@@ -32,9 +32,15 @@ from pathlib import Path
 from uuid import uuid4
 
 USER_AGENT = "longhouse-console-served-state-e2e/1"
-# Phases that mean "still working" in the rendered input bar. Settlement is the
-# absence of these, not the presence of any particular terminal label.
-WORKING_PHASES = {"Working", "Running", "Thinking", "Starting", "Tool"}
+
+# The pulsing composer bar is NOT display_phase. SessionChat.tsx:726 renders
+# "Working" off isSendLocked, which SessionDetailPage.tsx:574 derives from
+# activity.state. display_phase is a presentation string and is partly dynamic
+# ("Using shell" when a tool is named), so an allowlist of labels silently
+# passes on states it forgot. Assert the structured contract instead.
+WORKING_ACTIVITY = {"thinking", "executing"}
+WORKING_RUN_LIFECYCLE = {"starting", "running"}
+WORKING_PRESENTATION_KEYS = {"starting", "thinking", "executing", "stalled"}
 
 
 def _home() -> Path:
@@ -80,9 +86,40 @@ class Client:
             detail = error.read().decode(errors="replace")
             raise RuntimeError(f"{method} {path} returned HTTP {error.code}: {detail[:600]}") from error
 
-    def served_session(self, session_id: str) -> dict:
-        payload = self.request("GET", f"/api/timeline/sessions/{session_id}/workspace", browser=True)
-        return payload.get("session") or {}
+    def served_workspace(self, session_id: str) -> dict:
+        return self.request("GET", f"/api/timeline/sessions/{session_id}/workspace", browser=True)
+
+
+def settlement_state(workspace: dict, run_id: str) -> tuple[bool, dict]:
+    """Is the served surface done working for this run?
+
+    Fails closed: a missing field is unsettled, never settled. Absence-from-a-set
+    as the pass condition is how an oracle goes green on a state it never listed.
+    """
+    session = workspace.get("session") or {}
+    state = session.get("session_state") or {}
+    run = state.get("run") or {}
+    activity = state.get("activity") or {}
+    presentation = (state.get("presentation") or {}).get("primary") or {}
+
+    observed = {
+        "run_id": run.get("id"),
+        "run_lifecycle": run.get("lifecycle"),
+        "activity_state": activity.get("state"),
+        "presentation_key": presentation.get("key"),
+        "display_phase": session.get("display_phase"),
+        "working_set": state.get("working_set"),
+    }
+
+    settled = (
+        observed["run_id"] == run_id
+        and observed["run_lifecycle"] == "ended"
+        and observed["activity_state"] not in WORKING_ACTIVITY
+        and observed["presentation_key"] is not None
+        and observed["presentation_key"] not in WORKING_PRESENTATION_KEYS
+        and observed["working_set"] == "history"
+    )
+    return settled, observed
 
 
 class StreamWatcher(threading.Thread):
@@ -117,13 +154,18 @@ class StreamWatcher(threading.Thread):
                     if line.startswith("event:"):
                         event = line.split(":", 1)[1].strip()
                     elif line.startswith("data:"):
-                        self.frames.put((time.monotonic(), event))
+                        raw_data = line.split(":", 1)[1].strip()
+                        try:
+                            payload = json.loads(raw_data)
+                        except ValueError:
+                            payload = {}
+                        self.frames.put((time.monotonic(), event, payload))
                         event = None
         except Exception as exc:  # noqa: BLE001 - reported, never raised into the harness
             self.error = exc
 
-    def drain(self) -> list[tuple[float, str | None]]:
-        out: list[tuple[float, str | None]] = []
+    def drain(self) -> list[tuple[float, str | None, dict]]:
+        out: list[tuple[float, str | None, dict]] = []
         while True:
             try:
                 out.append(self.frames.get_nowait())
@@ -176,10 +218,30 @@ def run(args: argparse.Namespace) -> dict:
     session_id = str(created["session_id"])
     report["session_id"] = session_id
 
-    # Subscribe before dispatching, or the turn races the subscription.
+    # Subscribe before dispatching, or the turn races the subscription. Waiting a
+    # fixed two seconds is not enough: the stream emits a workspace_changed at
+    # connect, and on a slow handshake that frame lands after dispatch and passes
+    # as live delivery with zero turn frames. Wait for the baseline explicitly and
+    # remember its sequence so only newer frames count.
     watcher = StreamWatcher(client, args.watch_session or session_id)
     watcher.start()
-    time.sleep(2.0)
+    baseline_seq = -1
+    saw_connect = False
+    handshake_deadline = time.monotonic() + 30
+    while time.monotonic() < handshake_deadline:
+        for _stamp, event, payload in watcher.drain():
+            if event == "connected":
+                saw_connect = True
+            elif event == "workspace_changed":
+                baseline_seq = max(baseline_seq, int(payload.get("pubsub_seq") or 0))
+        if saw_connect and baseline_seq >= 0:
+            break
+        if watcher.error is not None:
+            raise RuntimeError(f"stream failed before the turn started: {watcher.error!r}")
+        time.sleep(0.25)
+    if not saw_connect:
+        raise RuntimeError("stream never delivered its connect frame")
+    report["baseline_pubsub_seq"] = baseline_seq
 
     dispatched_at = time.monotonic()
     turn = _start_turn(
@@ -197,28 +259,33 @@ def run(args: argparse.Namespace) -> dict:
     claim_path = _home() / "agent" / "turn-claims" / f"{run_id}.json"
     terminal_at: float | None = None
     deadline = time.monotonic() + args.turn_timeout
+    claim_state: str | None = None
     while time.monotonic() < deadline:
-        for stamp, event in watcher.drain():
+        for stamp, event, payload in watcher.drain():
             if event in {"connected", "heartbeat"}:
                 continue
-            offset = stamp - dispatched_at
-            # The stream emits one workspace_changed at connect. Counting it
-            # would let this oracle pass with zero frames during the turn --
-            # the exact symptom it exists to catch.
-            if offset <= 0:
+            sequence = int(payload.get("pubsub_seq") or 0)
+            # Only a frame newer than the connect baseline is evidence that this
+            # turn reached a viewer.
+            if sequence <= baseline_seq:
                 continue
-            offsets.append(round(offset, 2))
+            offsets.append(round(stamp - dispatched_at, 2))
             if first_live is None:
-                first_live = offset
+                first_live = stamp - dispatched_at
         if claim_path.exists():
             try:
                 claim = json.loads(claim_path.read_text())
             except (OSError, ValueError):
                 claim = {}
-            if claim.get("state") in {"terminal", "failed"}:
+            state = claim.get("state")
+            if state in {"terminal", "failed"}:
+                # `failed` is a launch/run failure, not a completed turn. Treating
+                # it as terminal lets a provider that never ran report green.
+                claim_state = state
                 terminal_at = time.monotonic()
                 break
         time.sleep(0.5)
+    report["claim_state"] = claim_state
 
     buckets: dict[int, int] = {}
     for offset in offsets:
@@ -236,19 +303,38 @@ def run(args: argparse.Namespace) -> dict:
     observed: dict | None = None
     if terminal_at is not None:
         while time.monotonic() - terminal_at < args.settle_budget:
-            session = client.served_session(session_id)
-            state = session.get("session_state") or {}
-            observed = {
-                "display_phase": session.get("display_phase"),
-                "run_lifecycle": (state.get("run") or {}).get("lifecycle"),
-                "activity_state": (state.get("activity") or {}).get("state"),
-            }
-            if observed["display_phase"] not in WORKING_PHASES:
+            workspace = client.served_workspace(session_id)
+            settled, observed = settlement_state(workspace, run_id)
+            if settled:
                 settled_at = time.monotonic()
                 break
             time.sleep(1.0)
 
     report["served_state_after_terminal"] = observed
+    report["settled_at_offset_s"] = round(settled_at - terminal_at, 2) if settled_at and terminal_at else None
+
+    # Content converges on a different clock than state. Measured against the
+    # live instance, state settles in ~0.25s while the transcript is still
+    # `convergence: lagging` with source_revision behind durable_revision.
+    # Asserting the reply inside the settle budget conflates two SLAs and reports
+    # a delivery failure that is really a timing assumption.
+    marker_served = False
+    marker_at: float | None = None
+    transcript_state: dict | None = None
+    if terminal_at is not None:
+        content_deadline = time.monotonic() + args.content_budget
+        while time.monotonic() < content_deadline:
+            workspace = client.served_workspace(session_id)
+            transcript_state = ((workspace.get("session") or {}).get("session_state") or {}).get("transcript")
+            if marker in json.dumps(workspace.get("projection") or {}):
+                marker_served = True
+                marker_at = time.monotonic()
+                break
+            time.sleep(1.0)
+
+    report["marker_served"] = marker_served
+    report["marker_latency_s"] = round(marker_at - terminal_at, 2) if marker_at and terminal_at else None
+    report["transcript"] = transcript_state
     report["settle_latency_s"] = round(settled_at - terminal_at, 2) if settled_at and terminal_at else None
 
     watcher.stop_flag.set()
@@ -257,10 +343,18 @@ def run(args: argparse.Namespace) -> dict:
     failures: list[str] = []
     if first_live is None:
         failures.append("no live frame reached the served stream during the turn")
+    if claim_state == "failed":
+        failures.append("the provider turn failed rather than completing")
     if terminal_at is None:
         failures.append(f"turn did not reach terminal within {args.turn_timeout}s")
     elif settled_at is None:
         failures.append(f"served surface still working after {args.settle_budget}s: {observed}")
+    if watcher.error is not None:
+        # A stream that dies mid-turn is a delivery failure even if early frames
+        # arrived; recording it without failing on it makes the oracle decorative.
+        failures.append(f"workspace stream died before the turn settled: {watcher.error!r}")
+    if terminal_at is not None and not marker_served:
+        failures.append(f"the turn marker never reached the served projection within {args.content_budget}s")
     report["failures"] = failures
     report["verdict"] = "red" if failures else "green"
     return report
@@ -274,6 +368,12 @@ def main() -> int:
     parser.add_argument("--api-url", default=None)
     parser.add_argument("--turn-timeout", type=float, default=180.0)
     parser.add_argument("--settle-budget", type=float, default=30.0)
+    parser.add_argument(
+        "--content-budget",
+        type=float,
+        default=90.0,
+        help="separate budget for transcript convergence, which lags state settlement",
+    )
     parser.add_argument(
         "--watch-session",
         default=None,
