@@ -256,21 +256,16 @@ fn list_opencode_sessions_inner(
 ) -> Result<Vec<OpenCodeSessionCandidate>> {
     let conn = open_readonly(db_path)?;
     let has_agent_column = sqlite_column_exists(&conn, "session", "agent")?;
-    let version_expression = if include_fingerprints {
-        "MAX(\
-            s.time_updated, \
-            COALESCE((SELECT MAX(m.time_updated) FROM message m WHERE m.session_id = s.id), 0), \
-            COALESCE((SELECT MAX(p.time_updated) FROM part p WHERE p.session_id = s.id), 0)\
-        )"
-    } else {
-        // OpenCode advances session.time_updated for normal message/part
-        // writes. The periodic durability reconciliation fingerprints every
-        // session and repairs a provider bug or hand-edited DB that violates
-        // that watermark contract. Keeping the hot wake path on the session
-        // table is what makes an idle database scan proportional to sessions,
-        // not to every message and part ever written.
-        "s.time_updated"
-    };
+    // These MAX lookups use OpenCode's session indexes and read timestamps,
+    // not content. The hot path therefore detects a normal message/part write
+    // without hashing every historical payload. The periodic durability pass
+    // remains the repair path for a provider bug or hand-edited row that
+    // changes content without advancing any timestamp.
+    let version_expression = "MAX(\
+        s.time_updated, \
+        COALESCE((SELECT MAX(m.time_updated) FROM message m WHERE m.session_id = s.id), 0), \
+        COALESCE((SELECT MAX(p.time_updated) FROM part p WHERE p.session_id = s.id), 0)\
+    )";
     let sql = format!(
         r#"
         SELECT s.id, {version_expression} AS version_ms
@@ -2139,19 +2134,20 @@ mod tests {
             opencode_session_fingerprints(&db_path, &["ses_test".to_string()]).unwrap();
         assert!(!fingerprints[0].is_empty());
 
-        // Make accidental message/part access impossible, rather than merely
-        // hoping a timing assertion notices a full-corpus scan on a tiny
-        // fixture.
+        let before = list_opencode_session_watermarks(&db_path).unwrap();
         let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("DROP TABLE message; DROP TABLE part;")
-            .unwrap();
+        conn.execute(
+            "UPDATE part SET time_updated = time_updated + 1 WHERE id = 'prt_assistant'",
+            [],
+        )
+        .unwrap();
         drop(conn);
 
         let sessions = list_opencode_session_watermarks(&db_path).unwrap();
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].provider_session_id, "ses_test");
-        assert!(sessions[0].version > 0);
+        assert!(sessions[0].version > before[0].version);
         assert!(sessions[0].fingerprint.is_empty());
     }
 

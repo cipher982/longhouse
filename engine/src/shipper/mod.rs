@@ -4605,7 +4605,7 @@ mod tests {
         Connection::open(&db_path)
             .unwrap()
             .execute(
-                "UPDATE part SET data = ?1 WHERE id = 'prt_assistant'",
+                "UPDATE part SET data = ?1, time_updated = time_updated + 1 WHERE id = 'prt_assistant'",
                 [r#"{"type":"text","text":"managed binding survived"}"#],
             )
             .unwrap();
@@ -4659,7 +4659,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ship_opencode_database_reships_same_timestamp_content_change() {
+    async fn test_opencode_reconciliation_reships_same_timestamp_content_change() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("opencode.db");
         create_opencode_fixture_db(&db_path);
@@ -4688,7 +4688,7 @@ mod tests {
             )
             .unwrap();
 
-        ship_opencode_database(
+        ship_opencode_database_with_trace(
             &db_path,
             &conn,
             &client,
@@ -4696,6 +4696,8 @@ mod tests {
             10_000_000,
             None,
             None,
+            OpenCodeShipMode::ReconcileDurability,
+            Some(&make_ship_trace("reconciliation_scan")),
         )
         .await
         .unwrap();
