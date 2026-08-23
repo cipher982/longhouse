@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from zerg import metrics
+from zerg.config import get_settings
 
 DEFAULT_MIN_FREE_BYTES = 5 * 1024 * 1024 * 1024
 DEFAULT_MIN_FREE_RATIO = 0.05
@@ -30,6 +31,33 @@ def _env_float(name: str, default: float) -> float:
         return float(raw) if raw else default
     except ValueError:
         return default
+
+
+def _disk_watermark_configuration() -> tuple[int, float]:
+    """Free-space watermarks below which historical work is shed.
+
+    Production samples the real storage filesystem on purpose. A unit test must
+    not: the host's ambient disk pressure has nothing to do with whether archive
+    ingest is correct, and letting it decide turned a full developer laptop into
+    ~46 unrelated red tests that read as product bugs.
+
+    `run_backend_tests_lite.sh` already pins both watermarks to zero and says why.
+    Keeping that knowledge only in the shell script meant a bare `pytest` run —
+    which the repo otherwise supports, there being no shared conftest — silently
+    got production watermarks. So default them off under `testing` instead.
+    Tests that are actually about admission set both explicitly and mock the
+    disk sample; an explicit value always wins.
+    """
+
+    if get_settings().testing:
+        return (
+            max(0, _env_int("LONGHOUSE_HISTORICAL_MIN_FREE_BYTES", 0)),
+            min(1.0, max(0.0, _env_float("LONGHOUSE_HISTORICAL_MIN_FREE_RATIO", 0.0))),
+        )
+    return (
+        max(0, _env_int("LONGHOUSE_HISTORICAL_MIN_FREE_BYTES", DEFAULT_MIN_FREE_BYTES)),
+        min(1.0, max(0.0, _env_float("LONGHOUSE_HISTORICAL_MIN_FREE_RATIO", DEFAULT_MIN_FREE_RATIO))),
+    )
 
 
 def _byte_budget_configuration() -> tuple[int, int]:
@@ -113,8 +141,7 @@ def evaluate_historical_admission(
     disk = sample_storage_disk(root)
     if disk.error is not None or disk.free_bytes is None or disk.free_ratio is None:
         return HistoricalAdmissionDecision(False, "disk_sample_unavailable", 30)
-    min_free_bytes = max(0, _env_int("LONGHOUSE_HISTORICAL_MIN_FREE_BYTES", DEFAULT_MIN_FREE_BYTES))
-    min_free_ratio = min(1.0, max(0.0, _env_float("LONGHOUSE_HISTORICAL_MIN_FREE_RATIO", DEFAULT_MIN_FREE_RATIO)))
+    min_free_bytes, min_free_ratio = _disk_watermark_configuration()
     if disk.free_bytes < min_free_bytes or disk.free_ratio < min_free_ratio:
         return HistoricalAdmissionDecision(
             False,

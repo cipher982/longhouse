@@ -1265,7 +1265,13 @@ def test_agents_ingest_releases_request_db_before_serialized_write(tmp_path, mon
     def override_verify_agents_token():
         return SimpleNamespace(device_id="ingest-release", id="token-1", owner_id=1)
 
+    # This test is about when the request DB is released, so it deliberately
+    # leaves testing mode to exercise the production ordering path. That also
+    # opts back into the production disk watermark, which has nothing to do with
+    # what is being asserted — pin it, or a full host turns this into a 503.
     monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setenv("LONGHOUSE_HISTORICAL_MIN_FREE_BYTES", "0")
+    monkeypatch.setenv("LONGHOUSE_HISTORICAL_MIN_FREE_RATIO", "0")
     monkeypatch.setattr(
         "zerg.services.write_serializer.get_write_serializer",
         lambda: ReleaseCheckingSerializer(),

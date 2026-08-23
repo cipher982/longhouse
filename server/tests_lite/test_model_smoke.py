@@ -1,8 +1,10 @@
 """Smoke test: verify every model in config/models.json responds to a trivial call.
 
-Skips entirely when no LLM API keys are set (normal for CI unit tests).
-Run with real keys to validate model availability:
-    OPENAI_API_KEY=... GROQ_API_KEY=... make test
+Skipped unless explicitly opted into. To validate model availability:
+    LONGHOUSE_MODEL_SMOKE=1 OPENAI_API_KEY=... GROQ_API_KEY=... make test
+
+Opt-in on purpose: `get_settings()` loads `.env`, so provider keys are present
+during an ordinary unit run and key presence alone would bill live calls.
 """
 
 from __future__ import annotations
@@ -21,19 +23,41 @@ from smoke_models import get_api_key  # noqa: E402
 from smoke_models import load_config  # noqa: E402
 from smoke_models import run_all  # noqa: E402
 
-_HAS_ANY_KEY = bool(
-    os.getenv("OPENAI_API_KEY", "").strip()
-    or os.getenv("OPENROUTER_API_KEY", "").strip()
-    or os.getenv("GROQ_API_KEY", "").strip()
-    or os.getenv("XAI_API_KEY", "").strip()
-    or os.getenv("ZAI_API_KEY", "").strip()
+_KEY_VARIABLES = (
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "XAI_API_KEY",
+    "ZAI_API_KEY",
 )
 
 
-@pytest.mark.skipif(not _HAS_ANY_KEY, reason="No LLM API keys set — skipping model smoke test")
+_OPT_IN = "LONGHOUSE_MODEL_SMOKE"
+
+
+def _opted_in() -> bool:
+    """Has someone explicitly asked for live provider calls?
+
+    Key presence is not consent. `get_settings()` loads the developer's `.env`,
+    so by the time anything in the suite has touched settings, real OpenAI /
+    OpenRouter / Groq keys are in `os.environ` — and this test then billed live
+    calls as part of `make test`. It also read as flaky, because running the file
+    alone never loaded settings and so always skipped.
+
+    Both reads happen at call time, not import time: as a module-level constant
+    the guard's value depended on which tests imported first.
+    """
+
+    if not os.getenv(_OPT_IN, "").strip():
+        return False
+    return any(os.getenv(name, "").strip() for name in _KEY_VARIABLES)
+
+
 @pytest.mark.timeout(30)
 def test_model_smoke_active_profile_models_respond():
     """Every model referenced by the active profile must return a non-error response."""
+    if not _opted_in():
+        pytest.skip(f"Live model smoke is opt-in; set {_OPT_IN}=1 with provider keys")
     results = asyncio.run(run_all(scope="active"))
 
     failures = [r for r in results if r["status"] == "fail"]
