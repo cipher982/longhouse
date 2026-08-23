@@ -89,7 +89,7 @@ pub fn oldest_undrained_epoch(
         .transpose()
 }
 
-/// Delete copied Cursor bytes for epochs the Runtime Host has fully receipted.
+/// Delete copied Cursor bytes the Runtime Host has fully receipted.
 ///
 /// Claude and Codex are re-read from their `.jsonl` files by byte offset, so
 /// the engine keeps only a cursor for them. Cursor keeps chats in its own blob
@@ -113,7 +113,10 @@ pub fn oldest_undrained_epoch(
 /// can never be mistaken for an empty ancestor.
 ///
 /// Historical supersession rows deliberately do not block a drain: they are an
-/// audit trail with no production reader, not an in-flight operation.
+/// audit trail with no production reader, not an in-flight operation. An epoch
+/// need not be ended: a persistent Cursor source can remain open forever, and
+/// a fully receipted prefix is just as safe to remove while its next position
+/// is preserved by the durable lane cursor.
 pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
     let deleted = conn.execute(
         "DELETE FROM cursor_store_raw_record
@@ -123,8 +126,7 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
              JOIN source_epoch_lane_state AS durable
                ON durable.source_epoch = epoch.source_epoch
               AND durable.lane = 'durable'
-             WHERE epoch.ended_at IS NOT NULL
-               AND NOT EXISTS (
+             WHERE NOT EXISTS (
                    SELECT 1 FROM pending_source_envelope AS pending
                    WHERE pending.source_epoch = epoch.source_epoch
                )
@@ -267,13 +269,28 @@ fn next_position(conn: &Connection, source_epoch: &str) -> Result<u64> {
         [source_epoch],
         |row| row.get(0),
     )?;
-    match highest {
-        Some(value) => u64::try_from(value)
-            .context("negative Cursor source position")?
-            .checked_add(1)
-            .context("Cursor source position overflow"),
-        None => Ok(0),
-    }
+    let durable: Option<i64> = conn
+        .query_row(
+            "SELECT last_position FROM source_epoch_lane_state
+             WHERE source_epoch = ?1 AND lane = 'durable'",
+            [source_epoch],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let next_from_records = highest
+        .map(|value| {
+            u64::try_from(value)
+                .context("negative Cursor source position")?
+                .checked_add(1)
+                .context("Cursor source position overflow")
+        })
+        .transpose()?;
+    let next_from_durable = durable
+        .map(|value| u64::try_from(value).context("negative durable Cursor source position"))
+        .transpose()?;
+    Ok(next_from_records
+        .unwrap_or(0)
+        .max(next_from_durable.unwrap_or(0)))
 }
 
 fn hex_hash(bytes: &[u8]) -> String {
@@ -322,13 +339,13 @@ mod tests {
     }
 
     #[test]
-    fn the_drain_removes_only_fully_receipted_ended_epochs() {
+    fn the_drain_removes_only_fully_receipted_epochs() {
         // The whole risk of this feature is deleting evidence that was never
         // shipped, so every retention reason gets its own epoch here.
         let temp = tempfile::NamedTempFile::new().unwrap();
         let mut conn = open_db(Some(temp.path())).unwrap();
 
-        // (a) ended and fully receipted — the only one that should go.
+        // (a) ended and fully receipted — safe to drain.
         let drained = Uuid::new_v4();
         seed_epoch(&conn, drained);
         append_unseen_cursor_records(&mut conn, drained, &[b"a0".to_vec(), b"a1".to_vec()]).unwrap();
@@ -358,7 +375,8 @@ mod tests {
         )
         .unwrap();
 
-        // (d) fully receipted but still open — the session may yet write more.
+        // (d) fully receipted but still open — the source may yet write more,
+        // but its durable lane preserves the next source position.
         let open = Uuid::new_v4();
         seed_epoch(&conn, open);
         append_unseen_cursor_records(&mut conn, open, &[b"d0".to_vec()]).unwrap();
@@ -366,11 +384,22 @@ mod tests {
 
         let deleted = drain_receipted_cursor_records(&conn).unwrap();
 
-        assert_eq!(deleted, 2, "expected only the fully receipted ended epoch");
+        assert_eq!(deleted, 3, "expected every fully receipted epoch");
         assert_eq!(cursor_record_count(&conn, drained).unwrap(), 0);
         assert_eq!(cursor_record_count(&conn, partial).unwrap(), 2, "unshipped");
         assert_eq!(cursor_record_count(&conn, pending).unwrap(), 1, "pending");
-        assert_eq!(cursor_record_count(&conn, open).unwrap(), 1, "still open");
+        assert_eq!(cursor_record_count(&conn, open).unwrap(), 0, "open is still drainable");
+
+        // A later append to the still-open epoch must continue after the
+        // durable cursor rather than restarting at position zero.
+        append_unseen_cursor_records(&mut conn, open, &[b"d1".to_vec()]).unwrap();
+        assert_eq!(
+            cursor_records_from(&conn, open, 0, 10, 1024).unwrap(),
+            vec![CursorRawRecord {
+                source_position: 1,
+                bytes: b"d1".to_vec()
+            }]
+        );
 
         // Retained evidence must still be shippable byte-for-byte, not merely
         // present: a drain that corrupted the read path would pass a row count.
