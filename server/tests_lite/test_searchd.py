@@ -519,7 +519,7 @@ def test_embedding_source_reads_only_the_fenced_published_projection(tmp_path):
             session_id=session_id,
             expected_generation_id=None,
             expected_revision=None,
-            offset=0,
+            after=None,
             limit=1,
         )
         assert first["generation_id"] == generation_id
@@ -533,7 +533,7 @@ def test_embedding_source_reads_only_the_fenced_published_projection(tmp_path):
             session_id=session_id,
             expected_generation_id=generation_id,
             expected_revision=7,
-            offset=1,
+            after=tuple(first["next_cursor"]),
             limit=1,
         )
         assert second["has_more"] is False
@@ -543,7 +543,7 @@ def test_embedding_source_reads_only_the_fenced_published_projection(tmp_path):
                 session_id=session_id,
                 expected_generation_id=generation_id,
                 expected_revision=8,
-                offset=0,
+                after=None,
                 limit=1,
             )
     finally:

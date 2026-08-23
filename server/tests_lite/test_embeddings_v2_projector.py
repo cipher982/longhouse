@@ -409,11 +409,13 @@ async def test_embedding_projector_pages_one_fenced_source(monkeypatch):
     full_source = _source(generation_id, records)
 
     def page(params):
-        offset = params["offset"]
+        offset = 0 if params["after"] is None else int(params["after"][-1]) + 1
+        next_cursor = [offset, "machine", "codex", "source", "epoch", offset, 0, offset]
         return {
             **full_source,
             "records": full_source["records"][offset : offset + 1],
             "has_more": offset + 1 < len(records),
+            "next_cursor": next_cursor,
         }
 
     catalog = FakeClient(
@@ -442,7 +444,7 @@ async def test_embedding_projector_pages_one_fenced_source(monkeypatch):
 
     assert await EmbeddingsV2Projector(catalog=catalog, search=search).run_once() == 1
     pages = [params for method, params in search.calls if method == "search.embedding.source.v2"]
-    assert [params["offset"] for params in pages] == [0, 1]
+    assert [params["after"] for params in pages] == [None, [0, "machine", "codex", "source", "epoch", 0, 0, 0]]
     assert pages[0]["expected_generation_id"] == generation_id
     assert pages[0]["expected_revision"] == "7"
     assert pages[1]["expected_generation_id"] == generation_id

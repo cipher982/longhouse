@@ -1094,24 +1094,34 @@ def _embedding_hashes_params(value: dict) -> dict:
 
 
 def _embedding_source_params(value: dict) -> dict:
-    _exact_keys(value, {"session_id", "expected_generation_id", "expected_revision", "offset", "limit"})
+    _exact_keys(value, {"session_id", "expected_generation_id", "expected_revision", "after", "limit"})
     expected_generation_id = value["expected_generation_id"]
     expected_revision = value["expected_revision"]
-    offset = value["offset"]
+    after = value["after"]
     limit = value["limit"]
     if expected_generation_id is not None:
         expected_generation_id = _uuid(expected_generation_id, "expected_generation_id")
     if expected_revision is not None:
         expected_revision = _revision(expected_revision, "expected_revision")
-    if type(offset) is not int or not 0 <= offset < 1_000_000_000:
-        raise ValueError("embedding source offset is invalid")
+    if after is not None:
+        if (
+            not isinstance(after, list)
+            or len(after) != 8
+            or type(after[0]) is not int
+            or type(after[5]) is not int
+            or type(after[6]) is not int
+            or type(after[7]) is not int
+            or any(not isinstance(after[index], str) or not after[index] for index in range(1, 5))
+        ):
+            raise ValueError("embedding source cursor is invalid")
+        after = tuple(after)
     if type(limit) is not int or not 1 <= limit <= 1_000:
         raise ValueError("embedding source limit is invalid")
     return {
         "session_id": _uuid(value["session_id"], "session_id"),
         "expected_generation_id": expected_generation_id,
         "expected_revision": expected_revision,
-        "offset": offset,
+        "after": after,
         "limit": limit,
     }
 

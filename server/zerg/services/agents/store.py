@@ -583,6 +583,10 @@ class AgentsStore:
 
     def __init__(self, db: Session):
         self.db = db
+        # Request-scoped semantic replay. Timeline/detail handlers commonly
+        # ask for both a count and a page through the same store; legacy Claude
+        # rows used to rematerialize the full transcript for each question.
+        self._legacy_semantic_ids_cache: dict[tuple[object, ...], set[int]] = {}
 
     def _thread_root_id(self, session: AgentSession) -> UUID:
         return session.id
@@ -4713,6 +4717,21 @@ class AgentsStore:
                 included.add(int(event.id))
         return included
 
+    def _legacy_semantic_event_ids(
+        self,
+        key: tuple[object, ...],
+        *,
+        context_stmt,
+        provider: str | None,
+    ) -> set[int]:
+        cached = self._legacy_semantic_ids_cache.get(key)
+        if cached is not None:
+            return cached
+        context_rows = list(self.db.execute(context_stmt.order_by(None).order_by(AgentEvent.timestamp, AgentEvent.id)).scalars())
+        included = self._semantic_event_ids(context_rows, provider=provider)
+        self._legacy_semantic_ids_cache[key] = included
+        return included
+
     def get_session_events(
         self,
         session_id: UUID,
@@ -4764,20 +4783,43 @@ class AgentsStore:
             # query/page rows against that semantic decision. In particular,
             # an FTS hit on Claude's command row must still see the preceding
             # caveat even when the caveat itself does not match the query.
-            context_rows = list(self.db.execute(context_stmt.order_by(None).order_by(AgentEvent.timestamp, AgentEvent.id)).scalars().all())
-            included_ids = self._semantic_event_ids(
-                context_rows,
+            semantic_key = (
+                str(session_id),
+                str(thread_id) if thread_id is not None else None,
+                tuple(roles or ()),
+                tool_name,
+                context_mode,
+                branch_mode,
+            )
+            included_ids = self._legacy_semantic_event_ids(
+                semantic_key,
+                context_stmt=context_stmt,
                 provider=provider,
             )
-            rows = list(
-                self.db.execute(stmt.order_by(None).order_by(AgentEvent.timestamp, AgentEvent.id).limit(None).offset(None)).scalars().all()
-            )
-            rows = [event for event in rows if int(event.id) in included_ids]
+            candidate_ids = [
+                int(value)
+                for value in self.db.execute(
+                    stmt.order_by(None)
+                    .with_only_columns(AgentEvent.id)
+                    .order_by(AgentEvent.timestamp, AgentEvent.id)
+                    .limit(None)
+                    .offset(None)
+                ).scalars()
+                if int(value) in included_ids
+            ]
             if load_from_end:
-                start = max(0, len(rows) - limit - offset)
+                start = max(0, len(candidate_ids) - limit - offset)
             else:
                 start = offset
-            return rows[start : start + limit]
+            page_ids = candidate_ids[start : start + limit]
+            if not page_ids:
+                return []
+            page_rows = list(
+                self.db.execute(
+                    select(AgentEvent).where(AgentEvent.id.in_(page_ids)).order_by(AgentEvent.timestamp, AgentEvent.id)
+                ).scalars()
+            )
+            return page_rows
 
         if load_from_end:
             total_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
@@ -4881,18 +4923,40 @@ class AgentsStore:
             # legacy NULL rows. Reuse the exact request-time semantic replay
             # so search pagination does not report controls that the page
             # correctly hides (or hide real prompts that are still unbackfilled).
-            return len(
-                self.get_session_events(
-                    session_id,
-                    thread_id=thread_id,
-                    roles=roles,
-                    tool_name=tool_name,
-                    query=query,
-                    context_mode=context_mode,
-                    branch_mode=branch_mode,
-                    limit=1_000_000_000,
-                    offset=0,
-                )
+            provider = self.db.query(AgentSession.provider).filter(AgentSession.id == session_id).scalar()
+            event_stmt = select(AgentEvent).where(AgentEvent.session_id == session_id).where(visible_transcript_event_predicate())
+            event_stmt = self._apply_branch_mode_filter(event_stmt, session_id, branch_mode)
+            event_stmt = self._apply_event_thread_filter(event_stmt, session_id, thread_id)
+            if context_mode == "active_context":
+                boundary = self.get_active_context_boundary(session_id, branch_mode=branch_mode)
+                if boundary is not None:
+                    event_stmt = self._apply_active_context_filter(event_stmt, boundary)
+            if roles:
+                event_stmt = event_stmt.where(AgentEvent.role.in_(roles))
+            if tool_name:
+                event_stmt = event_stmt.where(AgentEvent.tool_name == tool_name)
+            context_stmt = event_stmt
+            if query:
+                event_stmt, empty = self._apply_query_filter(event_stmt, session_id, query)
+                if empty:
+                    return 0
+            semantic_key = (
+                str(session_id),
+                str(thread_id) if thread_id is not None else None,
+                tuple(roles or ()),
+                tool_name,
+                context_mode,
+                branch_mode,
+            )
+            included_ids = self._legacy_semantic_event_ids(
+                semantic_key,
+                context_stmt=context_stmt,
+                provider=provider,
+            )
+            return sum(
+                1
+                for value in self.db.execute(event_stmt.order_by(None).with_only_columns(AgentEvent.id)).scalars()
+                if int(value) in included_ids
             )
         stmt = (
             select(func.count())

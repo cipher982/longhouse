@@ -206,7 +206,7 @@ class EmbeddingsV2Projector:
         owner_id: str | None = None
         provider: str | None = None
         expected_events: int | None = None
-        offset = 0
+        after = None
         while True:
             page = await self.search.call(
                 "search.embedding.source.v2",
@@ -214,7 +214,7 @@ class EmbeddingsV2Projector:
                     "session_id": session_id,
                     "expected_generation_id": generation_id,
                     "expected_revision": str(published_revision) if published_revision is not None else None,
-                    "offset": offset,
+                    "after": after,
                     "limit": SOURCE_PAGE_SIZE,
                 },
             )
@@ -256,7 +256,10 @@ class EmbeddingsV2Projector:
                 break
             if not page_records:
                 raise ValueError("searchd returned an empty truncated embedding source page")
-            offset += len(page_records)
+            next_cursor = page.get("next_cursor")
+            if not isinstance(next_cursor, list) or len(next_cursor) != 8 or next_cursor == after:
+                raise ValueError("searchd returned an invalid embedding source cursor")
+            after = next_cursor
         if len(records) != expected_events:
             raise ValueError("searchd embedding source event count is inconsistent")
         assert owner_id is not None and provider is not None

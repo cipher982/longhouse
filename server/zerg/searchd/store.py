@@ -1170,7 +1170,7 @@ class SearchStore:
         session_id: str,
         expected_generation_id: str | None,
         expected_revision: int | None,
-        offset: int,
+        after: tuple[int, str, str, str, str, int, int, int] | None,
         limit: int,
     ) -> dict[str, object]:
         """Read one fenced page of the semantic projection used for embedding."""
@@ -1187,8 +1187,18 @@ class SearchStore:
             raise ValueError("embedding source generation changed during pagination")
         if expected_revision is not None and expected_revision != revision:
             raise ValueError("embedding source revision changed during pagination")
-        rows = self.connection.execute(
+        cursor_sql = ""
+        params: list[object] = [session_id]
+        if after is not None:
+            cursor_sql = """
+               AND (e.order_time_us, e.machine_id, e.provider,
+                    e.opaque_source_id, e.source_epoch, e.source_position,
+                    e.event_subordinal, e.record_ordinal) > (?, ?, ?, ?, ?, ?, ?, ?)
             """
+            params.extend(after)
+        params.append(limit + 1)
+        rows = self.connection.execute(
+            f"""
             SELECT e.order_time_us, e.machine_id, e.provider,
                    e.opaque_source_id, e.source_epoch, e.source_position,
                    e.event_subordinal, e.record_ordinal, e.role,
@@ -1199,24 +1209,24 @@ class SearchStore:
                 ON m.session_id = s.session_id
                AND m.generation_id = s.generation_id
                AND m.desired_revision = s.desired_revision
-              JOIN events e
+             JOIN events e
                 ON e.session_id = m.session_id
                AND e.generation_id = m.generation_id
                AND e.source_object_id = m.object_id
              WHERE s.session_id = ?
+             {cursor_sql}
              ORDER BY e.order_time_us, e.machine_id, e.provider,
                       e.opaque_source_id, e.source_epoch, e.source_position,
                       e.event_subordinal, e.record_ordinal
-             LIMIT ? OFFSET ?
+             LIMIT ?
             """,
-            (session_id, limit, offset),
+            tuple(params),
         ).fetchall()
         total = int(published["event_count"])
-        if offset + len(rows) < total and len(rows) < limit:
-            raise ValueError("published embedding source event count is inconsistent")
         records: list[dict[str, object]] = []
         payload_bytes = 0
-        for row in rows:
+        returned_rows = []
+        for row in rows[:limit]:
             record: dict[str, object] = {
                 "timestamp": int(row["order_time_us"]),
                 "machine_id": str(row["machine_id"]),
@@ -1239,9 +1249,23 @@ class SearchStore:
             if records and payload_bytes + record_bytes > _EMBEDDING_SOURCE_PAGE_BYTES:
                 break
             records.append(record)
+            returned_rows.append(row)
             payload_bytes += record_bytes
-        if offset + len(records) > total or (not records and offset < total):
+        if not records and total > 0 and after is None:
             raise ValueError("published embedding source event count is inconsistent")
+        next_cursor = None
+        if returned_rows:
+            last = returned_rows[-1]
+            next_cursor = [
+                int(last["order_time_us"]),
+                str(last["machine_id"]),
+                str(last["provider"]),
+                str(last["opaque_source_id"]),
+                str(last["source_epoch"]),
+                int(last["source_position"]),
+                int(last["event_subordinal"]),
+                int(last["record_ordinal"]),
+            ]
         return {
             "found": True,
             "generation_id": generation_id,
@@ -1250,7 +1274,8 @@ class SearchStore:
             "provider": str(published["provider"]),
             "event_count": total,
             "records": records,
-            "has_more": offset + len(records) < total,
+            "has_more": len(records) < len(rows),
+            "next_cursor": next_cursor,
         }
 
     def _update_existing_object_semantics(
