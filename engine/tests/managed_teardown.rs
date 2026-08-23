@@ -253,6 +253,32 @@ fn prompt_acknowledgement_is_success_and_cleans_up() {
     );
 }
 
+/// A Ctrl-C can reach the stop helper after it has delivered the request but
+/// before the bridge commits and replies. The helper's signal is not the
+/// outcome: the facade must observe the durable commit that follows.
+#[test]
+fn interrupted_helper_converges_on_the_late_commit() {
+    let home = tempfile::tempdir().unwrap();
+    write_state(home.path(), "ready");
+    write_contract(home.path());
+    let helper = write_stub_helper(home.path(), "trap - INT\nkill -INT $$\nexit 99");
+    let state_home = home.path().to_path_buf();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        write_state(&state_home, "stopped");
+    });
+
+    let run = run_facade_stop(home.path(), &helper);
+    writer.join().unwrap();
+
+    assert!(
+        run.status.success(),
+        "a signaled helper must defer to the late durable commit; stderr: {}",
+        run.stderr
+    );
+    assert!(!contract_path(home.path()).exists());
+}
+
 /// T14: teardown must not be gated on the network at all. The facade is given
 /// an unroutable API URL; a network-coupled teardown would stall on it.
 #[test]

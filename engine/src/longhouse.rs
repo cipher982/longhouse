@@ -3846,7 +3846,8 @@ fn stop_codex_bridge(
     reason: &str,
 ) -> anyhow::Result<TeardownOutcome> {
     validate_session_id(session_id)?;
-    let mut child = Command::new(paired_engine_path()?)
+    let mut command = Command::new(paired_engine_path()?);
+    command
         .args([
             "codex-bridge",
             "stop",
@@ -3859,8 +3860,20 @@ fn stop_codex_bridge(
         // Detach the helper's stdio: teardown must not leave the user's
         // terminal tied to a helper the facade may have to abandon at the
         // deadline.
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // The provider has already returned terminal ownership to this
+        // facade. Put the non-interactive cleanup transaction in its own
+        // process group so an impatient second Ctrl-C cannot kill it while
+        // the bridge is committing the terminal fact.
+        command.process_group(0);
+    }
+    let mut child = command
         .spawn()
         .context("start managed Codex bridge cleanup")?;
     let deadline = std::time::Instant::now() + CODEX_STOP_DEADLINE;
@@ -3886,12 +3899,36 @@ fn stop_codex_bridge(
         std::thread::sleep(Duration::from_millis(25));
     }
 
-    // The RPC result is evidence, not authority. Re-read the durable fact.
-    Ok(classify_codex_teardown(
+    // The RPC result is evidence, not authority. A failed helper may already
+    // have delivered the stop request and then lost its reply channel. Give
+    // that in-flight commit the remainder of the same bounded deadline rather
+    // than racing one immediate read against it.
+    Ok(await_codex_teardown_outcome(
         session_id,
         expected_run_id,
         rpc_detail,
+        deadline,
     ))
+}
+
+fn await_codex_teardown_outcome(
+    session_id: &str,
+    expected_run_id: Option<&str>,
+    rpc_detail: Option<String>,
+    deadline: std::time::Instant,
+) -> TeardownOutcome {
+    loop {
+        let outcome = classify_codex_teardown(session_id, expected_run_id, rpc_detail.clone());
+        if !matches!(outcome, TeardownOutcome::Unresponsive { .. })
+            || std::time::Instant::now() >= deadline
+        {
+            return outcome;
+        }
+        std::thread::sleep(
+            Duration::from_millis(25)
+                .min(deadline.saturating_duration_since(std::time::Instant::now())),
+        );
+    }
 }
 
 fn classify_codex_teardown(
@@ -4746,6 +4783,112 @@ mod tests {
                 )
                 .unwrap();
                 assert!(!contract_path.exists());
+            },
+        );
+    }
+
+    #[test]
+    fn codex_teardown_waits_for_a_late_durable_commit() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "66666666-6666-4666-8666-666666666666";
+        let run_id = "77777777-7777-4777-8777-777777777777";
+        let cwd = temp.path().join("workspace");
+        let rollout = temp.path().join("rollout.jsonl");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(&rollout, "{}\n").unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                let state_path = codex_bridge_state_path(session_id).unwrap();
+                std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+                std::fs::write(
+                    &state_path,
+                    serde_json::to_vec(&json!({
+                        "cwd": cwd,
+                        "codex_bin": "/usr/local/bin/codex",
+                        "status": "ready",
+                        "run_id": run_id,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+
+                std::thread::scope(|scope| {
+                    let state_path = state_path.clone();
+                    let cwd = cwd.clone();
+                    let rollout = rollout.clone();
+                    scope.spawn(move || {
+                        std::thread::sleep(Duration::from_millis(50));
+                        std::fs::write(
+                            state_path,
+                            serde_json::to_vec(&json!({
+                                "cwd": cwd,
+                                "codex_bin": "/usr/local/bin/codex",
+                                "status": "stopped",
+                                "thread_id": "88888888-8888-4888-8888-888888888888",
+                                "thread_path": rollout,
+                                "run_id": run_id,
+                                "stopped_at": "2026-08-23T01:12:01Z",
+                                "terminal_state": "session_ended",
+                                "terminal_reason": "user_closed",
+                            }))
+                            .unwrap(),
+                        )
+                        .unwrap();
+                    });
+
+                    let outcome = await_codex_teardown_outcome(
+                        session_id,
+                        Some(run_id),
+                        Some("stop helper exited with signal: 2 (SIGINT)".to_string()),
+                        std::time::Instant::now() + Duration::from_secs(1),
+                    );
+                    assert!(matches!(
+                        outcome,
+                        TeardownOutcome::Committed {
+                            terminal_reason: Some(reason),
+                            resumable_thread: true,
+                        } if reason == "user_closed"
+                    ));
+                });
+            },
+        );
+    }
+
+    #[test]
+    fn codex_teardown_still_reports_an_uncommitted_live_bridge() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "99999999-9999-4999-8999-999999999999";
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                let state_path = codex_bridge_state_path(session_id).unwrap();
+                std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+                std::fs::write(
+                    state_path,
+                    serde_json::to_vec(&json!({
+                        "cwd": temp.path(),
+                        "codex_bin": "/usr/local/bin/codex",
+                        "status": "ready",
+                        "run_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+
+                let outcome = await_codex_teardown_outcome(
+                    session_id,
+                    Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+                    Some("stop helper exited with signal: 2 (SIGINT)".to_string()),
+                    std::time::Instant::now() + Duration::from_millis(40),
+                );
+                assert!(matches!(
+                    outcome,
+                    TeardownOutcome::Unresponsive { detail }
+                        if detail.contains("bridge state is still 'ready'")
+                ));
             },
         );
     }
