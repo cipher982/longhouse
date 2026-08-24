@@ -228,7 +228,7 @@ export default function LaunchSessionModal({
                 <summary aria-haspopup="listbox">
                   <span className="launch-choice-copy">
                     <strong>{selectedMachine?.machine_name ?? "Choose a machine"}</strong>
-                    <small><span className="launch-machine-status is-ready" aria-hidden="true" />Ready</small>
+                    <small><span className="launch-machine-status is-ready" aria-hidden="true" />{selectedMachine ? onlineForLabel(selectedMachine) : "Ready"}</small>
                   </span>
                 </summary>
                 <div className="launch-choice-panel">
@@ -252,7 +252,7 @@ export default function LaunchSessionModal({
                         }}
                       >
                         <span className="launch-machine-status is-ready" aria-hidden="true" />
-                        <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>Ready</small></span>
+                        <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>{onlineForLabel(machine)}</small></span>
                         <span>{machine.device_id === deviceId ? "✓" : ""}</span>
                       </button>
                     ))}
@@ -430,6 +430,27 @@ function launchBlockedLabel(machine: MachineDirectoryEntry): string {
       if (!machine.online) return lastSeenLabel(machine);
       return unreadyProviderLabel(machine) ?? "Console launch unavailable";
   }
+}
+
+// A machine you are about to hand work to is a bet that it will still be there
+// when the turn finishes. Uptime is how that bet is priced: a box connected for
+// days is one thing, a box that connected forty seconds ago -- and has probably
+// been reconnecting all morning -- is another. "Ready" alone hid the difference,
+// and `connected_since` was tracked all along without ever being served.
+function onlineForLabel(machine: MachineDirectoryEntry): string {
+  const since = machine.connected_since;
+  if (!since) return "Ready";
+  const started = new Date(since);
+  if (Number.isNaN(started.getTime())) return "Ready";
+  const elapsedMs = Date.now() - started.getTime();
+  // A clock skewed into the future would otherwise render a negative age.
+  if (elapsedMs < 0) return "Ready";
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 1) return "Ready · just connected";
+  if (minutes < 60) return `Ready · online ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Ready · online ${hours}h`;
+  return `Ready · online ${Math.floor(hours / 24)}d`;
 }
 
 const RELATIVE_TIME = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });

@@ -388,6 +388,43 @@ describe("LaunchSessionModal", () => {
   });
 
 
+
+  it("prices the bet by saying how long a machine has actually been up", async () => {
+    // Handing work to a machine is a bet it will still be there when the turn
+    // finishes. A box up for days and one that connected forty seconds ago are
+    // different bets, and "Ready" alone hid that.
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [machine({ device_id: "cube", machine_name: "cube", connected_since: threeHoursAgo })],
+    });
+    renderModal();
+    expect(await screen.findByText("Ready · online 3h")).toBeInTheDocument();
+  });
+
+  it("flags a machine that only just connected instead of calling it settled", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "flaky",
+          machine_name: "flaky",
+          connected_since: new Date(Date.now() - 5_000).toISOString(),
+        }),
+      ],
+    });
+    renderModal();
+    expect(await screen.findByText("Ready · just connected")).toBeInTheDocument();
+  });
+
+  it("says only Ready when the engine reports no connection time", async () => {
+    // An older engine serves no connected_since. Inventing an uptime from
+    // absence would be worse than staying quiet.
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [machine({ device_id: "cube", machine_name: "cube" })],
+    });
+    renderModal();
+    expect(await screen.findAllByText("Ready")).not.toHaveLength(0);
+  });
+
   it("tells a connected machine's owner what to fix instead of just refusing", async () => {
     // "Console launch unavailable" names the symptom the user can already see
     // and withholds the cause, which the machine has been reporting all along.
