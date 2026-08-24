@@ -30,6 +30,7 @@ mod daemon;
 mod device;
 mod discovery;
 mod error_tracker;
+mod fault_injection;
 mod flight;
 mod heartbeat;
 mod machine_presence;

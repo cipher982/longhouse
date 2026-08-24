@@ -118,6 +118,11 @@ fn runtime_event_phase_is_shippable(event: &Value) -> bool {
 /// Writers never POST directly: an atomic rename makes an event visible to the
 /// drain loop only after its complete JSON payload reaches disk.
 pub fn enqueue_runtime_event(dir: &Path, event: &Value) -> anyhow::Result<()> {
+    // The spill path drops too, or a fault-injected terminal would simply take
+    // the durable route and arrive anyway.
+    if crate::fault_injection::should_drop_runtime_event(event) {
+        return Ok(());
+    }
     // Ingest rejects a phase_signal outside the contract, which dead-letters it.
     // Refuse at the producer instead, so the bug surfaces as a local error rather
     // than a 422 in production. This is deliberately an error and not a

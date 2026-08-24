@@ -264,6 +264,15 @@ def run(args: argparse.Namespace) -> dict:
     session_id = str(created["session_id"])
     report["session_id"] = session_id
 
+    # Acceptance mode: arm the engine to drop this session's terminal on the real
+    # path. Scoped to this one session id so concurrent work on a shared machine
+    # is untouched, and disarmed below no matter what happens.
+    fault_control = _home() / "agent" / "fault-drop-runtime-events"
+    if args.drop_terminal:
+        fault_control.parent.mkdir(parents=True, exist_ok=True)
+        fault_control.write_text(f"{session_id}:terminal_signal", encoding="utf-8")
+        report["terminal_dropped"] = True
+
     # Subscribe before dispatching, or the turn races the subscription. Waiting a
     # fixed two seconds is not enough: the stream emits a workspace_changed at
     # connect, and on a slow handshake that frame lands after dispatch and passes
@@ -380,6 +389,8 @@ def run(args: argparse.Namespace) -> dict:
         failures.append(f"workspace stream died before the turn settled: {watcher.error!r}")
     report["failures"] = failures
     report["verdict"] = "red" if failures else "green"
+    if args.drop_terminal:
+        fault_control.unlink(missing_ok=True)
     return report
 
 
@@ -405,6 +416,11 @@ def main() -> int:
         "--watch-session",
         default=None,
         help="negative control: stream a different session so live delivery must fail",
+    )
+    parser.add_argument(
+        "--drop-terminal",
+        action="store_true",
+        help="acceptance mode: drop this session's terminal in transit; red is the pass",
     )
     parser.add_argument("--json-out", default=None)
     args = parser.parse_args()
@@ -461,6 +477,16 @@ def main() -> int:
     if args.json_out:
         Path(args.json_out).write_text(rendered + "\n", encoding="utf-8")
     print(rendered)
+
+    if args.drop_terminal:
+        # Red is the pass. Green means a terminal was dropped on the real path
+        # and nothing noticed, which is the incident.
+        detected = payload["verdict"] == "red"
+        print(
+            f"acceptance: dropped terminal -> verdict={payload['verdict']} "
+            f"({'detected' if detected else 'NOT DETECTED'})"
+        )
+        return 0 if detected else 1
     return 0 if payload["verdict"] == "green" else 1
 
 

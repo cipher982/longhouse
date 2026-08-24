@@ -1767,6 +1767,13 @@ impl CodexExecRuntimeSink {
     }
 
     async fn post_events(&self, events: Vec<Value>) {
+        // Acceptance testing drops a terminal here, on the real path, so the
+        // detection can be proven rather than assumed. Disarmed unless a control
+        // file names this exact session; see fault_injection.
+        let events = crate::fault_injection::filter_runtime_events(events);
+        if events.is_empty() {
+            return;
+        }
         let count = events.len();
         self.queued_events.fetch_add(count, Ordering::Relaxed);
         if events_are_critical(&events) {
