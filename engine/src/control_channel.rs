@@ -591,6 +591,27 @@ fn control_supports_for_path(path_value: Option<&OsStr>) -> Vec<String> {
     )
 }
 
+/// Readiness for every managed provider, as the hello frame reports it.
+///
+/// Probes run concurrently: only providers whose binary is actually present
+/// and whose manifest declares a runnable probe ever spawn a process, so a
+/// machine with nothing installed adds no subprocesses to connect at all.
+/// Concurrency matters for the pathological case rather than the normal one --
+/// the real probes take well under a second, but one hung CLI must not stack
+/// its timeout on top of another's.
+async fn provider_readiness_snapshot() -> Value {
+    let path_value = std::env::var_os("PATH");
+    let env_lookup = |name: &str| std::env::var_os(name);
+    let pending = managed_provider_contract_items().iter().map(|contract| {
+        let binary = provider_binary_value(contract, &env_lookup);
+        let on_path = binary
+            .as_ref()
+            .is_some_and(|value| command_value_exists_in_path(value.as_os_str(), path_value.as_deref()));
+        crate::provider_readiness::readiness_for_contract(contract, binary, on_path)
+    });
+    crate::provider_readiness::readiness_map(futures_util::future::join_all(pending).await)
+}
+
 fn control_supports() -> Vec<String> {
     control_supports_for_path(std::env::var_os("PATH").as_deref())
 }
@@ -783,6 +804,10 @@ async fn run_once(
         "machine_name": config.machine_name,
         "engine_build": build_identity::COMMIT_SHORT,
         "supports": control_supports(),
+        // supports[] says what this engine can drive. Readiness says whether
+        // the machine can actually do it right now, and why not when it
+        // cannot -- the reason the browser previously never received.
+        "provider_readiness": provider_readiness_snapshot().await,
     });
     send_control_message(
         &mut stream,

@@ -60,6 +60,7 @@ mod pi_print;
 mod pipeline;
 mod process_group;
 mod process_identity;
+mod provider_readiness;
 mod raw_records;
 mod scheduler;
 mod shipper;
