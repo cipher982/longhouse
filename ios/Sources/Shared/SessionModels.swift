@@ -30,6 +30,20 @@ struct SessionResumeIntent: Codable, Identifiable, Sendable {
     var id: String { sessionId }
 }
 
+extension SessionStateFacts {
+    /// Is the served activity evidence still inside its window?
+    ///
+    /// Mirrors `web/src/lib/activityEvidence.ts`. Expired evidence becomes
+    /// unknown, never idle or finished: absence of evidence is not evidence of
+    /// an ending. A missing or unparseable window is not an expired one --
+    /// inventing an expiry would hide live activity.
+    func activityEvidenceIsLive(asOf now: Date = Date()) -> Bool {
+        guard let validUntil = activityValidUntil, !validUntil.isEmpty else { return true }
+        guard let expiresAt = LonghouseDateParser.parse(validUntil) else { return true }
+        return now <= expiresAt
+    }
+}
+
 struct SessionStateFacts: Hashable, Codable, Sendable {
     let contractVersion: Int
     let presentationPolicyVersion: Int
@@ -247,14 +261,27 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
 
     var isClosed: Bool { stateFacts.dispositionState == "closed" }
 
-    var isBlocked: Bool { !isClosed && stateFacts.activityState == "blocked" }
+    var isBlocked: Bool { isBlocked(asOf: Date()) }
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool {
         if isClosed || !isUserActive { return false }
         return stateFacts.pendingInteractionKind != nil
     }
-    var isExecuting: Bool {
-        !isClosed && ["thinking", "executing"].contains(stateFacts.activityState)
+    var isExecuting: Bool { isExecuting(asOf: Date()) }
+
+    /// Activity, judged against the window the server stamped on the evidence.
+    ///
+    /// Without this a view holding a snapshot renders whatever it last received
+    /// for as long as it stays on screen. A wedged turn sends no further frame,
+    /// so a correct server and a "Working" bar coexist indefinitely.
+    func isExecuting(asOf now: Date) -> Bool {
+        guard !isClosed, stateFacts.activityEvidenceIsLive(asOf: now) else { return false }
+        return ["thinking", "executing"].contains(stateFacts.activityState)
+    }
+
+    func isBlocked(asOf now: Date) -> Bool {
+        guard !isClosed, stateFacts.activityEvidenceIsLive(asOf: now) else { return false }
+        return stateFacts.activityState == "blocked"
     }
     var isIdle: Bool { isClosed || stateFacts.activityState == "quiescent" }
     var runtimeTone: String { stateFacts.primary?.tone ?? "inactive" }

@@ -15,7 +15,8 @@ func makeSessionStateFacts(
     workingSet overrideWorkingSet: String? = nil,
     unread: Bool = false,
     lastResultAt: String? = nil,
-    lastResultOutcome: String? = nil
+    lastResultOutcome: String? = nil,
+    activityValidUntil: String? = nil
 ) -> SessionStateFacts {
     let available = SessionStateAction(state: "available", reason: nil)
     let unavailable = SessionStateAction(state: "unavailable", reason: "fixture_not_granted")
@@ -46,7 +47,7 @@ func makeSessionStateFacts(
         activityTool: tool,
         activitySource: nil,
         activityObservedAt: nil,
-        activityValidUntil: nil,
+        activityValidUntil: activityValidUntil,
         controlOwnership: owned ? "owned" : "unowned",
         controlConnection: owned ? "connected" : "not_applicable",
         // Mirror the server's _working_set rule so fixtures cannot drift.
