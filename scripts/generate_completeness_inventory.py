@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -87,120 +88,99 @@ def _collection_literals(members: list[str], sources: list[Path]) -> dict:
     }
 
 
-def _launch_identity(sources: list[Path], providers: list[str]) -> dict:
-    routed: dict[str, list[str]] = {}
-    for provider in providers:
-        variant = "".join(part.capitalize() for part in provider.split("_"))
-        pattern = re.compile(r"ManagedIdentity::new\(\s*ManagedProvider::%s\b" % re.escape(variant))
-        sites = sorted(
-            str(p.relative_to(ROOT))
-            for p in sources
-            if p.suffix == ".rs" and pattern.search(p.read_text(encoding="utf-8", errors="ignore"))
-        )
-        if sites:
-            routed[provider] = sites
-    # A launch source hand-writing these keys is the defect. A test harness doing
-    # it is simulating what a launcher produced, which is the point of the test --
-    # so the two are counted separately rather than summed into one alarming
-    # number.
-    in_launch_sources: list[str] = []
-    in_test_harnesses: list[str] = []
-    guarded = ("LONGHOUSE_MANAGED_SESSION_ID", "LONGHOUSE_MANAGED_PROVIDER")
-    for path in sources:
-        if path.suffix != ".rs" or path.name.startswith("managed_identity"):
-            continue
-        rel = str(path.relative_to(ROOT))
-        for number, line in enumerate(
-            path.read_text(encoding="utf-8", errors="ignore").splitlines(), start=1
-        ):
-            if line.lstrip().startswith("//") or ".env(" not in line:
-                continue
-            if any(f'"{key}"' in line for key in guarded):
-                bucket = in_test_harnesses if "/tests/" in rel else in_launch_sources
-                bucket.append(f"{rel}:{number}")
-    return {
-        "registry": "schemas/managed_providers.yml",
-        "anchor": "load-bearing: the factory, census, contract digest and generated Rust enum all derive from it",
-        "check": "scripts/qa/check-managed-identity-sites.py",
-        "providers_routed": routed,
-        "providers_unrouted": [p for p in providers if p not in routed],
-        "hand_written_in_launch_sources": in_launch_sources,
-        "hand_written_in_test_harnesses": in_test_harnesses,
-    }
-
-
 def _unread_checks() -> dict:
-    """A check whose result nothing reads is not a check."""
-    scripts = sorted(
-        p for p in (ROOT / "scripts" / "qa").glob("*") if p.is_file() and not p.name.startswith(".")
-    )
-    readers: list[str] = []
-    for candidate in [ROOT / "Makefile", ROOT / ".pre-commit-config.yaml"]:
-        if candidate.exists():
-            readers.append(candidate.read_text(encoding="utf-8", errors="ignore"))
-    for path in (ROOT / ".github" / "workflows").glob("*.yml"):
-        readers.append(path.read_text(encoding="utf-8", errors="ignore"))
-    blob = "\n".join(readers)
-    unreferenced = [p.name for p in scripts if p.name not in blob]
-    return {
-        "rule": "A file in scripts/qa/ whose basename appears in no Makefile, pre-commit config or workflow.",
-        "checks_total": len(scripts),
-        "unreferenced": unreferenced,
+    """A check whose result nothing reads is not a check.
+
+    The first version of this asked "is the basename mentioned in the Makefile,
+    pre-commit config or a workflow?" and reported 24 of 69 unread. Widening the
+    search showed most of those 24 are invoked by another script, a test, or a
+    runbook -- and that this artifact, which lists the filenames, was matching
+    itself. A negative search proves only the surfaces it searched.
+
+    So this computes reachability instead. Roots are the places work actually
+    starts: the Makefile, the pre-commit config, CI workflows, and docs (a tool
+    a runbook tells a human to run is reached by a human). A file referenced by
+    a reachable file is reachable. What is left over is referenced by nothing
+    that anything starts from -- including scripts reachable only from another
+    orphan.
+    """
+    qa_dir = ROOT / "scripts" / "qa"
+    scripts = sorted(p for p in qa_dir.glob("*") if p.is_file() and not p.name.startswith("."))
+
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+    texts: dict[str, str] = {}
+    for rel in tracked:
+        # This artifact lists the very names it is measuring; counting it as a
+        # reference would make every orphan look reached.
+        if rel == str(OUTPUT.relative_to(ROOT)):
+            continue
+        path = ROOT / rel
+        if path.suffix in (".png", ".jpg", ".jpeg", ".ico", ".woff", ".woff2", ".mp4", ".pdf"):
+            continue
+        try:
+            texts[rel] = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+    roots = {
+        rel
+        for rel in texts
+        if rel == "Makefile"
+        or rel == ".pre-commit-config.yaml"
+        or rel.startswith(".github/workflows/")
+        or rel.startswith("docs/")
     }
 
+    def references(text: str, name: str) -> bool:
+        module = pathlib.Path(name).stem.replace("-", "_")
+        return name in text or re.search(rf"\b{re.escape(module)}\b", text) is not None
 
-def _candidate_axes() -> list[dict]:
-    """Axes named as out of scope for the launch-identity work, measured only.
+    reachable: set[str] = set(roots)
+    frontier = list(roots)
+    while frontier:
+        current = frontier.pop()
+        body = texts.get(current, "")
+        for rel in texts:
+            if rel in reachable:
+                continue
+            if references(body, pathlib.Path(rel).name):
+                reachable.add(rel)
+                frontier.append(rel)
 
-    Recorded so a later epic is scoped from evidence. `derived_registry: false`
-    means the members exist only as prose or as repeated literals -- which is
-    where this bug class lives.
-    """
-    return [
-        {
-            "axis": "managed launch identity",
-            "derived_registry": True,
-            "completeness_check": True,
-            "status": "closed by scripts/qa/check-managed-identity-sites.py",
-        },
-        {
-            "axis": "session modes (Shadow / Helm / Console)",
-            "derived_registry": True,
-            "completeness_check": True,
-            "status": "session-mode-definitions pre-commit hook already checks the vocabulary",
-        },
-        {
-            "axis": "native device entrypoints",
-            "derived_registry": True,
-            "completeness_check": True,
-            "status": "scripts/qa/check-native-device-entrypoints.py, run via make validate",
-        },
-        {
-            "axis": "data tiers x datasets",
-            "derived_registry": False,
-            "completeness_check": False,
-            "status": "AGENTS.md states every dataset belongs to exactly one tier; no registry of datasets exists, so totality is unenforceable as written",
-        },
-        {
-            "axis": "retention roots x reachability",
-            "derived_registry": False,
-            "completeness_check": False,
-            "status": "AGENTS.md states retention must reach every root; roots are not enumerated anywhere",
-        },
-        {
-            "axis": "/api/* routes on api_app",
-            "derived_registry": False,
-            "completeness_check": False,
-            "status": "stated in AGENTS.md, enforced by review only; mechanically greppable",
-        },
-    ]
+    unreachable = sorted(
+        str(p.relative_to(ROOT)) for p in scripts if str(p.relative_to(ROOT)) not in reachable
+    )
+    return {
+        "rule": (
+            "Reachability, not mention. Roots are Makefile, .pre-commit-config.yaml, "
+            ".github/workflows/*, and docs/*; an edge exists where one file's text "
+            "contains another's basename or underscored module name. This artifact is "
+            "excluded as a referencer because it lists the names it measures. Name "
+            "matching is a heuristic and will over-report reachability, so this is a "
+            "floor: everything listed is unreachable, but not everything unreachable "
+            "is necessarily listed."
+        ),
+        "checks_total": len(scripts),
+        "unreachable_count": len(unreachable),
+        "unreachable": unreachable,
+    }
 
 
 def build() -> dict:
     sources = _tracked_sources()
     providers = _providers()
     return {
-        "purpose": "Where the omission bug class can still hide. Measured, not asserted.",
+        "purpose": (
+            "Two measurements, both computed from the tree. Launch-identity coverage "
+            "is deliberately absent: scripts/qa/check-managed-identity-sites.py owns "
+            "that property, and the weaker copy that used to live here counted the "
+            "overlay's own unit tests as launch sites -- it would have reported five "
+            "of six providers covered with every real launcher deleted. Judgment about "
+            "which axis to close next lives in the spec, where a reader can see it is "
+            "a person's opinion rather than a computed fact."
+        ),
         "not_the_provider_census": (
             "docs/generated/provider_census.json counts files with >=2 provider literals anywhere. "
             "This counts collection literals. Different rules, different numbers; neither target is zero."
@@ -214,12 +194,10 @@ def build() -> dict:
             f"git-tracked {', '.join(SOURCE_GLOBS)} excluding any path component in "
             f"{', '.join(EXCLUDED_PATH_PARTS)}"
         ),
-        "launch_identity": _launch_identity(sources, providers),
         "member_collections": {
             "managed_providers": _collection_literals(providers, sources),
         },
         "unread_checks": _unread_checks(),
-        "candidate_axes": _candidate_axes(),
     }
 
 

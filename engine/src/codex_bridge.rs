@@ -2563,7 +2563,7 @@ fn build_codex_bridge_attach_command(
         .arg("--remote")
         .arg(&ws_url)
         .current_dir(PathBuf::from(state.cwd));
-    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id).apply(&mut command);
+    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id).apply(&mut command, &[]);
 
     Ok((command, codex_bin))
 }
@@ -2832,11 +2832,14 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     let coordination_command =
         std::env::current_exe().context("resolving Longhouse engine for Codex coordination MCP")?;
     command.args(codex_app_server_args(config, &coordination_command));
-    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id).apply(&mut command);
-    // Set after the overlay, never before: the scrub would remove them.
+    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id).apply(
+        &mut command,
+        &[
+            ("LONGHOUSE_HOOK_URL", &config.api_url),
+            ("LONGHOUSE_HOOK_TOKEN", &config.api_token),
+        ],
+    );
     command
-        .env("LONGHOUSE_HOOK_URL", &config.api_url)
-        .env("LONGHOUSE_HOOK_TOKEN", &config.api_token)
         .current_dir(&config.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

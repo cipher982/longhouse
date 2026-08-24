@@ -1087,7 +1087,7 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
     // would deliver this session's input into another session's inbox.
     ManagedIdentity::new(ManagedProvider::Antigravity, &session_id)
         .with_run_id(&run_id)
-        .apply(&mut command);
+        .apply(&mut command, &[]);
 
     // Registration opens a launch that stays pending until it is confirmed, and
     // the transaction reports an abort on Drop if it never is. Without this a
@@ -1540,25 +1540,29 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         ])
         .arg(&mcp_config.path)
         .current_dir(&cwd);
+    // Claude's own keys, handed to the overlay rather than set afterwards: the
+    // channel server reads them, and inheriting another session's would point
+    // this one at the wrong channel.
+    let cwd_string = cwd.to_string_lossy().into_owned();
     ManagedIdentity::new(ManagedProvider::Claude, &session_id)
         .with_run_id(&run_id)
-        .apply(&mut command);
-    // Set after the overlay, never before: the scrub would remove them. These
-    // are Claude's own -- the channel server reads them, and inheriting another
-    // session's would point this one at the wrong channel.
-    command
-        .env("LONGHOUSE_CHANNEL_SESSION_ID", &session_id)
-        .env("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id)
-        .env("LONGHOUSE_CHANNEL_CWD", &cwd)
-        .env("LONGHOUSE_HOOK_URL", &url)
-        .env("LONGHOUSE_HOOK_TOKEN", hook_token)
-        .env(
-            "LONGHOUSE_PERMISSION_HOOK_ENABLED",
-            if permission_mode == "remote_approve" {
-                "1"
-            } else {
-                "0"
-            },
+        .apply(
+            &mut command,
+            &[
+                ("LONGHOUSE_CHANNEL_SESSION_ID", &session_id),
+                ("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id),
+                ("LONGHOUSE_CHANNEL_CWD", &cwd_string),
+                ("LONGHOUSE_HOOK_URL", &url),
+                ("LONGHOUSE_HOOK_TOKEN", hook_token),
+                (
+                    "LONGHOUSE_PERMISSION_HOOK_ENABLED",
+                    if permission_mode == "remote_approve" {
+                        "1"
+                    } else {
+                        "0"
+                    },
+                ),
+            ],
         );
     let contract_path = claude_contract_path(&session_id)?;
     let retained_contract_existed = contract_path.is_file();
@@ -3068,7 +3072,7 @@ fn build_codex_tui_command(
     command
         .args(["--enable", "tui_app_server", "--remote", ws_url])
         .current_dir(cwd);
-    ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command);
+    ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command, &[]);
     command
 }
 

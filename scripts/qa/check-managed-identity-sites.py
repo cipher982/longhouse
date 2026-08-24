@@ -52,21 +52,67 @@ def _sources() -> dict[Path, str]:
     }
 
 
+def _console_adapters() -> dict[str, str]:
+    """Each provider's Console adapter module, named by the schema itself.
+
+    This is what makes the check per-lane rather than per-provider. Asking only
+    "does this provider appear beside a constructor somewhere?" passes when one
+    of a provider's launchers routes and the rest do not -- which is the exact
+    shape of the bug, since Codex had four launch sites and one of them was
+    wrong.
+    """
+    payload = yaml.safe_load(SCHEMA.read_text(encoding="utf-8"))
+    return {
+        str(row["provider"]): str(row["console_adapter"])
+        for row in payload["providers"]
+        if row.get("launch_local") and row.get("console_adapter")
+    }
+
+
 def main() -> int:
     providers = _launchable()
     sources = _sources()
+    adapters = _console_adapters()
     findings: list[str] = []
 
     for provider in providers:
-        pattern = re.compile(
-            r"ManagedIdentity::new\(\s*ManagedProvider::%s\b" % re.escape(_variant(provider))
-        )
-        sites = [path.relative_to(ROOT) for path, text in sources.items() if pattern.search(text)]
+        variant = _variant(provider)
+        pattern = re.compile(r"ManagedIdentity::new\(\s*ManagedProvider::%s\b" % re.escape(variant))
+        sites = [path for path, text in sources.items() if pattern.search(text)]
         if not sites:
             findings.append(
                 f"{provider}: schema says launch_local, but nothing constructs "
-                f"ManagedIdentity::new(ManagedProvider::{_variant(provider)}, ..). "
+                f"ManagedIdentity::new(ManagedProvider::{variant}, ..). "
                 f"A launch that claims no identity is the defect this check exists for."
+            )
+            continue
+
+        # Per-lane: the Console adapter the schema names for this provider must
+        # itself claim the identity. One routed launcher must not cover for the
+        # rest.
+        adapter = adapters.get(provider)
+        if adapter:
+            adapter_path = ENGINE_SRC / f"{adapter}.rs"
+            if adapter_path.exists() and not pattern.search(sources.get(adapter_path, "")):
+                findings.append(
+                    f"{provider}: schema names {adapter} as its Console adapter, but "
+                    f"{adapter}.rs does not claim identity for {provider}. Another "
+                    f"launcher doing so does not cover this one."
+                )
+
+    # Constructing without applying claims nothing. Every construction must reach
+    # an applier, or it is decoration that satisfies the check above and changes
+    # no process environment.
+    construction = re.compile(r"ManagedIdentity::new\([^;]*?\)(?P<tail>[^;]*);", re.S)
+    for path, text in sources.items():
+        for match in construction.finditer(text):
+            if ".apply(" in match.group("tail") or ".apply_to_pairs(" in match.group("tail"):
+                continue
+            line = text[: match.start()].count("\n") + 1
+            findings.append(
+                f"{path.relative_to(ROOT)}:{line}: constructs a ManagedIdentity and "
+                f"never applies it. A claim that reaches no process environment is "
+                f"decoration."
             )
 
     for path, text in sources.items():
@@ -93,7 +139,8 @@ def main() -> int:
 
     print(
         f"Managed launch identity: {len(providers)} launchable providers "
-        f"({', '.join(providers)}) each claim identity through the overlay."
+        f"({', '.join(providers)}) claim identity through the overlay, each in the "
+        f"Console adapter the schema names for it, and every construction is applied."
     )
     return 0
 

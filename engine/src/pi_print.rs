@@ -131,7 +131,7 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
         .stderr(Stdio::from(stderr_file));
     ManagedIdentity::new(ManagedProvider::Pi, &config.session_id)
         .with_run_id(&config.run_id)
-        .apply(&mut command);
+        .apply(&mut command, &[]);
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {

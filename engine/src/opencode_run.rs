@@ -148,7 +148,7 @@ pub async fn start_opencode_run_turn(config: OpenCodeRunConfig) -> Result<OpenCo
         .env_remove("OPENCODE_SERVER_USERNAME");
     ManagedIdentity::new(ManagedProvider::Opencode, &config.session_id)
         .with_run_id(&config.run_id)
-        .apply(&mut command);
+        .apply(&mut command, &[]);
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {

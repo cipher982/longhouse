@@ -251,7 +251,7 @@ fn configure_opencode_environment(
     password: &str,
     mcp_config: &serde_json::Value,
 ) -> Result<()> {
-    ManagedIdentity::new(ManagedProvider::Opencode, session_id).apply(command);
+    ManagedIdentity::new(ManagedProvider::Opencode, session_id).apply(command, &[]);
     command
         .env("OPENCODE_SERVER_USERNAME", USERNAME)
         .env("OPENCODE_SERVER_PASSWORD", password)

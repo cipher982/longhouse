@@ -159,7 +159,7 @@ pub async fn start_cursor_print_turn(
         .stderr(Stdio::from(stderr_file));
     ManagedIdentity::new(ManagedProvider::Cursor, &config.session_id)
         .with_run_id(&config.run_id)
-        .apply(&mut command);
+        .apply(&mut command, &[]);
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {

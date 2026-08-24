@@ -933,7 +933,7 @@ fn app_server_command(
         // Through the shared overlay so the canary's environment matches what a
         // real launch produces. A canary that diverges from production proves
         // less than it appears to.
-        ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command);
+        ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command, &[]);
     }
     command
 }

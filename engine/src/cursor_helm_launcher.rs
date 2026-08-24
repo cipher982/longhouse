@@ -907,29 +907,23 @@ fn managed_identity_env(
     launch_id: &str,
     permission_mode: &str,
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut env_pairs = ManagedIdentity::new(ManagedProvider::Cursor, session_id)
-        .apply_to_pairs(inherited);
-    // Cursor's own, set after the overlay: the scrub removes them first, so an
-    // inherited launch id cannot make this child answer for another launch.
-    env_pairs.extend([
-        (
-            b"LONGHOUSE_CURSOR_LAUNCH_ID".to_vec(),
-            launch_id.as_bytes().to_vec(),
-        ),
-        (
-            b"LONGHOUSE_PERMISSION_HOOK_ENABLED".to_vec(),
-            if permission_mode == "remote_human" {
-                b"1".to_vec()
-            } else {
-                b"0".to_vec()
-            },
-        ),
-        (
-            b"LONGHOUSE_CURSOR_REGISTRATION_READY".to_vec(),
-            b"1".to_vec(),
-        ),
-    ]);
-    env_pairs
+    // Cursor's own, handed to the overlay: it scrubs first, so an inherited
+    // launch id cannot make this child answer for another launch.
+    ManagedIdentity::new(ManagedProvider::Cursor, session_id).apply_to_pairs(
+        inherited,
+        &[
+            ("LONGHOUSE_CURSOR_LAUNCH_ID", launch_id.as_bytes().to_vec()),
+            (
+                "LONGHOUSE_PERMISSION_HOOK_ENABLED",
+                if permission_mode == "remote_human" {
+                    b"1".to_vec()
+                } else {
+                    b"0".to_vec()
+                },
+            ),
+            ("LONGHOUSE_CURSOR_REGISTRATION_READY", b"1".to_vec()),
+        ],
+    )
 }
 
 pub fn serve_coordination_mcp() -> anyhow::Result<()> {

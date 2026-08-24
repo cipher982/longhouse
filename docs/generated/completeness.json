@@ -1,86 +1,4 @@
 {
-  "candidate_axes": [
-    {
-      "axis": "managed launch identity",
-      "completeness_check": true,
-      "derived_registry": true,
-      "status": "closed by scripts/qa/check-managed-identity-sites.py"
-    },
-    {
-      "axis": "session modes (Shadow / Helm / Console)",
-      "completeness_check": true,
-      "derived_registry": true,
-      "status": "session-mode-definitions pre-commit hook already checks the vocabulary"
-    },
-    {
-      "axis": "native device entrypoints",
-      "completeness_check": true,
-      "derived_registry": true,
-      "status": "scripts/qa/check-native-device-entrypoints.py, run via make validate"
-    },
-    {
-      "axis": "data tiers x datasets",
-      "completeness_check": false,
-      "derived_registry": false,
-      "status": "AGENTS.md states every dataset belongs to exactly one tier; no registry of datasets exists, so totality is unenforceable as written"
-    },
-    {
-      "axis": "retention roots x reachability",
-      "completeness_check": false,
-      "derived_registry": false,
-      "status": "AGENTS.md states retention must reach every root; roots are not enumerated anywhere"
-    },
-    {
-      "axis": "/api/* routes on api_app",
-      "completeness_check": false,
-      "derived_registry": false,
-      "status": "stated in AGENTS.md, enforced by review only; mechanically greppable"
-    }
-  ],
-  "launch_identity": {
-    "anchor": "load-bearing: the factory, census, contract digest and generated Rust enum all derive from it",
-    "check": "scripts/qa/check-managed-identity-sites.py",
-    "hand_written_in_launch_sources": [],
-    "hand_written_in_test_harnesses": [
-      "engine/tests/cursor_native_hooks.rs:31",
-      "engine/tests/cursor_native_hooks.rs:462",
-      "engine/tests/cursor_native_hooks.rs:522"
-    ],
-    "providers_routed": {
-      "antigravity": [
-        "engine/src/antigravity_print.rs",
-        "engine/src/longhouse.rs",
-        "engine/src/managed_identity.rs"
-      ],
-      "claude": [
-        "engine/src/claude_print.rs",
-        "engine/src/longhouse.rs",
-        "engine/src/managed_identity.rs"
-      ],
-      "codex": [
-        "engine/src/codex_app_server_canary.rs",
-        "engine/src/codex_bridge.rs",
-        "engine/src/codex_exec.rs",
-        "engine/src/longhouse.rs",
-        "engine/src/managed_identity.rs"
-      ],
-      "cursor": [
-        "engine/src/cursor_helm_launcher.rs",
-        "engine/src/cursor_print.rs",
-        "engine/src/managed_identity.rs"
-      ],
-      "opencode": [
-        "engine/src/managed_identity.rs",
-        "engine/src/opencode_bridge.rs",
-        "engine/src/opencode_run.rs"
-      ],
-      "pi": [
-        "engine/src/pi_print.rs"
-      ]
-    },
-    "providers_unrouted": [],
-    "registry": "schemas/managed_providers.yml"
-  },
   "member_collections": {
     "managed_providers": {
       "files": 90,
@@ -108,36 +26,23 @@
     }
   },
   "not_the_provider_census": "docs/generated/provider_census.json counts files with >=2 provider literals anywhere. This counts collection literals. Different rules, different numbers; neither target is zero.",
-  "purpose": "Where the omission bug class can still hide. Measured, not asserted.",
+  "purpose": "Two measurements, both computed from the tree. Launch-identity coverage is deliberately absent: scripts/qa/check-managed-identity-sites.py owns that property, and the weaker copy that used to live here counted the overlay's own unit tests as launch sites -- it would have reported five of six providers covered with every real launcher deleted. Judgment about which axis to close next lives in the spec, where a reader can see it is a person's opinion rather than a computed fact.",
   "scan_rule": "git-tracked *.py, *.ts, *.tsx, *.rs, *.swift excluding any path component in generated, node_modules, target",
   "unread_checks": {
     "checks_total": 69,
-    "rule": "A file in scripts/qa/ whose basename appears in no Makefile, pre-commit config or workflow.",
-    "unreferenced": [
-      "archive-pressure-read-smoke.py",
-      "catalogd-ping-benchmark.py",
-      "codex-provider-release-canary.py",
-      "cursor-visibility-evidence.py",
-      "profile-ios-session-open.py",
-      "provider-build-store.py",
-      "provider-control-e2e-canary.py",
-      "provider-harness-qualification.py",
-      "provider-live-canary.py",
-      "provider-live-proof-publish.py",
-      "provider-release-profile-canary.py",
-      "provider_release_proof_rollups.py",
-      "readme-serve-health-smoke.sh",
-      "repro-codex-remote-backpressure.sh",
-      "run-prod-e2e.sh",
-      "session-state-deep-health.py",
-      "session_title_model_eval.py",
-      "test-codex-managed-thread-lifecycle.sh",
-      "test-zerg-ops.sh",
-      "universal-agent-harness.py",
-      "validate-deployment.py",
-      "verify-runtime-truth.py",
-      "verify-single-react.mjs",
-      "visual-compare.ts"
-    ]
+    "rule": "Reachability, not mention. Roots are Makefile, .pre-commit-config.yaml, .github/workflows/*, and docs/*; an edge exists where one file's text contains another's basename or underscored module name. This artifact is excluded as a referencer because it lists the names it measures. Name matching is a heuristic and will over-report reachability, so this is a floor: everything listed is unreachable, but not everything unreachable is necessarily listed.",
+    "unreachable": [
+      "scripts/qa/archive-pressure-read-smoke.py",
+      "scripts/qa/catalogd-ping-benchmark.py",
+      "scripts/qa/cursor-visibility-evidence.py",
+      "scripts/qa/profile-ios-session-open.py",
+      "scripts/qa/repro-codex-remote-backpressure.sh",
+      "scripts/qa/session_title_model_eval.py",
+      "scripts/qa/test-codex-managed-thread-lifecycle.sh",
+      "scripts/qa/test-zerg-ops.sh",
+      "scripts/qa/validate-deployment.py",
+      "scripts/qa/verify-runtime-truth.py"
+    ],
+    "unreachable_count": 10
   }
 }

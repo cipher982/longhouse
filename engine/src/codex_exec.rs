@@ -528,7 +528,7 @@ async fn spawn_initialized_codex_worker(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     if let Some(session_id) = session_id {
-        ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command);
+        ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command, &[]);
     } else {
         // An anonymous worker is meant to carry no session. Scrubbing is what
         // makes that true: without it the worker carries whichever managed

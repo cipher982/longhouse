@@ -111,25 +111,40 @@ impl ManagedIdentity {
         }
     }
 
-    /// Scrub every inheritable identity key, then set this launcher's own. Call
-    /// this **before** the launcher sets the keys it owns, or the scrub will
-    /// remove them.
-    pub fn apply<S: EnvSink>(&self, sink: &mut S) {
+    /// Scrub every inheritable identity key, then write the required overlay,
+    /// then write the keys this launcher legitimately owns.
+    ///
+    /// `owned` is a parameter rather than something the caller sets afterwards
+    /// on purpose. The first version of this scrubbed and returned, which meant
+    /// a launcher had to remember to call it *before* its own `.env()` calls or
+    /// silently lose them -- reintroducing exactly the "remember to do it right"
+    /// the overlay exists to remove. Ordering is now the function's problem, and
+    /// a launcher that owns nothing passes an empty slice.
+    pub fn apply<S: EnvSink>(&self, sink: &mut S, owned: &[(&str, &str)]) {
         for key in NEVER_INHERITED_KEYS {
             sink.unset_var(key);
         }
         for (key, value) in self.overlay() {
             sink.set_var(key, &value);
         }
+        for (key, value) in owned {
+            debug_assert!(
+                key.starts_with("LONGHOUSE_"),
+                "{key} is not a Longhouse key; set provider-private variables directly"
+            );
+            sink.set_var(key, value);
+        }
     }
 
     /// Apply to a raw environment list for `execve`, which cannot go through
-    /// `Command`. Returns the scrubbed inherited pairs with the overlay appended:
+    /// `Command`. Returns the scrubbed inherited pairs with the overlay and the
+    /// launcher's own keys appended:
     /// a duplicate key in an exec environment resolves to whichever copy comes
     /// first, so the inherited copies must be dropped rather than shadowed.
     pub fn apply_to_pairs(
         &self,
         inherited: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
+        owned: &[(&str, Vec<u8>)],
     ) -> Vec<(Vec<u8>, Vec<u8>)> {
         let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = inherited
             .filter(|(key, _)| {
@@ -140,6 +155,9 @@ impl ManagedIdentity {
             .collect();
         for (key, value) in self.overlay() {
             pairs.push((key.as_bytes().to_vec(), value.into_bytes()));
+        }
+        for (key, value) in owned {
+            pairs.push((key.as_bytes().to_vec(), value.clone()));
         }
         pairs
     }
@@ -169,7 +187,7 @@ mod tests {
 
     fn applied(identity: &ManagedIdentity, inherited: &[(&str, &str)]) -> HashMap<String, String> {
         identity
-            .apply_to_pairs(pairs(inherited).into_iter())
+            .apply_to_pairs(pairs(inherited).into_iter(), &[])
             .into_iter()
             .map(|(k, v)| {
                 (
@@ -224,7 +242,7 @@ mod tests {
             .collect();
         let identity =
             ManagedIdentity::new(ManagedProvider::Claude, "session-123").with_run_id("run-456");
-        let result = identity.apply_to_pairs(pairs(&inherited).into_iter());
+        let result = identity.apply_to_pairs(pairs(&inherited).into_iter(), &[]);
         for key in never_inherited_keys() {
             let count = result
                 .iter()
@@ -263,7 +281,7 @@ mod tests {
         // Order is load-bearing: a launcher calls apply() and then sets the keys
         // it owns. If the scrub ran last it would erase them.
         let mut sink = RecordingSink::default();
-        ManagedIdentity::new(ManagedProvider::Antigravity, "session-123").apply(&mut sink);
+        ManagedIdentity::new(ManagedProvider::Antigravity, "session-123").apply(&mut sink, &[]);
         for key in never_inherited_keys() {
             assert!(sink.unset.contains(&(*key).to_string()), "{key} not scrubbed");
         }
@@ -274,6 +292,43 @@ mod tests {
                 ("LONGHOUSE_MANAGED_PROVIDER".to_string(), "antigravity".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn a_launchers_own_keys_survive_the_scrub() {
+        // The hazard this signature removes: the scrub and the launcher's own
+        // keys used to be two calls, so a launcher that wrote its keys first
+        // silently lost them. Ordering is now inside apply().
+        let mut sink = RecordingSink::default();
+        ManagedIdentity::new(ManagedProvider::Claude, "session-123").apply(
+            &mut sink,
+            &[
+                ("LONGHOUSE_CHANNEL_SESSION_ID", "session-123"),
+                ("LONGHOUSE_HOOK_TOKEN", "token"),
+            ],
+        );
+        let final_value: std::collections::HashMap<_, _> = sink.set.iter().cloned().collect();
+        assert_eq!(final_value["LONGHOUSE_CHANNEL_SESSION_ID"], "session-123");
+        assert_eq!(final_value["LONGHOUSE_HOOK_TOKEN"], "token");
+        // Both are in NEVER_INHERITED, so a scrub running after them would have
+        // erased them. The last write wins and it is the launcher's.
+        assert!(sink.unset.contains(&"LONGHOUSE_CHANNEL_SESSION_ID".to_string()));
+        let scrub_index = sink.unset.len();
+        assert!(scrub_index > 0, "scrub must happen");
+    }
+
+    #[test]
+    fn owned_keys_reach_the_execve_lane_too() {
+        let identity = ManagedIdentity::new(ManagedProvider::Cursor, "session-123");
+        let result = identity.apply_to_pairs(
+            pairs(&[("LONGHOUSE_CURSOR_LAUNCH_ID", "parent-launch")]).into_iter(),
+            &[("LONGHOUSE_CURSOR_LAUNCH_ID", b"my-launch".to_vec())],
+        );
+        let env: HashMap<String, String> = result
+            .into_iter()
+            .map(|(k, v)| (String::from_utf8(k).unwrap(), String::from_utf8(v).unwrap()))
+            .collect();
+        assert_eq!(env["LONGHOUSE_CURSOR_LAUNCH_ID"], "my-launch");
     }
 
     #[test]

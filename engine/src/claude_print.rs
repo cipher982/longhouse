@@ -132,7 +132,7 @@ pub async fn start_claude_print_turn(
         .stderr(Stdio::from(stderr_file));
     ManagedIdentity::new(ManagedProvider::Claude, &config.session_id)
         .with_run_id(&config.run_id)
-        .apply(&mut command);
+        .apply(&mut command, &[]);
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {
