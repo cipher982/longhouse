@@ -902,7 +902,10 @@ fn restore_mcp_config(path: &Path, original: Option<&str>) -> std::io::Result<()
 ///
 /// The inherited copies are dropped before the new ones are appended: a
 /// duplicate key in the exec environment resolves to whichever copy comes
-/// first, which would hand the child its parent's identity.
+/// first, which would hand the child its parent's identity. The channel and
+/// run ids are dropped outright -- nothing on the Cursor path sets or reads
+/// them, and `claude-channel serve` falls back to them, so an inherited value
+/// is another session's identity rather than a default.
 fn managed_identity_env(
     inherited: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
     session_id: &str,
@@ -922,6 +925,10 @@ fn managed_identity_env(
                     | b"LONGHOUSE_HOOK_URL"
                     | b"LONGHOUSE_HOOK_TOKEN"
                     | b"LONGHOUSE_COORDINATION_TOKEN"
+                    | b"LONGHOUSE_RUN_ID"
+                    | b"LONGHOUSE_CHANNEL_SESSION_ID"
+                    | b"LONGHOUSE_PROVIDER_SESSION_ID"
+                    | b"LONGHOUSE_CHANNEL_CWD"
             )
         })
         .collect();
@@ -1879,6 +1886,10 @@ mod tests {
             ("LONGHOUSE_PERMISSION_HOOK_ENABLED", "1"),
             ("LONGHOUSE_HOOK_TOKEN", "parent-token"),
             ("LONGHOUSE_COORDINATION_TOKEN", "parent-coordination"),
+            ("LONGHOUSE_RUN_ID", "parent-run"),
+            ("LONGHOUSE_CHANNEL_SESSION_ID", "parent-channel"),
+            ("LONGHOUSE_PROVIDER_SESSION_ID", "parent-provider"),
+            ("LONGHOUSE_CHANNEL_CWD", "/parent/cwd"),
         ];
         let pairs = super::managed_identity_env(
             inherited
@@ -1914,6 +1925,12 @@ mod tests {
         assert!(env.get("LONGHOUSE_HOOK_TOKEN").is_none());
         assert!(env.get("LONGHOUSE_COORDINATION_TOKEN").is_none());
         assert!(env.get("LONGHOUSE_SESSION_ID").is_none());
+        // `claude-channel serve` reads these when they are not passed
+        // explicitly, so an inherited value speaks for another session.
+        assert!(env.get("LONGHOUSE_RUN_ID").is_none());
+        assert!(env.get("LONGHOUSE_CHANNEL_SESSION_ID").is_none());
+        assert!(env.get("LONGHOUSE_PROVIDER_SESSION_ID").is_none());
+        assert!(env.get("LONGHOUSE_CHANNEL_CWD").is_none());
     }
 
     use super::*;
