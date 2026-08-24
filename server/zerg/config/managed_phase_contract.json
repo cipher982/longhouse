@@ -3,40 +3,47 @@
     {
       "raw_phase": "thinking",
       "display_label": "thinking",
-      "attention": "working"
+      "attention": "working",
+      "freshness_seconds": 90
     },
     {
       "raw_phase": "running",
       "display_label": "running",
       "tool_display_format": "running {tool_name}",
-      "attention": "working"
+      "attention": "working",
+      "freshness_seconds": 600
     },
     {
       "raw_phase": "blocked",
       "display_label": "needs permission",
       "tool_display_format": "blocked on {tool_name}",
-      "attention": "blocked"
+      "attention": "blocked",
+      "freshness_seconds": 86400
     },
     {
       "raw_phase": "needs_user",
       "display_label": "ready",
-      "attention": "idle"
+      "attention": "idle",
+      "freshness_seconds": 600
     },
     {
       "raw_phase": "stalled",
       "display_label": "stalled",
-      "attention": "blocked"
+      "attention": "blocked",
+      "freshness_seconds": 600
     },
     {
       "raw_phase": "idle",
       "display_label": "idle",
-      "attention": "idle"
+      "attention": "idle",
+      "freshness_seconds": 600
     },
     {
       "raw_phase": "finished",
       "display_label": "completed",
       "attention": "idle",
-      "local_health_only": true
+      "local_health_only": true,
+      "freshness_seconds": 600
     }
   ]
 }

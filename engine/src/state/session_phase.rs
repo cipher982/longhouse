@@ -44,19 +44,14 @@ impl PhaseSource {
     }
 }
 
-/// Phase freshness windows in seconds. MUST stay in lock-step with
-/// `server/zerg/services/local_health.py::_PHASE_FRESHNESS_SECONDS` and
-/// `server/zerg/services/session_runtime.py::PHASE_FRESHNESS`. Used by the
-/// engine to decide which ledger rows to emit in `engine-status.json`.
-pub const PHASE_FRESHNESS_SECONDS: &[(&str, i64)] = &[
-    ("thinking", 90),
-    ("running", 10 * 60),
-    ("stalled", 10 * 60),
-    ("idle", 10 * 60),
-    ("blocked", 24 * 60 * 60),
-    ("needs_user", 10 * 60),
-    ("finished", 10 * 60),
-];
+/// Phase freshness windows in seconds, generated from the managed phase
+/// contract. Used by the engine to decide which ledger rows to emit in
+/// `engine-status.json`.
+///
+/// This was a hand-maintained copy whose doc comment named two Python
+/// locations to keep it in lock-step with -- one of which had already been
+/// refactored away.
+pub use crate::managed_phase_contract::PHASE_FRESHNESS_SECONDS;
 
 fn phase_window_seconds(phase: &str) -> Option<i64> {
     PHASE_FRESHNESS_SECONDS

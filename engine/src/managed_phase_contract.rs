@@ -38,3 +38,17 @@ pub const LOCAL_HEALTH_ONLY_PHASES: &[&str] = &[PHASE_FINISHED];
 pub fn is_wire_phase(value: &str) -> bool {
     WIRE_PHASES.contains(&value)
 }
+
+/// Freshness window per phase, in seconds.
+///
+/// Previously restated here, in `session_runtime.PHASE_FRESHNESS`, and in
+/// local health, kept aligned by a doc comment that had already gone stale.
+pub const PHASE_FRESHNESS_SECONDS: &[(&str, i64)] = &[
+    (PHASE_THINKING, 90),
+    (PHASE_RUNNING, 600),
+    (PHASE_BLOCKED, 86400),
+    (PHASE_NEEDS_USER, 600),
+    (PHASE_STALLED, 600),
+    (PHASE_IDLE, 600),
+    (PHASE_FINISHED, 600),
+];

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 
+from zerg.managed_phase_contract import local_health_retention_seconds
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 
 SCHEMA_VERSION = 1
@@ -64,7 +65,9 @@ _THREAD_SUBSCRIPTION_TRANSIENT_STATES = frozenset(
     }
 )
 
-_MANAGED_FINISHED_RETENTION_SECONDS = 10 * 60
+# `finished` never crosses the wire, so it has no entry in PHASE_FRESHNESS; its
+# window still comes from the one contract rather than a fourth restatement.
+_MANAGED_FINISHED_RETENTION_SECONDS = local_health_retention_seconds("finished")
 
 _UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",

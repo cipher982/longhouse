@@ -11,6 +11,7 @@ class ManagedPhaseDefinition:
     raw_phase: str
     display_label: str
     attention: str
+    freshness_seconds: int
     tool_display_format: str | None = None
     local_health_only: bool = False
 
@@ -46,6 +47,7 @@ def managed_phase_definitions() -> tuple[ManagedPhaseDefinition, ...]:
             raw_phase=item["raw_phase"],
             display_label=item["display_label"],
             attention=item["attention"],
+            freshness_seconds=int(item["freshness_seconds"]),
             tool_display_format=item.get("tool_display_format"),
             local_health_only=bool(item.get("local_health_only", False)),
         )
@@ -94,3 +96,17 @@ def attention_for_display_phase(display_phase: str | None) -> str | None:
 
 def raw_phases() -> tuple[str, ...]:
     return tuple(item.normalized_raw_phase for item in managed_phase_definitions())
+
+
+def phase_freshness_seconds() -> dict[str, int]:
+    """Freshness window per phase a producer may ship.
+
+    `finished` is excluded: it never crosses the wire, and local health applies
+    its own retention.
+    """
+    return {item.normalized_raw_phase: item.freshness_seconds for item in managed_phase_definitions() if not item.local_health_only}
+
+
+def local_health_retention_seconds(raw_phase: str) -> int | None:
+    definition = definition_for_raw_phase(raw_phase)
+    return None if definition is None else definition.freshness_seconds

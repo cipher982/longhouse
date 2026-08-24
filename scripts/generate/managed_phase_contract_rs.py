@@ -77,6 +77,18 @@ def render() -> str:
         "",
     ]
 
+    rendered_freshness = ", ".join(
+        f'(PHASE_{item["raw_phase"].upper()}, {item["freshness_seconds"]})' for item in phases
+    )
+    lines += [
+        "/// Freshness window per phase, in seconds.",
+        "///",
+        "/// Previously restated here, in `session_runtime.PHASE_FRESHNESS`, and in",
+        "/// local health, kept aligned by a doc comment that had already gone stale.",
+        f"pub const PHASE_FRESHNESS_SECONDS: &[(&str, i64)] = &[{rendered_freshness}];",
+        "",
+    ]
+
     return _rustfmt("\n".join(lines))
 
 

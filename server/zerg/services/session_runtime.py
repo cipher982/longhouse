@@ -22,6 +22,8 @@ from pydantic import model_validator
 from sqlalchemy.orm import Session
 
 from zerg.managed_phase_contract import is_known_raw_phase
+from zerg.managed_phase_contract import phase_freshness_seconds
+from zerg.managed_phase_contract import raw_phases
 from zerg.metrics import managed_codex_bridge_freshness_total
 from zerg.metrics import managed_codex_runtime_observations_total
 from zerg.models.agents import AgentSession
@@ -61,16 +63,14 @@ RuntimeEventApplyOutcome = Literal[
     "stored_live_overlay",
 ]
 
-PHASE_FRESHNESS = {
-    "thinking": timedelta(seconds=90),
-    "running": timedelta(minutes=10),
-    "stalled": timedelta(minutes=10),
-    "idle": timedelta(minutes=10),
-    "blocked": timedelta(hours=24),
-    # `needs_user` is often the provider's normal prompt after a response.
-    # Without a session-level heartbeat, do not let it imply live control all day.
-    "needs_user": timedelta(minutes=10),
-}
+# Derived from the managed phase contract, which is also what generates the
+# engine's copy. These windows previously lived here, in the engine, and in local
+# health, kept aligned by a doc comment that had already gone stale.
+#
+# `needs_user` is often the provider's normal prompt after a response. Without a
+# session-level heartbeat, it must not imply live control all day -- hence its
+# ten-minute window in the contract rather than `blocked`'s twenty-four hours.
+PHASE_FRESHNESS = {phase: timedelta(seconds=seconds) for phase, seconds in phase_freshness_seconds().items()}
 MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
 # Only explicit user/admin closure closes the durable session. Provider exit and
 # process loss end the current run; they never change session disposition.
@@ -80,7 +80,9 @@ RUN_TERMINAL_STATES = {"run_completed", "run_failed", "run_cancelled"}
 UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
-KNOWN_PHASES = {"thinking", "running", "blocked", "stalled", "needs_user", "idle", "finished"}
+# Derived, not restated. This set was a hand-maintained copy of the contract and
+# had no way to notice when the two diverged.
+KNOWN_PHASES = frozenset(raw_phases())
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
 MANAGED_CODEX_RUNTIME_SOURCES = {MANAGED_SESSION_LEASE_SOURCE, "codex_bridge", "codex_bridge_live", "codex_exec"}
 

@@ -56,3 +56,34 @@ def test_binding_signal_is_never_rejected_on_vocabulary():
 
 def test_a_phase_signal_without_a_phase_is_still_accepted():
     assert RuntimeEventIngest.model_validate(_event("phase_signal", None)).phase is None
+
+
+def test_known_phases_is_derived_from_the_contract_not_restated():
+    from zerg.services.session_runtime import KNOWN_PHASES
+
+    assert KNOWN_PHASES == frozenset(raw_phases())
+
+
+def test_python_and_engine_freshness_windows_agree():
+    """The two sides read one contract; prove the numbers actually match.
+
+    These windows used to live in session_runtime, in local health, and in the
+    engine, aligned by a doc comment that named a module which had already been
+    refactored away.
+    """
+    import re
+    from pathlib import Path
+
+    from zerg.managed_phase_contract import managed_phase_definitions
+    from zerg.services.session_runtime import PHASE_FRESHNESS
+
+    generated = Path(__file__).resolve().parents[2] / "engine" / "src" / "managed_phase_contract.rs"
+    table = re.search(r"PHASE_FRESHNESS_SECONDS: &\[\(&str, i64\)\] = &\[(.*?)\];", generated.read_text(), re.S)
+    assert table is not None, "the engine must expose a generated freshness table"
+    engine_windows = {name.lower(): int(seconds) for name, seconds in re.findall(r"PHASE_([A-Z_]+),\s*(\d+)", table.group(1))}
+
+    contract_windows = {item.normalized_raw_phase: item.freshness_seconds for item in managed_phase_definitions()}
+    assert engine_windows == contract_windows
+
+    for phase, window in PHASE_FRESHNESS.items():
+        assert int(window.total_seconds()) == contract_windows[phase]
