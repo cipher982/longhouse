@@ -17,6 +17,7 @@ vi.mock("../../services/api", async (importOriginal) => {
     ...actual,
     ...apiMocks,
   };
+
 });
 
 function renderModal(props: Partial<React.ComponentProps<typeof LaunchSessionModal>> = {}) {
@@ -384,5 +385,43 @@ describe("LaunchSessionModal", () => {
 
     expect(await screen.findByTestId("launch-error")).toHaveTextContent("Launch failed");
     expect(onLaunched).not.toHaveBeenCalled();
+  });
+
+  it("tells an offline machine's last contact apart within the same day", async () => {
+    // "Last seen today" covered one minute ago through twenty-three hours ago
+    // identically, which is exactly the range that decides whether waiting is
+    // worth it. A laptop closed over lunch is not a laptop shut since
+    // yesterday.
+    const minutesAgo = (count: number) => new Date(Date.now() - count * 60_000).toISOString();
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "recent",
+          machine_name: "recent",
+          online: false,
+          control_channel_status: "disconnected",
+          supports: [],
+          control_operations_by_provider: {},
+          last_seen_at: minutesAgo(30),
+          launch: { blocked_by: "control_down", providers: [], default_provider: null },
+        }),
+        machine({
+          device_id: "stale",
+          machine_name: "stale",
+          online: false,
+          control_channel_status: "disconnected",
+          supports: [],
+          control_operations_by_provider: {},
+          last_seen_at: minutesAgo(11 * 60),
+          launch: { blocked_by: "control_down", providers: [], default_provider: null },
+        }),
+      ],
+    });
+
+    renderModal({});
+
+    expect(await screen.findByText("Offline · Last seen 30 minutes ago")).toBeInTheDocument();
+    expect(screen.getByText("Offline · Last seen 11 hours ago")).toBeInTheDocument();
+    expect(screen.queryByText("Offline · Last seen today")).not.toBeInTheDocument();
   });
 });

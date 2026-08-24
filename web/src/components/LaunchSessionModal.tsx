@@ -404,13 +404,31 @@ function launchBlockedLabel(machine: MachineDirectoryEntry): string {
   }
 }
 
+const RELATIVE_TIME = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+
+// "Last seen today" covered everything from one minute ago to twenty-three
+// hours ago, which is the whole range a person actually cares about: a laptop
+// that closed during lunch and one that has been shut since yesterday morning
+// read identically. iOS already resolved to minutes here; this brings the web
+// to the same answer rather than leaving two clients disagreeing about the
+// same timestamp.
 function lastSeenLabel(machine: MachineDirectoryEntry): string {
   if (!machine.last_seen_at) return "Offline";
   const seen = new Date(machine.last_seen_at);
   if (Number.isNaN(seen.getTime())) return "Offline";
-  const days = Math.max(0, Math.round((Date.now() - seen.getTime()) / 86_400_000));
-  if (days === 0) return "Offline · Last seen today";
-  return `Offline · Last seen ${days} day${days === 1 ? "" : "s"} ago`;
+  const elapsedMs = Date.now() - seen.getTime();
+  // A clock skewed into the future is not evidence of recent contact.
+  if (elapsedMs < 0) return "Offline";
+
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 1) return "Offline · Last seen just now";
+  if (minutes < 60) return `Offline · Last seen ${RELATIVE_TIME.format(-minutes, "minute")}`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Offline · Last seen ${RELATIVE_TIME.format(-hours, "hour")}`;
+
+  const days = Math.floor(hours / 24);
+  return `Offline · Last seen ${RELATIVE_TIME.format(-days, "day")}`;
 }
 
 function machineStatusClass(machine: MachineDirectoryEntry): string {
