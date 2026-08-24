@@ -80,16 +80,25 @@ def main() -> int:
                 }
             )
         except RuntimeError as error:
-            # A provider that will not start on this machine is a provider
-            # install, not a Longhouse contract failure. Recording it as red
-            # would leave this permanently red for an unauthenticated CLI and
-            # teach everyone to ignore it.
+            # This used to record "unavailable" on the theory that a provider
+            # which will not start is a provider install rather than a
+            # Longhouse failure. That theory was wrong about which errors reach
+            # here: the genuine not-offered case is `adapter_unavailable`,
+            # caught above, and every RuntimeError this harness raises is a
+            # real failure -- a refused turn, a turn with no run, a stream that
+            # died, missing credentials.
+            #
+            # The cost of the mistake was measured. A Console turn dispatched
+            # to cube came back `state: failed`, was classified unavailable,
+            # and so did not turn the daily check red. The machine advertised
+            # Claude the whole time. A capability the product offers and cannot
+            # deliver is exactly what this check exists to catch.
             reports.append(
                 {
                     "artifact_kind": "console_served_state_e2e",
                     "schema_version": 1,
                     "provider": provider,
-                    "verdict": "unavailable",
+                    "verdict": "error",
                     "failures": [str(error)],
                 }
             )
