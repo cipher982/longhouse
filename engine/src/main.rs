@@ -38,6 +38,8 @@ mod managed_antigravity_scan;
 mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_contract_janitor;
+mod managed_identity;
+mod managed_identity_contract;
 mod managed_cursor_helm_scan;
 mod managed_launch_lifecycle;
 mod managed_launch_payload;

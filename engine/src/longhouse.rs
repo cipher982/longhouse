@@ -6,6 +6,10 @@
 
 #[path = "build_identity.rs"]
 mod build_identity;
+#[path = "managed_identity.rs"]
+mod managed_identity;
+#[path = "managed_identity_contract.rs"]
+mod managed_identity_contract;
 #[path = "managed_launch_lifecycle.rs"]
 mod managed_launch_lifecycle;
 use managed_launch_lifecycle::DeferredNotices;
