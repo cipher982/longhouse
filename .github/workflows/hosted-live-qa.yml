@@ -133,20 +133,6 @@ jobs:
           fi
           make render-canary
 
-      - name: Prove Console on the browser-served surface
-        id: console_served_state
-        if: always() && steps.qa_live.outcome == 'success' && (env.LONGHOUSE_DEVICE_TOKEN != '' || env.SMOKE_RUNTIME_TOKEN != '')
-        env:
-          HOME: ${{ env.QA_HOME }}
-        # Every other Console check in this repo asserts machine-side. The
-        # 2026-08-23 wedge served "Working" for a run that had ended and every
-        # one of them stayed green, because none of them looked at what a
-        # browser is actually handed. This drives a real turn per provider and
-        # asserts on the served surface. It belongs here and not in the factory
-        # candidate lane: it observes whichever runtime is deployed, which is
-        # exactly the subject this workflow exists to qualify.
-        run: make test-console-served-state-e2e ARGS="--provider all"
-
       - name: Validate cohort journey contracts
         if: always() && steps.qa_live.outcome == 'success'
         run: make validate-cohort-journey
@@ -172,7 +158,6 @@ jobs:
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- hosted shipper mixed bench: \`${{ steps.hosted_shipper_bench.outcome || 'skipped' }}\`"
             echo "- render-canary: \`${{ steps.render_canary.outcome || 'skipped' }}\`"
-            echo "- console served-state: \`${{ steps.console_served_state.outcome || 'skipped' }}\`"
             echo "- cohort journey: \`${{ steps.cohort_journey.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 

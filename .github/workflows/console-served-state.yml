@@ -1,0 +1,88 @@
+name: Console Served State
+
+# One signal, one meaning: can a person who opens Longhouse in a browser
+# actually run a Console turn and see it finish, on every provider that offers
+# one?
+#
+# This is deliberately its own workflow rather than a step inside Hosted Live
+# QA. That workflow has failed 34 of its last 40 runs on unrelated checks, so a
+# red there means nothing and a new red would be invisible. A check nobody can
+# read is not a check -- the same failure this repo already paid for when the
+# 2026-08-23 Console wedge sat unnoticed for two days while a monitor mailed
+# about it twice.
+#
+# Every other Console check asserts machine-side. All of them stayed green
+# through that wedge, because none of them looked at what the browser is handed.
+# This one drives a real turn and asserts on the served surface.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider to prove, or 'all'"
+        required: false
+        default: 'all'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: console-served-state-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  console-served-state:
+    name: "console-served-state"
+    runs-on: ubuntu-latest
+    if: github.repository == 'cipher982/longhouse'
+    timeout-minutes: 20
+    env:
+      LONGHOUSE_DEVICE_TOKEN: ${{ secrets.LONGHOUSE_DEVICE_TOKEN }}
+      SMOKE_RUNTIME_TOKEN: ${{ secrets.SMOKE_RUNTIME_TOKEN }}
+      QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
+      QA_HOME: /tmp/console-served-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: astral-sh/setup-uv@v5
+
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
+      - name: Prepare isolated QA home
+        run: mkdir -p "$QA_HOME"
+
+      - name: Prove Console on the browser-served surface
+        id: served_state
+        env:
+          HOME: ${{ env.QA_HOME }}
+        run: |
+          if [[ -z "$LONGHOUSE_DEVICE_TOKEN" && -z "$SMOKE_RUNTIME_TOKEN" ]]; then
+            echo "No device token configured; cannot prove the served surface." >&2
+            exit 1
+          fi
+          make test-console-served-state-e2e \
+            ARGS="--provider ${{ github.event.inputs.provider || 'all' }} --json-out $GITHUB_WORKSPACE/console-served-state.json"
+
+      - name: Summarise
+        if: always()
+        run: |
+          if [[ -s console-served-state.json ]]; then
+            python3 scripts/qa/summarise-console-served-state.py console-served-state.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Console served state" >> "$GITHUB_STEP_SUMMARY"
+            echo "No artifact produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: console-served-state-${{ github.run_id }}
+          path: console-served-state.json
+          if-no-files-found: ignore
