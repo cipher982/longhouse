@@ -205,7 +205,15 @@ def build() -> dict:
             "docs/generated/provider_census.json counts files with >=2 provider literals anywhere. "
             "This counts collection literals. Different rules, different numbers; neither target is zero."
         ),
-        "sources_scanned": len(sources),
+        # The scan *rule* is recorded; the raw file count deliberately is not.
+        # It moves whenever anyone adds a source file anywhere, which would make
+        # this inventory go stale on unrelated commits -- and a check that fails
+        # for unrelated reasons is one people learn to ignore. The counts below
+        # move only when the thing being measured moves.
+        "scan_rule": (
+            f"git-tracked {', '.join(SOURCE_GLOBS)} excluding any path component in "
+            f"{', '.join(EXCLUDED_PATH_PARTS)}"
+        ),
         "launch_identity": _launch_identity(sources, providers),
         "member_collections": {
             "managed_providers": _collection_literals(providers, sources),
@@ -229,7 +237,7 @@ def main() -> int:
         return 0
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(rendered, encoding="utf-8")
-    print(f"Wrote {OUTPUT.relative_to(ROOT)}")
+    print(f"Wrote {OUTPUT.relative_to(ROOT)} (scanned {len(_tracked_sources())} sources)")
     return 0
 
 

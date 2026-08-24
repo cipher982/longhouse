@@ -31,10 +31,15 @@ ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = ROOT / "schemas" / "managed_providers.yml"
 OUTPUT = ROOT / "engine" / "src" / "managed_identity_contract.rs"
 
-# Keys that name a session, run, or launch. A provider process receives these
-# from its own launcher or not at all -- never by inheritance from whatever
-# managed session happened to spawn it. `LONGHOUSE_SESSION_ID` is retired: it is
-# scrubbed and never set.
+# The one hand-written registry in this epic, and it is hand-written because
+# there is nothing to derive it from: no schema records which environment
+# variables carry session identity, and inferring it from usage would relearn
+# each launcher's mistakes as the specification. Adding a key here is the
+# deliberate act of saying "this names a session, run, or launch."
+#
+# A provider process receives these from its own launcher or not at all -- never
+# by inheritance from whatever managed session happened to spawn it.
+# `LONGHOUSE_SESSION_ID` is retired: it is scrubbed and never set.
 NEVER_INHERITED = [
     "LONGHOUSE_SESSION_ID",
     "LONGHOUSE_MANAGED_SESSION_ID",

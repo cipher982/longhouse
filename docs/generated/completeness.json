@@ -109,7 +109,7 @@
   },
   "not_the_provider_census": "docs/generated/provider_census.json counts files with >=2 provider literals anywhere. This counts collection literals. Different rules, different numbers; neither target is zero.",
   "purpose": "Where the omission bug class can still hide. Measured, not asserted.",
-  "sources_scanned": 1839,
+  "scan_rule": "git-tracked *.py, *.ts, *.tsx, *.rs, *.swift excluding any path component in generated, node_modules, target",
   "unread_checks": {
     "checks_total": 69,
     "rule": "A file in scripts/qa/ whose basename appears in no Makefile, pre-commit config or workflow.",
