@@ -40,9 +40,16 @@ jobs:
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 20
     env:
-      LONGHOUSE_DEVICE_TOKEN: ${{ secrets.LONGHOUSE_DEVICE_TOKEN }}
-      SMOKE_RUNTIME_TOKEN: ${{ secrets.SMOKE_RUNTIME_TOKEN }}
-      QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
+      # The harness reads these two names; the repo secret is called something
+      # else. Getting this wrong is silent -- it produced six "provider
+      # unavailable" results that looked like a broken product and were really
+      # an unauthenticated client.
+      LONGHOUSE_MACHINE_TOKEN: ${{ secrets.LONGHOUSE_DEVICE_TOKEN }}
+      LONGHOUSE_API_URL: https://${{ vars.HOSTED_CANARY_SUBDOMAIN || 'david010' }}.longhouse.ai
+      # Console turns need a machine that has the provider CLIs installed. Today
+      # that is only the workstation, so a scheduled run genuinely cannot check
+      # anything while it is asleep -- reported as unqualified, never as red.
+      LONGHOUSE_DEVICE_ID: ${{ vars.CONSOLE_QA_DEVICE_ID || 'cinder' }}
       QA_HOME: /tmp/console-served-state-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
@@ -62,12 +69,25 @@ jobs:
         env:
           HOME: ${{ env.QA_HOME }}
         run: |
-          if [[ -z "$LONGHOUSE_DEVICE_TOKEN" && -z "$SMOKE_RUNTIME_TOKEN" ]]; then
-            echo "No device token configured; cannot prove the served surface." >&2
+          if [[ -z "$LONGHOUSE_MACHINE_TOKEN" ]]; then
+            echo "::error::No device token configured; cannot reach the served surface."
             exit 1
           fi
+          set +e
           make test-console-served-state-e2e \
             ARGS="--provider ${{ github.event.inputs.provider || 'all' }} --json-out $GITHUB_WORKSPACE/console-served-state.json"
+          set -e
+          # Red and unqualified are different facts and must not share an exit
+          # code. Red means a Console turn broke on a machine that could run it.
+          # Unqualified means no machine could run one, which says nothing about
+          # Console -- failing on it would cry wolf nightly and teach everyone
+          # to ignore the one signal that is supposed to mean something.
+          verdict="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("verdict",""))' console-served-state.json 2>/dev/null || echo "")"
+          case "$verdict" in
+            green) echo "Console proved on the served surface." ;;
+            unqualified) echo "::warning::No machine could serve a Console turn; nothing was proved." ;;
+            *) echo "::error::Console served-state verdict: ${verdict:-unknown}"; exit 1 ;;
+          esac
 
       - name: Summarise
         if: always()
