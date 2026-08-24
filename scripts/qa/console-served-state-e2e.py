@@ -11,11 +11,21 @@ suite whose oracles are all machine-side runs green through that incident.
 This harness watches what a browser or phone actually receives:
 
   1. live delivery -- frames reach the workspace SSE stream *during* the turn
-  2. settlement    -- once the run is terminal, the served state stops working
+  2. settlement    -- once the reply is served, the state axis stops saying work
 
-Both are checked against the browser surface, reached with the `zdt_` device
-token that `dependencies/browser_auth.py` accepts precisely so a non-browser
-client can drive the UI contract.
+Oracle 2 encodes the incident directly. A reply reaching a viewer while the
+state axis still says working is exactly what the wedge looked like: the
+response was there when you came back, and the bar kept pulsing.
+
+Every signal is remote. An earlier version triggered settlement off the local
+turn-claim file, which is the same machine-side coupling this exists to escape
+and would have pinned the check to the box that owns the engine. Content
+arriving in the served projection is the evidence that the turn finished, and it
+is readable from anywhere with API access.
+
+Both oracles are checked against the browser surface, reached with the `zdt_`
+device token that `dependencies/browser_auth.py` accepts precisely so a
+non-browser client can drive the UI contract.
 """
 
 from __future__ import annotations
@@ -254,12 +264,16 @@ def run(args: argparse.Namespace) -> dict:
     report["run_id"] = run_id
 
     # --- Oracle 1: live delivery during the turn ---------------------------
+    #
+    # The turn is judged finished when its reply reaches the served projection,
+    # not when a local claim file flips. That keeps every signal remote, so this
+    # runs anywhere with API access rather than only on the box that owns the
+    # engine -- and it encodes the incident directly: the wedge was a turn whose
+    # content arrived while the state kept saying working.
     first_live: float | None = None
     offsets: list[float] = []
-    claim_path = _home() / "agent" / "turn-claims" / f"{run_id}.json"
-    terminal_at: float | None = None
+    produced_at: float | None = None
     deadline = time.monotonic() + args.turn_timeout
-    claim_state: str | None = None
     while time.monotonic() < deadline:
         for stamp, event, payload in watcher.drain():
             if event in {"connected", "heartbeat"}:
@@ -272,20 +286,14 @@ def run(args: argparse.Namespace) -> dict:
             offsets.append(round(stamp - dispatched_at, 2))
             if first_live is None:
                 first_live = stamp - dispatched_at
-        if claim_path.exists():
-            try:
-                claim = json.loads(claim_path.read_text())
-            except (OSError, ValueError):
-                claim = {}
-            state = claim.get("state")
-            if state in {"terminal", "failed"}:
-                # `failed` is a launch/run failure, not a completed turn. Treating
-                # it as terminal lets a provider that never ran report green.
-                claim_state = state
-                terminal_at = time.monotonic()
-                break
-        time.sleep(0.5)
-    report["claim_state"] = claim_state
+        workspace = client.served_workspace(session_id)
+        if marker in json.dumps(workspace.get("projection") or {}):
+            produced_at = time.monotonic()
+            break
+        time.sleep(1.0)
+
+    report["marker_served"] = produced_at is not None
+    report["marker_latency_s"] = round(produced_at - dispatched_at, 2) if produced_at else None
 
     buckets: dict[int, int] = {}
     for offset in offsets:
@@ -296,46 +304,27 @@ def run(args: argparse.Namespace) -> dict:
     # Each frame invalidates the workspace for every connected viewer.
     report["peak_frames_per_sec"] = max(buckets.values()) if buckets else 0
     report["busy_seconds"] = len(buckets)
-    report["reached_terminal"] = terminal_at is not None
-
-    # --- Oracle 2: settlement after terminal (the incident assertion) ------
+    # --- Oracle 2: settlement after the reply is served --------------------
+    #
+    # The incident assertion. A reply reaching a viewer while the state axis
+    # still says working is exactly what the wedge looked like: the response was
+    # there when you came back, and the bar kept pulsing.
     settled_at: float | None = None
     observed: dict | None = None
-    if terminal_at is not None:
-        while time.monotonic() - terminal_at < args.settle_budget:
+    transcript_state: dict | None = None
+    if produced_at is not None:
+        while time.monotonic() - produced_at < args.settle_budget:
             workspace = client.served_workspace(session_id)
             settled, observed = settlement_state(workspace, run_id)
+            transcript_state = ((workspace.get("session") or {}).get("session_state") or {}).get("transcript")
             if settled:
                 settled_at = time.monotonic()
                 break
             time.sleep(1.0)
 
-    report["served_state_after_terminal"] = observed
-    report["settled_at_offset_s"] = round(settled_at - terminal_at, 2) if settled_at and terminal_at else None
-
-    # Content converges on a different clock than state. Measured against the
-    # live instance, state settles in ~0.25s while the transcript is still
-    # `convergence: lagging` with source_revision behind durable_revision.
-    # Asserting the reply inside the settle budget conflates two SLAs and reports
-    # a delivery failure that is really a timing assumption.
-    marker_served = False
-    marker_at: float | None = None
-    transcript_state: dict | None = None
-    if terminal_at is not None:
-        content_deadline = time.monotonic() + args.content_budget
-        while time.monotonic() < content_deadline:
-            workspace = client.served_workspace(session_id)
-            transcript_state = ((workspace.get("session") or {}).get("session_state") or {}).get("transcript")
-            if marker in json.dumps(workspace.get("projection") or {}):
-                marker_served = True
-                marker_at = time.monotonic()
-                break
-            time.sleep(1.0)
-
-    report["marker_served"] = marker_served
-    report["marker_latency_s"] = round(marker_at - terminal_at, 2) if marker_at and terminal_at else None
+    report["served_state_after_reply"] = observed
     report["transcript"] = transcript_state
-    report["settle_latency_s"] = round(settled_at - terminal_at, 2) if settled_at and terminal_at else None
+    report["settle_latency_s"] = round(settled_at - produced_at, 2) if settled_at and produced_at else None
 
     watcher.stop_flag.set()
     report["stream_error"] = repr(watcher.error) if watcher.error else None
@@ -343,18 +332,16 @@ def run(args: argparse.Namespace) -> dict:
     failures: list[str] = []
     if first_live is None:
         failures.append("no live frame reached the served stream during the turn")
-    if claim_state == "failed":
-        failures.append("the provider turn failed rather than completing")
-    if terminal_at is None:
-        failures.append(f"turn did not reach terminal within {args.turn_timeout}s")
+    if produced_at is None:
+        failures.append(f"the turn reply never reached the served projection within {args.turn_timeout}s")
     elif settled_at is None:
-        failures.append(f"served surface still working after {args.settle_budget}s: {observed}")
+        failures.append(
+            f"the reply is served but the state axis still says working after {args.settle_budget}s: {observed}"
+        )
     if watcher.error is not None:
         # A stream that dies mid-turn is a delivery failure even if early frames
         # arrived; recording it without failing on it makes the oracle decorative.
         failures.append(f"workspace stream died before the turn settled: {watcher.error!r}")
-    if terminal_at is not None and not marker_served:
-        failures.append(f"the turn marker never reached the served projection within {args.content_budget}s")
     report["failures"] = failures
     report["verdict"] = "red" if failures else "green"
     return report
