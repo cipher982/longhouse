@@ -11,11 +11,11 @@ from starlette.requests import Request
 from zerg.routers import agents_search
 from zerg.routers import agents_sessions
 from zerg.routers import timeline
+from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.session_views import MachineSearchLaneFailure
+from zerg.services.session_views import MachineSessionResponse
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
-from zerg.services.session_views import MachineSessionResponse
-from zerg.services.session_views import MachineSearchLaneFailure
-from zerg.services.catalog_read_gateway import CatalogReadError
 
 
 def _request(path: str) -> Request:
@@ -246,8 +246,10 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     assert response.total == 1
     assert response.matches[0].evidence == "the migration completed"
     assert response.matches[0].total_events == 12
-    assert response.matches[0].context[0]["content_text"] == "please migrate"
+    assert response.matches[0].context[0].content_text == "please migrate"
     assert response.server_commit == "c" * 40
+    assert response.context_byte_budget == agents_search.RECALL_CONTEXT_BYTE_BUDGET
+    assert response.context_bytes_returned == len("please migrate")
     assert observed["include_snippets"] is False
 
 
@@ -283,6 +285,41 @@ def test_recall_rejects_unknown_query_parameters_before_search():
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail["parameters"] == ["limti"]
+
+
+def test_recall_rejects_unbounded_context_fanout_before_search():
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/agents/recall",
+            "headers": [],
+            "query_string": b"query=migration&max_results=20&context_turns=3",
+        }
+    )
+
+    with pytest.raises(agents_search.HTTPException) as exc_info:
+        asyncio.run(
+            agents_search.recall_sessions(
+                request=request,
+                query="migration",
+                project=None,
+                provider=None,
+                include_test=False,
+                since_days=90,
+                max_results=20,
+                context_turns=3,
+                context_mode="forensic",
+                include_automation=False,
+                mode="lexical",
+                _auth=SimpleNamespace(owner_id=7),
+                _single=None,
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "recall_context_fanout_too_large"
+    assert exc_info.value.detail["requested_context_items"] == 140
 
 
 def test_browser_recall_delegates_to_requested_canonical_pipeline(monkeypatch):

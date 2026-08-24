@@ -1229,7 +1229,15 @@ def _search_params(value: dict) -> dict:
 def _context_params(value: dict) -> dict:
     _exact_keys(
         value,
-        {"owner_id", "session_id", "generation_id", "search_event_id", "start_order_time_us", "context_turns"},
+        {
+            "owner_id",
+            "session_id",
+            "generation_id",
+            "search_event_id",
+            "start_order_time_us",
+            "context_turns",
+            "max_evidence_bytes",
+        },
     )
     search_event_id = value["search_event_id"]
     start_order_time_us = value["start_order_time_us"]
@@ -1244,6 +1252,8 @@ def _context_params(value: dict) -> dict:
         raise ValueError("exactly one of search_event_id or start_order_time_us is required")
     if type(value["context_turns"]) is not int or not 0 <= value["context_turns"] <= 10:
         raise ValueError("context_turns is invalid")
+    if type(value["max_evidence_bytes"]) is not int or not 1 <= value["max_evidence_bytes"] <= 16 * 1024:
+        raise ValueError("max_evidence_bytes is invalid")
     return {
         "owner_id": _text(value["owner_id"], "owner_id", 64),
         "session_id": _uuid(value["session_id"], "session_id"),
@@ -1251,6 +1261,7 @@ def _context_params(value: dict) -> dict:
         "search_event_id": search_event_id,
         "start_order_time_us": start_order_time_us,
         "context_turns": value["context_turns"],
+        "max_evidence_bytes": value["max_evidence_bytes"],
     }
 
 

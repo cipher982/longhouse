@@ -1869,29 +1869,46 @@ class SemanticSearchResponse(BaseModel):
     has_real_sessions: bool = True
 
 
+class RecallContextTurn(BaseModel):
+    """One bounded conversation turn surrounding a recall match."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    search_event_id: int = Field(ge=1)
+    event_id: str = Field(min_length=1)
+    source_object_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    record_ordinal: int = Field(ge=0)
+    order_time_us: int = Field(ge=0)
+    role: Literal["user", "assistant"]
+    content_text: str
+    tool_name: Optional[str] = None
+    content_text_truncated: Optional[Literal[True]] = None
+    content_text_full_bytes: Optional[int] = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_truncation(self) -> "RecallContextTurn":
+        if (self.content_text_truncated is None) != (self.content_text_full_bytes is None):
+            raise ValueError("recall context truncation fields must appear together")
+        if self.content_text_full_bytes is not None and self.content_text_full_bytes <= len(self.content_text.encode("utf-8")):
+            raise ValueError("recall context full byte count must exceed returned content")
+        return self
+
+
 class RecallMatch(BaseModel):
-    """A single recall match with context."""
+    """A ranked recall match with bounded source-linked evidence."""
 
     model_config = ConfigDict(extra="forbid")
 
     session_id: str
     chunk_index: int
     score: float
-    chunk_id: Optional[int] = None
-    chunk_uid: Optional[str] = None
-    parent_chunk_id: Optional[int] = None
-    context_chunk_id: Optional[int] = None
-    chunk_kind: Optional[str] = None
-    context_text: Optional[str] = None
-    intent: Optional[str] = None
     evidence: Optional[str] = None
-    structured_hits: List[str] = Field(default_factory=list)
     retrieval_lanes: List[Literal["lexical", "dense"]] = Field(default_factory=list)
     lane_ranks: Dict[str, int] = Field(default_factory=dict)
     event_index_start: Optional[int] = None
     event_index_end: Optional[int] = None
     total_events: int = 0
-    context: List[Dict[str, Any]] = Field(default_factory=list)
+    context: List[RecallContextTurn] = Field(default_factory=list)
     match_event_id: Optional[int] = None
     generation_id: Optional[str] = None
     source_object_id: Optional[str] = None
@@ -2039,11 +2056,15 @@ class RecallResponse(BaseModel):
     embedding_revision: Optional[str] = None
     coverage: Optional[RecallCoverage] = None
     server_commit: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+    context_byte_budget: int = Field(default=0, ge=0)
+    context_bytes_returned: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_recall_contract(self) -> "RecallResponse":
         if self.total != len(self.matches):
             raise ValueError("recall total must equal the number of matches")
+        if self.context_bytes_returned > self.context_byte_budget:
+            raise ValueError("recall context exceeds its declared response budget")
         if not self.lanes or len(self.lanes) != len(set(self.lanes)):
             raise ValueError("recall lanes must be a non-empty unique list")
 

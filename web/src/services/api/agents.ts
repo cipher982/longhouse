@@ -133,7 +133,7 @@ export interface SessionTranscriptPreview {
   event_id: number;
   text: string;
   role?: string;
-  tool_name?: string | null;
+  tool_name: string | null;
   /** Provider-native tool input; free-form tools may emit a JSON string. */
   tool_input_json?: unknown;
   tool_output_text?: string | null;
@@ -520,7 +520,7 @@ export interface AgentEvent {
   content_text: string | null;
   raw_content_text?: string | null;
   input_origin?: AgentEventInputOrigin | null;
-  tool_name: string | null;
+  tool_name?: string | null;
   /** Provider-native tool input; free-form tools may emit a JSON string. */
   tool_input_json: unknown;
   tool_output_text: string | null;
@@ -1247,7 +1247,9 @@ export interface RecallContextTurn {
   order_time_us: number;
   role: string;
   content_text: string;
-  tool_name: string | null;
+  tool_name?: string | null;
+  content_text_truncated?: true;
+  content_text_full_bytes?: number;
 }
 
 export interface RecallResponse {
@@ -1259,6 +1261,8 @@ export interface RecallResponse {
   embedding_revision: string | null;
   coverage: RecallCoverage | null;
   server_commit: string | null;
+  context_byte_budget: number;
+  context_bytes_returned: number;
 }
 
 export type RecallCoverage = components["schemas"]["RecallCoverage"];

@@ -123,7 +123,7 @@ def test_finalizer_normalizes_evidence_states_into_one_truthful_algebra():
         chunk_index=0,
         score=0.1,
         evidence="matching snippet",
-        context=[{"role": "assistant", "content_text": "matching snippet"}],
+        context=[_context_row("matching snippet")],
         evidence_status="complete",
         evidence_reason="stale_store_reason",
     )
@@ -154,7 +154,7 @@ def test_recall_response_enforces_lane_space_and_evidence_consistency():
         chunk_index=0,
         score=0.7,
         evidence="the answer",
-        context=[{"role": "assistant", "content_text": "the answer"}],
+        context=[_context_row("the answer")],
         evidence_status="complete",
         retrieval_lanes=["dense"],
         lane_ranks={"dense": 1},
@@ -205,6 +205,14 @@ def test_recall_response_enforces_lane_space_and_evidence_consistency():
         )
     with pytest.raises(ValueError, match="lexical-only recall must not claim dense corpus coverage"):
         RecallResponse(matches=[], total=0, lanes=["lexical"], coverage=_coverage())
+    with pytest.raises(ValueError, match="exceeds its declared response budget"):
+        RecallResponse(
+            matches=[],
+            total=0,
+            lanes=["lexical"],
+            context_byte_budget=10,
+            context_bytes_returned=11,
+        )
 
 
 @pytest.mark.asyncio
@@ -244,7 +252,7 @@ async def test_semantic_match_with_a_locator_hydrates(monkeypatch):
     assert seen["search_event_id"] is None
     assert match.evidence_status == "complete"
     assert match.total_events == 590
-    assert match.context[0]["content_text"] == "the migration applied cleanly"
+    assert match.context[0].content_text == "the migration applied cleanly"
 
 
 @pytest.mark.asyncio
@@ -372,7 +380,41 @@ async def test_semantic_match_carries_evidence_beside_its_context(monkeypatch):
     await agents_search._hydrate_recall_match(match, owner_id=42, context_turns=2, timeout_seconds=5.0)
 
     assert match.evidence == "the anchored episode text"
-    assert match.context_text == "the anchored episode text"
+
+
+@pytest.mark.asyncio
+async def test_anchor_only_recall_hydrates_dense_evidence_without_returning_context(monkeypatch):
+    async def fake_context(**kwargs):
+        assert kwargs["context_turns"] == 0
+        assert kwargs["max_evidence_bytes"] == 400
+        return {
+            "evidence_status": "complete",
+            "evidence_reason": None,
+            "context": [_context_row("the bounded anchor")],
+            "total_events": 42,
+            "timing": _timing(),
+        }
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_context", fake_context)
+    match = RecallMatch(
+        session_id=str(uuid4()),
+        chunk_index=1,
+        score=0.6,
+        generation_id=str(uuid4()),
+        start_order_time_us=100,
+    )
+
+    await agents_search._hydrate_recall_match(
+        match,
+        owner_id=42,
+        context_turns=0,
+        timeout_seconds=5.0,
+        max_evidence_bytes=400,
+    )
+
+    assert match.evidence == "the bounded anchor"
+    assert match.context == []
+    assert match.evidence_status == "not_requested"
 
 
 @pytest.mark.asyncio
@@ -428,4 +470,3 @@ async def test_lexical_match_without_a_snippet_uses_its_exact_context_event(monk
     await agents_search._hydrate_recall_match(match, owner_id=42, context_turns=2, timeout_seconds=5.0)
 
     assert match.evidence == "the exact lexical match"
-    assert match.context_text == "the exact lexical match"

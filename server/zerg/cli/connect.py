@@ -660,10 +660,16 @@ def recall(
         help="Days to look back (1-365)",
     ),
     limit: int = typer.Option(
-        10,
+        5,
         "--limit",
         "-n",
-        help="Max results to return (1-20)",
+        help="Max results to return (1-20; default 5)",
+    ),
+    context_turns: int = typer.Option(
+        0,
+        "--context-turns",
+        "-c",
+        help="Surrounding turns before/after each match (0-10; default 0)",
     ),
     output_json: bool = typer.Option(
         False,
@@ -697,6 +703,7 @@ def recall(
     Examples:
         longhouse recall "auth token refresh"
         longhouse recall "database migration" --project zerg --days-back 30
+        longhouse recall "deploy fix" --context-turns 2
         longhouse recall "deploy fix" --json
     """
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
@@ -718,7 +725,7 @@ def recall(
         "query": query,
         "since_days": days_back,
         "max_results": limit,
-        "context_turns": 2,
+        "context_turns": context_turns,
     }
     if project:
         params["project"] = project
@@ -751,7 +758,7 @@ def recall(
 
     # Raw JSON output mode
     if output_json:
-        typer.echo(json_lib.dumps(data, indent=2))
+        typer.echo(json_lib.dumps(data, separators=(",", ":"), sort_keys=True))
         return
 
     # Pretty-print results
@@ -767,12 +774,13 @@ def recall(
 
     for i, match in enumerate(matches):
         session_id = str(match.get("session_id") or "")
-        score = match.get("score")
-        score_label = f"{float(score) * 100:.0f}%" if isinstance(score, (int, float)) else "score n/a"
         event_id = match.get("match_event_id")
         total_events = match.get("total_events", 0)
         event_range = _recall_event_range(match)
-        header = f"  [{i + 1}] Session {session_id}  {score_label}"
+        provenance = _recall_provenance(match)
+        header = f"  [{i + 1}] Session {session_id}"
+        if provenance:
+            header += f"  {provenance}"
         if event_id is not None:
             header += f"  event:{event_id}"
         typer.secho(header, fg=typer.colors.CYAN, bold=True)
@@ -781,11 +789,17 @@ def recall(
         context = list(match.get("context") or [])
         for turn in context:
             role = _recall_turn_label(turn)
-            marker = "*" if turn.get("is_match") else " "
-            content = " ".join(str(turn.get("content") or "").split())
-            if len(content) > 160:
-                content = content[:157] + "..."
+            marker = "*" if turn.get("search_event_id") == event_id else " "
+            content = _recall_excerpt(turn.get("content_text"))
             typer.echo(f"      {marker} [{role}] {content}")
+
+        if not context and match.get("evidence"):
+            typer.echo(f"      * [match] {_recall_excerpt(match.get('evidence'))}")
+
+        evidence_status = str(match.get("evidence_status") or "")
+        if evidence_status in {"partial", "unavailable"}:
+            reason = str(match.get("evidence_reason") or evidence_status)
+            typer.echo(f"      evidence: {evidence_status} ({reason})")
 
         typer.echo("")
 
@@ -806,6 +820,24 @@ def _recall_turn_label(turn: dict) -> str:
     if role == "tool" and tool_name:
         return tool_name
     return role
+
+
+def _recall_provenance(match: dict) -> str:
+    lane_ranks = match.get("lane_ranks") if isinstance(match.get("lane_ranks"), dict) else {}
+    lanes = match.get("retrieval_lanes") if isinstance(match.get("retrieval_lanes"), list) else []
+    labels: list[str] = []
+    for lane in sorted(lanes, key=lambda value: lane_ranks.get(value, 1_000_000)):
+        label = "Semantic" if lane == "dense" else "Lexical" if lane == "lexical" else str(lane)
+        rank = lane_ranks.get(lane)
+        labels.append(f"{label} #{rank}" if isinstance(rank, int) else label)
+    return " + ".join(labels)
+
+
+def _recall_excerpt(value: object, *, max_chars: int = 240) -> str:
+    content = " ".join(str(value or "").split())
+    if len(content) <= max_chars:
+        return content
+    return content[: max_chars - 3] + "..."
 
 
 def _handle_status() -> None:

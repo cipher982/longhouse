@@ -27,10 +27,25 @@ from zerg.searchd.store import _SEARCH_SQL
 from zerg.searchd.store import _SEARCHABLE_SEARCH_SQL
 from zerg.searchd.store import SCHEMA_GENERATION
 from zerg.searchd.store import SearchStore
+from zerg.searchd.store import _bounded_recall_context
 from zerg.searchd.store import _bounded_worklog_content
 from zerg.searchd.store import _fts_query
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
+
+
+def test_recall_context_budget_is_shared_and_truncation_is_explicit():
+    rows = [
+        {"content_text": "a" * 200, "event_id": "first"},
+        {"content_text": "é" * 200, "event_id": "second"},
+    ]
+
+    bounded, truncated = _bounded_recall_context(rows, max_evidence_bytes=160)
+
+    assert truncated is True
+    assert sum(len(row["content_text"].encode("utf-8")) for row in bounded) <= 160
+    assert all(row["content_text_truncated"] is True for row in bounded)
+    assert [row["content_text_full_bytes"] for row in bounded] == [200, 400]
 
 
 def _records(text: str) -> list[dict]:
@@ -1447,6 +1462,7 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
                 "search_event_id": search["results"][0]["search_event_id"],
                 "start_order_time_us": None,
                 "context_turns": 1,
+                "max_evidence_bytes": 16 * 1024,
             },
         )
         assert context["evidence_status"] == "complete"

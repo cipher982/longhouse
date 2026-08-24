@@ -32,6 +32,7 @@ _WORKLOG_SNAPSHOT_MAX_PAGES = 200
 _WORKLOG_SNAPSHOT_TTL_SECONDS = 120.0
 _WORKLOG_SNAPSHOT_LIMIT = 8
 _EMBEDDING_SOURCE_PAGE_BYTES = 6 * 1024 * 1024
+_RECALL_TRUNCATION_MARKER = " …[truncated]"
 
 _PUBLISH_AGGREGATES_SQL = """
     SELECT
@@ -1778,6 +1779,7 @@ class SearchStore:
         search_event_id: int | None = None,
         start_order_time_us: int | None = None,
         context_turns: int,
+        max_evidence_bytes: int,
     ) -> dict[str, object]:
         """Return bounded clean neighbor evidence from the hit's published generation.
 
@@ -1811,8 +1813,6 @@ class SearchStore:
                 "total_events": 0,
             }
         total_events = int(target["event_count"])
-        if context_turns == 0:
-            return {"evidence_status": "complete", "evidence_reason": None, "context": [], "total_events": total_events}
         before_sql = _CONTEXT_ROWS_SQL.format(
             position_predicate="(e.order_time_us < ? OR (e.order_time_us = ? AND e.event_key <= ?))",
             direction="DESC",
@@ -1824,10 +1824,13 @@ class SearchStore:
         position = (int(target["order_time_us"]), int(target["order_time_us"]), str(target["event_key"]))
         before = self.connection.execute(before_sql, (session_id, generation_id, owner_id, *position, context_turns + 1)).fetchall()
         after = self.connection.execute(after_sql, (session_id, generation_id, owner_id, *position, context_turns)).fetchall()
-        context = [dict(row) for row in reversed(before)] + [dict(row) for row in after]
+        context, truncated = _bounded_recall_context(
+            [dict(row) for row in reversed(before)] + [dict(row) for row in after],
+            max_evidence_bytes=max_evidence_bytes,
+        )
         return {
-            "evidence_status": "complete",
-            "evidence_reason": None,
+            "evidence_status": "partial" if truncated else "complete",
+            "evidence_reason": "evidence_byte_budget_applied" if truncated else None,
             "context": context,
             "total_events": total_events,
         }
@@ -2301,6 +2304,41 @@ def _bounded_worklog_content(value: str) -> str:
     marker = _WORKLOG_TRUNCATION_MARKER.encode("utf-8")
     prefix = encoded[: _WORKLOG_EVENT_CONTENT_BYTES - len(marker)].decode("utf-8", "ignore")
     return prefix + _WORKLOG_TRUNCATION_MARKER
+
+
+def _bounded_recall_context(rows: list[dict[str, Any]], *, max_evidence_bytes: int) -> tuple[list[dict[str, Any]], bool]:
+    """Share one match budget across every requested turn without dropping provenance."""
+
+    remaining_bytes = max_evidence_bytes
+    remaining_rows = len(rows)
+    bounded: list[dict[str, Any]] = []
+    any_truncated = False
+    for row in rows:
+        item = dict(row)
+        content = str(item["content_text"])
+        allocation = remaining_bytes // remaining_rows
+        returned, truncated, full_bytes = _truncate_utf8(content, max_bytes=allocation)
+        item["content_text"] = returned
+        if truncated:
+            item["content_text_truncated"] = True
+            item["content_text_full_bytes"] = full_bytes
+            any_truncated = True
+        bounded.append(item)
+        remaining_bytes -= len(returned.encode("utf-8"))
+        remaining_rows -= 1
+    return bounded, any_truncated
+
+
+def _truncate_utf8(value: str, *, max_bytes: int) -> tuple[str, bool, int]:
+    encoded = value.encode("utf-8")
+    full_bytes = len(encoded)
+    if full_bytes <= max_bytes:
+        return value, False, full_bytes
+    marker = _RECALL_TRUNCATION_MARKER.encode("utf-8")
+    if max_bytes <= len(marker):
+        return encoded[:max_bytes].decode("utf-8", "ignore"), True, full_bytes
+    prefix = encoded[: max_bytes - len(marker)].decode("utf-8", "ignore")
+    return prefix + _RECALL_TRUNCATION_MARKER, True, full_bytes
 
 
 def _bounded_worklog_page(rows: list[sqlite3.Row | dict[str, Any]], *, limit: int, cursor_builder) -> dict[str, object]:

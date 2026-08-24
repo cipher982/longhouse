@@ -360,7 +360,7 @@ async def semantic_search_timeline_sessions(
     return result
 
 
-@router.get("/recall", response_model=RecallResponse)
+@router.get("/recall", response_model=RecallResponse, response_model_exclude_none=True)
 async def recall_timeline_sessions(
     request: Request,
     response: Response,

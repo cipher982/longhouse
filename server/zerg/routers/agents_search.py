@@ -37,6 +37,7 @@ from zerg.services.session_views import RECALL_COVERAGE_MAX_NAMED_SESSIONS
 from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import MachineSessionResponse
 from zerg.services.session_views import MachineSessionsListResponse
+from zerg.services.session_views import RecallContextTurn
 from zerg.services.session_views import RecallCoverage
 from zerg.services.session_views import RecallLaneFailure
 from zerg.services.session_views import RecallMatch
@@ -53,6 +54,9 @@ logger = logging.getLogger(__name__)
 # the explicit hydration reserve and stays within searchd's hard RPC ceiling;
 # timing telemetry and release gates enforce ordinary latency separately.
 RECALL_ROUTE_TIMEOUT_SECONDS = 5.0
+RECALL_CONTEXT_BYTE_BUDGET = 16 * 1024
+RECALL_CONTEXT_ITEM_LIMIT = 100
+RECALL_ANCHOR_BYTE_BUDGET = 400
 
 _catalog_db_dependency = catalog_db_dependency()
 
@@ -148,25 +152,12 @@ class _SearchReadTiming(BaseModel):
     queued_readers: int
 
 
-class _RecallContextTurn(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    search_event_id: int = Field(ge=1)
-    event_id: str = Field(min_length=1)
-    source_object_id: str = Field(pattern=r"^[0-9a-f]{64}$")
-    record_ordinal: int = Field(ge=0)
-    order_time_us: int = Field(ge=0)
-    role: Literal["user", "assistant"]
-    content_text: str
-    tool_name: str | None
-
-
 class _RecallContextPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     evidence_status: Literal["complete", "partial", "unavailable"]
     evidence_reason: str | None
-    context: list[_RecallContextTurn]
+    context: list[RecallContextTurn]
     total_events: int = Field(ge=0)
     timing: _SearchReadTiming
 
@@ -392,6 +383,7 @@ async def search_storage_v2_context(
     search_event_id: int | None = None,
     start_order_time_us: int | None = None,
     context_turns: int,
+    max_evidence_bytes: int,
     timeout_seconds: float,
 ) -> _RecallContextPayload:
     """Read bounded neighbor evidence from the same generation as a search hit.
@@ -416,6 +408,7 @@ async def search_storage_v2_context(
                 "search_event_id": search_event_id,
                 "start_order_time_us": start_order_time_us,
                 "context_turns": context_turns,
+                "max_evidence_bytes": max_evidence_bytes,
             },
             timeout_seconds=timeout_seconds,
         )
@@ -1023,7 +1016,6 @@ async def _lexical_recall_matches(
                 session_id=session_id,
                 chunk_index=int(row.get("record_ordinal") or 0),
                 score=1.0 / (1.0 + abs(float(row.get("rank") or 0.0))),
-                context_text=snippet or None,
                 evidence=snippet or None,
                 total_events=int(row.get("event_count") or 0),
                 context=[],
@@ -1044,6 +1036,7 @@ async def _hydrate_recall_match(
     owner_id: int,
     context_turns: int,
     timeout_seconds: float,
+    max_evidence_bytes: int = RECALL_CONTEXT_BYTE_BUDGET,
 ) -> None:
     """Attach neighbour evidence to a match and record how well that went.
 
@@ -1051,10 +1044,6 @@ async def _hydrate_recall_match(
     the model default, because a default is a claim nobody checked.
     """
 
-    if context_turns == 0:
-        match.evidence_status = "not_requested"
-        match.evidence_reason = None
-        return
     if match.generation_id is None or (match.match_event_id is None and match.start_order_time_us is None):
         match.evidence_status = "unavailable"
         match.evidence_reason = "search_hit_missing_locator"
@@ -1069,6 +1058,7 @@ async def _hydrate_recall_match(
             # when a match somehow carries both.
             start_order_time_us=None if match.match_event_id is not None else match.start_order_time_us,
             context_turns=context_turns,
+            max_evidence_bytes=max_evidence_bytes,
             timeout_seconds=timeout_seconds,
         )
     except HTTPException as exc:
@@ -1077,7 +1067,7 @@ async def _hydrate_recall_match(
         match.evidence_reason = str(detail.get("code") or "search_evidence_unavailable")
         return
     evidence = _RecallContextPayload.model_validate(evidence)
-    match.context = [turn.model_dump() for turn in evidence.context]
+    match.context = evidence.context
     match.total_events = evidence.total_events
     # Only the store may declare completeness. An absent status means the
     # response did not carry one, which is not evidence that everything arrived
@@ -1092,7 +1082,14 @@ async def _hydrate_recall_match(
         match.evidence_reason = None
     if match.evidence is None:
         match.evidence = _anchor_excerpt(match)
-        match.context_text = match.evidence
+    if context_turns == 0:
+        # The anchor is always part of a recall result. Neighbour context is a
+        # separate, opt-in expansion; do not make callers hydrate full turns
+        # just to get usable evidence for a dense match.
+        match.context = []
+        if match.evidence:
+            match.evidence_status = "not_requested"
+            match.evidence_reason = None
 
 
 def _finalize_recall_evidence(matches: list[RecallMatch]) -> None:
@@ -1131,19 +1128,18 @@ def _anchor_excerpt(match: RecallMatch) -> str | None:
         return None
     if match.match_event_id is not None:
         for item in match.context:
-            if item.get("search_event_id") != match.match_event_id:
+            if item.search_event_id != match.match_event_id:
                 continue
-            text = str(item.get("content_text") or "").strip()
+            text = item.content_text.strip()
             if text:
                 return text[:_ANCHOR_EXCERPT_MAX_CHARS]
         return None
     if match.start_order_time_us is None:
         return None
     for item in match.context:
-        order_time = item.get("order_time_us")
-        if not isinstance(order_time, int) or order_time < match.start_order_time_us:
+        if item.order_time_us < match.start_order_time_us:
             continue
-        text = str(item.get("content_text") or "").strip()
+        text = item.content_text.strip()
         if text:
             return text[:_ANCHOR_EXCERPT_MAX_CHARS]
     return None
@@ -1253,7 +1249,7 @@ async def semantic_search_sessions(
     return result
 
 
-@router.get("/recall", response_model=RecallResponse)
+@router.get("/recall", response_model=RecallResponse, response_model_exclude_none=True)
 async def recall_sessions(
     request: Request,
     response: Response = None,
@@ -1295,6 +1291,18 @@ async def recall_sessions(
                 "code": "unknown_query_parameters",
                 "message": "Recall request contains unsupported query parameters.",
                 "parameters": unknown_query_params,
+            },
+        )
+
+    projected_context_items = max_results * (2 * context_turns + 1) if context_turns else 0
+    if projected_context_items > RECALL_CONTEXT_ITEM_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "recall_context_fanout_too_large",
+                "message": "Recall context expansion exceeds the bounded response shape.",
+                "max_context_items": RECALL_CONTEXT_ITEM_LIMIT,
+                "requested_context_items": projected_context_items,
             },
         )
 
@@ -1393,6 +1401,9 @@ async def recall_sessions(
     # semantic matches never reached the hydrator at all — they were appended
     # afterwards and went out with empty evidence — while lexical matches that
     # fusion then dropped were hydrated for nothing.
+    per_match_evidence_bytes = (
+        max(1, RECALL_CONTEXT_BYTE_BUDGET // len(matches)) if context_turns and matches else RECALL_ANCHOR_BYTE_BUDGET
+    )
     with timing.span("hydrate"):
         await asyncio.gather(
             *(
@@ -1401,12 +1412,14 @@ async def recall_sessions(
                     owner_id=owner_id,
                     context_turns=context_turns,
                     timeout_seconds=max(0.05, remaining_budget()),
+                    max_evidence_bytes=per_match_evidence_bytes,
                 )
                 for match in matches
             )
         )
 
     _finalize_recall_evidence(matches)
+    context_bytes_returned = sum(len(turn.content_text.encode("utf-8")) for match in matches for turn in match.context)
     timing.apply(response)
     if "dense" in lanes:
         from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
@@ -1423,6 +1436,8 @@ async def recall_sessions(
             embedding_revision=EMBEDDING_ARTIFACT_REVISION,
             coverage=dense_result.coverage,
             server_commit=_server_build_commit(),
+            context_byte_budget=RECALL_CONTEXT_BYTE_BUDGET if context_turns else 0,
+            context_bytes_returned=context_bytes_returned,
         )
     return RecallResponse(
         matches=matches,
@@ -1430,4 +1445,6 @@ async def recall_sessions(
         lanes=list(lanes),
         degraded=degraded,
         server_commit=_server_build_commit(),
+        context_byte_budget=RECALL_CONTEXT_BYTE_BUDGET if context_turns else 0,
+        context_bytes_returned=context_bytes_returned,
     )
