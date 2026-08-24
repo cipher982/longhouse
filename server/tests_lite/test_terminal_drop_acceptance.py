@@ -25,7 +25,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -123,8 +122,21 @@ def _settled(client: TestClient, session_id: str, run_id: str) -> tuple[bool, di
     return HARNESS.settlement_state({"session": response.json()}, run_id)
 
 
-@pytest.mark.parametrize("provider", CONSOLE_PROVIDERS)
-def test_a_terminal_lost_in_transit_keeps_the_console_check_red(provider, tmp_path, monkeypatch):
+def test_the_console_provider_set_is_derived_and_non_empty():
+    """Per-provider proof belongs in the live harness, not here.
+
+    This ran once per provider until two reviews pointed out the obvious: the
+    projector does not branch on provider, so six runs of a provider-agnostic
+    projection prove nothing six times. Assert the derivation instead, and let
+    `console-served-state-e2e --provider all` carry the real per-provider proof
+    where actual adapters run.
+    """
+    assert CONSOLE_PROVIDERS, "the schema must yield at least one Console provider"
+    assert "codex" in CONSOLE_PROVIDERS
+
+
+def test_a_terminal_lost_in_transit_keeps_the_console_check_red(tmp_path, monkeypatch):
+    provider = "codex"
     from zerg.routers import agents_sessions
     from zerg.routers import runtime as runtime_router
     from zerg.routers import session_chat

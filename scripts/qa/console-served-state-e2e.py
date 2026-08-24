@@ -464,14 +464,29 @@ def main() -> int:
                 }
             )
 
-    payload = reports[0] if len(reports) == 1 else {
-        "artifact_kind": "console_served_state_e2e_matrix",
-        "schema_version": 1,
-        "providers": {report["provider"]: report for report in reports},
-        "verdict": "red" if any(report["verdict"] in {"red", "error"} for report in reports) else "green",
-        "unavailable": [report["provider"] for report in reports if report["verdict"] == "unavailable"],
-        "errored": [report["provider"] for report in reports if report["verdict"] == "error"],
-    }
+    if len(reports) == 1:
+        payload = reports[0]
+    else:
+        verified = [report["provider"] for report in reports if report["verdict"] == "green"]
+        failed = [report["provider"] for report in reports if report["verdict"] in {"red", "error"}]
+        if failed:
+            verdict = "red"
+        elif not verified:
+            # Nothing was actually checked. Reporting green here would let a
+            # machine that offers no providers, or an instance that 503s on
+            # every request, pass as proof -- unknown must stay unknown.
+            verdict = "unqualified"
+        else:
+            verdict = "green"
+        payload = {
+            "artifact_kind": "console_served_state_e2e_matrix",
+            "schema_version": 1,
+            "providers": {report["provider"]: report for report in reports},
+            "verdict": verdict,
+            "verified": verified,
+            "unavailable": [report["provider"] for report in reports if report["verdict"] == "unavailable"],
+            "errored": [report["provider"] for report in reports if report["verdict"] == "error"],
+        }
 
     rendered = json.dumps(payload, indent=2, sort_keys=True)
     if args.json_out:
