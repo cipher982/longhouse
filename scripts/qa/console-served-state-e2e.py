@@ -41,6 +41,17 @@ import urllib.request
 from pathlib import Path
 from uuid import uuid4
 
+ROOT = Path(__file__).resolve().parents[2]
+API_RETRY_ATTEMPTS = 3
+API_RETRY_DELAY_S = 2.0
+
+
+class ApiError(RuntimeError):
+    """An HTTP failure from the Longhouse API, carrying its status."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
 USER_AGENT = "longhouse-console-served-state-e2e/1"
 
 # The pulsing composer bar is NOT display_phase. SessionChat.tsx:726 renders
@@ -51,6 +62,23 @@ USER_AGENT = "longhouse-console-served-state-e2e/1"
 WORKING_ACTIVITY = {"thinking", "executing"}
 WORKING_RUN_LIFECYCLE = {"starting", "running"}
 WORKING_PRESENTATION_KEYS = {"starting", "thinking", "executing", "stalled"}
+
+
+def console_providers() -> list[str]:
+    """Every provider with a Console adapter, from the single provider authority.
+
+    Derived rather than listed so a new provider enters this check by existing,
+    which is the whole point of `schemas/managed_providers.yml` being the
+    authority. A hardcoded tuple is how a provider silently escapes coverage.
+    """
+    import yaml  # imported lazily so the single-provider path needs no dependency
+
+    schema = yaml.safe_load((ROOT / "schemas" / "managed_providers.yml").read_text(encoding="utf-8"))
+    return [
+        str(entry["provider"])
+        for entry in schema.get("providers") or []
+        if str(entry.get("console_adapter") or "").strip()
+    ]
 
 
 def _home() -> Path:
@@ -86,15 +114,23 @@ class Client:
 
     def request(self, method: str, path: str, payload=None, *, browser=False, timeout=60) -> dict:
         body = json.dumps(payload).encode() if payload is not None else None
-        request = urllib.request.Request(
-            f"{self.api_url}{path}", data=body, method=method, headers=self._headers(browser=browser)
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read())
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode(errors="replace")
-            raise RuntimeError(f"{method} {path} returned HTTP {error.code}: {detail[:600]}") from error
+        last_detail = ""
+        for attempt in range(API_RETRY_ATTEMPTS):
+            request = urllib.request.Request(
+                f"{self.api_url}{path}", data=body, method=method, headers=self._headers(browser=browser)
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return json.loads(response.read())
+            except urllib.error.HTTPError as error:
+                last_detail = error.read().decode(errors="replace")
+                # Catalog and archive routes 503 transiently. Treating the first
+                # one as fatal reported "provider unavailable" for what was a
+                # server hiccup, which is a lie about which system is at fault.
+                if error.code < 500 or attempt == API_RETRY_ATTEMPTS - 1:
+                    raise ApiError(error.code, f"{method} {path} returned HTTP {error.code}: {last_detail[:600]}")
+                time.sleep(API_RETRY_DELAY_S * (attempt + 1))
+        raise ApiError(0, f"{method} {path} exhausted retries: {last_detail[:600]}")
 
     def served_workspace(self, session_id: str) -> dict:
         return self.request("GET", f"/api/timeline/sessions/{session_id}/workspace", browser=True)
@@ -349,7 +385,11 @@ def run(args: argparse.Namespace) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--provider", default="codex")
+    parser.add_argument(
+        "--provider",
+        default="codex",
+        help="a provider name, or 'all' to derive the set from schemas/managed_providers.yml",
+    )
     parser.add_argument("--device-id", default=os.environ.get("LONGHOUSE_DEVICE_ID") or "cinder")
     parser.add_argument("--cwd", default=str(Path.home() / "git" / "zerg"))
     parser.add_argument("--api-url", default=None)
@@ -369,12 +409,55 @@ def main() -> int:
     parser.add_argument("--json-out", default=None)
     args = parser.parse_args()
 
-    report = run(args)
-    rendered = json.dumps(report, indent=2, sort_keys=True)
+    providers = console_providers() if args.provider == "all" else [args.provider]
+
+    reports: list[dict] = []
+    for provider in providers:
+        attempt = argparse.Namespace(**{**vars(args), "provider": provider})
+        try:
+            reports.append(run(attempt))
+        except ApiError as error:
+            # The API failing is not a verdict about this provider. Say so
+            # separately, and still count it: a check that could not run is not
+            # a check that passed.
+            reports.append(
+                {
+                    "artifact_kind": "console_served_state_e2e",
+                    "schema_version": 1,
+                    "provider": provider,
+                    "verdict": "error",
+                    "failures": [str(error)],
+                }
+            )
+        except RuntimeError as error:
+            # A provider that will not start on this machine is a provider
+            # install, not a Longhouse contract failure. Recording it as red
+            # would leave this permanently red for an unauthenticated CLI and
+            # teach everyone to ignore it.
+            reports.append(
+                {
+                    "artifact_kind": "console_served_state_e2e",
+                    "schema_version": 1,
+                    "provider": provider,
+                    "verdict": "unavailable",
+                    "failures": [str(error)],
+                }
+            )
+
+    payload = reports[0] if len(reports) == 1 else {
+        "artifact_kind": "console_served_state_e2e_matrix",
+        "schema_version": 1,
+        "providers": {report["provider"]: report for report in reports},
+        "verdict": "red" if any(report["verdict"] in {"red", "error"} for report in reports) else "green",
+        "unavailable": [report["provider"] for report in reports if report["verdict"] == "unavailable"],
+        "errored": [report["provider"] for report in reports if report["verdict"] == "error"],
+    }
+
+    rendered = json.dumps(payload, indent=2, sort_keys=True)
     if args.json_out:
         Path(args.json_out).write_text(rendered + "\n", encoding="utf-8")
     print(rendered)
-    return 0 if report["verdict"] == "green" else 1
+    return 0 if payload["verdict"] == "green" else 1
 
 
 if __name__ == "__main__":
