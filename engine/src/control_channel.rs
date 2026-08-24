@@ -68,8 +68,13 @@ const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_CURSOR_BIN: &str = "cursor-agent";
 const DEFAULT_OPENCODE_BIN: &str = "opencode";
 const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
-const REMOTE_CODEX_EXEC_APPROVAL_POLICY: &str = "never";
-const REMOTE_CODEX_EXEC_SANDBOX: &str = "workspace-write";
+// Re-exported rather than restated. `warm_pool_compatible` only reuses a
+// prewarmed Console worker when the spawn config equals these exact values, so
+// a second copy that drifted would silently cost every Console turn its warm
+// start with nothing failing to say so.
+use crate::codex_exec::DEFAULT_CONSOLE_APPROVAL_POLICY as REMOTE_CODEX_EXEC_APPROVAL_POLICY;
+use crate::codex_exec::DEFAULT_CONSOLE_SANDBOX as REMOTE_CODEX_EXEC_SANDBOX;
+const CONSOLE_DEFAULT_PERMISSION_MODE: &str = "bypass";
 // Engine is built from the monorepo. Keep this path beside the Python reader so
 // advertised supports[] and server-side contracts cannot drift silently.
 const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
@@ -1539,15 +1544,14 @@ async fn execute_turn_start(
     }
     let message = payload_required_string(payload, "message")?;
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
-    let permission_mode =
-        payload_optional_string(payload, "permission_mode").unwrap_or_else(|| {
-            if matches!(provider.as_str(), "cursor" | "opencode" | "claude" | "pi") {
-                "bypass"
-            } else {
-                "remote_approve"
-            }
-            .to_string()
-        });
+    // One default for every Console provider. The per-provider branch this
+    // replaced defaulted Antigravity to `remote_approve`, which
+    // `antigravity_print` then rejects outright -- a turn that omitted the
+    // field could never run. Nothing surfaced it because every served caller
+    // sends "bypass" explicitly, so the broken default was reachable only from
+    // the machine API.
+    let permission_mode = payload_optional_string(payload, "permission_mode")
+        .unwrap_or_else(|| CONSOLE_DEFAULT_PERMISSION_MODE.to_string());
     if provider == "opencode" && permission_mode != "bypass" {
         return Err(CommandError {
             code: "permission_mode_unsupported".to_string(),

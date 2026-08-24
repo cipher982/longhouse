@@ -27,8 +27,13 @@ const STDERR_TAIL_LINES: usize = 40;
 const APP_SERVER_TURN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const CONSOLE_WARM_POOL_TARGET: usize = 1;
 const DEFAULT_CODEX_BIN: &str = "codex";
-const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
-const DEFAULT_CONSOLE_SANDBOX: &str = "workspace-write";
+pub const DEFAULT_CONSOLE_APPROVAL_POLICY: &str = "never";
+// Console runs unattended: there is no terminal and no human to answer a
+// prompt, so a confining sandbox cannot degrade into "ask first" -- it just
+// fails the turn with no way to recover. Every other Console provider already
+// runs unconfined (`permission_mode: "bypass"`); Codex was the lone exception,
+// which made the same prompt succeed on Claude and fail here. One policy.
+pub const DEFAULT_CONSOLE_SANDBOX: &str = "danger-full-access";
 pub const CODEX_EXEC_ADAPTER: &str = "codex_exec";
 
 struct AppServerRpc {
@@ -2063,8 +2068,8 @@ mod tests {
             api_url: "http://localhost:8080".to_string(),
             api_token: "token".to_string(),
             codex_bin: "codex".to_string(),
-            approval_policy: Some("never".to_string()),
-            sandbox: Some("workspace-write".to_string()),
+            approval_policy: Some(DEFAULT_CONSOLE_APPROVAL_POLICY.to_string()),
+            sandbox: Some(DEFAULT_CONSOLE_SANDBOX.to_string()),
             model: None,
             prompt: "Do one bounded turn".to_string(),
             launch_actor: None,
@@ -2438,7 +2443,7 @@ for line in sys.stdin:
                 "-c",
                 "approval_policy=\"never\"",
                 "-s",
-                "workspace-write",
+                "danger-full-access",
                 "-c",
                 "model=\"gpt-5.3-codex-low\"",
                 "app-server",
@@ -2467,7 +2472,7 @@ for line in sys.stdin:
                 "-c",
                 "approval_policy=\"never\"",
                 "-s",
-                "workspace-write",
+                "danger-full-access",
                 "app-server",
                 "--listen",
                 "stdio://",
