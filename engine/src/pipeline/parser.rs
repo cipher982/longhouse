@@ -206,6 +206,10 @@ struct RawMessage {
     /// Kept as raw JSON — avoids building a full serde_json::Value DOM tree.
     /// Parsed on-demand in extraction functions via ContentItem.
     content: Box<RawValue>,
+    /// pi carries the role inside the envelope: `{type:"message",
+    /// message:{role, content}}`. Claude encodes it as the line type and Cursor
+    /// puts it at the top level, so this is the third of three placements.
+    role: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1797,7 +1801,20 @@ fn extract_events(
 
     let content_str = content_raw.get();
 
-    match event_type {
+    // pi types every record `message` and carries the role inside the envelope,
+    // so neither the Claude nor the Cursor placement finds it. Without this the
+    // lines match no branch at all: a completed pi Console turn wrote and bound
+    // a transcript and served a session with zero events.
+    let effective_role = match event_type {
+        "message" => obj
+            .message
+            .as_ref()
+            .and_then(|m| m.role.as_deref())
+            .unwrap_or(""),
+        other => other,
+    };
+
+    match effective_role {
         "user" => {
             extract_user_events(
                 content_str,
@@ -3178,6 +3195,39 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_pi_message_envelope_yields_events() {
+        // Captured from the pi Console turn that served an empty session: the
+        // transcript was written and bound, the run completed, and the archive
+        // held nothing. pi types every record `message` and puts the role inside
+        // the envelope, which is neither Claude's placement (role is the type)
+        // nor Cursor's (role at top level), so every line matched no branch.
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "2026-08-24T00-51-28-286Z_01a03140-3b9e-7866-bc73-73a1719f2a84.jsonl",
+            &[
+                r#"{"type":"session","version":3,"id":"01a03140-3b9e-7866-bc73-73a1719f2a84","timestamp":"2026-08-24T00:51:28.286Z","cwd":"/Users/davidrose/git/zerg"}"#,
+                r#"{"type":"model_change","id":"a1","parentId":null,"timestamp":"2026-08-24T00:51:28.400Z","provider":"openrouter","modelId":"x"}"#,
+                r#"{"type":"message","id":"e924ad85","parentId":"72149a9a","timestamp":"2026-08-24T00:51:28.811Z","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly LH_SERVED_pi and nothing else."}]}}"#,
+                r#"{"type":"message","id":"4fe8d1c0","parentId":"e924ad85","timestamp":"2026-08-24T00:51:31.861Z","message":{"role":"assistant","content":[{"type":"text","text":"LH_SERVED_pi"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(
+            result.events.len(),
+            2,
+            "a completed pi turn must archive its user prompt and assistant reply"
+        );
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events[1].role, Role::Assistant);
+        assert_eq!(
+            result.events[1].content_text.as_deref(),
+            Some("LH_SERVED_pi")
+        );
+    }
+
+    #[test]
     fn test_parse_cursor_agent_transcript_messages_and_injections() {
         let dir = tempfile::tempdir().unwrap();
         let path = make_jsonl_file(
@@ -3986,7 +4036,10 @@ mod tests {
         .unwrap();
 
         let result = parse_session_file(&transcript, 0).unwrap();
-        assert_eq!(result.metadata.cwd.as_deref(), Some(workspace.to_string_lossy().as_ref()));
+        assert_eq!(
+            result.metadata.cwd.as_deref(),
+            Some(workspace.to_string_lossy().as_ref())
+        );
         assert_eq!(result.metadata.project.as_deref(), Some("g55"));
     }
 
