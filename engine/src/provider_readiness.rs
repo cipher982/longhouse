@@ -6,10 +6,19 @@
 //! failed at turn time as `adapter_unavailable` -- a dead end whose cause the
 //! machine already knew and threw away.
 //!
-//! The probe that answers "is this credential real" is declared per provider in
-//! `schemas/managed_providers.yml` and travels in the embedded contract
-//! manifest, so the engine never decides for itself what authenticated means.
-//! Providers with no safe way to ask report `unknown`; nothing here guesses.
+//! The probe is declared per provider in `schemas/managed_providers.yml` and
+//! travels in the embedded contract manifest, so the engine never decides for
+//! itself what authenticated means. Providers with no safe way to ask report
+//! `unknown`; nothing here guesses.
+//!
+//! **What readiness proves is asymmetric, and the weak direction is the useful
+//! one.** A local status command can prove a credential is *absent* cheaply and
+//! reliably. It cannot prove one still *works*, because that is a fact about
+//! the provider's servers, not this disk. Observed on a real machine: `claude
+//! auth status` reported `loggedIn: true` on a Max plan while every turn failed
+//! with "OAuth session expired and could not be refreshed". `Ready` therefore
+//! means "installed, and holding a credential the CLI itself accepts as
+//! present" -- never "a turn will succeed". The only proof of that is a turn.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -25,7 +34,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadinessState {
-    /// Installed and holding a credential the provider itself accepts.
+    /// Installed, and holding a credential the CLI accepts as present.
+    ///
+    /// Not a promise that a turn will succeed: a stored credential can still be
+    /// expired or unrefreshable server-side, which no local probe can see.
     Ready,
     /// No binary. The user has not installed this provider here.
     CliMissing,

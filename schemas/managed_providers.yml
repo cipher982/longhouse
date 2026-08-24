@@ -374,6 +374,11 @@ providers:
   marketing_name: Claude Code
   provider_cli_binary: claude
   provider_cli_env: LONGHOUSE_CLAUDE_BIN
+  # Proves absence, not health. Observed on a real machine: this reported
+  # loggedIn true on a Max plan while every turn failed with "OAuth session
+  # expired and could not be refreshed". It reads the stored credential's own
+  # claims; whether the provider still honours them is not a fact on this disk.
+  #
   # `claude auth status` prints structured JSON and is read rather than the exit
   # code, because the exit code cannot express the case that matters: with
   # ANTHROPIC_API_KEY set, loggedIn stays true and authMethod still reports
