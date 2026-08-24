@@ -134,6 +134,7 @@ def _register(
     owner_id: int,
     device_id: str,
     supports=("codex.send",),
+    provider_readiness=None,
     websocket=None,
 ):
     asyncio.run(
@@ -143,6 +144,7 @@ def _register(
             machine_name=device_id,
             engine_build="test-build",
             supports=list(supports),
+            provider_readiness=provider_readiness,
             websocket=websocket or _FakeWebSocket(),
         )
     )
@@ -848,3 +850,102 @@ def test_machines_route_returns_empty_for_unknown_user(tmp_path):
 
     assert resp.status_code == 200
     assert resp.json() == {"machines": []}
+
+
+def test_directory_carries_the_reason_a_provider_cannot_run(tmp_path):
+    # The point of readiness: a machine that cannot run a provider says why and
+    # what to do, instead of the browser learning only adapter_unavailable at
+    # turn time.
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="cinder",
+        supports=("codex.turn_start",),
+        provider_readiness={
+            "claude": {"state": "not_authenticated", "remediation": "Sign in to claude on this machine"},
+            "codex": {"state": "ready", "detail": "max plan"},
+        },
+    )
+
+    entry = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)[0]
+
+    assert entry.provider_readiness["claude"]["state"] == "not_authenticated"
+    assert "Sign in" in entry.provider_readiness["claude"]["remediation"]
+    assert entry.provider_readiness["codex"] == {"state": "ready", "detail": "max plan"}
+    assert entry.to_response()["provider_readiness"]["claude"]["state"] == "not_authenticated"
+
+
+def test_a_machine_that_reports_no_readiness_is_unreported_not_unready(tmp_path):
+    # An engine predating readiness sends nothing. Rendering that as "no
+    # provider is ready" would block launches that work today, so absence has
+    # to stay absence.
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(registry, owner_id=OWNER_ID, device_id="older-engine", supports=("codex.turn_start",))
+
+    entry = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)[0]
+
+    assert entry.provider_readiness == {}
+    assert [option.provider for option in entry.launch.providers] == ["codex"]
+
+
+def test_readiness_from_a_malformed_engine_frame_is_dropped_not_trusted(tmp_path):
+    # Readiness arrives from an engine the Runtime Host does not control, so a
+    # junk entry must vanish rather than reach clients as a state they will try
+    # to render.
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="cinder",
+        provider_readiness={
+            "claude": "not-a-mapping",
+            "codex": {"no_state_field": True},
+            "opencode": {"state": "ready", "email": "someone@example.com"},
+        },
+    )
+
+    entry = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)[0]
+
+    assert "claude" not in entry.provider_readiness
+    assert "codex" not in entry.provider_readiness
+    # Unrecognised keys are dropped, so identity cannot ride along in readiness.
+    assert entry.provider_readiness["opencode"] == {"state": "ready"}
+
+
+def test_an_online_machine_reports_when_its_connection_began(tmp_path):
+    # last_seen_at alone cannot tell a machine that has held one connection all
+    # day from one that keeps reconnecting.
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(registry, owner_id=OWNER_ID, device_id="cinder")
+
+    entry = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)[0]
+
+    assert entry.connected_since is not None
+    assert entry.connected_since <= entry.last_seen_at
+
+
+def test_an_offline_machine_reports_neither_uptime_nor_readiness(tmp_path):
+    # Both describe a live connection. Carrying last-known values forward would
+    # present stale capability as current truth.
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    _seed_device_token(SessionLocal, "homelab")
+
+    entry = build_machines_directory(
+        owner_id=OWNER_ID,
+        enrollments=_enrollments(SessionLocal),
+        registry=MachineControlChannelRegistry(),
+    )[0]
+
+    assert entry.online is False
+    assert entry.connected_since is None
+    assert entry.provider_readiness == {}

@@ -6108,6 +6108,20 @@ export interface components {
              * @description Engine build string from the last hello frame; null when offline.
              */
             engine_build?: string | null;
+            /**
+             * Connected Since
+             * @description When the current control channel connected; null when offline. Paired with last_seen_at this separates a machine that has held one connection from one that keeps reconnecting.
+             */
+            connected_since?: string | null;
+            /**
+             * Provider Readiness
+             * @description Per-provider readiness reported by the Machine Agent: state is one of ready, cli_missing, not_authenticated, unknown, with optional detail, credential_override, and remediation. Empty means not reported -- an offline machine or an older engine -- never that providers are unready.
+             */
+            provider_readiness?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
             /** @description Canonical Console launch options and defaults for human clients. */
             launch: components["schemas"]["MachineLaunchProjection"];
         };

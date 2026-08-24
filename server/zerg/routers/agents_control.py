@@ -211,6 +211,7 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             machine_name=str(hello.get("machine_name") or device_id),
             engine_build=str(hello.get("engine_build") or "") or None,
             supports=supports,
+            provider_readiness=hello.get("provider_readiness"),
             websocket=websocket,
         )
         console_reconcile_task = asyncio.create_task(

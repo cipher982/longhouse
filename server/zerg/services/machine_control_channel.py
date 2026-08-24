@@ -23,8 +23,36 @@ class MachineControlConnectionInfo:
     machine_name: str | None
     engine_build: str | None
     supports: frozenset[str]
+    # Per-provider readiness from the hello frame: whether each provider can
+    # actually run here now, and why not when it cannot. supports[] says what
+    # the engine can drive; this says what the machine can do.
+    provider_readiness: Mapping[str, Mapping[str, Any]]
     connected_at: datetime
     last_seen_at: datetime
+
+
+def _normalized_readiness(payload: Mapping[str, Any] | None) -> Mapping[str, Mapping[str, Any]]:
+    """Keep only well-formed readiness entries from an engine we do not control.
+
+    An older engine sends nothing, which must read as "no readiness reported"
+    rather than as every provider being unready -- absence of evidence is not a
+    verdict, and inventing one here would block launches that work.
+    """
+
+    if not isinstance(payload, Mapping):
+        return {}
+    normalized: dict[str, Mapping[str, Any]] = {}
+    for provider, entry in payload.items():
+        if not isinstance(entry, Mapping):
+            continue
+        state = entry.get("state")
+        if not isinstance(state, str) or not state.strip():
+            continue
+        normalized[str(provider)] = {
+            "state": state,
+            **{key: str(entry[key]) for key in ("detail", "credential_override", "remediation") if isinstance(entry.get(key), str)},
+        }
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -74,6 +102,7 @@ class MachineControlChannelRegistry:
         machine_name: str | None,
         engine_build: str | None,
         supports: list[str] | tuple[str, ...] | set[str] | frozenset[str],
+        provider_readiness: Mapping[str, Any] | None = None,
         websocket: WebSocket,
     ) -> None:
         key = (owner_id, device_id)
@@ -84,6 +113,7 @@ class MachineControlChannelRegistry:
             machine_name=machine_name,
             engine_build=engine_build,
             supports=frozenset(str(item) for item in supports if str(item).strip()),
+            provider_readiness=_normalized_readiness(provider_readiness),
             connected_at=now,
             last_seen_at=now,
         )
@@ -122,6 +152,7 @@ class MachineControlChannelRegistry:
                 machine_name=info.machine_name,
                 engine_build=info.engine_build,
                 supports=info.supports,
+                provider_readiness=info.provider_readiness,
                 connected_at=info.connected_at,
                 last_seen_at=_utc_now(),
             )

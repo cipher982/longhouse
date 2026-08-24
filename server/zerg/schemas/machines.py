@@ -53,6 +53,23 @@ class MachineDirectoryEntry(UTCBaseModel):
         default=None,
         description="Engine build string from the last hello frame; null when offline.",
     )
+    connected_since: datetime | None = Field(
+        default=None,
+        description=(
+            "When the current control channel connected; null when offline. Paired with "
+            "last_seen_at this separates a machine that has held one connection from one "
+            "that keeps reconnecting."
+        ),
+    )
+    provider_readiness: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-provider readiness reported by the Machine Agent: state is one of ready, "
+            "cli_missing, not_authenticated, unknown, with optional detail, "
+            "credential_override, and remediation. Empty means not reported -- an offline "
+            "machine or an older engine -- never that providers are unready."
+        ),
+    )
     launch: "MachineLaunchProjection" = Field(
         ...,
         description="Canonical Console launch options and defaults for human clients.",

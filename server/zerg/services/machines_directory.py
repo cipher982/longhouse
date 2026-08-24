@@ -56,8 +56,17 @@ class MachineEntry:
     supports: tuple[str, ...]
     control_operations_by_provider: dict[str, tuple[str, ...]]
     last_seen_at: datetime | None
+    # When the current control channel connected. Distinct from last_seen_at:
+    # together they separate a machine that has held one connection all day
+    # from one that keeps reconnecting. Null when offline -- an ended
+    # connection has no ongoing uptime to report.
+    connected_since: datetime | None
     engine_build: str | None
     launch: MachineLaunchProjection
+    # Why each provider can or cannot run here. Empty for an offline machine
+    # and for engines predating readiness, both of which mean "not reported"
+    # rather than "not ready".
+    provider_readiness: dict[str, dict[str, str]]
 
     def to_response(self) -> dict[str, object]:
         return {
@@ -70,8 +79,10 @@ class MachineEntry:
                 provider: list(operations) for provider, operations in sorted(self.control_operations_by_provider.items())
             },
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
+            "connected_since": self.connected_since.isoformat() if self.connected_since else None,
             "engine_build": self.engine_build,
             "launch": self.launch.to_response(),
+            "provider_readiness": {provider: dict(entry) for provider, entry in sorted(self.provider_readiness.items())},
         }
 
 
@@ -155,8 +166,10 @@ def build_machines_directory(
             supports=supports,
             control_operations_by_provider=control_operations_by_provider,
             last_seen_at=conn_info.last_seen_at,
+            connected_since=conn_info.connected_at,
             engine_build=conn_info.engine_build,
             launch=launch,
+            provider_readiness={provider: dict(entry) for provider, entry in conn_info.provider_readiness.items()},
         )
         seen[entry.device_id] = entry
 
@@ -173,8 +186,13 @@ def build_machines_directory(
             supports=(),
             control_operations_by_provider={},
             last_seen_at=_as_utc(last_used),
+            # Offline: there is no live connection, so no uptime and no
+            # readiness. Reporting last-known values here would present stale
+            # capability as current truth.
+            connected_since=None,
             engine_build=None,
             launch=_launch_projection({}, connected=False),
+            provider_readiness={},
         )
 
     return sorted(
