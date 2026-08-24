@@ -17,7 +17,6 @@ class this epic exists to close.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 from datetime import datetime
 from datetime import timezone
@@ -49,12 +48,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_live_harness():
-    """Import the shipped QA harness so this asserts on its actual predicate."""
-    path = REPO_ROOT / "scripts" / "qa" / "console-served-state-e2e.py"
-    spec = importlib.util.spec_from_file_location("console_served_state_e2e", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """Import the shipped predicates so this asserts on the real ones.
+
+    These live in the core module that both the hand-run harness and the factory
+    producer `zerg.qa.console_served_state` import, so this test, the script and
+    the factory cannot drift into asserting different things.
+    """
+    from zerg.qa import console_served_state_core
+
+    return console_served_state_core
 
 
 HARNESS = _load_live_harness()
