@@ -36,6 +36,7 @@ import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRunti
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
 import { useWallClock } from "../hooks/useWallClock";
+import { isActivityExecuting, isActivityStalled } from "../lib/activityEvidence";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useAuth } from "../lib/auth";
 import { config } from "../lib/config";
@@ -570,11 +571,14 @@ function SessionDetailWorkspaceRoute({
                     displaySession.capabilities?.can_steer_active_turn,
                   )}
                   timelineItems={items}
-                  isStalled={displaySession.session_state.activity.state === "stalled"}
-                  isSessionExecuting={
-                    displaySession.session_state.activity.state === "thinking" ||
-                    displaySession.session_state.activity.state === "executing"
-                  }
+                  isStalled={isActivityStalled(
+                    displaySession.session_state.activity,
+                    nowMs,
+                  )}
+                  isSessionExecuting={isActivityExecuting(
+                    displaySession.session_state.activity,
+                    nowMs,
+                  )}
                   onSessionChanged={(nextSessionId) => {
                     if (!nextSessionId || nextSessionId === session.id) return;
                     navigate(`/timeline/${nextSessionId}`, {

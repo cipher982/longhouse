@@ -15,6 +15,7 @@ type SessionStateOptions = {
   unread?: boolean;
   lastResultAt?: string | null;
   lastResultOutcome?: string | null;
+  activityValidUntil?: string | null;
 };
 
 export function makeSessionStateFacts(options: SessionStateOptions = {}): SessionStateFacts {
@@ -68,6 +69,7 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
       state: activity,
       observed_at: options.observedAt,
       tool: options.tool ?? (activity === "executing" ? "Shell" : null),
+      valid_until: options.activityValidUntil ?? null,
     },
     working_set: workingSet,
     unread: options.unread ?? false,

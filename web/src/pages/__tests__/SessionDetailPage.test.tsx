@@ -91,14 +91,20 @@ vi.mock("../../components/SessionChat", () => ({
   SessionChat: ({
     composerDisabledReason,
     managedLaunchSuggestion,
+    isSessionExecuting,
+    isStalled,
   }: {
     composerDisabledReason?: string | null;
     managedLaunchSuggestion?: { command: string } | null;
+    isSessionExecuting?: boolean;
+    isStalled?: boolean;
   }) => (
     <div
       data-testid="session-chat"
       data-disabled-reason={composerDisabledReason ?? ""}
       data-launch-command={managedLaunchSuggestion?.command ?? ""}
+      data-session-executing={String(Boolean(isSessionExecuting))}
+      data-stalled={String(Boolean(isStalled))}
     >
       session-chat
     </div>
@@ -457,6 +463,56 @@ describe("SessionDetailPage", () => {
     ];
     const model = buildTimelineModel(projectionItems);
     mockWorkspaceState({ session, model });
+  });
+
+  it("keeps rendering work while the served activity window is open", () => {
+    const session = makeSession({
+      session_state: makeSessionStateFacts({
+        access: "live_control",
+        activity: "executing",
+        observedAt: "2026-03-22T22:04:30Z",
+        activityValidUntil: "2026-03-22T22:14:30Z",
+      }),
+    });
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    wallClockMocks.useWallClock.mockReturnValue(
+      Date.parse("2026-03-22T22:06:00Z"),
+    );
+
+    renderSessionDetailPage();
+
+    // isSessionExecuting is what locks the composer and paints the pulsing
+    // "Working" badge.
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-session-executing",
+      "true",
+    );
+  });
+
+  it("stops rendering work once the served activity window has expired", () => {
+    // The wedge, client-side. The server is correct and no further frame
+    // arrives; an open tab holds its last snapshot. Without expiry the composer
+    // pulses "Working" for as long as the tab stays open -- ten hours, in the
+    // incident this came from.
+    const session = makeSession({
+      session_state: makeSessionStateFacts({
+        access: "live_control",
+        activity: "executing",
+        observedAt: "2026-03-22T22:04:30Z",
+        activityValidUntil: "2026-03-22T22:14:30Z",
+      }),
+    });
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    wallClockMocks.useWallClock.mockReturnValue(
+      Date.parse("2026-03-23T08:00:00Z"),
+    );
+
+    renderSessionDetailPage();
+
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-session-executing",
+      "false",
+    );
   });
 
   it("renders managed-local Codex detail with live-session controls and preserved tool inspector labels", async () => {
