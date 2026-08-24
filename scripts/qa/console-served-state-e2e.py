@@ -31,6 +31,7 @@ non-browser client can drive the UI contract.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import queue
@@ -233,6 +234,27 @@ def _start_turn(client: Client, session_id: str, message: str) -> dict:
     raise RuntimeError("queued Console turn was not assigned a run within 30 seconds")
 
 
+@contextlib.contextmanager
+def armed_terminal_drop(session_id: str, enabled: bool):
+    """Arm the engine's terminal drop for one session, and always disarm.
+
+    A leaked control file would keep dropping that session's terminals after the
+    run exits. Scoped to one session so it cannot reach other work, and released
+    on every exit path including a raised ApiError -- which is how it leaked the
+    first time.
+    """
+    control = _home() / "agent" / "fault-drop-runtime-events"
+    if not enabled:
+        yield None
+        return
+    control.parent.mkdir(parents=True, exist_ok=True)
+    control.write_text(f"{session_id}:terminal_signal", encoding="utf-8")
+    try:
+        yield control
+    finally:
+        control.unlink(missing_ok=True)
+
+
 def run(args: argparse.Namespace) -> dict:
     api_url, token = _defaults()
     api_url = args.api_url.rstrip("/") if args.api_url else api_url
@@ -264,15 +286,20 @@ def run(args: argparse.Namespace) -> dict:
     session_id = str(created["session_id"])
     report["session_id"] = session_id
 
-    # Acceptance mode: arm the engine to drop this session's terminal on the real
-    # path. Scoped to this one session id so concurrent work on a shared machine
-    # is untouched, and disarmed below no matter what happens.
-    fault_control = _home() / "agent" / "fault-drop-runtime-events"
     if args.drop_terminal:
-        fault_control.parent.mkdir(parents=True, exist_ok=True)
-        fault_control.write_text(f"{session_id}:terminal_signal", encoding="utf-8")
         report["terminal_dropped"] = True
+    with armed_terminal_drop(session_id, args.drop_terminal):
+        return _observe_turn(client, args, report, session_id, marker)
 
+
+def _observe_turn(
+    client: Client,
+    args: argparse.Namespace,
+    report: dict,
+    session_id: str,
+    marker: str,
+) -> dict:
+    """Drive one turn and judge what a viewer receives."""
     # Subscribe before dispatching, or the turn races the subscription. Waiting a
     # fixed two seconds is not enough: the stream emits a workspace_changed at
     # connect, and on a slow handshake that frame lands after dispatch and passes
@@ -389,8 +416,6 @@ def run(args: argparse.Namespace) -> dict:
         failures.append(f"workspace stream died before the turn settled: {watcher.error!r}")
     report["failures"] = failures
     report["verdict"] = "red" if failures else "green"
-    if args.drop_terminal:
-        fault_control.unlink(missing_ok=True)
     return report
 
 
