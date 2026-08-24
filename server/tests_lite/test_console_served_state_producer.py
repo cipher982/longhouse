@@ -31,18 +31,28 @@ def test_the_registration_is_a_longhouse_product_subject_with_live_evidence():
 
 
 def test_the_provider_set_is_derived_from_the_schema_not_restated():
-    # A hardcoded tuple is how a provider silently escapes coverage.
+    # A hardcoded tuple is how a provider silently escapes coverage. This is the
+    # set the producer may choose a vehicle from at runtime.
     assert list(producer.PROVIDERS) == console_providers()
-    assert producer.REGISTRATION.to_dict()["providers"] == console_providers()
 
 
-def test_every_provider_binds_runtime_host_control():
+def test_the_registration_declares_no_provider_even_though_one_runs():
+    # A provider does run -- it is the instrument that produces a Console turn.
+    # But the subject under test is Longhouse, and the factory refuses a
+    # longhouse_product observation that carries a provider
+    # (provider_factory/cases.py: "Longhouse product case observation carries a
+    # provider"). Declaring the vehicle here would make every published case
+    # invalid, so the runtime choice set and the declared subject are
+    # deliberately different things.
+    assert producer.REGISTRATION.to_dict()["providers"] == []
+
+
+def test_the_registration_binds_runtime_host_control():
     # The proof is what a viewer is served, so the producer needs the Runtime
-    # Host credential as well as the provider's own.
-    bindings = producer.REGISTRATION.to_dict()["credential_binding_ids_by_provider"]
-    for provider in producer.PROVIDERS:
-        assert "runtime_host_control" in bindings[provider], provider
-        assert f"{provider}_provider_token" in bindings[provider], provider
+    # Host credential. It is bound once for the producer rather than per
+    # provider, because the subject is the Runtime Host's served contract and
+    # not any one provider's release.
+    assert producer.REGISTRATION.to_dict()["credential_binding_ids"] == ["runtime_host_control"]
 
 
 def test_the_oracle_points_at_the_shared_core():
