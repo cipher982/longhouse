@@ -387,6 +387,109 @@ describe("LaunchSessionModal", () => {
     expect(onLaunched).not.toHaveBeenCalled();
   });
 
+
+  it("tells a connected machine's owner what to fix instead of just refusing", async () => {
+    // "Console launch unavailable" names the symptom the user can already see
+    // and withholds the cause, which the machine has been reporting all along.
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "cube",
+          machine_name: "cube",
+          online: true,
+          control_operations_by_provider: {},
+          launch: { blocked_by: "no_launch_support", providers: [], default_provider: null },
+          provider_readiness: {
+            claude: { state: "not_authenticated", remediation: "Sign in to claude on this machine" },
+          },
+        }),
+      ],
+    });
+    renderModal();
+    expect(await screen.findByText("Sign in to claude on this machine")).toBeInTheDocument();
+    expect(screen.queryByText("Console launch unavailable")).not.toBeInTheDocument();
+  });
+
+  it("names every provider a user could sign in to, not just the first", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "cube",
+          machine_name: "cube",
+          online: true,
+          control_operations_by_provider: {},
+          launch: { blocked_by: "no_launch_support", providers: [], default_provider: null },
+          provider_readiness: {
+            claude: { state: "not_authenticated", remediation: "Sign in to claude on this machine" },
+            codex: { state: "not_authenticated", remediation: "Sign in to codex on this machine" },
+          },
+        }),
+      ],
+    });
+    renderModal();
+    expect(await screen.findByText("Sign in to claude or codex on this machine")).toBeInTheDocument();
+  });
+
+  it("prefers the fix that is one command over the one that is an install", async () => {
+    // Signing in beats installing, so a machine offering both paths should
+    // point at the cheaper one rather than the alphabetically first.
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "cube",
+          machine_name: "cube",
+          online: true,
+          control_operations_by_provider: {},
+          launch: { blocked_by: "no_launch_support", providers: [], default_provider: null },
+          provider_readiness: {
+            claude: { state: "cli_missing", remediation: "Install the claude CLI on this machine" },
+            codex: { state: "not_authenticated", remediation: "Sign in to codex on this machine" },
+          },
+        }),
+      ],
+    });
+    renderModal();
+    expect(await screen.findByText("Sign in to codex on this machine")).toBeInTheDocument();
+  });
+
+  it("does not blame the user for a provider Longhouse could not ask about", async () => {
+    // `unknown` means the probe could not run -- our gap, not theirs. Rendering
+    // it as a cause would read as an accusation that they broke something.
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "cube",
+          machine_name: "cube",
+          online: true,
+          control_operations_by_provider: {},
+          launch: { blocked_by: "no_launch_support", providers: [], default_provider: null },
+          provider_readiness: {
+            antigravity: { state: "unknown", detail: "the agy CLI has no auth/login/status subcommand" },
+          },
+        }),
+      ],
+    });
+    renderModal();
+    expect(await screen.findByText("Console launch unavailable")).toBeInTheDocument();
+    expect(screen.queryByText(/agy CLI/)).not.toBeInTheDocument();
+  });
+
+  it("still refuses plainly when an older engine reports no readiness at all", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "old-engine",
+          machine_name: "old-engine",
+          online: true,
+          control_operations_by_provider: {},
+          launch: { blocked_by: "no_launch_support", providers: [], default_provider: null },
+        }),
+      ],
+    });
+    renderModal();
+    expect(await screen.findByText("Console launch unavailable")).toBeInTheDocument();
+  });
+
   it("tells an offline machine's last contact apart within the same day", async () => {
     // "Last seen today" covered one minute ago through twenty-three hours ago
     // identically, which is exactly the range that decides whether waiting is

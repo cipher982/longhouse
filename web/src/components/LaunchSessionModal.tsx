@@ -387,20 +387,48 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
   );
 }
 
+// "Console launch unavailable" is true and useless: it names the symptom a user
+// already sees and withholds the cause, which the machine has been reporting
+// all along. A connected machine that cannot launch is almost always one where
+// a provider CLI is missing or signed out, and both are things the person
+// sitting at that machine can fix in a minute -- if anyone tells them.
+function unreadyProviderLabel(machine: MachineDirectoryEntry): string | null {
+  const readiness = machine.provider_readiness ?? {};
+  const entries = Object.entries(readiness);
+  if (entries.length === 0) return null;
+
+  // Prefer whatever the user can act on. A signed-out CLI is one command away;
+  // a missing one is an install. `unknown` is deliberately never surfaced as a
+  // cause -- it means Longhouse could not ask, which is not the user's problem
+  // to solve and would read as an accusation that they broke something.
+  const signedOut = entries.filter(([, entry]) => entry?.state === "not_authenticated");
+  const missing = entries.filter(([, entry]) => entry?.state === "cli_missing");
+  const actionable = signedOut.length > 0 ? signedOut : missing;
+  if (actionable.length === 0) return null;
+
+  if (actionable.length === 1) {
+    const [provider, entry] = actionable[0];
+    return entry?.remediation ?? `${provider} is not ready`;
+  }
+  const verb = signedOut.length > 0 ? "Sign in to" : "Install";
+  return `${verb} ${actionable.map(([provider]) => provider).sort().join(" or ")} on this machine`;
+}
+
 function launchBlockedLabel(machine: MachineDirectoryEntry): string {
   switch (machine.launch.blocked_by) {
     case "control_down":
       return lastSeenLabel(machine);
-    case "no_launch_support":
-      return "Console launch unavailable";
     case "engine_too_old":
       return "Update required";
     case "auth_failed":
       return "Needs repair";
     case "runtime_unreachable":
       return "Needs repair";
+    case "no_launch_support":
+      return unreadyProviderLabel(machine) ?? "Console launch unavailable";
     default:
-      return machine.online ? "Console launch unavailable" : lastSeenLabel(machine);
+      if (!machine.online) return lastSeenLabel(machine);
+      return unreadyProviderLabel(machine) ?? "Console launch unavailable";
   }
 }
 
