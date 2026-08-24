@@ -9,6 +9,14 @@ providers:
   marketing_name: Codex CLI
   provider_cli_binary: codex
   provider_cli_env: LONGHOUSE_CODEX_BIN
+  # Verified against the real CLI: logged in exits 0 ("Logged in using an API
+  # key - sk-proj-***"), an empty CODEX_HOME exits 1 ("Not logged in"). The
+  # output names the credential but also prints a masked key, so only the exit
+  # code is read -- Longhouse never captures the line itself.
+  auth_probe:
+    disposition: implemented
+    argv: [login, status]
+    format: exit_code
   requires_longhouse_cli: false
   managed_transport: codex_app_server
   console_adapter: codex_exec
@@ -366,6 +374,19 @@ providers:
   marketing_name: Claude Code
   provider_cli_binary: claude
   provider_cli_env: LONGHOUSE_CLAUDE_BIN
+  # `claude auth status` prints structured JSON and is read rather than the exit
+  # code, because the exit code cannot express the case that matters: with
+  # ANTHROPIC_API_KEY set, loggedIn stays true and authMethod still reports
+  # claude.ai, but apiKeySource appears and subscriptionType goes null. A probe
+  # that only asked "logged in?" would report a Max plan while the machine
+  # silently billed API rates.
+  auth_probe:
+    disposition: implemented
+    argv: [auth, status]
+    format: json
+    logged_in_field: loggedIn
+    plan_field: subscriptionType
+    credential_override_field: apiKeySource
   requires_longhouse_cli: false
   managed_transport: claude_channel_bridge
   console_adapter: claude_print
@@ -679,6 +700,12 @@ providers:
   marketing_name: OpenCode
   provider_cli_binary: opencode
   provider_cli_env: LONGHOUSE_OPENCODE_BIN
+  # `opencode auth list` renders its credential store, but its logged-out
+  # behaviour is unverified, so nothing is declared. Readiness reports unknown
+  # rather than guessing a provider is usable.
+  auth_probe:
+    disposition: not_implemented
+    owner_action: "observe `opencode auth list` with an empty credential store and record whether it signals absence by exit code or output"
   requires_longhouse_cli: false
   managed_transport: opencode_server_bridge
   console_adapter: opencode_run
@@ -919,6 +946,11 @@ providers:
   marketing_name: Antigravity CLI
   provider_cli_binary: agy
   provider_cli_env: LONGHOUSE_ANTIGRAVITY_BIN
+  # agy exposes no auth, login, or status subcommand -- there is no surface to
+  # ask. Readiness stays unknown for Antigravity until upstream adds one.
+  auth_probe:
+    disposition: upstream_absent
+    reason: "the agy CLI has no auth/login/status subcommand"
   requires_longhouse_cli: false
   managed_transport: antigravity_hook_inbox
   console_adapter: antigravity_print
@@ -1183,6 +1215,11 @@ providers:
   marketing_name: Cursor Agent
   provider_cli_binary: cursor-agent
   provider_cli_env: LONGHOUSE_CURSOR_BIN
+  # `cursor-agent status` reports "Logged in as <email>", but its logged-out
+  # behaviour is unverified, so nothing is declared.
+  auth_probe:
+    disposition: not_implemented
+    owner_action: "observe `cursor-agent status` with no Cursor credential and record whether it signals absence by exit code or output"
   requires_longhouse_cli: false
   # cursor_helm is the LIVE control plane (interactive TUI + remote steer via
   # PTY pass-through + per-session Unix socket; launcher owns the PTY master and
@@ -1412,6 +1449,13 @@ providers:
   marketing_name: Pi Agent
   provider_cli_binary: pi
   provider_cli_env: LONGHOUSE_PI_BIN
+  # pi offers only `auth print-api-key` and `auth print-bearer-token`, both of
+  # which write the credential itself to stdout. Longhouse does not run a
+  # command whose output is a secret, so this is refused by policy rather than
+  # missing upstream.
+  auth_probe:
+    disposition: policy_disabled
+    reason: "pi's only auth surface prints the credential to stdout"
   requires_longhouse_cli: false
   # Pi (earendil-works/pi, npm @earendil-works/pi-coding-agent) is a standalone
   # TypeScript/Bun CLI. One-shot `pi -p` runs and their transcript JSONL are

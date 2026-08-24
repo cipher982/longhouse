@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from zerg.managed_provider_contract_manifest import _validate_auth_probe
+from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
@@ -974,3 +976,60 @@ def test_contract_carries_the_facts_the_runner_used_to_hardcode() -> None:
     assert antigravity.harness_safe_managed_session_scenarios == ()
     for contract in (claude, codex, cursor, opencode, antigravity):
         assert set(contract.harness_safe_managed_session_scenarios) <= set(SCENARIOS)
+
+
+def _probe_item(**probe: object) -> dict[str, object]:
+    return {"provider": "codex", "auth_probe": probe}
+
+
+def test_an_implemented_auth_probe_must_actually_be_runnable() -> None:
+    # Readiness only means something if a declared probe can be executed and
+    # read. A probe missing its argv or its reading rule would leave the engine
+    # deciding for itself what "authenticated" means, which is the drift this
+    # manifest exists to prevent.
+    with pytest.raises(ValueError, match="argv"):
+        _validate_auth_probe(_probe_item(disposition="implemented", format="exit_code"))
+    with pytest.raises(ValueError, match="argv"):
+        _validate_auth_probe(_probe_item(disposition="implemented", argv=[], format="exit_code"))
+    with pytest.raises(ValueError, match="format"):
+        _validate_auth_probe(_probe_item(disposition="implemented", argv=["login", "status"]))
+    with pytest.raises(ValueError, match="logged_in_field"):
+        _validate_auth_probe(_probe_item(disposition="implemented", argv=["auth", "status"], format="json"))
+
+
+def test_an_exit_code_probe_cannot_claim_to_read_fields_it_never_parses() -> None:
+    # `format: exit_code` reads nothing but the status, so a plan_field there
+    # would silently never populate -- a promise the UI would render as absence.
+    with pytest.raises(ValueError, match="requires format json"):
+        _validate_auth_probe(
+            _probe_item(disposition="implemented", argv=["login", "status"], format="exit_code", plan_field="subscriptionType")
+        )
+
+
+def test_an_unprobed_provider_has_to_say_why() -> None:
+    # The failure this guards is a provider quietly having no probe at all and
+    # therefore never reporting a readiness gap. Backlog owes the observation
+    # that closes it; a decision owes its reason.
+    with pytest.raises(ValueError, match="owner_action"):
+        _validate_auth_probe(_probe_item(disposition="not_implemented"))
+    with pytest.raises(ValueError, match="reason"):
+        _validate_auth_probe(_probe_item(disposition="upstream_absent"))
+    with pytest.raises(ValueError, match="reason"):
+        _validate_auth_probe(_probe_item(disposition="policy_disabled"))
+    with pytest.raises(ValueError, match="disposition"):
+        _validate_auth_probe(_probe_item(disposition="probably_fine"))
+    _validate_auth_probe(_probe_item(disposition="upstream_absent", reason="the agy CLI has no auth subcommand"))
+
+
+def test_a_gap_cannot_smuggle_in_a_command_nothing_will_run() -> None:
+    with pytest.raises(ValueError, match="meaningless"):
+        _validate_auth_probe(_probe_item(disposition="upstream_absent", reason="none", argv=["auth"]))
+
+
+def test_every_provider_declares_a_readiness_probe_disposition() -> None:
+    # A provider added without an auth_probe would report ready on binary
+    # presence alone, which is exactly the inference this replaces.
+    for item in managed_provider_contract_items():
+        probe = item.get("auth_probe")
+        assert probe is not None, f"{item['provider']} declares no auth_probe"
+        _validate_auth_probe(item)

@@ -285,6 +285,57 @@ def _validate_operation_disposition(*, provider: str, operation: str, entry: dic
         )
 
 
+_AUTH_PROBE_DISPOSITIONS = _CAPABILITY_DISPOSITIONS
+_AUTH_PROBE_FORMATS = frozenset({"exit_code", "json"})
+
+
+def _validate_auth_probe(item: dict[str, Any]) -> None:
+    """Enforce that a declared readiness probe is runnable and honest.
+
+    Readiness exists so a machine can say why a provider is unusable instead of
+    reporting a bare `adapter_unavailable`. That is only worth trusting if a
+    declared probe is real: `implemented` must carry the argv and the reading
+    rule, and every other disposition must say why it is absent rather than
+    leaving a provider silently unprobed.
+    """
+
+    provider = str(item.get("provider") or "<unknown>")
+    probe = item.get("auth_probe")
+    if probe is None:
+        return
+    if not isinstance(probe, dict):
+        raise ValueError(f"managed provider contract {provider}: auth_probe must be an object")
+    disposition = probe.get("disposition")
+    if disposition not in _AUTH_PROBE_DISPOSITIONS:
+        raise ValueError(f"managed provider contract {provider}: auth_probe.disposition must be one of {sorted(_AUTH_PROBE_DISPOSITIONS)}")
+    if disposition != "implemented":
+        # A gap has to name itself. `not_implemented` is backlog and owes the
+        # observation that would close it; the other two are decisions and owe
+        # the reason they are decisions.
+        required = "owner_action" if disposition == "not_implemented" else "reason"
+        if not str(probe.get(required) or "").strip():
+            raise ValueError(f"managed provider contract {provider}: auth_probe.{required} is required for disposition {disposition}")
+        for unexpected in ("argv", "format"):
+            if unexpected in probe:
+                raise ValueError(
+                    f"managed provider contract {provider}: auth_probe.{unexpected} is meaningless for disposition {disposition}"
+                )
+        return
+    argv = probe.get("argv")
+    if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) and arg for arg in argv):
+        raise ValueError(f"managed provider contract {provider}: auth_probe.argv must be a non-empty list of strings")
+    probe_format = probe.get("format")
+    if probe_format not in _AUTH_PROBE_FORMATS:
+        raise ValueError(f"managed provider contract {provider}: auth_probe.format must be one of {sorted(_AUTH_PROBE_FORMATS)}")
+    if probe_format == "json":
+        if not str(probe.get("logged_in_field") or "").strip():
+            raise ValueError(f"managed provider contract {provider}: auth_probe.logged_in_field is required for format json")
+    else:
+        for unexpected in ("logged_in_field", "plan_field", "credential_override_field"):
+            if unexpected in probe:
+                raise ValueError(f"managed provider contract {provider}: auth_probe.{unexpected} requires format json")
+
+
 def _validate_machine_control_supports(item: dict[str, Any]) -> None:
     provider = str(item.get("provider") or "<unknown>")
     for support in item.get("machine_control_supports") or ():
@@ -553,6 +604,7 @@ def _validated_contract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
             _validate_string_list_field(item, field)
         _validate_operation_evidence(item)
         _validate_machine_control_supports(item)
+        _validate_auth_probe(item)
         _validate_capabilities(item)
         _validate_factory_contract(item)
         items.append(deepcopy(item))

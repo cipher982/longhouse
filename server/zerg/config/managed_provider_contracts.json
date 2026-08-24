@@ -7,6 +7,14 @@
       "marketing_name": "Codex CLI",
       "provider_cli_binary": "codex",
       "provider_cli_env": "LONGHOUSE_CODEX_BIN",
+      "auth_probe": {
+        "disposition": "implemented",
+        "argv": [
+          "login",
+          "status"
+        ],
+        "format": "exit_code"
+      },
       "requires_longhouse_cli": false,
       "managed_transport": "codex_app_server",
       "console_adapter": "codex_exec",
@@ -547,6 +555,17 @@
       "marketing_name": "Claude Code",
       "provider_cli_binary": "claude",
       "provider_cli_env": "LONGHOUSE_CLAUDE_BIN",
+      "auth_probe": {
+        "disposition": "implemented",
+        "argv": [
+          "auth",
+          "status"
+        ],
+        "format": "json",
+        "logged_in_field": "loggedIn",
+        "plan_field": "subscriptionType",
+        "credential_override_field": "apiKeySource"
+      },
       "requires_longhouse_cli": false,
       "managed_transport": "claude_channel_bridge",
       "console_adapter": "claude_print",
@@ -1145,6 +1164,10 @@
       "marketing_name": "OpenCode",
       "provider_cli_binary": "opencode",
       "provider_cli_env": "LONGHOUSE_OPENCODE_BIN",
+      "auth_probe": {
+        "disposition": "not_implemented",
+        "owner_action": "observe `opencode auth list` with an empty credential store and record whether it signals absence by exit code or output"
+      },
       "requires_longhouse_cli": false,
       "managed_transport": "opencode_server_bridge",
       "console_adapter": "opencode_run",
@@ -1601,6 +1624,10 @@
       "marketing_name": "Antigravity CLI",
       "provider_cli_binary": "agy",
       "provider_cli_env": "LONGHOUSE_ANTIGRAVITY_BIN",
+      "auth_probe": {
+        "disposition": "upstream_absent",
+        "reason": "the agy CLI has no auth/login/status subcommand"
+      },
       "requires_longhouse_cli": false,
       "managed_transport": "antigravity_hook_inbox",
       "console_adapter": "antigravity_print",
@@ -1900,6 +1927,10 @@
       "marketing_name": "Cursor Agent",
       "provider_cli_binary": "cursor-agent",
       "provider_cli_env": "LONGHOUSE_CURSOR_BIN",
+      "auth_probe": {
+        "disposition": "not_implemented",
+        "owner_action": "observe `cursor-agent status` with no Cursor credential and record whether it signals absence by exit code or output"
+      },
       "requires_longhouse_cli": false,
       "managed_transport": "cursor_helm",
       "console_adapter": "cursor_print",
@@ -2346,6 +2377,10 @@
       "marketing_name": "Pi Agent",
       "provider_cli_binary": "pi",
       "provider_cli_env": "LONGHOUSE_PI_BIN",
+      "auth_probe": {
+        "disposition": "policy_disabled",
+        "reason": "pi's only auth surface prints the credential to stdout"
+      },
       "requires_longhouse_cli": false,
       "managed_transport": "pi_print",
       "console_adapter": "pi_print",
