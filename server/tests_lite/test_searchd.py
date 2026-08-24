@@ -36,16 +36,29 @@ from zerg.searchd.store import open_search_database
 
 def test_recall_context_budget_is_shared_and_truncation_is_explicit():
     rows = [
-        {"content_text": "a" * 200, "event_id": "first"},
-        {"content_text": "é" * 200, "event_id": "second"},
+        {"search_event_id": 1, "content_text": "a" * 200, "event_id": "first"},
+        {"search_event_id": 2, "content_text": "é" * 200, "event_id": "second"},
     ]
 
-    bounded, truncated = _bounded_recall_context(rows, max_evidence_bytes=160)
+    bounded, truncated = _bounded_recall_context(rows, max_evidence_bytes=160, anchor_event_id=1)
 
     assert truncated is True
     assert sum(len(row["content_text"].encode("utf-8")) for row in bounded) <= 160
     assert all(row["content_text_truncated"] is True for row in bounded)
     assert [row["content_text_full_bytes"] for row in bounded] == [200, 400]
+
+
+def test_recall_context_never_starves_the_matching_turn():
+    rows = [
+        {"search_event_id": event_id, "content_text": str(event_id) * 1_000}
+        for event_id in range(1, 6)
+    ]
+
+    bounded, truncated = _bounded_recall_context(rows, max_evidence_bytes=819, anchor_event_id=3)
+
+    assert truncated is True
+    assert len(bounded[2]["content_text"].encode("utf-8")) == 400
+    assert sum(len(row["content_text"].encode("utf-8")) for row in bounded) <= 819
 
 
 def _records(text: str) -> list[dict]:

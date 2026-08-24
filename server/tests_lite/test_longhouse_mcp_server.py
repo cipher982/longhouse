@@ -121,6 +121,28 @@ async def test_recall_tool_forwards_provider_filter():
 
 
 @pytest.mark.asyncio
+async def test_recall_tool_defaults_to_anchor_only():
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["recall"]
+    response = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": '{"matches":[],"total":0}',
+        },
+    )()
+
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(return_value=response),
+    ) as mock_get:
+        await tool.run({"query": "auth refresh"})
+
+    assert mock_get.await_args.kwargs["params"]["context_turns"] == 0
+
+
+@pytest.mark.asyncio
 async def test_send_uses_session_scoped_authority(monkeypatch):
     server = create_server("http://example.com", "test-token")
     tool = server._tool_manager._tools["send"]

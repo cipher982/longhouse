@@ -918,11 +918,10 @@ HYDRATION_RESERVED_SECONDS = 1.0
 CANDIDATE_DEPTH_FACTOR = 5
 
 
-def _discovery_budget(*, remaining_seconds: float, context_turns: int) -> float:
-    """Keep hydration's reserve only when the caller requested hydration."""
+def _discovery_budget(*, remaining_seconds: float) -> float:
+    """Reserve time for the anchor hydration every recall result now requires."""
 
-    hydration_reserve = HYDRATION_RESERVED_SECONDS if context_turns > 0 else 0.0
-    return max(0.05, remaining_seconds - hydration_reserve)
+    return max(0.05, remaining_seconds - HYDRATION_RESERVED_SECONDS)
 
 
 def _lane_result(outcome: object, *, lane: Literal["lexical", "dense"], degraded: list["RecallLaneFailure"]):
@@ -1259,7 +1258,7 @@ async def recall_sessions(
     include_test: bool = Query(False, description="Include test/e2e sessions"),
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
     max_results: int = Query(5, ge=1, le=25, description="Max matches"),
-    context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
+    context_turns: int = Query(0, ge=0, le=10, description="Context turns before/after match"),
     context_mode: Literal["forensic", "active_context"] = Query("forensic", description="Context projection mode: forensic|active_context"),
     include_automation: bool = Query(False, description="Include Hatch automation sessions in recall results"),
     mode: Literal["auto", "lexical", "semantic"] = "auto",
@@ -1325,10 +1324,7 @@ async def recall_sessions(
     # Reserved, not leftover. Hydration used to receive whatever discovery had
     # not already spent, which in practice was the 0.05s floor, so matches came
     # back "partial / search_evidence_unavailable" whenever a lane ran long.
-    discovery_deadline = _discovery_budget(
-        remaining_seconds=remaining_budget(),
-        context_turns=context_turns,
-    )
+    discovery_deadline = _discovery_budget(remaining_seconds=remaining_budget())
 
     async def lexical() -> list[RecallMatch]:
         with timing.span("lexical"):

@@ -309,8 +309,9 @@ fn coordination_tools() -> Vec<Value> {
             "Read conversation evidence from past sessions by meaning, not just keyword. \
              Use when you know the concept but not the phrase: \"what did we decide about \
              auth?\". Searches a keyword lane and an embedding lane and fuses them. \
-             Returns the surrounding turns, not just session metadata — use \
-             search_sessions when you only need to find which session to open. The \
+             Returns bounded match anchors by default; request surrounding turns \
+             only when needed, then use tail for deeper evidence. Use search_sessions \
+             when you only need to find which session to open. The \
              response names the lanes that ran in `lanes` and any that could not in \
              `degraded`; results from a single lane are still real results.",
             json!({
@@ -319,7 +320,7 @@ fn coordination_tools() -> Vec<Value> {
                 "provider":{"type":"string","description":"Optional provider filter"},
                 "since_days":{"type":"integer","default":90,"minimum":1,"maximum":365},
                 "max_results":{"type":"integer","default":5,"minimum":1,"maximum":25},
-                "context_turns":{"type":"integer","default":2,"minimum":0,"maximum":10,"description":"Turns of surrounding context to include around each match."},
+                "context_turns":{"type":"integer","default":0,"minimum":0,"maximum":10,"description":"Turns of surrounding context to include around each anchor."},
                 "mode":{"type":"string","enum":["auto","lexical","semantic"],"default":"auto","description":"Which lanes to search. Prefer auto: it fuses both and degrades to whichever is available."},
             }),
         ),
@@ -506,7 +507,7 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                 )])
                 .query(&[(
                     "context_turns",
-                    clamp_i64(arguments.get("context_turns"), 2, 0, 10).to_string(),
+                    clamp_i64(arguments.get("context_turns"), 0, 0, 10).to_string(),
                 )])
         }
         "tail" => {
@@ -1243,6 +1244,19 @@ mod tests {
 
     fn state_path(root: &Path) -> PathBuf {
         root.join("sessions").join(format!("{SESSION_ID}.json"))
+    }
+
+    #[test]
+    fn recall_defaults_to_anchor_only() {
+        let recall = coordination_tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "recall")
+            .unwrap();
+
+        assert_eq!(
+            recall["inputSchema"]["properties"]["context_turns"]["default"],
+            0
+        );
     }
 
     async fn read_json_line<R>(reader: &mut R) -> Value

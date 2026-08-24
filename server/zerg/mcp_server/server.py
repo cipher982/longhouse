@@ -298,7 +298,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         provider: str | None = None,
         since_days: int = 90,
         max_results: int = 5,
-        context_turns: int = 2,
+        context_turns: int = 0,
         context_mode: str = "forensic",
         mode: str = "auto",
     ) -> str:
@@ -314,6 +314,8 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         narrower coverage, not as a failed call. `coverage.complete_through_commit_seq`
         is how current the embedded corpus is; `coverage.complete` is false when
         sessions are still being indexed, which mainly affects the newest work.
+        Recall returns bounded match anchors by default. Request surrounding
+        turns only when needed, then use tail for deeper evidence.
 
         Args:
             query: Natural language description of what you are looking for.
@@ -321,7 +323,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             provider: Filter by provider, e.g. claude, codex, antigravity, opencode (optional).
             since_days: Days to look back (default 90).
             max_results: Max sessions to return content from (default 5).
-            context_turns: Turns before/after match to include (default 2).
+            context_turns: Turns before/after each anchor to include (default 0).
             context_mode: Context projection mode: forensic|active_context (default forensic).
             mode: Which lanes to search — auto (both, default), lexical (keyword
                 only), or semantic (meaning only). Prefer auto: it fuses both and

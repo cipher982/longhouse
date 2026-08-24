@@ -33,6 +33,7 @@ _WORKLOG_SNAPSHOT_TTL_SECONDS = 120.0
 _WORKLOG_SNAPSHOT_LIMIT = 8
 _EMBEDDING_SOURCE_PAGE_BYTES = 6 * 1024 * 1024
 _RECALL_TRUNCATION_MARKER = " …[truncated]"
+_RECALL_ANCHOR_MIN_BYTES = 400
 
 _PUBLISH_AGGREGATES_SQL = """
     SELECT
@@ -285,7 +286,7 @@ _CANDIDATE_CEILING = 50_000
 _SEARCH_SQL = _ARCHIVE_SEARCH_SQL
 
 _CONTEXT_TARGET_SQL = """
-    SELECT e.order_time_us, e.event_key, s.event_count
+    SELECT e.id AS search_event_id, e.order_time_us, e.event_key, s.event_count
     FROM events e
     JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
     JOIN projection_membership m
@@ -302,7 +303,7 @@ _CONTEXT_TARGET_SQL = """
 # position. Ordering matches _CONTEXT_ROWS_SQL so the neighbour walk stays
 # consistent with a lexical hit's.
 _CONTEXT_TARGET_BY_POSITION_SQL = """
-    SELECT e.order_time_us, e.event_key, s.event_count
+    SELECT e.id AS search_event_id, e.order_time_us, e.event_key, s.event_count
     FROM events e
     JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
     JOIN projection_membership m
@@ -1827,6 +1828,7 @@ class SearchStore:
         context, truncated = _bounded_recall_context(
             [dict(row) for row in reversed(before)] + [dict(row) for row in after],
             max_evidence_bytes=max_evidence_bytes,
+            anchor_event_id=int(target["search_event_id"]),
         )
         return {
             "evidence_status": "partial" if truncated else "complete",
@@ -2306,26 +2308,51 @@ def _bounded_worklog_content(value: str) -> str:
     return prefix + _WORKLOG_TRUNCATION_MARKER
 
 
-def _bounded_recall_context(rows: list[dict[str, Any]], *, max_evidence_bytes: int) -> tuple[list[dict[str, Any]], bool]:
-    """Share one match budget across every requested turn without dropping provenance."""
+def _bounded_recall_context(
+    rows: list[dict[str, Any]],
+    *,
+    max_evidence_bytes: int,
+    anchor_event_id: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Share one match budget while keeping the matching turn independently legible."""
 
+    if not rows:
+        return [], False
+    anchor_index = next(
+        (index for index, row in enumerate(rows) if row.get("search_event_id") == anchor_event_id),
+        None,
+    )
+    allocations: list[int] = [0] * len(rows)
     remaining_bytes = max_evidence_bytes
     remaining_rows = len(rows)
+    if anchor_index is not None:
+        allocations[anchor_index] = min(max_evidence_bytes, _RECALL_ANCHOR_MIN_BYTES)
+        remaining_bytes -= allocations[anchor_index]
+        remaining_rows -= 1
+
+    for index in range(len(rows)):
+        if index == anchor_index:
+            continue
+        allocation = remaining_bytes // remaining_rows
+        allocations[index] = allocation
+        remaining_bytes -= allocation
+        remaining_rows -= 1
+
     bounded: list[dict[str, Any]] = []
     any_truncated = False
-    for row in rows:
+    unused_bytes = 0
+    for index, row in enumerate(rows):
         item = dict(row)
         content = str(item["content_text"])
-        allocation = remaining_bytes // remaining_rows
+        allocation = allocations[index] + unused_bytes
         returned, truncated, full_bytes = _truncate_utf8(content, max_bytes=allocation)
         item["content_text"] = returned
+        unused_bytes = allocation - len(returned.encode("utf-8"))
         if truncated:
             item["content_text_truncated"] = True
             item["content_text_full_bytes"] = full_bytes
             any_truncated = True
         bounded.append(item)
-        remaining_bytes -= len(returned.encode("utf-8"))
-        remaining_rows -= 1
     return bounded, any_truncated
 
 
