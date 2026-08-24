@@ -17,6 +17,9 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::io::{AsyncWriteExt, Lines};
 use tokio::process::Command;
+
+use crate::managed_identity::ManagedIdentity;
+use crate::managed_identity_contract::ManagedProvider;
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::mpsc;
 use walkdir::WalkDir;
@@ -525,8 +528,12 @@ async fn spawn_initialized_codex_worker(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     if let Some(session_id) = session_id {
-        command.env("LONGHOUSE_MANAGED_SESSION_ID", session_id);
+        ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command);
     } else {
+        // An anonymous worker is meant to carry no session. Scrubbing is what
+        // makes that true: without it the worker carries whichever managed
+        // session happened to spawn it.
+        ManagedIdentity::scrub(&mut command);
         command.env("LONGHOUSE_CONSOLE_WORKER", "1");
     }
     if let Some(actor) = launch_actor {

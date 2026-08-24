@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
+
+use crate::managed_identity::ManagedIdentity;
+use crate::managed_identity_contract::ManagedProvider;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::info;
@@ -2559,9 +2562,8 @@ fn build_codex_bridge_attach_command(
         .arg("tui_app_server")
         .arg("--remote")
         .arg(&ws_url)
-        .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
-        .env("LONGHOUSE_MANAGED_PROVIDER", "codex")
         .current_dir(PathBuf::from(state.cwd));
+    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id).apply(&mut command);
 
     Ok((command, codex_bin))
 }
@@ -2830,10 +2832,9 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     let coordination_command =
         std::env::current_exe().context("resolving Longhouse engine for Codex coordination MCP")?;
     command.args(codex_app_server_args(config, &coordination_command));
+    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id).apply(&mut command);
+    // Set after the overlay, never before: the scrub would remove them.
     command
-        .env_remove("LONGHOUSE_COORDINATION_TOKEN")
-        .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
-        .env("LONGHOUSE_MANAGED_PROVIDER", "codex")
         .env("LONGHOUSE_HOOK_URL", &config.api_url)
         .env("LONGHOUSE_HOOK_TOKEN", &config.api_token)
         .current_dir(&config.cwd)

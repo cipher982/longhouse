@@ -168,6 +168,7 @@
     {
       "path": "engine/src/managed_identity.rs",
       "providers": [
+        "antigravity",
         "cursor",
         "opencode"
       ]

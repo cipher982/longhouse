@@ -20,6 +20,9 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
+
+use crate::managed_identity::ManagedIdentity;
+use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
 
 pub const CLAUDE_PRINT_ADAPTER: &str = "claude_print";
@@ -126,19 +129,10 @@ pub async fn start_claude_print_turn(
         .current_dir(&config.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file))
-        .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
-        .env("LONGHOUSE_MANAGED_PROVIDER", "claude")
-        .env("LONGHOUSE_RUN_ID", &config.run_id)
-        .env_remove("LONGHOUSE_SESSION_ID")
-        .env_remove("LONGHOUSE_CHANNEL_SESSION_ID")
-        .env_remove("LONGHOUSE_PROVIDER_SESSION_ID")
-        .env_remove("LONGHOUSE_CHANNEL_CWD")
-        .env_remove("LONGHOUSE_PERMISSION_HOOK_ENABLED")
-        .env_remove("LONGHOUSE_HOOK_URL")
-        .env_remove("LONGHOUSE_HOOK_TOKEN")
-        .env_remove("LONGHOUSE_LAUNCH_ACTOR")
-        .env_remove("LONGHOUSE_LAUNCH_SURFACE");
+        .stderr(Stdio::from(stderr_file));
+    ManagedIdentity::new(ManagedProvider::Claude, &config.session_id)
+        .with_run_id(&config.run_id)
+        .apply(&mut command);
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {

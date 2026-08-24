@@ -9,6 +9,9 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+use crate::managed_identity::ManagedIdentity;
+use crate::managed_identity_contract::ManagedProvider;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -248,9 +251,8 @@ fn configure_opencode_environment(
     password: &str,
     mcp_config: &serde_json::Value,
 ) -> Result<()> {
+    ManagedIdentity::new(ManagedProvider::Opencode, session_id).apply(command);
     command
-        .env_remove("LONGHOUSE_COORDINATION_TOKEN")
-        .env("LONGHOUSE_MANAGED_SESSION_ID", session_id)
         .env("OPENCODE_SERVER_USERNAME", USERNAME)
         .env("OPENCODE_SERVER_PASSWORD", password)
         .env(

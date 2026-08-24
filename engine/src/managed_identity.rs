@@ -24,11 +24,36 @@
 //! spawn a `std::process::Command`. Each keeps owning its argv, cwd, PTY and
 //! credentials; only identity is shared.
 
-use std::process::Command;
-
 use crate::managed_identity_contract::{
     ManagedProvider, NEVER_INHERITED_KEYS, REQUIRED_IDENTITY_KEYS,
 };
+
+/// Somewhere an environment can be written. The launchers spawn through three
+/// different mechanisms -- `std::process::Command`, `tokio::process::Command`,
+/// and a raw `execve` -- and the overlay has to reach all of them without
+/// forcing them into one spawn path.
+pub trait EnvSink {
+    fn set_var(&mut self, key: &str, value: &str);
+    fn unset_var(&mut self, key: &str);
+}
+
+impl EnvSink for std::process::Command {
+    fn set_var(&mut self, key: &str, value: &str) {
+        self.env(key, value);
+    }
+    fn unset_var(&mut self, key: &str) {
+        self.env_remove(key);
+    }
+}
+
+impl EnvSink for tokio::process::Command {
+    fn set_var(&mut self, key: &str, value: &str) {
+        self.env(key, value);
+    }
+    fn unset_var(&mut self, key: &str) {
+        self.env_remove(key);
+    }
+}
 
 /// The session a provider process belongs to, and the provider that owns the claim.
 #[derive(Debug, Clone)]
@@ -77,15 +102,24 @@ impl ManagedIdentity {
         pairs
     }
 
-    /// Apply to a `Command`: scrub every inheritable identity key, then set this
-    /// launcher's own. Call this **before** the launcher sets the keys it owns,
-    /// or the scrub will remove them.
-    pub fn apply(&self, command: &mut Command) {
+    /// Scrub every inheritable identity key without claiming one. An anonymous
+    /// worker is meant to carry no session; without this it carries whichever
+    /// session happened to spawn it.
+    pub fn scrub<S: EnvSink>(sink: &mut S) {
         for key in NEVER_INHERITED_KEYS {
-            command.env_remove(key);
+            sink.unset_var(key);
+        }
+    }
+
+    /// Scrub every inheritable identity key, then set this launcher's own. Call
+    /// this **before** the launcher sets the keys it owns, or the scrub will
+    /// remove them.
+    pub fn apply<S: EnvSink>(&self, sink: &mut S) {
+        for key in NEVER_INHERITED_KEYS {
+            sink.unset_var(key);
         }
         for (key, value) in self.overlay() {
-            command.env(key, value);
+            sink.set_var(key, &value);
         }
     }
 
@@ -207,6 +241,39 @@ mod tests {
         let identity = ManagedIdentity::new(ManagedProvider::Codex, "session-123");
         let env = applied(&identity, &[("LONGHOUSE_RUN_ID", "parent-run")]);
         assert!(!env.contains_key("LONGHOUSE_RUN_ID"));
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        set: Vec<(String, String)>,
+        unset: Vec<String>,
+    }
+
+    impl EnvSink for RecordingSink {
+        fn set_var(&mut self, key: &str, value: &str) {
+            self.set.push((key.into(), value.into()));
+        }
+        fn unset_var(&mut self, key: &str) {
+            self.unset.push(key.into());
+        }
+    }
+
+    #[test]
+    fn apply_scrubs_before_it_sets() {
+        // Order is load-bearing: a launcher calls apply() and then sets the keys
+        // it owns. If the scrub ran last it would erase them.
+        let mut sink = RecordingSink::default();
+        ManagedIdentity::new(ManagedProvider::Antigravity, "session-123").apply(&mut sink);
+        for key in never_inherited_keys() {
+            assert!(sink.unset.contains(&(*key).to_string()), "{key} not scrubbed");
+        }
+        assert_eq!(
+            sink.set,
+            vec![
+                ("LONGHOUSE_MANAGED_SESSION_ID".to_string(), "session-123".to_string()),
+                ("LONGHOUSE_MANAGED_PROVIDER".to_string(), "antigravity".to_string()),
+            ]
+        );
     }
 
     #[test]

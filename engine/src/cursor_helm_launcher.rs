@@ -25,6 +25,9 @@ use serde_json::{json, Value};
 use sha2::Digest;
 use uuid::Uuid;
 
+use crate::managed_identity::ManagedIdentity;
+use crate::managed_identity_contract::ManagedProvider;
+
 use crate::managed_launch_lifecycle::ManagedLaunchResponse;
 
 const STATE_DIR: &str = "managed-local/cursor-helm";
@@ -893,56 +896,22 @@ fn restore_mcp_config(path: &Path, original: Option<&str>) -> std::io::Result<()
 
 /// Longhouse identity handed to the Cursor child process.
 ///
-/// `LONGHOUSE_MANAGED_SESSION_ID` is the cross-provider contract for "the
-/// session this process belongs to": local health, the hook plumbing, the
-/// coordination MCP, and the CLI all resolve the current session from it, and
-/// every other managed launcher exports it. Cursor Helm used to export
-/// `LONGHOUSE_SESSION_ID` instead -- a name nothing downstream reads -- so a
-/// helmed Cursor session was invisible to all of them.
-///
-/// The inherited copies are dropped before the new ones are appended: a
-/// duplicate key in the exec environment resolves to whichever copy comes
-/// first, which would hand the child its parent's identity. The channel and
-/// run ids are dropped outright -- nothing on the Cursor path sets or reads
-/// them, and `claude-channel serve` falls back to them, so an inherited value
-/// is another session's identity rather than a default.
+/// Cursor Helm cannot spawn through `std::process::Command`: it `execve`s after
+/// `forkpty`, and the child may only call async-signal-safe functions, so the
+/// whole environment is built as raw pairs beforehand. The shared overlay
+/// therefore applies to the pair list rather than to a `Command` -- same
+/// contract, different applier.
 fn managed_identity_env(
     inherited: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
     session_id: &str,
     launch_id: &str,
     permission_mode: &str,
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut env_pairs: Vec<(Vec<u8>, Vec<u8>)> = inherited
-        .filter(|(key, _)| {
-            !matches!(
-                key.as_slice(),
-                b"LONGHOUSE_SESSION_ID"
-                    | b"LONGHOUSE_MANAGED_SESSION_ID"
-                    | b"LONGHOUSE_MANAGED_PROVIDER"
-                    | b"LONGHOUSE_CURSOR_LAUNCH_ID"
-                    | b"LONGHOUSE_CURSOR_REGISTRATION_READY"
-                    | b"LONGHOUSE_PERMISSION_HOOK_ENABLED"
-                    | b"LONGHOUSE_HOOK_URL"
-                    | b"LONGHOUSE_HOOK_TOKEN"
-                    | b"LONGHOUSE_COORDINATION_TOKEN"
-                    | b"LONGHOUSE_RUN_ID"
-                    | b"LONGHOUSE_CHANNEL_SESSION_ID"
-                    | b"LONGHOUSE_PROVIDER_SESSION_ID"
-                    | b"LONGHOUSE_CHANNEL_CWD"
-            )
-        })
-        .collect();
+    let mut env_pairs = ManagedIdentity::new(ManagedProvider::Cursor, session_id)
+        .apply_to_pairs(inherited);
+    // Cursor's own, set after the overlay: the scrub removes them first, so an
+    // inherited launch id cannot make this child answer for another launch.
     env_pairs.extend([
-        (
-            b"LONGHOUSE_MANAGED_SESSION_ID".to_vec(),
-            session_id.as_bytes().to_vec(),
-        ),
-        // Tag the claim with its owner. The session id alone is ambient: any
-        // child inherits it, so a `claude` or `codex` started from inside a
-        // managed Cursor session would otherwise bind its transcripts to this
-        // Cursor session, and the Runtime Host refuses every upload whose
-        // envelope claims a provider the session is not.
-        (b"LONGHOUSE_MANAGED_PROVIDER".to_vec(), b"cursor".to_vec()),
         (
             b"LONGHOUSE_CURSOR_LAUNCH_ID".to_vec(),
             launch_id.as_bytes().to_vec(),

@@ -584,6 +584,7 @@ generate-managed-identity: ## Regenerate the engine managed-identity vocabulary 
 
 validate-managed-identity: ## @internal Guard the generated managed-identity vocabulary and its launch sites
 	@cd server && uv run python ../scripts/generate/managed_identity_contract_rs.py --check
+	@cd server && uv run python ../scripts/qa/check-managed-identity-sites.py
 
 validate-phase-contract: ## @internal Guard the generated engine wire-phase vocabulary
 	@python3 scripts/generate/managed_phase_contract_rs.py --check

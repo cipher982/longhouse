@@ -13,6 +13,9 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
+
+use crate::managed_identity::ManagedIdentity;
+use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
 
 pub const OPENCODE_RUN_ADAPTER: &str = "opencode_run";
@@ -137,13 +140,15 @@ pub async fn start_opencode_run_turn(config: OpenCodeRunConfig) -> Result<OpenCo
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file))
+        // OpenCode server credentials belong to the Helm bridge, not to a
+        // one-shot Console turn that talks to the CLI directly.
         .env_remove("OPENCODE_CONFIG")
         .env_remove("OPENCODE_CONFIG_CONTENT")
         .env_remove("OPENCODE_SERVER_PASSWORD")
-        .env_remove("OPENCODE_SERVER_USERNAME")
-        .env_remove("LONGHOUSE_SESSION_ID")
-        .env_remove("LONGHOUSE_LAUNCH_ACTOR")
-        .env_remove("LONGHOUSE_LAUNCH_SURFACE");
+        .env_remove("OPENCODE_SERVER_USERNAME");
+    ManagedIdentity::new(ManagedProvider::Opencode, &config.session_id)
+        .with_run_id(&config.run_id)
+        .apply(&mut command);
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {

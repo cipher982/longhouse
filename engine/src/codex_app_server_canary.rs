@@ -14,6 +14,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
+
+use crate::managed_identity::ManagedIdentity;
+use crate::managed_identity_contract::ManagedProvider;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::{sleep, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -927,7 +930,10 @@ fn app_server_command(
         command.env("CODEX_HOME", home.join(".codex"));
     }
     if let Some(session_id) = hook_session_id {
-        command.env("LONGHOUSE_MANAGED_SESSION_ID", session_id);
+        // Through the shared overlay so the canary's environment matches what a
+        // real launch produces. A canary that diverges from production proves
+        // less than it appears to.
+        ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command);
     }
     command
 }

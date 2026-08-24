@@ -33,6 +33,9 @@ use std::io::{IsTerminal, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use managed_identity::ManagedIdentity;
+use managed_identity_contract::ManagedProvider;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -1077,22 +1080,14 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         .arg("--dangerously-skip-permissions")
         .args(&args.antigravity_args)
         .current_dir(&cwd)
-        .env("LONGHOUSE_MANAGED_SESSION_ID", &session_id)
-        // Tag the claim with its owner. The session id alone is ambient: any
-        // child inherits it, so an `agy` started from inside another managed
-        // session would otherwise bind its transcripts to that session.
-        .env("LONGHOUSE_MANAGED_PROVIDER", "antigravity")
-        .env("LONGHOUSE_RUN_ID", &run_id)
-        .env("LONGHOUSE_HOME", longhouse_home()?)
-        .env_remove("LONGHOUSE_SESSION_ID")
-        .env_remove("LONGHOUSE_CHANNEL_SESSION_ID")
-        .env_remove("LONGHOUSE_PROVIDER_SESSION_ID")
-        .env_remove("LONGHOUSE_CHANNEL_CWD")
-        // The hook derives its inbox and state directories from LONGHOUSE_HOME
-        // and the managed session id. Inheriting another session's overrides
-        // would deliver this session's input into that one's inbox.
-        .env_remove("LONGHOUSE_ANTIGRAVITY_INBOX_DIR")
-        .env_remove("LONGHOUSE_ANTIGRAVITY_STATE_DIR");
+        .env("LONGHOUSE_HOME", longhouse_home()?);
+    // The overlay scrubs every inheritable identity key -- including the
+    // Antigravity inbox and state directory overrides, whose hook derives them
+    // from LONGHOUSE_HOME and the managed session id, so an inherited pair
+    // would deliver this session's input into another session's inbox.
+    ManagedIdentity::new(ManagedProvider::Antigravity, &session_id)
+        .with_run_id(&run_id)
+        .apply(&mut command);
 
     // Registration opens a launch that stays pending until it is confirmed, and
     // the transaction reports an abort on Drop if it never is. Without this a
@@ -1544,19 +1539,19 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             "--mcp-config",
         ])
         .arg(&mcp_config.path)
-        .current_dir(&cwd)
-        .env("LONGHOUSE_MANAGED_SESSION_ID", &session_id)
-        // Tag the claim with its owner. The session id alone is ambient: any
-        // child process inherits it, and a `claude` launched from inside a
-        // managed Codex session bound its transcripts to that Codex session.
-        .env("LONGHOUSE_MANAGED_PROVIDER", "claude")
-        .env("LONGHOUSE_RUN_ID", &run_id)
+        .current_dir(&cwd);
+    ManagedIdentity::new(ManagedProvider::Claude, &session_id)
+        .with_run_id(&run_id)
+        .apply(&mut command);
+    // Set after the overlay, never before: the scrub would remove them. These
+    // are Claude's own -- the channel server reads them, and inheriting another
+    // session's would point this one at the wrong channel.
+    command
         .env("LONGHOUSE_CHANNEL_SESSION_ID", &session_id)
         .env("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id)
         .env("LONGHOUSE_CHANNEL_CWD", &cwd)
         .env("LONGHOUSE_HOOK_URL", &url)
         .env("LONGHOUSE_HOOK_TOKEN", hook_token)
-        .env_remove("LONGHOUSE_COORDINATION_TOKEN")
         .env(
             "LONGHOUSE_PERMISSION_HOOK_ENABLED",
             if permission_mode == "remote_approve" {
@@ -3072,9 +3067,8 @@ fn build_codex_tui_command(
     }
     command
         .args(["--enable", "tui_app_server", "--remote", ws_url])
-        .current_dir(cwd)
-        .env("LONGHOUSE_MANAGED_SESSION_ID", session_id)
-        .env("LONGHOUSE_MANAGED_PROVIDER", "codex");
+        .current_dir(cwd);
+    ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command);
     command
 }
 

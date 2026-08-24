@@ -14,6 +14,9 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
+
+use crate::managed_identity::ManagedIdentity;
+use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
 
 pub const CURSOR_PRINT_ADAPTER: &str = "cursor_print";
@@ -153,16 +156,10 @@ pub async fn start_cursor_print_turn(
         .current_dir(&config.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file))
-        .env_remove("LONGHOUSE_SESSION_ID")
-        .env_remove("LONGHOUSE_CURSOR_LAUNCH_ID")
-        .env_remove("LONGHOUSE_CURSOR_REGISTRATION_READY")
-        .env_remove("LONGHOUSE_CURSOR_PRINT_MODE")
-        .env_remove("LONGHOUSE_LAUNCH_ACTOR")
-        .env_remove("LONGHOUSE_LAUNCH_SURFACE");
-    command.env_remove("LONGHOUSE_PERMISSION_HOOK_ENABLED");
-    command.env_remove("LONGHOUSE_HOOK_URL");
-    command.env_remove("LONGHOUSE_HOOK_TOKEN");
+        .stderr(Stdio::from(stderr_file));
+    ManagedIdentity::new(ManagedProvider::Cursor, &config.session_id)
+        .with_run_id(&config.run_id)
+        .apply(&mut command);
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {
