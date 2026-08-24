@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 261,
+  "file_count": 263,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -108,6 +108,13 @@
         "cursor",
         "opencode",
         "pi"
+      ]
+    },
+    {
+      "path": "engine/src/cursor_helm_launcher.rs",
+      "providers": [
+        "claude",
+        "cursor"
       ]
     },
     {
@@ -807,6 +814,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_codex_hooks.py",
+      "providers": [
+        "codex",
+        "cursor"
       ]
     },
     {

@@ -224,7 +224,18 @@ IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID TOOL CWD TRANSCRIPT <<< "$(
 )"
 
 # Session ID resolution — managed sessions use the launcher-injected env.
+# That id is ambient: every child inherits it, so a `codex` launched from
+# inside a managed session of another provider would bind a Codex transcript
+# to a session the Runtime Host knows is not Codex, and it refuses every
+# upload for it. Each launcher tags the claim with its owner, so a mismatch
+# is provable. Absence is not: an older launcher predates the tag, and
+# treating "no tag" as "not mine" would unmanage live sessions across an
+# upgrade. So this fails closed only on a contradiction.
 MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-}"
+MANAGED_PROVIDER="${LONGHOUSE_MANAGED_PROVIDER:-}"
+if [ -n "$MANAGED_PROVIDER" ] && [ "$MANAGED_PROVIDER" != "codex" ]; then
+  MANAGED_SESSION_ID=""
+fi
 if [ -n "$MANAGED_SESSION_ID" ]; then
   SID="$MANAGED_SESSION_ID"
 else

@@ -16,6 +16,7 @@
       ],
       "adapter_sources": [
         "server/zerg/mcp_server/server.py",
+        "server/zerg/services/shipper/hooks.py",
         "engine/src/codex_bridge.rs",
         "engine/src/codex_bridge_ownership.rs",
         "engine/src/codex_exec.rs",
@@ -538,7 +539,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "d0a79747be5296ecce388d87d2c12e7942f1f1e7cea50520a51be28d1ace33e9"
+      "adapter_digest": "44696d0b6e58ca1fa5f586d0d65125e2ac385b22918c1680f9b3aabf5bbf4669"
     },
     {
       "provider": "claude",
@@ -1136,7 +1137,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "6ffbb43fbec5bf86901c0fbe57330a7e8dd9bca55542473589c205cc701069e5"
+      "adapter_digest": "28d7ff9a252c4dce402fcb891198f5a0ea18e001e143f3e2f58ec9c5701bb980"
     },
     {
       "provider": "opencode",
@@ -2337,7 +2338,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "f98374086cf22d4f793df6effd83e41651ea1809a15121ae25a816a02877ac12"
+      "adapter_digest": "9f179759c3590c252f375296dcc2ebef871dec34d4f3b4f102f05a067bbd45e1"
     },
     {
       "provider": "pi",

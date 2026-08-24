@@ -317,7 +317,7 @@ row = {
     "conversation_id": str(payload.get("conversation_id") or ""),
     "generation_id": str(payload.get("generation_id") or ""),
     "model": str(payload.get("model") or ""),
-    "longhouse_session_id": os.environ.get("LONGHOUSE_SESSION_ID", ""),
+    "longhouse_session_id": os.environ.get("LONGHOUSE_MANAGED_SESSION_ID", ""),
     "hook_pid": os.getpid(),
     "cwd": str(payload.get("cwd") or ""),
     "tool_name": str(payload.get("tool_name") or ""),
@@ -450,7 +450,7 @@ def wait_for_store(agent_id: str, *, timeout: float = _DEFAULT_TIMEOUT_SECONDS) 
 
 def _child_env(longhouse_session_id: str, events_path: Path) -> dict[str, str]:
     env = dict(os.environ)
-    env["LONGHOUSE_SESSION_ID"] = longhouse_session_id
+    env["LONGHOUSE_MANAGED_SESSION_ID"] = longhouse_session_id
     env["LONGHOUSE_CURSOR_GATE0_EVENTS"] = str(events_path)
     for key in (
         "CI",

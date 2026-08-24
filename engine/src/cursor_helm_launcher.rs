@@ -891,9 +891,73 @@ fn restore_mcp_config(path: &Path, original: Option<&str>) -> std::io::Result<()
     }
 }
 
+/// Longhouse identity handed to the Cursor child process.
+///
+/// `LONGHOUSE_MANAGED_SESSION_ID` is the cross-provider contract for "the
+/// session this process belongs to": local health, the hook plumbing, the
+/// coordination MCP, and the CLI all resolve the current session from it, and
+/// every other managed launcher exports it. Cursor Helm used to export
+/// `LONGHOUSE_SESSION_ID` instead -- a name nothing downstream reads -- so a
+/// helmed Cursor session was invisible to all of them.
+///
+/// The inherited copies are dropped before the new ones are appended: a
+/// duplicate key in the exec environment resolves to whichever copy comes
+/// first, which would hand the child its parent's identity.
+fn managed_identity_env(
+    inherited: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
+    session_id: &str,
+    launch_id: &str,
+    permission_mode: &str,
+) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut env_pairs: Vec<(Vec<u8>, Vec<u8>)> = inherited
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_slice(),
+                b"LONGHOUSE_SESSION_ID"
+                    | b"LONGHOUSE_MANAGED_SESSION_ID"
+                    | b"LONGHOUSE_MANAGED_PROVIDER"
+                    | b"LONGHOUSE_CURSOR_LAUNCH_ID"
+                    | b"LONGHOUSE_CURSOR_REGISTRATION_READY"
+                    | b"LONGHOUSE_PERMISSION_HOOK_ENABLED"
+                    | b"LONGHOUSE_HOOK_URL"
+                    | b"LONGHOUSE_HOOK_TOKEN"
+                    | b"LONGHOUSE_COORDINATION_TOKEN"
+            )
+        })
+        .collect();
+    env_pairs.extend([
+        (
+            b"LONGHOUSE_MANAGED_SESSION_ID".to_vec(),
+            session_id.as_bytes().to_vec(),
+        ),
+        // Tag the claim with its owner. The session id alone is ambient: any
+        // child inherits it, so a `claude` or `codex` started from inside a
+        // managed Cursor session would otherwise bind its transcripts to this
+        // Cursor session, and the Runtime Host refuses every upload whose
+        // envelope claims a provider the session is not.
+        (b"LONGHOUSE_MANAGED_PROVIDER".to_vec(), b"cursor".to_vec()),
+        (
+            b"LONGHOUSE_CURSOR_LAUNCH_ID".to_vec(),
+            launch_id.as_bytes().to_vec(),
+        ),
+        (
+            b"LONGHOUSE_PERMISSION_HOOK_ENABLED".to_vec(),
+            if permission_mode == "remote_human" {
+                b"1".to_vec()
+            } else {
+                b"0".to_vec()
+            },
+        ),
+        (
+            b"LONGHOUSE_CURSOR_REGISTRATION_READY".to_vec(),
+            b"1".to_vec(),
+        ),
+    ]);
+    env_pairs
+}
+
 pub fn serve_coordination_mcp() -> anyhow::Result<()> {
-    let session_id = std::env::var("LONGHOUSE_SESSION_ID")
-        .or_else(|_| std::env::var("LONGHOUSE_MANAGED_SESSION_ID"))
+    let session_id = std::env::var("LONGHOUSE_MANAGED_SESSION_ID")
         .context("Cursor MCP did not inherit a Longhouse session ID")?;
     Uuid::parse_str(&session_id).context("Cursor MCP inherited an invalid Longhouse session ID")?;
     let mut stream = UnixStream::connect(socket_path(&session_id)?)?;
@@ -1411,44 +1475,17 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
         .map(|value| CString::new(value.as_str()))
         .collect::<Result<_, _>>()
         .context("Cursor arguments cannot contain NUL")?;
-    let mut env_pairs: Vec<(Vec<u8>, Vec<u8>)> = std::env::vars_os()
-        .filter_map(|(key, value)| {
-            let key = key.as_os_str().as_bytes().to_vec();
-            (!matches!(
-                key.as_slice(),
-                b"LONGHOUSE_SESSION_ID"
-                    | b"LONGHOUSE_CURSOR_LAUNCH_ID"
-                    | b"LONGHOUSE_PERMISSION_HOOK_ENABLED"
-                    | b"LONGHOUSE_HOOK_URL"
-                    | b"LONGHOUSE_HOOK_TOKEN"
-                    | b"LONGHOUSE_COORDINATION_TOKEN"
-                    | b"LONGHOUSE_MANAGED_SESSION_ID"
-            ))
-            .then(|| (key, value.as_os_str().as_bytes().to_vec()))
-        })
-        .collect();
-    env_pairs.extend([
-        (
-            b"LONGHOUSE_SESSION_ID".to_vec(),
-            session_id.as_bytes().to_vec(),
-        ),
-        (
-            b"LONGHOUSE_CURSOR_LAUNCH_ID".to_vec(),
-            launch_id.as_bytes().to_vec(),
-        ),
-        (
-            b"LONGHOUSE_PERMISSION_HOOK_ENABLED".to_vec(),
-            if matches!(permission_mode.as_str(), "remote_human") {
-                b"1".to_vec()
-            } else {
-                b"0".to_vec()
-            },
-        ),
-    ]);
-    env_pairs.push((
-        b"LONGHOUSE_CURSOR_REGISTRATION_READY".to_vec(),
-        b"1".to_vec(),
-    ));
+    let mut env_pairs = managed_identity_env(
+        std::env::vars_os().map(|(key, value)| {
+            (
+                key.as_os_str().as_bytes().to_vec(),
+                value.as_os_str().as_bytes().to_vec(),
+            )
+        }),
+        &session_id,
+        &launch_id,
+        permission_mode.as_str(),
+    );
     for key in [
         b"CI".as_slice(),
         b"CONTINUOUS_INTEGRATION",
@@ -1789,6 +1826,96 @@ fn fs2_lock(file: &fs::File) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    fn identity_env(
+        inherited: &[(&str, &str)],
+        permission_mode: &str,
+    ) -> std::collections::HashMap<String, String> {
+        super::managed_identity_env(
+            inherited
+                .iter()
+                .map(|(key, value)| (key.as_bytes().to_vec(), value.as_bytes().to_vec())),
+            "session-123",
+            "launch-456",
+            permission_mode,
+        )
+        .into_iter()
+        .map(|(key, value)| {
+            (
+                String::from_utf8(key).unwrap(),
+                String::from_utf8(value).unwrap(),
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn cursor_child_carries_the_cross_provider_managed_session_contract() {
+        // The skills, local health, and CLI that ask "which session am I in?"
+        // read LONGHOUSE_MANAGED_SESSION_ID. Cursor Helm exported a private
+        // name and answered nothing.
+        let env = identity_env(&[("PATH", "/usr/bin")], "auto_approve");
+        assert_eq!(
+            env.get("LONGHOUSE_MANAGED_SESSION_ID").unwrap(),
+            "session-123"
+        );
+        assert_eq!(env.get("LONGHOUSE_MANAGED_PROVIDER").unwrap(), "cursor");
+        assert_eq!(env.get("LONGHOUSE_CURSOR_LAUNCH_ID").unwrap(), "launch-456");
+        assert_eq!(env.get("LONGHOUSE_CURSOR_REGISTRATION_READY").unwrap(), "1");
+        assert_eq!(env.get("LONGHOUSE_PERMISSION_HOOK_ENABLED").unwrap(), "0");
+        assert_eq!(env.get("PATH").unwrap(), "/usr/bin");
+        assert!(env.get("LONGHOUSE_SESSION_ID").is_none());
+    }
+
+    #[test]
+    fn cursor_child_never_inherits_another_session_identity() {
+        // Launching Helm from inside another managed session must not leave a
+        // second copy of any identity key in the exec environment.
+        let inherited = [
+            ("LONGHOUSE_SESSION_ID", "stale"),
+            ("LONGHOUSE_MANAGED_SESSION_ID", "parent-session"),
+            ("LONGHOUSE_MANAGED_PROVIDER", "claude"),
+            ("LONGHOUSE_CURSOR_LAUNCH_ID", "parent-launch"),
+            ("LONGHOUSE_CURSOR_REGISTRATION_READY", "1"),
+            ("LONGHOUSE_PERMISSION_HOOK_ENABLED", "1"),
+            ("LONGHOUSE_HOOK_TOKEN", "parent-token"),
+            ("LONGHOUSE_COORDINATION_TOKEN", "parent-coordination"),
+        ];
+        let pairs = super::managed_identity_env(
+            inherited
+                .iter()
+                .map(|(key, value)| (key.as_bytes().to_vec(), value.as_bytes().to_vec())),
+            "session-123",
+            "launch-456",
+            "remote_human",
+        );
+        for key in [
+            "LONGHOUSE_MANAGED_SESSION_ID",
+            "LONGHOUSE_MANAGED_PROVIDER",
+            "LONGHOUSE_CURSOR_LAUNCH_ID",
+            "LONGHOUSE_CURSOR_REGISTRATION_READY",
+            "LONGHOUSE_PERMISSION_HOOK_ENABLED",
+        ] {
+            assert_eq!(
+                pairs
+                    .iter()
+                    .filter(|(name, _)| name.as_slice() == key.as_bytes())
+                    .count(),
+                1,
+                "{key} must appear exactly once"
+            );
+        }
+        let env = identity_env(&inherited, "remote_human");
+        assert_eq!(
+            env.get("LONGHOUSE_MANAGED_SESSION_ID").unwrap(),
+            "session-123"
+        );
+        assert_eq!(env.get("LONGHOUSE_MANAGED_PROVIDER").unwrap(), "cursor");
+        assert_eq!(env.get("LONGHOUSE_PERMISSION_HOOK_ENABLED").unwrap(), "1");
+        assert!(env.get("LONGHOUSE_HOOK_TOKEN").is_none());
+        assert!(env.get("LONGHOUSE_COORDINATION_TOKEN").is_none());
+        assert!(env.get("LONGHOUSE_SESSION_ID").is_none());
+    }
+
     use super::*;
     use std::os::fd::FromRawFd;
     #[cfg(unix)]

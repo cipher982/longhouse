@@ -17,6 +17,10 @@ providers:
   - codex_app_server
   adapter_sources:
   - server/zerg/mcp_server/server.py
+  # CODEX_HOOK_SCRIPT -- the hook installed into ~/.codex/hooks -- lives here.
+  # It is part of Codex's control surface, but only Claude claimed this file,
+  # so a change to Codex's own hook left the Codex digest untouched.
+  - server/zerg/services/shipper/hooks.py
   - engine/src/codex_bridge.rs
   - engine/src/codex_bridge_ownership.rs
   - engine/src/codex_exec.rs

@@ -37,16 +37,16 @@ from zerg.qa import codex_release_identity
 from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_release_identity
 from zerg.qa import pi_qualification
-from zerg.qa.provider_adapters.pi import PI_LIVE_ENV
-from zerg.qa.provider_adapters.pi import PI_PROVIDER
-from zerg.qa.provider_adapters.pi import _newest_session_file  # noqa: SLF001
-from zerg.qa.provider_adapters.pi import pi_qualification_model
-from zerg.qa.provider_adapters.pi import pi_transcript_rows
 from zerg.qa.claude_conversation_reset import _terminal_text
 from zerg.qa.claude_conversation_reset import _wait
 from zerg.qa.codex_auth import CodexAuthError
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.managed_claude_live import strip_terminal_controls
+from zerg.qa.provider_adapters.pi import PI_LIVE_ENV
+from zerg.qa.provider_adapters.pi import PI_PROVIDER
+from zerg.qa.provider_adapters.pi import _newest_session_file  # noqa: SLF001
+from zerg.qa.provider_adapters.pi import pi_qualification_model
+from zerg.qa.provider_adapters.pi import pi_transcript_rows
 from zerg.qa.provider_interaction_semantics import MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
 from zerg.qa.provider_interaction_semantics import raw_event_digest
 from zerg.qa.provider_interaction_semantics import semantic_boundary_fixture
@@ -1153,7 +1153,7 @@ def _cursor_model_probe_with_runtime_home(
     events_path = output_root / "cursor-hooks.jsonl"
     env = dict(environment)
     secrets = _secret_values(env)
-    env["LONGHOUSE_SESSION_ID"] = f"direct-{invocation}"
+    env["LONGHOUSE_MANAGED_SESSION_ID"] = f"direct-{invocation}"
     env["LONGHOUSE_CURSOR_GATE0_EVENTS"] = str(events_path)
     env["HOME"] = str(home)
     # Cursor's default macOS credential store is the user's Keychain. The
@@ -2342,9 +2342,7 @@ def _pi_model_probe(
         evidence = _file_evidence(transcript, artifact_root=artifact_root)
         if evidence is not None:
             native_rows.append(evidence)
-    transcript_rows, provider_session_id, metadata = (
-        pi_transcript_rows(transcript) if transcript is not None else ([], None, {})
-    )
+    transcript_rows, provider_session_id, metadata = pi_transcript_rows(transcript) if transcript is not None else ([], None, {})
     raw_events = _pi_transcript_json_events(transcript) if transcript is not None else []
     observed_model = metadata.get("model")
     assistant_rows = [row for row in transcript_rows if row.get("role") == "assistant" and str(row.get("text") or "").strip()]

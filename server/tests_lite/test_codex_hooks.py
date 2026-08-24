@@ -2,7 +2,11 @@
 
 import json
 import os
+import shutil
 import stat
+import subprocess
+
+import pytest
 
 from zerg.services.shipper.hooks import CODEX_HOOK_SCRIPT
 from zerg.services.shipper.hooks import _is_longhouse_codex_hook
@@ -418,3 +422,84 @@ def test_install_hooks_ensures_claude_projects_root(tmp_path, monkeypatch):
 
     assert (claude_dir / "projects").is_dir()
     assert any(str(claude_dir / "projects") in action for action in actions)
+
+
+def _run_codex_hook(tmp_path, hook_input: dict, env_overrides: dict[str, str]):
+    """Materialize the installed hook and run it against a fake engine."""
+    longhouse_home = tmp_path / "longhouse"
+    longhouse_home.mkdir()
+    engine_log = tmp_path / "engine-argv.log"
+    engine = tmp_path / "fake-engine"
+    engine.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {engine_log}\n')
+    engine.chmod(0o755)
+
+    script = tmp_path / "longhouse-codex-hook.sh"
+    script.write_text(
+        CODEX_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(longhouse_home)).replace(
+            "__ENGINE_PATH__", str(engine)
+        )
+    )
+    script.chmod(0o755)
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("LONGHOUSE_")}
+    env.update(env_overrides)
+    completed = subprocess.run(
+        [str(script)],
+        input=json.dumps(hook_input),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    rows = [json.loads(path.read_text()) for path in sorted((longhouse_home / "agent" / "outbox").glob("prs.*.json"))]
+    argv = engine_log.read_text().splitlines() if engine_log.exists() else []
+    return rows, argv
+
+
+_HOOK_INPUT = {
+    "hook_event_name": "UserPromptSubmit",
+    "session_id": "codex-native-session",
+    "cwd": "/tmp/project",
+    "transcript_path": "/tmp/rollout.jsonl",
+}
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="hook script requires jq")
+def test_codex_hook_adopts_the_managed_session_of_its_own_provider(tmp_path):
+    rows, argv = _run_codex_hook(
+        tmp_path,
+        _HOOK_INPUT,
+        {"LONGHOUSE_MANAGED_SESSION_ID": "managed-codex", "LONGHOUSE_MANAGED_PROVIDER": "codex"},
+    )
+    assert [row["session_id"] for row in rows] == ["managed-codex"]
+    assert argv == ["bind --path /tmp/rollout.jsonl --session-id managed-codex --provider codex"]
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="hook script requires jq")
+def test_codex_hook_ignores_a_managed_session_owned_by_another_provider(tmp_path):
+    """A `codex` run inside a managed Cursor/Claude session inherits that
+    session's id. Binding a Codex rollout to it makes the Runtime Host refuse
+    every upload, because the envelope claims a provider the session is not."""
+    rows, argv = _run_codex_hook(
+        tmp_path,
+        _HOOK_INPUT,
+        {"LONGHOUSE_MANAGED_SESSION_ID": "managed-cursor", "LONGHOUSE_MANAGED_PROVIDER": "cursor"},
+    )
+    assert [row["session_id"] for row in rows] == ["codex-native-session"]
+    assert argv == []
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="hook script requires jq")
+def test_codex_hook_still_trusts_an_untagged_managed_session(tmp_path):
+    """Absence is not a contradiction: an older launcher predates the tag, and
+    treating "no tag" as "not mine" would unmanage live sessions on upgrade."""
+    rows, argv = _run_codex_hook(
+        tmp_path,
+        _HOOK_INPUT,
+        {"LONGHOUSE_MANAGED_SESSION_ID": "managed-codex"},
+    )
+    assert [row["session_id"] for row in rows] == ["managed-codex"]
+    assert argv == ["bind --path /tmp/rollout.jsonl --session-id managed-codex --provider codex"]

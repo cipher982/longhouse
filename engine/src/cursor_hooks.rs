@@ -133,7 +133,7 @@ pub fn lifecycle(event: &str) {
         println!("{{}}");
         return;
     };
-    let session_id = std::env::var("LONGHOUSE_SESSION_ID").unwrap_or_default();
+    let session_id = std::env::var("LONGHOUSE_MANAGED_SESSION_ID").unwrap_or_default();
     let conversation = payload
         .get("conversation_id")
         .and_then(Value::as_str)
@@ -359,7 +359,7 @@ pub fn permission(event: &str) -> anyhow::Result<()> {
             return Ok(());
         }
     };
-    let session_id = std::env::var("LONGHOUSE_SESSION_ID").unwrap_or_default();
+    let session_id = std::env::var("LONGHOUSE_MANAGED_SESSION_ID").unwrap_or_default();
     let conversation = payload
         .get("conversation_id")
         .and_then(Value::as_str)
