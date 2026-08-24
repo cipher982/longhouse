@@ -24,6 +24,7 @@ const hookMocks = vi.hoisted(() => ({
   useAgentSessions: vi.fn(),
   useAgentFilters: vi.fn(),
   useRecall: vi.fn(),
+  useRecallContext: vi.fn(),
 }));
 
 const runnerHookMocks = vi.hoisted(() => ({
@@ -38,6 +39,7 @@ vi.mock("../../hooks/useAgentSessions", () => ({
   useAgentSessions: hookMocks.useAgentSessions,
   useAgentFilters: hookMocks.useAgentFilters,
   useRecall: hookMocks.useRecall,
+  useRecallContext: hookMocks.useRecallContext,
 }));
 
 vi.mock("../../hooks/useRunners", () => ({
@@ -333,11 +335,12 @@ describe("SessionsPage", () => {
     mockUseRecall.mockImplementation((filters: RecallFilters) => {
       latestRecallFilters = filters;
       return {
-        data: { matches: [], total: 0 },
+        data: { results: [], total: 0, lanes: ["lexical"], degraded: [], coverage: null },
         isLoading: false,
         error: null,
       };
     });
+    hookMocks.useRecallContext.mockReturnValue({ data: undefined, isLoading: false, error: null });
 
     mockUseRunners.mockReturnValue({
       data: [],

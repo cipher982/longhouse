@@ -1235,8 +1235,9 @@ def _context_params(value: dict) -> dict:
             "generation_id",
             "search_event_id",
             "start_order_time_us",
-            "context_turns",
-            "max_evidence_bytes",
+            "before_turns",
+            "after_turns",
+            "max_content_bytes",
         },
     )
     search_event_id = value["search_event_id"]
@@ -1250,18 +1251,21 @@ def _context_params(value: dict) -> dict:
     # locators resolve to whichever the store happened to check first.
     if (search_event_id is None) == (start_order_time_us is None):
         raise ValueError("exactly one of search_event_id or start_order_time_us is required")
-    if type(value["context_turns"]) is not int or not 0 <= value["context_turns"] <= 10:
-        raise ValueError("context_turns is invalid")
-    if type(value["max_evidence_bytes"]) is not int or not 1 <= value["max_evidence_bytes"] <= 16 * 1024:
-        raise ValueError("max_evidence_bytes is invalid")
+    if type(value["before_turns"]) is not int or not 0 <= value["before_turns"] <= 5:
+        raise ValueError("before_turns is invalid")
+    if type(value["after_turns"]) is not int or not 0 <= value["after_turns"] <= 5:
+        raise ValueError("after_turns is invalid")
+    if type(value["max_content_bytes"]) is not int or not 1 <= value["max_content_bytes"] <= 4_000:
+        raise ValueError("max_content_bytes is invalid")
     return {
         "owner_id": _text(value["owner_id"], "owner_id", 64),
         "session_id": _uuid(value["session_id"], "session_id"),
         "generation_id": _uuid(value["generation_id"], "generation_id"),
         "search_event_id": search_event_id,
         "start_order_time_us": start_order_time_us,
-        "context_turns": value["context_turns"],
-        "max_evidence_bytes": value["max_evidence_bytes"],
+        "before_turns": value["before_turns"],
+        "after_turns": value["after_turns"],
+        "max_content_bytes": value["max_content_bytes"],
     }
 
 

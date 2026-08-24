@@ -1,16 +1,16 @@
 /**
  * RecallPanel — Turn-level semantic knowledge retrieval.
  *
- * Searches conversation turn embeddings and returns matched turns with
- * surrounding context. Results link directly to the session in the Timeline.
+ * Returns small result cards first and fetches transcript context only when a
+ * person opens one. Results link directly to the full session in Timeline.
  */
 
 import { useState } from "react";
 import "../styles/recall-panel.css";
 import { Link } from "react-router-dom";
-import { useRecall } from "../hooks/useAgentSessions";
+import { useRecall, useRecallContext } from "../hooks/useAgentSessions";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
-import type { RecallMatch, RecallContextTurn, RecallFilters } from "../services/api/agents";
+import type { RecallSearchResult, RecallExpandedTurn, RecallFilters } from "../services/api/agents";
 import { Badge, Input, Spinner, EmptyState } from "./ui";
 
 interface RecallPanelProps {
@@ -20,13 +20,13 @@ interface RecallPanelProps {
   provider?: string;
 }
 
-function ContextTurn({ turn, isMatch }: { turn: RecallContextTurn; isMatch: boolean }) {
+function ContextTurn({ turn }: { turn: RecallExpandedTurn }) {
   // Neutral assistant label: recall spans Claude, Codex, Antigravity, OpenCode,
   // Provider-specific launch hints live in sessionWorkspace/interaction.ts,
   // so don't hardcode a single provider name.
   const roleLabel = turn.role === "user" ? "User" : turn.tool_name ? turn.tool_name : "Assistant";
   const roleClass = turn.role === "user" ? "recall-turn--user" : "recall-turn--assistant";
-  const matchClass = isMatch ? "recall-turn--match" : "";
+  const matchClass = turn.is_match ? "recall-turn--match" : "";
 
   return (
     <div className={`recall-turn ${roleClass} ${matchClass}`.trim()}>
@@ -36,27 +36,22 @@ function ContextTurn({ turn, isMatch }: { turn: RecallContextTurn; isMatch: bool
   );
 }
 
-function retrievalProvenance(match: RecallMatch): string {
-  if (!match.retrieval_lanes?.length) return "Source unavailable";
-  return [...match.retrieval_lanes]
-    .sort((left, right) => (match.lane_ranks?.[left] ?? Number.MAX_SAFE_INTEGER) - (match.lane_ranks?.[right] ?? Number.MAX_SAFE_INTEGER))
-    .map((lane) => {
-      const label = lane === "dense" ? "Semantic" : "Lexical";
-      const rank = match.lane_ranks?.[lane];
-      return rank ? `${label} #${rank}` : label;
-    })
-    .join(" + ");
+function retrievalProvenance(result: RecallSearchResult): string {
+  return result.matched_by.map((lane) => lane === "dense" ? "Semantic" : "Lexical").join(" + ");
 }
 
-function RecallCard({ match }: { match: RecallMatch }) {
-  const eventLink = match.match_event_id != null
-    ? `/timeline/${match.session_id}?event_id=${match.match_event_id}`
-    : `/timeline/${match.session_id}`;
-  const evidenceLabel = match.evidence_status === "partial"
-    ? "Partial evidence"
-    : match.evidence_status === "unavailable"
-      ? "Evidence unavailable"
-      : null;
+function RecallCard({ result }: { result: RecallSearchResult }) {
+  const [expanded, setExpanded] = useState(false);
+  const context = useRecallContext(expanded ? result.ref : null);
+  const sessionLink = `/timeline/${result.session_id}`;
+  const sourceTitle = [result.project || "Unknown project", result.provider].filter(Boolean).join(" · ");
+  const matchedTurn = result.matched_tool_name || result.matched_role;
+  const sourceLine = [
+    result.started_at,
+    matchedTurn,
+    `${result.total_events} event${result.total_events === 1 ? "" : "s"}`,
+    `Session ${result.session_id.slice(0, 8)}…`,
+  ].filter(Boolean).join(" · ");
 
   return (
     <div
@@ -65,46 +60,45 @@ function RecallCard({ match }: { match: RecallMatch }) {
     >
       <div className="recall-card-header">
         <Link
-          to={eventLink}
+          to={sessionLink}
           className="recall-card-session-link"
           title="Open session"
           {...{ elementtiming: "longhouse-recall-card" }}
         >
-          Session {match.session_id.slice(0, 8)}…
+          {sourceTitle}
         </Link>
-        <Badge variant="neutral">{retrievalProvenance(match)}</Badge>
-        {evidenceLabel && (
-          <Badge variant={match.evidence_status === "unavailable" ? "error" : "warning"}>
-            {evidenceLabel}
-          </Badge>
-        )}
-        <span className="recall-card-meta">
-          {match.total_events} events
-        </span>
+        <Badge variant="neutral">{retrievalProvenance(result)}</Badge>
       </div>
+      <div className="recall-card-meta">{sourceLine}</div>
       <div className="recall-card-context">
-        {match.context.length > 0 ? (
-          match.context.map((turn) => (
-            <ContextTurn
-              key={turn.search_event_id}
-              turn={turn}
-              isMatch={
-                turn.search_event_id === match.match_event_id
-                || (!!match.evidence && turn.content_text === match.evidence)
-              }
-            />
-          ))
-        ) : match.evidence ? (
-          <div className="recall-card-evidence">{match.evidence}</div>
+        {result.snippet ? (
+          <div className="recall-card-evidence">{result.snippet}</div>
         ) : (
           <div className="recall-card-evidence recall-card-evidence--unavailable">
-            {match.evidence_reason || "No evidence was returned for this match."}
+            Snippet unavailable: {result.snippet_unavailable_reason || "unknown"}
           </div>
         )}
+        {expanded && context.isLoading && (
+          <div className="recall-loading"><Spinner size="sm" /><span>Opening result…</span></div>
+        )}
+        {expanded && context.error && (
+          <div className="recall-card-evidence recall-card-evidence--unavailable">Context unavailable.</div>
+        )}
+        {expanded && context.data?.turns.map((turn, index) => (
+          <ContextTurn key={`${result.ref}-${index}`} turn={turn} />
+        ))}
       </div>
       <div className="recall-card-actions">
+        <button
+          type="button"
+          className="recall-card-open"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "Hide context" : "Show context"}
+        </button>
         <Link
-          to={eventLink}
+          to={sessionLink}
           className="recall-card-open"
         >
           Open session →
@@ -126,23 +120,22 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
     mode,
     since_days: 90,
     max_results: 8,
-    context_turns: 2,
   };
 
   const { data, isLoading, error } = useRecall(filters);
-  const matches = data?.matches ?? [];
+  const matches = data?.results ?? [];
   const total = data?.total ?? 0;
   const coverageSummary = data?.coverage
-    ? data.coverage.catalog_lag_count > 0 || data.coverage.resident_stale
-      ? `Corpus snapshot: ${data.coverage.expected_episodes.toLocaleString()} episodes · ${data.coverage.catalog_lag_count} session${data.coverage.catalog_lag_count === 1 ? "" : "s"} updating`
-      : `Current corpus: ${data.coverage.expected_episodes.toLocaleString()} episodes`
+    ? data.coverage.complete
+      ? "Corpus current"
+      : `Corpus snapshot · ${data.coverage.lagging_sessions} session${data.coverage.lagging_sessions === 1 ? "" : "s"} updating`
     : null;
 
   return (
     <div className="recall-panel" data-testid="recall-panel">
       <div className="recall-panel-header">
         <h3 className="recall-panel-title">Recall</h3>
-        <p className="recall-panel-description">Search conversation turns with explicit retrieval lanes and context.</p>
+        <p className="recall-panel-description">Search compact conversation snippets, then open only the useful results.</p>
       </div>
 
       <div className="recall-panel-search">
@@ -209,7 +202,7 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
             </div>
             <div className="recall-results-list" data-testid="recall-results">
               {matches.map((match) => (
-                <RecallCard key={`${match.session_id}-${match.chunk_index}`} match={match} />
+                <RecallCard key={match.ref} result={match} />
               ))}
             </div>
           </>

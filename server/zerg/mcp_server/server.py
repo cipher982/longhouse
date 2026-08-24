@@ -1,7 +1,7 @@
 """Longhouse MCP server — exposes continuity/search tools for CLI agents.
 
 Uses the ``mcp`` SDK's ``FastMCP`` decorator pattern to register tools.
-All tools return JSON strings.
+Recall tools render compact browseable text; data-heavy session tools return JSON.
 """
 
 from __future__ import annotations
@@ -115,6 +115,71 @@ def _truncate_event(event: dict, max_chars: int, include_tool_output: bool) -> d
             result[f"_{field}_truncated"] = True
             result[f"_{field}_full_chars"] = len(val)
     return result
+
+
+def _render_recall_search(payload: dict) -> str:
+    """Render the agent projection as a compact browseable index."""
+
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    lanes = "+".join(str(lane) for lane in payload.get("lanes", [])) or "unknown"
+    lines = [f"{len(results)} recall result{'s' if len(results) != 1 else ''} · lanes: {lanes}"]
+    degraded = payload.get("degraded") if isinstance(payload.get("degraded"), list) else []
+    if degraded:
+        lines.append(
+            "degraded: "
+            + ", ".join(f"{item.get('lane', 'unknown')} ({item.get('code', 'unavailable')})" for item in degraded if isinstance(item, dict))
+        )
+    coverage = payload.get("coverage")
+    if isinstance(coverage, dict) and not coverage.get("complete", False):
+        lines.append(
+            f"coverage: {int(coverage.get('lagging_sessions') or 0)} lagging, {int(coverage.get('unpublished_sessions') or 0)} unpublished"
+        )
+    for index, result in enumerate(results, start=1):
+        if not isinstance(result, dict):
+            continue
+        source = (
+            " · ".join(str(value) for value in (result.get("project"), result.get("provider"), result.get("started_at")) if value)
+            or "unknown source"
+        )
+        matched_by = "+".join(str(lane) for lane in result.get("matched_by", []))
+        matched_turn = str(result.get("matched_tool_name") or result.get("matched_role") or "").strip()
+        event_count = int(result.get("total_events") or 0)
+        card_facts = " · ".join(value for value in (matched_turn, f"{event_count} events" if event_count else "") if value)
+        lines.extend(
+            [
+                "",
+                f"[{index}] {source}" + (f" · {matched_by}" if matched_by else ""),
+                f"session: {result.get('session_id', '')}",
+                *([card_facts] if card_facts else []),
+                str(result.get("snippet") or f"[snippet unavailable: {result.get('snippet_unavailable_reason') or 'unknown'}]"),
+                f"ref: {result.get('ref', '')}",
+            ]
+        )
+    if results:
+        lines.extend(["", 'Open one result: recall_context(ref="…"). Full page: tail(session_id, roles="user,assistant").'])
+    return "\n".join(lines)
+
+
+def _render_recall_context(payload: dict) -> str:
+    """Render one bounded click-through without exposing storage locators."""
+
+    lines = [f"session: {payload.get('session_id', '')}"]
+    turns = payload.get("turns") if isinstance(payload.get("turns"), list) else []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        marker = "*" if turn.get("is_match") else " "
+        role = str(turn.get("tool_name") or turn.get("role") or "unknown")
+        truncation = " [truncated]" if turn.get("content_text_truncated") else ""
+        lines.append(f"{marker} [{role}]{truncation} {turn.get('content_text', '')}")
+    if not turns:
+        lines.append(f"context unavailable: {payload.get('evidence_reason') or 'unknown'}")
+    lines.append(
+        f"evidence: {payload.get('evidence_status', 'unknown')} · "
+        f"{int(payload.get('content_bytes_returned') or 0)}/{int(payload.get('content_byte_budget') or 0)} bytes"
+    )
+    lines.append('Read deeper: tail(session_id, roles="user,assistant").')
+    return "\n".join(lines)
 
 
 def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
@@ -298,8 +363,6 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         provider: str | None = None,
         since_days: int = 90,
         max_results: int = 5,
-        context_turns: int = 0,
-        context_mode: str = "forensic",
         mode: str = "auto",
     ) -> str:
         """Retrieve conversation evidence from the canonical Longhouse session archive.
@@ -311,35 +374,28 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         The response says which lanes actually ran. `lanes` lists the ones that
         produced these results; `degraded` lists any that could not run and why.
         Results from one lane are still real results — treat a degraded lane as
-        narrower coverage, not as a failed call. `coverage.complete_through_commit_seq`
-        is how current the embedded corpus is; `coverage.complete` is false when
-        sessions are still being indexed, which mainly affects the newest work.
-        Recall returns bounded match anchors by default. Request surrounding
-        turns only when needed, then use tail for deeper evidence.
+        narrower coverage, not as a failed call. `coverage.complete` is false
+        when sessions are still being indexed, which mainly affects the newest work.
+        Recall returns small search cards. Open one card with recall_context,
+        then use tail only when the full session is needed.
 
         Args:
             query: Natural language description of what you are looking for.
             project: Filter by project name (optional).
             provider: Filter by provider, e.g. claude, codex, antigravity, opencode (optional).
             since_days: Days to look back (default 90).
-            max_results: Max sessions to return content from (default 5).
-            context_turns: Turns before/after each anchor to include (default 0).
-            context_mode: Context projection mode: forensic|active_context (default forensic).
+            max_results: Max result cards to return (default 5, max 10).
             mode: Which lanes to search — auto (both, default), lexical (keyword
                 only), or semantic (meaning only). Prefer auto: it fuses both and
                 degrades to whichever lane is available.
         """
-        if context_mode not in {"forensic", "active_context"}:
-            return json.dumps({"error": "context_mode must be one of: forensic, active_context"})
         if mode not in {"auto", "lexical", "semantic"}:
             return json.dumps({"error": "mode must be one of: auto, lexical, semantic"})
 
         params: dict = {
             "query": query,
-            "since_days": since_days,
-            "max_results": max_results,
-            "context_turns": context_turns,
-            "context_mode": context_mode,
+            "since_days": max(1, min(since_days, 365)),
+            "max_results": max(1, min(max_results, 10)),
             "mode": mode,
         }
         if project:
@@ -357,7 +413,38 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                     # pinning a single lane.
                     retry = "Retry with mode=auto to search the lanes that are available."
                 return _format_api_error(resp, retry=retry)
-            return resp.text
+            return _render_recall_search(resp.json())
+        except Exception as exc:
+            return _format_error(exc, api_url)
+
+    # ------------------------------------------------------------------
+    # Tool: recall_context
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def recall_context(
+        ref: str,
+        before: int = 2,
+        after: int = 2,
+        max_content_bytes: int = 1_200,
+    ) -> str:
+        """Open exactly one recall result with bounded neighboring turns.
+
+        Use the opaque ref returned by recall. The server enforces an 8 KiB
+        total content ceiling. Use tail(session_id, roles="user,assistant") only
+        after this window proves the session is worth reading more deeply.
+        """
+
+        params = {
+            "ref": ref,
+            "before": max(0, min(before, 5)),
+            "after": max(0, min(after, 5)),
+            "max_content_bytes": max(200, min(max_content_bytes, 4_000)),
+        }
+        try:
+            resp = await client.get("/api/agents/recall/context", params=params)
+            if resp.status_code != 200:
+                return _format_api_error(resp)
+            return _render_recall_context(resp.json())
         except Exception as exc:
             return _format_error(exc, api_url)
 

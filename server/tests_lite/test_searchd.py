@@ -34,31 +34,29 @@ from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
 
 
-def test_recall_context_budget_is_shared_and_truncation_is_explicit():
+def test_recall_context_per_turn_budget_and_truncation_are_explicit():
     rows = [
         {"search_event_id": 1, "content_text": "a" * 200, "event_id": "first"},
         {"search_event_id": 2, "content_text": "é" * 200, "event_id": "second"},
     ]
 
-    bounded, truncated = _bounded_recall_context(rows, max_evidence_bytes=160, anchor_event_id=1)
+    bounded, truncated, anchor_seen = _bounded_recall_context(rows, max_content_bytes=160, anchor_event_id=1)
 
     assert truncated is True
-    assert sum(len(row["content_text"].encode("utf-8")) for row in bounded) <= 160
+    assert anchor_seen is True
+    assert all(len(row["content_text"].encode("utf-8")) <= 160 for row in bounded)
     assert all(row["content_text_truncated"] is True for row in bounded)
     assert [row["content_text_full_bytes"] for row in bounded] == [200, 400]
 
 
-def test_recall_context_never_starves_the_matching_turn():
-    rows = [
-        {"search_event_id": event_id, "content_text": str(event_id) * 1_000}
-        for event_id in range(1, 6)
-    ]
+def test_recall_context_applies_the_same_predictable_cap_to_every_turn():
+    rows = [{"search_event_id": event_id, "content_text": str(event_id) * 1_000} for event_id in range(1, 6)]
 
-    bounded, truncated = _bounded_recall_context(rows, max_evidence_bytes=819, anchor_event_id=3)
+    bounded, truncated, anchor_seen = _bounded_recall_context(rows, max_content_bytes=819, anchor_event_id=3)
 
     assert truncated is True
-    assert len(bounded[2]["content_text"].encode("utf-8")) == 400
-    assert sum(len(row["content_text"].encode("utf-8")) for row in bounded) <= 819
+    assert anchor_seen is True
+    assert all(len(row["content_text"].encode("utf-8")) <= 819 for row in bounded)
 
 
 def _records(text: str) -> list[dict]:
@@ -125,39 +123,45 @@ def _publish_visibility_fixture(
     object_id = str(uuid4())
     source_epoch = str(uuid4())
     records = [{**record, "order_time_us": order_time_us + index} for index, record in enumerate(_records("scope needle"))]
-    assert store.index_object(
-        session_id=session_id,
-        generation_id=generation_id,
-        object_id=object_id,
-        desired_revision=1,
-        provider="codex",
-        machine_id="cinder",
-        project="longhouse",
-        environment=environment,
-        cwd="/workspace/longhouse",
-        git_repo="cipher982/longhouse",
-        opaque_source_id=f"codex/{session_id}.jsonl",
-        source_epoch=source_epoch,
-        records=records,
-    )["created"] is True
-    assert store.publish_generation(
-        session_id=session_id,
-        generation_id=generation_id,
-        owner_id="42",
-        desired_revision=1,
-        object_count=1,
-        object_set_hash=object_set_hash([object_id]),
-        event_count=len(records),
-        project="longhouse",
-        provider="codex",
-        environment=environment,
-        cwd="/workspace/longhouse",
-        git_repo="cipher982/longhouse",
-        started_at=datetime.fromtimestamp(order_time_us / 1_000_000, UTC).isoformat(),
-        hidden_from_default_timeline=hidden,
-        test_scope_visible=test_scope_visible,
-        source_commit_seq=source_commit_seq,
-    )["published"] is True
+    assert (
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=1,
+            provider="codex",
+            machine_id="cinder",
+            project="longhouse",
+            environment=environment,
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            opaque_source_id=f"codex/{session_id}.jsonl",
+            source_epoch=source_epoch,
+            records=records,
+        )["created"]
+        is True
+    )
+    assert (
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=1,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=len(records),
+            project="longhouse",
+            provider="codex",
+            environment=environment,
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=datetime.fromtimestamp(order_time_us / 1_000_000, UTC).isoformat(),
+            hidden_from_default_timeline=hidden,
+            test_scope_visible=test_scope_visible,
+            source_commit_seq=source_commit_seq,
+        )["published"]
+        is True
+    )
 
 
 def test_include_test_reveals_only_test_environment_hidden_rows_in_search_and_worklog(tmp_path):
@@ -424,6 +428,7 @@ def test_episode_embeddings_deduplicate_exact_replays(tmp_path):
     finally:
         connection.close()
 
+
 def test_episode_embeddings_refresh_revision_on_unchanged_hash(tmp_path):
     """A revision bump exposes reusable hashes and moves the vector to the new fence."""
 
@@ -468,14 +473,11 @@ def test_episode_embeddings_refresh_revision_on_unchanged_hash(tmp_path):
             "UPDATE session_index SET desired_revision = 2, indexed_through = 2 WHERE session_id = ?",
             (session_id,),
         )
-        assert (
-            store.read_episode_embedding_hashes(
-                session_id=session_id,
-                model="test-model",
-                dims=2,
-            )["hashes"]
-            == {"0": "a" * 64}
-        )
+        assert store.read_episode_embedding_hashes(
+            session_id=session_id,
+            model="test-model",
+            dims=2,
+        )["hashes"] == {"0": "a" * 64}
         assert store.write_episode_embeddings(
             session_id=session_id,
             owner_id=owner_id,
@@ -1194,9 +1196,7 @@ async def test_dense_refresh_defers_full_rebuild_while_a_corrupt_session_blocks_
         assert daemon._dense_index.coverage.as_dict()["stale"] is True
 
         # Rewriting the blocking session is the only thing that can clear it.
-        assert await daemon._run_with_dense_refresh(lambda session_id: {"committed": True}, session_id="bad-session") == {
-            "committed": True
-        }
+        assert await daemon._run_with_dense_refresh(lambda session_id: {"committed": True}, session_id="bad-session") == {"committed": True}
         assert loads == 1
         assert daemon._dense_index.coverage.integrity_ready is True
         assert daemon._dense_known_unservable is False
@@ -1421,7 +1421,39 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
             "git_repo": "cipher982/longhouse",
             "opaque_source_id": "codex/session.jsonl",
             "source_epoch": source_epoch,
-            "records": _records("find the speed database"),
+            "records": _records("find the speed database")
+            + [
+                {
+                    "event_id": "event-3",
+                    "record_ordinal": 2,
+                    "order_time_us": 1_720_780_402_000_002,
+                    "source_position": 12,
+                    "event_subordinal": 0,
+                    "role": "assistant",
+                    "interaction_kind": "provider_tool_result",
+                    "content_text": None,
+                    "tool_name": "Bash",
+                    "tool_output_text": "hiddenanchor command",
+                    "tool_call_id": "tool-3",
+                    "thread_id": "thread-subagent",
+                    "branch_kind": "subagent",
+                },
+                {
+                    "event_id": "event-4",
+                    "record_ordinal": 3,
+                    "order_time_us": 1_720_780_402_000_003,
+                    "source_position": 13,
+                    "event_subordinal": 0,
+                    "role": "assistant",
+                    "interaction_kind": "durable_assistant_message",
+                    "content_text": "visible answer after hidden anchor",
+                    "tool_name": None,
+                    "tool_output_text": None,
+                    "tool_call_id": None,
+                    "thread_id": "thread-subagent",
+                    "branch_kind": "subagent",
+                },
+            ],
         }
         indexed = await client.call("search.index.object.v2", index_params)
         assert indexed["created"] is True
@@ -1438,7 +1470,7 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
             "generation_id": generation_id,
             "owner_id": "42",
             "desired_revision": "7",
-            "event_count": 2,
+            "event_count": 4,
             "object_set_hash": object_set_hash([object_id]),
             "project": "longhouse",
             "provider": "codex",
@@ -1474,13 +1506,30 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
                 "generation_id": generation_id,
                 "search_event_id": search["results"][0]["search_event_id"],
                 "start_order_time_us": None,
-                "context_turns": 1,
-                "max_evidence_bytes": 16 * 1024,
+                "before_turns": 1,
+                "after_turns": 1,
+                "max_content_bytes": 1200,
             },
         )
         assert context["evidence_status"] == "complete"
-        assert context["total_events"] == 2
+        assert context["total_events"] == 4
         assert [item["role"] for item in context["context"]] == ["user", "assistant"]
+        hidden_search = await client.call("search.query.v2", _search_params("hiddenanchor"))
+        hidden_context = await client.call(
+            "search.context.v2",
+            {
+                "owner_id": "42",
+                "session_id": session_id,
+                "generation_id": generation_id,
+                "search_event_id": hidden_search["results"][0]["search_event_id"],
+                "start_order_time_us": None,
+                "before_turns": 0,
+                "after_turns": 0,
+                "max_content_bytes": 1200,
+            },
+        )
+        assert hidden_context["evidence_status"] == "complete"
+        assert [item["content_text"] for item in hidden_context["context"]] == ["visible answer after hidden anchor"]
         filtered = await client.call("search.query.v2", {**_search_params("speed"), "provider": "claude"})
         assert filtered["results"] == []
 
@@ -1557,7 +1606,7 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         assert worklog_sessions["items"][0]["message_count"] == 2
         assert worklog_sessions["items"][0]["day_event_count"] == 2
         assert worklog_sessions["items"][0]["user_messages"] == 1
-        assert worklog_sessions["items"][0]["assistant_messages"] == 1
+        assert worklog_sessions["items"][0]["assistant_messages"] == 2
         assert worklog_sessions["items"][0]["is_sidechain"] == 1
         first_worklog_page = await client.call(
             "worklog.day.v2",
@@ -1591,6 +1640,7 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
             "desired_revision": "9",
             "object_set_hash": object_set_hash([replacement_id]),
             "object_count": 1,
+            "event_count": 2,
         }
         assert (await client.call("search.index.publish.v2", replacement_publish))["published"] is True
 
@@ -2099,10 +2149,7 @@ def test_reclassify_origin_flips_hidden_across_index_and_searchable_corpus(tmp_p
     generation_id = str(uuid4())
     object_id = str(uuid4())
     source_epoch = str(uuid4())
-    records = [
-        {**record, "order_time_us": now_us + index}
-        for index, record in enumerate(_records("indexed answer"))
-    ]
+    records = [{**record, "order_time_us": now_us + index} for index, record in enumerate(_records("indexed answer"))]
     try:
         store.index_object(
             session_id=session_id,
@@ -2196,10 +2243,7 @@ def test_reclassify_origin_clears_test_scope_visibility(tmp_path):
             test_scope_visible=True,
             order_time_us=now_us,
         )
-        assert [
-            row["session_id"]
-            for row in store.search(**_search_params("scope needle"), include_test=True)["results"]
-        ] == [session_id]
+        assert [row["session_id"] for row in store.search(**_search_params("scope needle"), include_test=True)["results"]] == [session_id]
 
         result = store.reclassify_session_origin(
             session_id=session_id,
@@ -2209,8 +2253,7 @@ def test_reclassify_origin_clears_test_scope_visibility(tmp_path):
         assert result["reclassified"] is True
         assert store.search(**_search_params("scope needle"), include_test=True)["results"] == []
         index_row = connection.execute(
-            "SELECT hidden_from_default_timeline, test_scope_visible, source_commit_seq "
-            "FROM session_index WHERE session_id = ?",
+            "SELECT hidden_from_default_timeline, test_scope_visible, source_commit_seq FROM session_index WHERE session_id = ?",
             (session_id,),
         ).fetchone()
         event_row = connection.execute(
@@ -2379,8 +2422,7 @@ def test_delayed_publish_preserves_newer_reconciled_visibility(tmp_path):
         )
         assert delayed["published"] is True
         index_row = connection.execute(
-            "SELECT hidden_from_default_timeline, test_scope_visible, source_commit_seq "
-            "FROM session_index WHERE session_id = ?",
+            "SELECT hidden_from_default_timeline, test_scope_visible, source_commit_seq FROM session_index WHERE session_id = ?",
             (session_id,),
         ).fetchone()
         event_row = connection.execute(

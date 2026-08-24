@@ -7,9 +7,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from zerg.metrics import product_read_requests_total
+from zerg.middleware import request_timeout as request_timeout_module
 from zerg.middleware.request_timeout import RequestTimeoutMiddleware
 from zerg.middleware.request_timeout import _product_read_route_class
-from zerg.middleware import request_timeout as request_timeout_module
 
 
 def _counter_value(route_class: str, status_family: str, outcome: str) -> float:
@@ -23,9 +23,16 @@ def test_product_read_route_classes_are_bounded_and_ignore_identifiers():
     assert _product_read_route_class(f"/timeline/sessions/{session_id}/workspace", "GET") == "session_detail"
     assert _product_read_route_class(f"/agents/storage/v2/sessions/{session_id}/raw", "GET") == "raw_export"
     assert _product_read_route_class("/agents/recall", "GET") == "recall"
+    assert _product_read_route_class("/agents/recall/context", "GET") == "recall"
+    assert _product_read_route_class("/timeline/recall/context", "GET") == "recall"
     assert _product_read_route_class("/timeline/sessions/semantic", "GET") == "search"
     assert _product_read_route_class(f"/agents/sessions/{session_id}/action", "POST") is None
     assert _product_read_route_class("/unrelated/private-session-id", "GET") is None
+
+
+def test_recall_timeout_override_covers_machine_and_browser_facades():
+    assert request_timeout_module._TIMEOUT_OVERRIDES["/agents/recall"] == request_timeout_module.RECALL_TIMEOUT_SECONDS
+    assert request_timeout_module._TIMEOUT_OVERRIDES["/timeline/recall"] == request_timeout_module.RECALL_TIMEOUT_SECONDS
 
 
 @pytest.mark.parametrize(

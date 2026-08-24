@@ -8,7 +8,39 @@ import pytest
 
 from zerg.cli.mcp_serve import mcp_server
 from zerg.mcp_server.server import COORDINATION_INSTRUCTIONS
+from zerg.mcp_server.server import _render_recall_search
 from zerg.mcp_server.server import create_server
+
+
+class _Response:
+    def __init__(self, payload: dict, status_code: int = 200):
+        self.status_code = status_code
+        self.text = json.dumps(payload)
+
+    def json(self) -> dict:
+        return json.loads(self.text)
+
+
+def test_recall_card_renderer_exposes_small_open_decision_facts():
+    rendered = _render_recall_search(
+        {
+            "results": [
+                {
+                    "session_id": "11111111-1111-4111-8111-111111111111",
+                    "project": "longhouse",
+                    "provider": "codex",
+                    "snippet": "the answer",
+                    "total_events": 42,
+                    "matched_role": "assistant",
+                    "matched_by": ["dense"],
+                    "ref": "rr1_" + "A" * 55,
+                }
+            ],
+            "lanes": ["dense"],
+        }
+    )
+
+    assert "assistant · 42 events" in rendered
 
 
 def test_mcp_server_initializes_without_hosted_probe(monkeypatch):
@@ -43,6 +75,7 @@ def test_create_server_exposes_archive_and_coordination_tools_by_default():
         "search_sessions",
         "get_session_detail",
         "recall",
+        "recall_context",
         "peers",
         "tail",
         "send",
@@ -79,14 +112,7 @@ def test_mcp_server_carries_durable_coordination_instructions():
 async def test_recall_tool_forwards_provider_filter():
     server = create_server("http://example.com", "test-token")
     tool = server._tool_manager._tools["recall"]
-    response = type(
-        "Resp",
-        (),
-        {
-            "status_code": 200,
-            "text": '{"matches":[],"total":0}',
-        },
-    )()
+    response = _Response({"results": [], "total": 0, "lanes": ["lexical"], "degraded": []})
 
     with patch(
         "zerg.mcp_server.server.LonghouseAPIClient.get",
@@ -99,20 +125,16 @@ async def test_recall_tool_forwards_provider_filter():
                 "provider": "codex",
                 "since_days": 30,
                 "max_results": 3,
-                "context_turns": 4,
-                "context_mode": "active_context",
             }
         )
 
-    assert result == '{"matches":[],"total":0}'
+    assert result == "0 recall results · lanes: lexical"
     mock_get.assert_awaited_once_with(
         "/api/agents/recall",
         params={
             "query": "auth refresh",
             "since_days": 30,
             "max_results": 3,
-            "context_turns": 4,
-            "context_mode": "active_context",
             "mode": "auto",
             "project": "zerg",
             "provider": "codex",
@@ -121,25 +143,47 @@ async def test_recall_tool_forwards_provider_filter():
 
 
 @pytest.mark.asyncio
-async def test_recall_tool_defaults_to_anchor_only():
+async def test_recall_tool_caps_card_count_and_never_requests_bulk_context():
     server = create_server("http://example.com", "test-token")
     tool = server._tool_manager._tools["recall"]
-    response = type(
-        "Resp",
-        (),
-        {
-            "status_code": 200,
-            "text": '{"matches":[],"total":0}',
-        },
-    )()
+    response = _Response({"results": [], "total": 0, "lanes": ["lexical"], "degraded": []})
 
     with patch(
         "zerg.mcp_server.server.LonghouseAPIClient.get",
         new=AsyncMock(return_value=response),
     ) as mock_get:
-        await tool.run({"query": "auth refresh"})
+        await tool.run({"query": "auth refresh", "max_results": 999})
 
-    assert mock_get.await_args.kwargs["params"]["context_turns"] == 0
+    assert mock_get.await_args.kwargs["params"]["max_results"] == 10
+    assert "context_turns" not in mock_get.await_args.kwargs["params"]
+
+
+@pytest.mark.asyncio
+async def test_recall_context_opens_one_ref_and_renders_turns():
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["recall_context"]
+    result_ref = "rr1_" + "A" * 55
+    response = _Response(
+        {
+            "ref": result_ref,
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "turns": [{"role": "assistant", "content_text": "the answer", "is_match": True}],
+            "content_byte_budget": 6000,
+            "content_bytes_returned": 10,
+            "evidence_status": "complete",
+        }
+    )
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(return_value=response),
+    ) as mock_get:
+        result = await tool.run({"ref": result_ref, "before": 99, "after": -1})
+
+    assert "* [assistant] the answer" in result
+    mock_get.assert_awaited_once_with(
+        "/api/agents/recall/context",
+        params={"ref": result_ref, "before": 5, "after": 0, "max_content_bytes": 1200},
+    )
 
 
 @pytest.mark.asyncio

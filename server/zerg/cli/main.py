@@ -13,6 +13,7 @@ from zerg.build_info import load as load_build_identity
 from zerg.cli.apns_smoke import apns_smoke_command
 from zerg.cli.archive import app as archive_app
 from zerg.cli.connect import recall
+from zerg.cli.connect import recall_context
 from zerg.cli.connect import ship
 from zerg.cli.coordination import inbox
 from zerg.cli.coordination import peers
@@ -643,7 +644,7 @@ app.add_typer(translation_app, name="translation", help="Read-only provider tool
 app.add_typer(provider_app, name="provider", help="Provider contracts and automation-factory diagnostics")
 app.add_typer(archive_app, name="archive", help="Archive backlog inspection and control")
 
-for command in (serve, status, peers, tail, send, inbox, reply, ship, recall):
+for command in (serve, status, peers, tail, send, inbox, reply, ship, recall, recall_context):
     app.command()(command)
 
 app.command(name="hash-password")(hash_password)

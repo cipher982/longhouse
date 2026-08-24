@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import binascii
 import logging
 import time
 from dataclasses import dataclass
@@ -37,11 +38,15 @@ from zerg.services.session_views import RECALL_COVERAGE_MAX_NAMED_SESSIONS
 from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import MachineSessionResponse
 from zerg.services.session_views import MachineSessionsListResponse
+from zerg.services.session_views import RecallContextResponse
 from zerg.services.session_views import RecallContextTurn
 from zerg.services.session_views import RecallCoverage
+from zerg.services.session_views import RecallCoverageSummary
+from zerg.services.session_views import RecallExpandedTurn
 from zerg.services.session_views import RecallLaneFailure
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
+from zerg.services.session_views import RecallSearchResult
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import project_machine_session
 from zerg.utils.server_timing import ServerTimingRecorder
@@ -54,9 +59,38 @@ logger = logging.getLogger(__name__)
 # the explicit hydration reserve and stays within searchd's hard RPC ceiling;
 # timing telemetry and release gates enforce ordinary latency separately.
 RECALL_ROUTE_TIMEOUT_SECONDS = 5.0
-RECALL_CONTEXT_BYTE_BUDGET = 16 * 1024
-RECALL_CONTEXT_ITEM_LIMIT = 100
-RECALL_ANCHOR_BYTE_BUDGET = 400
+RECALL_SEARCH_SNIPPET_BYTES = 320
+RECALL_CONTEXT_TOTAL_BYTES = 8 * 1024
+RECALL_CONTEXT_MAX_TURN_BYTES = 4_000
+RECALL_SEARCH_RESULT_LIMIT = 10
+RECALL_SERIALIZED_RESPONSE_BYTES = 12 * 1024
+_RECALL_REF_PREFIX = "rr1_"
+_RECALL_SNIPPET_TRUNCATION_MARKER = " …[truncated]"
+
+
+def _apply_recall_diagnostic_headers(response: Response | None, *, include_dense: bool) -> None:
+    """Keep release diagnostics off the model-visible JSON payload."""
+
+    if response is None:
+        return
+    from zerg.build_info import BuildIdentityMissing
+    from zerg.build_info import load
+
+    try:
+        response.headers["X-Longhouse-Commit"] = load().commit
+    except BuildIdentityMissing:
+        pass
+    if include_dense:
+        from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
+        from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
+        from zerg.embedding_space import EMBEDDING_ARTIFACT_REVISION
+        from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+
+        response.headers["X-Recall-Embedding-Model"] = ACTIVE_EMBEDDING_MODEL
+        response.headers["X-Recall-Embedding-Dims"] = str(ACTIVE_EMBEDDING_DIMS)
+        response.headers["X-Recall-Embedding-Revision"] = EMBEDDING_ARTIFACT_REVISION
+        response.headers["X-Recall-Projector"] = EMBEDDING_PROJECTOR_ID
+
 
 _catalog_db_dependency = catalog_db_dependency()
 
@@ -71,6 +105,9 @@ class _DenseEpisodeHit(BaseModel):
     event_index_end: int | None = Field(ge=0)
     generation_id: str
     start_order_time_us: int = Field(ge=0)
+    project: str | None
+    provider: str | None
+    started_at: str | None
 
     @model_validator(mode="after")
     def validate_identity(self) -> "_DenseEpisodeHit":
@@ -157,6 +194,7 @@ class _RecallContextPayload(BaseModel):
 
     evidence_status: Literal["complete", "partial", "unavailable"]
     evidence_reason: str | None
+    anchor_event_id: int | None = Field(default=None, ge=1)
     context: list[RecallContextTurn]
     total_events: int = Field(ge=0)
     timing: _SearchReadTiming
@@ -288,20 +326,6 @@ class _DenseRecallResult:
     coverage: RecallCoverage
 
 
-def _server_build_commit() -> str | None:
-    """Return the serving artifact SHA when this is a packaged build."""
-
-    from zerg.build_info import BuildIdentityMissing
-    from zerg.build_info import load
-
-    try:
-        return load().commit
-    except BuildIdentityMissing:
-        # Source/dev installs intentionally have no staged build identity. The
-        # production evaluator requires this field and fails if it is absent.
-        return None
-
-
 def _catalog_owner_id(auth: object) -> int:
     owner_id = getattr(auth, "owner_id", None)
     if owner_id is None:
@@ -382,8 +406,9 @@ async def search_storage_v2_context(
     generation_id: str,
     search_event_id: int | None = None,
     start_order_time_us: int | None = None,
-    context_turns: int,
-    max_evidence_bytes: int,
+    before_turns: int,
+    after_turns: int,
+    max_content_bytes: int,
     timeout_seconds: float,
 ) -> _RecallContextPayload:
     """Read bounded neighbor evidence from the same generation as a search hit.
@@ -407,8 +432,9 @@ async def search_storage_v2_context(
                 "generation_id": generation_id,
                 "search_event_id": search_event_id,
                 "start_order_time_us": start_order_time_us,
-                "context_turns": context_turns,
-                "max_evidence_bytes": max_evidence_bytes,
+                "before_turns": before_turns,
+                "after_turns": after_turns,
+                "max_content_bytes": max_content_bytes,
             },
             timeout_seconds=timeout_seconds,
         )
@@ -731,6 +757,9 @@ async def _semantic_recall(
             matches.append(
                 RecallMatch(
                     session_id=session_id,
+                    project=row.project,
+                    provider=row.provider,
+                    started_at=row.started_at,
                     chunk_index=row.episode_ordinal,
                     score=row.score,
                     event_index_start=row.event_index_start,
@@ -1013,6 +1042,9 @@ async def _lexical_recall_matches(
         matches.append(
             RecallMatch(
                 session_id=session_id,
+                project=str(row.get("project") or "") or None,
+                provider=str(row.get("provider") or "") or None,
+                started_at=str(row.get("started_at") or "") or None,
                 chunk_index=int(row.get("record_ordinal") or 0),
                 score=1.0 / (1.0 + abs(float(row.get("rank") or 0.0))),
                 evidence=snippet or None,
@@ -1033,11 +1065,10 @@ async def _hydrate_recall_match(
     match: RecallMatch,
     *,
     owner_id: int,
-    context_turns: int,
     timeout_seconds: float,
-    max_evidence_bytes: int = RECALL_CONTEXT_BYTE_BUDGET,
+    max_content_bytes: int = RECALL_SEARCH_SNIPPET_BYTES,
 ) -> None:
-    """Attach neighbour evidence to a match and record how well that went.
+    """Attach one bounded source turn to a search card candidate.
 
     Every exit sets ``evidence_status`` explicitly. Nothing here may leave it at
     the model default, because a default is a claim nobody checked.
@@ -1056,8 +1087,9 @@ async def _hydrate_recall_match(
             # An event id is exact; a position is an anchor. Prefer the exact one
             # when a match somehow carries both.
             start_order_time_us=None if match.match_event_id is not None else match.start_order_time_us,
-            context_turns=context_turns,
-            max_evidence_bytes=max_evidence_bytes,
+            before_turns=0,
+            after_turns=0,
+            max_content_bytes=max_content_bytes,
             timeout_seconds=timeout_seconds,
         )
     except HTTPException as exc:
@@ -1067,7 +1099,16 @@ async def _hydrate_recall_match(
         return
     evidence = _RecallContextPayload.model_validate(evidence)
     match.context = evidence.context
+    if evidence.anchor_event_id is not None:
+        match.match_event_id = evidence.anchor_event_id
     match.total_events = evidence.total_events
+    anchor = next(
+        (turn for turn in evidence.context if turn.search_event_id == evidence.anchor_event_id),
+        None,
+    )
+    if anchor is not None:
+        match.matched_role = anchor.role
+        match.matched_tool_name = anchor.tool_name
     # Only the store may declare completeness. An absent status means the
     # response did not carry one, which is not evidence that everything arrived
     # — reading it as "complete" is how a silent contract change would look
@@ -1081,14 +1122,12 @@ async def _hydrate_recall_match(
         match.evidence_reason = None
     if match.evidence is None:
         match.evidence = _anchor_excerpt(match)
-    if context_turns == 0:
-        # The anchor is always part of a recall result. Neighbour context is a
-        # separate, opt-in expansion; do not make callers hydrate full turns
-        # just to get usable evidence for a dense match.
-        match.context = []
-        if match.evidence:
-            match.evidence_status = "not_requested"
-            match.evidence_reason = None
+    # Search cards carry the snippet only. Neighbour turns are a distinct,
+    # one-result expansion so N search hits can never multiply transcript text.
+    match.context = []
+    if match.evidence:
+        match.evidence_status = "not_requested"
+        match.evidence_reason = None
 
 
 def _finalize_recall_evidence(matches: list[RecallMatch]) -> None:
@@ -1146,7 +1185,204 @@ def _anchor_excerpt(match: RecallMatch) -> str | None:
 
 # Long enough to judge relevance, short enough that five of them do not crowd out
 # the context they are summarizing.
-_ANCHOR_EXCERPT_MAX_CHARS = 400
+_ANCHOR_EXCERPT_MAX_CHARS = RECALL_SEARCH_SNIPPET_BYTES
+
+
+@dataclass(frozen=True)
+class _RecallRef:
+    session_id: str
+    generation_id: str
+    search_event_id: int | None
+    start_order_time_us: int | None
+
+
+def _encode_recall_ref(match: RecallMatch) -> str:
+    """Encode the exact published hit into a compact, stateless click target."""
+
+    if match.generation_id is None:
+        raise ValueError("recall result is missing its generation")
+    if match.match_event_id is not None:
+        kind = 0
+        locator = match.match_event_id
+    elif match.start_order_time_us is not None:
+        kind = 1
+        locator = match.start_order_time_us
+    else:
+        raise ValueError("recall result is missing its locator")
+    payload = bytes([kind]) + UUID(match.session_id).bytes + UUID(match.generation_id).bytes + locator.to_bytes(8, "big")
+    return _RECALL_REF_PREFIX + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_recall_ref(value: str) -> _RecallRef:
+    """Decode a result reference without trusting it as authorization."""
+
+    if not value.startswith(_RECALL_REF_PREFIX):
+        raise ValueError("unsupported recall reference")
+    token = value[len(_RECALL_REF_PREFIX) :]
+    try:
+        payload = base64.b64decode(token + "=", altchars=b"-_", validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("invalid recall reference encoding") from exc
+    if len(payload) != 41 or payload[0] not in (0, 1):
+        raise ValueError("invalid recall reference payload")
+    locator = int.from_bytes(payload[33:], "big")
+    if locator <= 0:
+        raise ValueError("invalid recall reference locator")
+    return _RecallRef(
+        session_id=str(UUID(bytes=payload[1:17])),
+        generation_id=str(UUID(bytes=payload[17:33])),
+        search_event_id=locator if payload[0] == 0 else None,
+        start_order_time_us=locator if payload[0] == 1 else None,
+    )
+
+
+def _recall_search_result(match: RecallMatch) -> RecallSearchResult:
+    snippet = _bounded_recall_snippet(match.evidence) if match.evidence else None
+    return RecallSearchResult(
+        ref=_encode_recall_ref(match),
+        session_id=match.session_id,
+        project=match.project[:200] if match.project else None,
+        provider=match.provider[:64] if match.provider else None,
+        started_at=match.started_at[:64] if match.started_at else None,
+        total_events=match.total_events,
+        matched_role=match.matched_role,
+        matched_tool_name=match.matched_tool_name[:128] if match.matched_tool_name else None,
+        snippet=snippet,
+        snippet_unavailable_reason=None if snippet else (match.evidence_reason or "snippet_unavailable"),
+        matched_by=match.retrieval_lanes,
+    )
+
+
+def _bounded_recall_snippet(value: str) -> str | None:
+    """Return one printable, byte-bounded card excerpt with an honest cut marker."""
+
+    printable = "".join(" " if ord(character) < 32 or ord(character) == 127 else character for character in value)
+    normalized = " ".join(printable.split()).strip()
+    if not normalized:
+        return None
+    encoded = normalized.encode("utf-8")
+    if len(encoded) <= RECALL_SEARCH_SNIPPET_BYTES:
+        return normalized
+    marker = _RECALL_SNIPPET_TRUNCATION_MARKER.encode("utf-8")
+    prefix = encoded[: RECALL_SEARCH_SNIPPET_BYTES - len(marker)].decode("utf-8", "ignore").rstrip()
+    return prefix + _RECALL_SNIPPET_TRUNCATION_MARKER
+
+
+def _recall_search_results(matches: list[RecallMatch]) -> list[RecallSearchResult]:
+    """Project every valid hit without letting one corrupt row erase the page."""
+
+    results: list[RecallSearchResult] = []
+    for match in matches:
+        try:
+            results.append(_recall_search_result(match))
+        except (ValueError, ValidationError) as exc:
+            logger.warning("Skipping unexpandable recall hit session_id=%s reason=%s", match.session_id, exc)
+    return results
+
+
+def _fit_recall_search_response(
+    *,
+    results: list[RecallSearchResult],
+    lanes: list[Literal["lexical", "dense"]],
+    degraded: list[RecallLaneFailure],
+    coverage: RecallCoverageSummary | None = None,
+) -> RecallResponse:
+    """Keep the highest-ranked cards that fit the hard serialized page ceiling."""
+
+    candidate = RecallResponse.model_construct(
+        results=list(results),
+        total=len(results),
+        lanes=lanes,
+        degraded=degraded,
+        coverage=coverage,
+    )
+    dropped = 0
+    while len(candidate.model_dump_json(exclude_none=True).encode("utf-8")) > RECALL_SERIALIZED_RESPONSE_BYTES:
+        candidate.results.pop()
+        candidate.total -= 1
+        dropped += 1
+    if dropped:
+        logger.warning("Dropped %d trailing recall cards to enforce serialized response ceiling", dropped)
+    return RecallResponse.model_validate(candidate.model_dump())
+
+
+def _merge_evidence_reason(current: str | None, added: str) -> str:
+    values = [value for value in (current, added) if value]
+    return ",".join(dict.fromkeys(values))[:300]
+
+
+def _context_response_size(response: RecallContextResponse) -> int:
+    return len(response.model_dump_json(exclude_none=True).encode("utf-8"))
+
+
+def _trim_context_turn(turn: RecallExpandedTurn, max_bytes: int) -> RecallExpandedTurn:
+    encoded = turn.content_text.encode("utf-8")
+    returned = encoded[:max_bytes].decode("utf-8", "ignore")
+    full_bytes = turn.content_text_full_bytes or len(encoded)
+    return turn.model_copy(
+        update={
+            "content_text": returned,
+            "content_text_truncated": True,
+            "content_text_full_bytes": full_bytes,
+        }
+    )
+
+
+def _fit_recall_context_response(response: RecallContextResponse) -> RecallContextResponse:
+    """Enforce the serialized ceiling by trimming evidence, never by returning 500."""
+
+    if _context_response_size(response) <= RECALL_SERIALIZED_RESPONSE_BYTES:
+        return RecallContextResponse.model_validate(response.model_dump())
+
+    working = response.model_copy(deep=True)
+    working.evidence_status = "partial"
+    working.evidence_reason = _merge_evidence_reason(
+        working.evidence_reason,
+        "response_byte_ceiling_applied",
+    )
+    match_index = next(index for index, turn in enumerate(working.turns) if turn.is_match)
+    trim_order = sorted(
+        enumerate(working.turns),
+        key=lambda item: (item[1].is_match, -abs(item[0] - match_index)),
+    )
+    for _, target in trim_order:
+        if _context_response_size(working) <= RECALL_SERIALIZED_RESPONSE_BYTES:
+            break
+        index = next((index for index, turn in enumerate(working.turns) if turn is target), None)
+        if index is None:
+            continue
+        turn = working.turns[index]
+        encoded_bytes = len(turn.content_text.encode("utf-8"))
+        low, high = 0, encoded_bytes
+        best: RecallExpandedTurn | None = None
+        while low <= high:
+            midpoint = (low + high) // 2
+            candidate = _trim_context_turn(turn, midpoint)
+            working.turns[index] = candidate
+            working.content_bytes_returned = sum(len(item.content_text.encode("utf-8")) for item in working.turns)
+            if _context_response_size(working) <= RECALL_SERIALIZED_RESPONSE_BYTES:
+                best = candidate
+                low = midpoint + 1
+            else:
+                high = midpoint - 1
+        if best is not None and best.content_text:
+            working.turns[index] = best
+        elif not turn.is_match:
+            working.turns.pop(index)
+        else:
+            working.turns[index] = _trim_context_turn(turn, max(0, high))
+        working.content_bytes_returned = sum(len(item.content_text.encode("utf-8")) for item in working.turns)
+
+    return RecallContextResponse.model_validate(working.model_dump())
+
+
+def _recall_coverage_summary(coverage: RecallCoverage) -> RecallCoverageSummary:
+    return RecallCoverageSummary(
+        complete=coverage.complete,
+        lagging_sessions=coverage.catalog_lag_count,
+        unpublished_sessions=coverage.unpublished_sessions,
+        oldest_lag_seconds=coverage.catalog_oldest_lag_seconds,
+    )
 
 
 def _rrf_merge_recall_matches(
@@ -1248,6 +1484,73 @@ async def semantic_search_sessions(
     return result
 
 
+@router.get("/recall/context", response_model=RecallContextResponse, response_model_exclude_none=True)
+async def recall_context(
+    request: Request,
+    ref: str = Query(..., description="Opaque result reference returned by recall"),
+    before: int = Query(2, ge=0, le=5, description="Conversation turns before the match"),
+    after: int = Query(2, ge=0, le=5, description="Conversation turns after the match"),
+    max_content_bytes: int = Query(1_200, ge=200, le=RECALL_CONTEXT_MAX_TURN_BYTES),
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> RecallContextResponse:
+    """Open one recall card under a fixed total evidence budget."""
+
+    unknown = sorted(set(request.query_params) - {"ref", "before", "after", "max_content_bytes"})
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "unknown_query_parameters", "parameters": unknown},
+        )
+    try:
+        locator = _decode_recall_ref(ref)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "invalid_recall_ref", "message": str(exc)},
+        ) from exc
+
+    turn_count = before + after + 1
+    applied_max = min(max_content_bytes, RECALL_CONTEXT_TOTAL_BYTES // turn_count)
+    content_budget = applied_max * turn_count
+    payload = await search_storage_v2_context(
+        owner_id=_catalog_owner_id(_auth),
+        session_id=locator.session_id,
+        generation_id=locator.generation_id,
+        search_event_id=locator.search_event_id,
+        start_order_time_us=locator.start_order_time_us,
+        before_turns=before,
+        after_turns=after,
+        max_content_bytes=applied_max,
+        timeout_seconds=RECALL_ROUTE_TIMEOUT_SECONDS,
+    )
+    anchor_event_id = payload.anchor_event_id
+    turns = [
+        RecallExpandedTurn(
+            role=turn.role,
+            content_text=turn.content_text,
+            is_match=turn.search_event_id == anchor_event_id,
+            tool_name=turn.tool_name,
+            content_text_truncated=turn.content_text_truncated,
+            content_text_full_bytes=turn.content_text_full_bytes,
+        )
+        for turn in payload.context
+    ]
+    returned_bytes = sum(len(turn.content_text.encode("utf-8")) for turn in turns)
+    candidate = RecallContextResponse.model_construct(
+        ref=ref,
+        session_id=locator.session_id,
+        turns=turns,
+        total_events=payload.total_events,
+        content_byte_budget=content_budget,
+        content_bytes_returned=returned_bytes,
+        max_content_bytes_applied=applied_max,
+        evidence_status=payload.evidence_status,
+        evidence_reason=payload.evidence_reason,
+    )
+    return _fit_recall_context_response(candidate)
+
+
 @router.get("/recall", response_model=RecallResponse, response_model_exclude_none=True)
 async def recall_sessions(
     request: Request,
@@ -1257,9 +1560,7 @@ async def recall_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
-    max_results: int = Query(5, ge=1, le=25, description="Max matches"),
-    context_turns: int = Query(0, ge=0, le=10, description="Context turns before/after match"),
-    context_mode: Literal["forensic", "active_context"] = Query("forensic", description="Context projection mode: forensic|active_context"),
+    max_results: int = Query(5, ge=1, le=RECALL_SEARCH_RESULT_LIMIT, description="Max search-result cards"),
     include_automation: bool = Query(False, description="Include Hatch automation sessions in recall results"),
     mode: Literal["auto", "lexical", "semantic"] = "auto",
     _auth: object = Depends(verify_agents_token),
@@ -1277,8 +1578,6 @@ async def recall_sessions(
         "include_test",
         "since_days",
         "max_results",
-        "context_turns",
-        "context_mode",
         "include_automation",
         "mode",
     }
@@ -1293,30 +1592,9 @@ async def recall_sessions(
             },
         )
 
-    projected_context_items = max_results * (2 * context_turns + 1) if context_turns else 0
-    if projected_context_items > RECALL_CONTEXT_ITEM_LIMIT:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "recall_context_fanout_too_large",
-                "message": "Recall context expansion exceeds the bounded response shape.",
-                "max_context_items": RECALL_CONTEXT_ITEM_LIMIT,
-                "requested_context_items": projected_context_items,
-            },
-        )
-
     def remaining_budget() -> float:
         started = request_started if isinstance(request_started, float) else handler_started
         return max(0.05, RECALL_ROUTE_TIMEOUT_SECONDS - (time.perf_counter() - started) - 0.1)
-
-    if context_mode != "forensic":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "search_mode_unsupported",
-                "message": "Storage-v2 search does not yet project active-context boundaries.",
-            },
-        )
 
     owner_id = _catalog_owner_id(_auth)
     candidate_depth = min(200, max(max_results, max_results * CANDIDATE_DEPTH_FACTOR))
@@ -1397,50 +1675,33 @@ async def recall_sessions(
     # semantic matches never reached the hydrator at all — they were appended
     # afterwards and went out with empty evidence — while lexical matches that
     # fusion then dropped were hydrated for nothing.
-    per_match_evidence_bytes = (
-        max(1, RECALL_CONTEXT_BYTE_BUDGET // len(matches)) if context_turns and matches else RECALL_ANCHOR_BYTE_BUDGET
-    )
     with timing.span("hydrate"):
         await asyncio.gather(
             *(
                 _hydrate_recall_match(
                     match,
                     owner_id=owner_id,
-                    context_turns=context_turns,
                     timeout_seconds=max(0.05, remaining_budget()),
-                    max_evidence_bytes=per_match_evidence_bytes,
+                    max_content_bytes=RECALL_SEARCH_SNIPPET_BYTES,
                 )
                 for match in matches
             )
         )
 
     _finalize_recall_evidence(matches)
-    context_bytes_returned = sum(len(turn.content_text.encode("utf-8")) for match in matches for turn in match.context)
+    results = _recall_search_results(matches)
     timing.apply(response)
+    _apply_recall_diagnostic_headers(response, include_dense="dense" in lanes)
     if "dense" in lanes:
-        from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
-        from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
-        from zerg.embedding_space import EMBEDDING_ARTIFACT_REVISION
-
-        return RecallResponse(
-            matches=matches,
-            total=len(matches),
+        assert dense_result is not None
+        return _fit_recall_search_response(
+            results=results,
             lanes=list(lanes),
             degraded=degraded,
-            embedding_model=ACTIVE_EMBEDDING_MODEL,
-            embedding_dims=ACTIVE_EMBEDDING_DIMS,
-            embedding_revision=EMBEDDING_ARTIFACT_REVISION,
-            coverage=dense_result.coverage,
-            server_commit=_server_build_commit(),
-            context_byte_budget=RECALL_CONTEXT_BYTE_BUDGET if context_turns else 0,
-            context_bytes_returned=context_bytes_returned,
+            coverage=_recall_coverage_summary(dense_result.coverage),
         )
-    return RecallResponse(
-        matches=matches,
-        total=len(matches),
+    return _fit_recall_search_response(
+        results=results,
         lanes=list(lanes),
         degraded=degraded,
-        server_commit=_server_build_commit(),
-        context_byte_budget=RECALL_CONTEXT_BYTE_BUDGET if context_turns else 0,
-        context_bytes_returned=context_bytes_returned,
     )

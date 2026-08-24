@@ -53,7 +53,7 @@ fn registered_engine_command_advertises_coordination_tools() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 7);
+    assert_eq!(names.len(), 8);
     // search_sessions finds sessions and recall reads evidence out of them.
     // This is the surface every managed provider loads, so a verb missing here
     // is a verb no agent can reach -- recall was absent entirely, which left
@@ -61,6 +61,7 @@ fn registered_engine_command_advertises_coordination_tools() {
     for expected in [
         "search_sessions",
         "recall",
+        "recall_context",
         "peers",
         "tail",
         "send",

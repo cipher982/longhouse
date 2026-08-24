@@ -6,11 +6,13 @@ import { RecallPanel } from "../RecallPanel";
 
 const hookMocks = vi.hoisted(() => ({
   useRecall: vi.fn(),
+  useRecallContext: vi.fn(),
   useDebouncedValue: vi.fn(),
 }));
 
 vi.mock("../../hooks/useAgentSessions", () => ({
   useRecall: hookMocks.useRecall,
+  useRecallContext: hookMocks.useRecallContext,
 }));
 
 vi.mock("../../hooks/useDebouncedValue", () => ({
@@ -20,62 +22,42 @@ vi.mock("../../hooks/useDebouncedValue", () => ({
 describe("RecallPanel", () => {
   beforeEach(() => {
     hookMocks.useDebouncedValue.mockReturnValue("migration");
+    hookMocks.useRecallContext.mockImplementation((ref: string | null) => ({
+      data: ref ? {
+        ref,
+        session_id: "11111111-1111-4111-8111-111111111111",
+        turns: [{ role: "assistant", content_text: "The full migration context.", is_match: true }],
+        total_events: 42,
+        content_byte_budget: 6000,
+        content_bytes_returned: 27,
+        max_content_bytes_applied: 1200,
+        evidence_status: "complete",
+        evidence_reason: null,
+      } : undefined,
+      isLoading: false,
+      error: null,
+    }));
     hookMocks.useRecall.mockReturnValue({
       data: {
         total: 1,
         lanes: ["lexical", "dense"],
-        embedding_model: "google/embeddinggemma-300m",
-        embedding_dims: 256,
-        embedding_revision: "a".repeat(40),
-        server_commit: "b".repeat(40),
+        degraded: [],
         coverage: {
-          ready: true,
-          projector: "embeddings-test-256d-p2",
-          cutover_certified_commit_seq: "9",
-          cutover_certified_at: "2026-08-02T00:00:00+00:00",
-          catalog_lag_count: 0,
-          catalog_indexed_through: "10",
-          catalog_oldest_lag_at: null,
-          catalog_oldest_lag_seconds: null,
-          catalog_commit_seq: "10",
-          catalog_observed_at: "2026-08-02T00:00:00+00:00",
-          resident_stale: false,
-          expected_sessions: 5_901,
-          published_sessions: 5_901,
-          expected_episodes: 82_958,
-          current_episodes: 82_958,
-          invalid_vectors: 0,
-          unnormalized_vectors: 0,
-          unlocatable_episodes: 0,
-          episode_count_mismatches: 0,
-          missing_session_ids: [],
+          complete: true,
+          lagging_sessions: 0,
+          unpublished_sessions: 0,
+          oldest_lag_seconds: null,
         },
-        matches: [
+        results: [
           {
+            ref: `rr1_${"A".repeat(55)}`,
             session_id: "11111111-1111-4111-8111-111111111111",
-            chunk_index: 2,
-            score: 0.0325,
-            evidence: "The migration completed successfully.",
-            retrieval_lanes: ["lexical", "dense"],
-            lane_ranks: { lexical: 2, dense: 1 },
-            event_index_start: 4,
-            event_index_end: 5,
-            total_events: 42,
-            match_event_id: 99,
-            evidence_status: "complete",
-            evidence_reason: null,
-            context: [
-              {
-                search_event_id: 99,
-                event_id: "event-99",
-                source_object_id: "a".repeat(64),
-                record_ordinal: 4,
-                order_time_us: 123,
-                role: "assistant",
-                content_text: "The migration completed successfully.",
-                tool_name: null,
-              },
-            ],
+            project: "longhouse",
+            provider: "codex",
+            started_at: "2026-08-02T00:00:00Z",
+            snippet: "The migration completed successfully.",
+            snippet_unavailable_reason: null,
+            matched_by: ["lexical", "dense"],
           },
         ],
       },
@@ -84,17 +66,19 @@ describe("RecallPanel", () => {
     });
   });
 
-  it("renders lane ranks and real context fields instead of a fake score percentage", () => {
+  it("renders compact source cards without fetching context", () => {
     render(
       <MemoryRouter>
         <RecallPanel />
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Semantic #1 + Lexical #2")).toBeInTheDocument();
+    expect(screen.getByText("Lexical + Semantic")).toBeInTheDocument();
+    expect(screen.getByText("longhouse · codex")).toBeInTheDocument();
     expect(screen.getByText("The migration completed successfully.")).toBeInTheDocument();
-    expect(screen.getByText(/Current corpus: 82,958 episodes/)).toBeInTheDocument();
-    expect(screen.queryByText("3%")).not.toBeInTheDocument();
+    expect(screen.getByText(/Corpus current/)).toBeInTheDocument();
+    expect(hookMocks.useRecallContext).toHaveBeenCalledWith(null);
+    expect(screen.queryByText("The full migration context.")).not.toBeInTheDocument();
   });
 
   it("labels a bounded live head as a snapshot instead of a complete corpus", () => {
@@ -105,11 +89,9 @@ describe("RecallPanel", () => {
         ...current.data,
         coverage: {
           ...current.data.coverage,
-          catalog_lag_count: 1,
-          catalog_indexed_through: "9",
-          catalog_oldest_lag_at: "2026-08-02T00:00:00+00:00",
-          catalog_oldest_lag_seconds: 1,
-          resident_stale: true,
+          complete: false,
+          lagging_sessions: 1,
+          oldest_lag_seconds: 1,
         },
       },
     });
@@ -120,8 +102,22 @@ describe("RecallPanel", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText(/Corpus snapshot: 82,958 episodes · 1 session updating/)).toBeInTheDocument();
-    expect(screen.queryByText(/Current corpus/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Corpus snapshot · 1 session updating/)).toBeInTheDocument();
+    expect(screen.queryByText(/Corpus current/)).not.toBeInTheDocument();
+  });
+
+  it("opens context for only the selected result", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <RecallPanel />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Show context" }));
+
+    expect(hookMocks.useRecallContext).toHaveBeenLastCalledWith(`rr1_${"A".repeat(55)}`);
+    expect(screen.getByText("The full migration context.")).toBeInTheDocument();
   });
 
   it("requests only the explicitly selected retrieval mode", async () => {

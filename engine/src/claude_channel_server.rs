@@ -309,8 +309,8 @@ fn coordination_tools() -> Vec<Value> {
             "Read conversation evidence from past sessions by meaning, not just keyword. \
              Use when you know the concept but not the phrase: \"what did we decide about \
              auth?\". Searches a keyword lane and an embedding lane and fuses them. \
-             Returns bounded match anchors by default; request surrounding turns \
-             only when needed, then use tail for deeper evidence. Use search_sessions \
+             Returns small result cards; open one with recall_context, then use tail \
+             only when deeper evidence is needed. Use search_sessions \
              when you only need to find which session to open. The \
              response names the lanes that ran in `lanes` and any that could not in \
              `degraded`; results from a single lane are still real results.",
@@ -319,9 +319,20 @@ fn coordination_tools() -> Vec<Value> {
                 "project":{"type":"string","description":"Optional project filter, e.g. g55"},
                 "provider":{"type":"string","description":"Optional provider filter"},
                 "since_days":{"type":"integer","default":90,"minimum":1,"maximum":365},
-                "max_results":{"type":"integer","default":5,"minimum":1,"maximum":25},
-                "context_turns":{"type":"integer","default":0,"minimum":0,"maximum":10,"description":"Turns of surrounding context to include around each anchor."},
+                "max_results":{"type":"integer","default":5,"minimum":1,"maximum":10},
                 "mode":{"type":"string","enum":["auto","lexical","semantic"],"default":"auto","description":"Which lanes to search. Prefer auto: it fuses both and degrades to whichever is available."},
+            }),
+        ),
+        tool(
+            "recall_context",
+            "Open exactly one recall result using its opaque ref. Returns a small \
+             conversation window under an 8 KiB hard content ceiling. Use tail only \
+             after this proves the session is worth reading more deeply.",
+            json!({
+                "ref":{"type":"string","description":"Opaque ref returned by recall."},
+                "before":{"type":"integer","default":2,"minimum":0,"maximum":5},
+                "after":{"type":"integer","default":2,"minimum":0,"maximum":5},
+                "max_content_bytes":{"type":"integer","default":1200,"minimum":200,"maximum":4000},
             }),
         ),
         tool(
@@ -503,11 +514,32 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                 )])
                 .query(&[(
                     "max_results",
-                    clamp_i64(arguments.get("max_results"), 5, 1, 25).to_string(),
+                    clamp_i64(arguments.get("max_results"), 5, 1, 10).to_string(),
+                )])
+        }
+        "recall_context" => {
+            let Some(result_ref) = arguments
+                .get("ref")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                return tool_result(id, json!({"error":"recall_context requires ref"}));
+            };
+            client
+                .get(format!("{base}/api/agents/recall/context"))
+                .query(&[("ref", result_ref)])
+                .query(&[(
+                    "before",
+                    clamp_i64(arguments.get("before"), 2, 0, 5).to_string(),
                 )])
                 .query(&[(
-                    "context_turns",
-                    clamp_i64(arguments.get("context_turns"), 0, 0, 10).to_string(),
+                    "after",
+                    clamp_i64(arguments.get("after"), 2, 0, 5).to_string(),
+                )])
+                .query(&[(
+                    "max_content_bytes",
+                    clamp_i64(arguments.get("max_content_bytes"), 1200, 200, 4000).to_string(),
                 )])
         }
         "tail" => {
@@ -600,7 +632,9 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         Ok(response) => {
             let status = response.status().as_u16();
             match response.text().await {
-                Ok(text) if (200..300).contains(&status) => tool_text_result(id, text),
+                Ok(text) if (200..300).contains(&status) => {
+                    tool_text_result(id, render_coordination_response(name, &text))
+                }
                 Ok(text) => tool_result(
                     id,
                     json!({"error":format!("API returned {status}"),"detail":parse_json_or_text(&text)}),
@@ -640,6 +674,235 @@ async fn resolve_session_repo(
 
 fn parse_json_or_text(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
+}
+
+fn render_coordination_response(name: &str, text: &str) -> String {
+    let Ok(payload) = serde_json::from_str::<Value>(text) else {
+        return text.to_string();
+    };
+    match name {
+        "recall" => render_recall_search(&payload),
+        "recall_context" => render_recall_context(&payload),
+        _ => text.to_string(),
+    }
+}
+
+fn render_recall_search(payload: &Value) -> String {
+    let results = payload
+        .get("results")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let lanes = payload
+        .get("lanes")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("+")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    let mut lines = vec![format!(
+        "{} recall result{} · lanes: {lanes}",
+        results.len(),
+        if results.len() == 1 { "" } else { "s" }
+    )];
+    if let Some(degraded) = payload.get("degraded").and_then(Value::as_array) {
+        if !degraded.is_empty() {
+            let failures = degraded
+                .iter()
+                .map(|item| {
+                    format!(
+                        "{} ({})",
+                        item.get("lane")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown"),
+                        item.get("code")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unavailable")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("degraded: {failures}"));
+        }
+    }
+    if let Some(coverage) = payload.get("coverage").filter(|value| {
+        !value
+            .get("complete")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) {
+        lines.push(format!(
+            "coverage: {} lagging, {} unpublished",
+            coverage
+                .get("lagging_sessions")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+            coverage
+                .get("unpublished_sessions")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+        ));
+    }
+    for (index, result) in results.iter().enumerate() {
+        let source = ["project", "provider", "started_at"]
+            .iter()
+            .filter_map(|key| result.get(*key).and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let matched_by = result
+            .get("matched_by")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("+")
+            })
+            .unwrap_or_default();
+        let suffix = if matched_by.is_empty() {
+            String::new()
+        } else {
+            format!(" · {matched_by}")
+        };
+        let matched_turn = result
+            .get("matched_tool_name")
+            .or_else(|| result.get("matched_role"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let event_count = result
+            .get("total_events")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let card_facts = match (matched_turn.is_empty(), event_count) {
+            (false, 0) => matched_turn.to_string(),
+            (true, 0) => String::new(),
+            (true, count) => format!("{count} events"),
+            (false, count) => format!("{matched_turn} · {count} events"),
+        };
+        let snippet = result
+            .get("snippet")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                format!(
+                    "[snippet unavailable: {}]",
+                    result
+                        .get("snippet_unavailable_reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                )
+            });
+        lines.extend([
+            String::new(),
+            format!(
+                "[{}] {}{suffix}",
+                index + 1,
+                if source.is_empty() {
+                    "unknown source"
+                } else {
+                    &source
+                }
+            ),
+            format!(
+                "session: {}",
+                result
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+            ),
+        ]);
+        if !card_facts.is_empty() {
+            lines.push(card_facts);
+        }
+        lines.extend([
+            snippet,
+            format!(
+                "ref: {}",
+                result.get("ref").and_then(Value::as_str).unwrap_or("")
+            ),
+        ]);
+    }
+    if !results.is_empty() {
+        lines.extend([
+            String::new(),
+            "Open one result: recall_context(ref=\"…\"). Full page: tail(session_id, roles=\"user,assistant\").".to_string(),
+        ]);
+    }
+    lines.join("\n")
+}
+
+fn render_recall_context(payload: &Value) -> String {
+    let mut lines = vec![format!(
+        "session: {}",
+        payload
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    )];
+    let turns = payload
+        .get("turns")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    for turn in turns {
+        let marker = if turn
+            .get("is_match")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            "*"
+        } else {
+            " "
+        };
+        let role = turn
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .or_else(|| turn.get("role").and_then(Value::as_str))
+            .unwrap_or("unknown");
+        let truncated = if turn.get("content_text_truncated").is_some() {
+            " [truncated]"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "{marker} [{role}]{truncated} {}",
+            turn.get("content_text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+        ));
+    }
+    if turns.is_empty() {
+        lines.push(format!(
+            "context unavailable: {}",
+            payload
+                .get("evidence_reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        ));
+    }
+    lines.push(format!(
+        "evidence: {} · {}/{} bytes",
+        payload
+            .get("evidence_status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        payload
+            .get("content_bytes_returned")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        payload
+            .get("content_byte_budget")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    ));
+    lines.push("Read deeper: tail(session_id, roles=\"user,assistant\").".to_string());
+    lines.join("\n")
 }
 fn tool_text_result(id: Value, text: String) -> Value {
     json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":text}]}})
@@ -1247,16 +1510,53 @@ mod tests {
     }
 
     #[test]
-    fn recall_defaults_to_anchor_only() {
-        let recall = coordination_tools()
-            .into_iter()
-            .find(|tool| tool["name"] == "recall")
+    fn recall_search_cannot_request_bulk_context() {
+        let tools = coordination_tools();
+        let recall = tools.iter().find(|tool| tool["name"] == "recall").unwrap();
+        let context = tools
+            .iter()
+            .find(|tool| tool["name"] == "recall_context")
             .unwrap();
 
+        assert!(recall["inputSchema"]["properties"]
+            .get("context_turns")
+            .is_none());
         assert_eq!(
-            recall["inputSchema"]["properties"]["context_turns"]["default"],
-            0
+            recall["inputSchema"]["properties"]["max_results"]["maximum"],
+            10
         );
+        assert_eq!(context["inputSchema"]["properties"]["before"]["default"], 2);
+    }
+
+    #[test]
+    fn recall_renderers_keep_search_and_expansion_progressive() {
+        let result_ref = format!("rr1_{}", "A".repeat(55));
+        let search = render_recall_search(&json!({
+            "results": [{
+                "ref": result_ref,
+                "session_id": SESSION_ID,
+                "project": "longhouse",
+                "provider": "codex",
+                "snippet": "the answer",
+                "total_events": 42,
+                "matched_role": "assistant",
+                "matched_by": ["lexical", "dense"]
+            }],
+            "lanes": ["lexical", "dense"]
+        }));
+        assert!(search.contains("[1] longhouse · codex · lexical+dense"));
+        assert!(search.contains("assistant · 42 events"));
+        assert!(search.contains("the answer"));
+        assert!(!search.contains("content_byte_budget"));
+
+        let context = render_recall_context(&json!({
+            "session_id": SESSION_ID,
+            "turns": [{"role":"assistant", "content_text":"the answer", "is_match":true}],
+            "evidence_status":"complete",
+            "content_bytes_returned":10,
+            "content_byte_budget":6000
+        }));
+        assert!(context.contains("* [assistant] the answer"));
     }
 
     async fn read_json_line<R>(reader: &mut R) -> Value

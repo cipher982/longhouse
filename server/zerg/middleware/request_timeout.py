@@ -41,6 +41,7 @@ _STREAMING_FRAGMENTS = ("/stream", "/chat", "/branch", "/ws")
 # Route-specific timeout overrides for legitimate long-running requests.
 _TIMEOUT_OVERRIDES = {
     "/agents/recall": RECALL_TIMEOUT_SECONDS,
+    "/timeline/recall": RECALL_TIMEOUT_SECONDS,
     "/devices/tokens": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
     "/agents/ingest": INGEST_TIMEOUT_SECONDS,
     "/sessions/managed-local/this-device": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,
@@ -52,7 +53,6 @@ _ARCHIVE_READ_EXACT_PATHS = {
     "/agents/machines/health",
     "/agents/usage-stats",
     "/timeline/filters",
-    "/timeline/recall",
     "/timeline/sessions/semantic",
     "/timeline/sessions/summary",
 }
@@ -67,7 +67,12 @@ def _product_read_route_class(api_path: str, method: str) -> str | None:
 
     if method not in {"GET", "HEAD"}:
         return None
-    if api_path in {"/agents/recall", "/timeline/recall"}:
+    if api_path in {
+        "/agents/recall",
+        "/agents/recall/context",
+        "/timeline/recall",
+        "/timeline/recall/context",
+    }:
         return "recall"
     if api_path in {"/agents/sessions/semantic", "/timeline/sessions/semantic"}:
         return "search"
@@ -165,7 +170,12 @@ class RequestTimeoutMiddleware:
         # at the portion after /api.
         api_path = path[4:]  # "/api/health" -> "/health"
         started_at = time.perf_counter()
-        if api_path == "/agents/recall":
+        if api_path in {
+            "/agents/recall",
+            "/agents/recall/context",
+            "/timeline/recall",
+            "/timeline/recall/context",
+        }:
             scope.setdefault("state", {})["request_timeout_started_at"] = started_at
 
         # Skip health/readiness probes (they have their own timeout handling).
@@ -210,7 +220,7 @@ class RequestTimeoutMiddleware:
                 timeout=timeout,
             )
             elapsed = time.perf_counter() - started_at
-            if api_path == "/agents/recall" and elapsed > 1.0:
+            if route_class == "recall" and elapsed > 1.0:
                 logger.warning(
                     "Slow recall HTTP request completed elapsed_ms=%.1f path=%s",
                     elapsed * 1000,

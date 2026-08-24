@@ -471,6 +471,9 @@ class ResidentEpisodeIndex:
                     "event_index_end": int(snapshot.event_index_ends[index]),
                     "generation_id": str(snapshot.generation_ids[index]),
                     "start_order_time_us": None if start < 0 else start,
+                    "project": str(snapshot.projects[index]) or None,
+                    "provider": str(snapshot.providers[index]) or None,
+                    "started_at": str(snapshot.started_ats[index]) or None,
                 }
             )
             if len(results) >= limit:

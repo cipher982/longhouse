@@ -33,7 +33,6 @@ _WORKLOG_SNAPSHOT_TTL_SECONDS = 120.0
 _WORKLOG_SNAPSHOT_LIMIT = 8
 _EMBEDDING_SOURCE_PAGE_BYTES = 6 * 1024 * 1024
 _RECALL_TRUNCATION_MARKER = " …[truncated]"
-_RECALL_ANCHOR_MIN_BYTES = 400
 
 _PUBLISH_AGGREGATES_SQL = """
     SELECT
@@ -285,16 +284,37 @@ _CANDIDATE_CEILING = 50_000
 # correctness lane. Interactive recent recall uses _SEARCHABLE_SEARCH_SQL.
 _SEARCH_SQL = _ARCHIVE_SEARCH_SQL
 
-_CONTEXT_TARGET_SQL = """
-    SELECT e.id AS search_event_id, e.order_time_us, e.event_key, s.event_count
-    FROM events e
-    JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+_CLEAN_RECALL_TURN_PREDICATE = """
+      e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
+      AND (e.role != 'user' OR (e.title_eligible = 1
+           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
+"""
+
+_CONTEXT_TARGET_SQL = f"""
+    WITH hit AS (
+        SELECT e.session_id, e.generation_id, e.order_time_us, e.event_key,
+               s.event_count, s.indexed_through
+        FROM events e
+        JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+        JOIN projection_membership m
+          ON m.session_id = e.session_id
+         AND m.generation_id = e.generation_id
+         AND m.desired_revision = s.indexed_through
+         AND m.object_id = e.source_object_id
+        WHERE e.id = ? AND e.session_id = ? AND e.generation_id = ? AND s.owner_id = ?
+    )
+    SELECT e.id AS search_event_id, e.order_time_us, e.event_key, hit.event_count
+    FROM hit
+    JOIN events e ON e.session_id = hit.session_id AND e.generation_id = hit.generation_id
     JOIN projection_membership m
       ON m.session_id = e.session_id
      AND m.generation_id = e.generation_id
-     AND m.desired_revision = s.indexed_through
+     AND m.desired_revision = hit.indexed_through
      AND m.object_id = e.source_object_id
-    WHERE e.id = ? AND e.session_id = ? AND e.generation_id = ? AND s.owner_id = ?
+    WHERE {_CLEAN_RECALL_TURN_PREDICATE}
+      AND (e.order_time_us > hit.order_time_us OR (e.order_time_us = hit.order_time_us AND e.event_key >= hit.event_key))
+    ORDER BY e.order_time_us ASC, e.event_key ASC
+    LIMIT 1
 """
 
 # Same target row, located by transcript position instead of event id. The
@@ -302,7 +322,7 @@ _CONTEXT_TARGET_SQL = """
 # which searchd row that is, so it anchors on the first event at or after that
 # position. Ordering matches _CONTEXT_ROWS_SQL so the neighbour walk stays
 # consistent with a lexical hit's.
-_CONTEXT_TARGET_BY_POSITION_SQL = """
+_CONTEXT_TARGET_BY_POSITION_SQL = f"""
     SELECT e.id AS search_event_id, e.order_time_us, e.event_key, s.event_count
     FROM events e
     JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
@@ -313,6 +333,7 @@ _CONTEXT_TARGET_BY_POSITION_SQL = """
      AND m.object_id = e.source_object_id
     WHERE e.session_id = ? AND e.generation_id = ? AND s.owner_id = ?
       AND e.order_time_us >= ?
+      AND {_CLEAN_RECALL_TURN_PREDICATE}
     ORDER BY e.order_time_us ASC, e.event_key ASC
     LIMIT 1
 """
@@ -323,7 +344,7 @@ _CONTEXT_TARGET_BY_POSITION_SQL = """
 # numbered them, so reproducing this order here reproduces its clean indices.
 # `source_position` is stored zero-padded, which sorts identically to the
 # projector's integer compare.
-_CONTEXT_ROWS_SQL = """
+_CONTEXT_ROWS_SQL = f"""
     SELECT e.id AS search_event_id, e.event_id, e.source_object_id, e.record_ordinal,
            e.order_time_us, e.role, e.content_text, e.tool_name
     FROM events e
@@ -334,11 +355,9 @@ _CONTEXT_ROWS_SQL = """
      AND m.desired_revision = s.indexed_through
      AND m.object_id = e.source_object_id
     WHERE e.session_id = ? AND e.generation_id = ? AND s.owner_id = ?
-      AND e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
-      AND (e.role != 'user' OR (e.title_eligible = 1
-           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary'))))
-      AND {position_predicate}
-    ORDER BY e.order_time_us {direction}, e.event_key {direction}
+      AND {_CLEAN_RECALL_TURN_PREDICATE}
+      AND {{position_predicate}}
+    ORDER BY e.order_time_us {{direction}}, e.event_key {{direction}}
     LIMIT ?
 """
 
@@ -1779,8 +1798,9 @@ class SearchStore:
         generation_id: str,
         search_event_id: int | None = None,
         start_order_time_us: int | None = None,
-        context_turns: int,
-        max_evidence_bytes: int,
+        before_turns: int,
+        after_turns: int,
+        max_content_bytes: int,
     ) -> dict[str, object]:
         """Return bounded clean neighbor evidence from the hit's published generation.
 
@@ -1823,16 +1843,24 @@ class SearchStore:
             direction="ASC",
         )
         position = (int(target["order_time_us"]), int(target["order_time_us"]), str(target["event_key"]))
-        before = self.connection.execute(before_sql, (session_id, generation_id, owner_id, *position, context_turns + 1)).fetchall()
-        after = self.connection.execute(after_sql, (session_id, generation_id, owner_id, *position, context_turns)).fetchall()
-        context, truncated = _bounded_recall_context(
+        before = self.connection.execute(before_sql, (session_id, generation_id, owner_id, *position, before_turns + 1)).fetchall()
+        after = self.connection.execute(after_sql, (session_id, generation_id, owner_id, *position, after_turns)).fetchall()
+        context, truncated, anchor_seen = _bounded_recall_context(
             [dict(row) for row in reversed(before)] + [dict(row) for row in after],
-            max_evidence_bytes=max_evidence_bytes,
+            max_content_bytes=max_content_bytes,
             anchor_event_id=int(target["search_event_id"]),
         )
+        if not anchor_seen:
+            return {
+                "evidence_status": "unavailable",
+                "evidence_reason": "anchor_not_expandable",
+                "context": [],
+                "total_events": total_events,
+            }
         return {
             "evidence_status": "partial" if truncated else "complete",
             "evidence_reason": "evidence_byte_budget_applied" if truncated else None,
+            "anchor_event_id": int(target["search_event_id"]),
             "context": context,
             "total_events": total_events,
         }
@@ -2311,49 +2339,26 @@ def _bounded_worklog_content(value: str) -> str:
 def _bounded_recall_context(
     rows: list[dict[str, Any]],
     *,
-    max_evidence_bytes: int,
+    max_content_bytes: int,
     anchor_event_id: int,
-) -> tuple[list[dict[str, Any]], bool]:
-    """Share one match budget while keeping the matching turn independently legible."""
-
-    if not rows:
-        return [], False
-    anchor_index = next(
-        (index for index, row in enumerate(rows) if row.get("search_event_id") == anchor_event_id),
-        None,
-    )
-    allocations: list[int] = [0] * len(rows)
-    remaining_bytes = max_evidence_bytes
-    remaining_rows = len(rows)
-    if anchor_index is not None:
-        allocations[anchor_index] = min(max_evidence_bytes, _RECALL_ANCHOR_MIN_BYTES)
-        remaining_bytes -= allocations[anchor_index]
-        remaining_rows -= 1
-
-    for index in range(len(rows)):
-        if index == anchor_index:
-            continue
-        allocation = remaining_bytes // remaining_rows
-        allocations[index] = allocation
-        remaining_bytes -= allocation
-        remaining_rows -= 1
+) -> tuple[list[dict[str, Any]], bool, bool]:
+    """Apply one predictable cap to each raw turn; the route bounds the total."""
 
     bounded: list[dict[str, Any]] = []
     any_truncated = False
-    unused_bytes = 0
-    for index, row in enumerate(rows):
+    anchor_seen = False
+    for row in rows:
         item = dict(row)
         content = str(item["content_text"])
-        allocation = allocations[index] + unused_bytes
-        returned, truncated, full_bytes = _truncate_utf8(content, max_bytes=allocation)
+        returned, truncated, full_bytes = _truncate_utf8(content, max_bytes=max_content_bytes)
         item["content_text"] = returned
-        unused_bytes = allocation - len(returned.encode("utf-8"))
+        anchor_seen |= item.get("search_event_id") == anchor_event_id
         if truncated:
             item["content_text_truncated"] = True
             item["content_text_full_bytes"] = full_bytes
             any_truncated = True
         bounded.append(item)
-    return bounded, any_truncated
+    return bounded, any_truncated, anchor_seen
 
 
 def _truncate_utf8(value: str, *, max_bytes: int) -> tuple[str, bool, int]:

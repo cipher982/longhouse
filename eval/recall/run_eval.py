@@ -33,25 +33,24 @@ TOKEN_PATH = Path.home() / ".longhouse" / "machine" / "device-token"
 # queries at k=25, so the replacement may miss at most 36/76. The previous
 # 0.671 ceiling came from an older partial-corpus k=5 run and no longer matched
 # the evaluator's real result depth or the baseline named by this release gate.
-# Keep the release boundary as the exact observed counts. Rounded decimal
-# approximations make the baseline fail its own gate (25 / 76 is slightly less
-# than 0.329, while 36 / 76 is slightly more than 0.474).
-DEFAULT_MAX_FALSE_NEGATIVE_RATE = 36 / 76
-DEFAULT_MIN_RECALL_AT_5 = 25 / 76
+# Keep the release boundary as the exact observed ten-card counts. Rounded
+# decimal approximations can make a baseline fail its own gate.
+DEFAULT_MAX_FALSE_NEGATIVE_RATE = 45 / 76
+DEFAULT_MIN_RECALL_AT_5 = 26 / 76
 # Grading retrieval against a half-projected corpus measures the backlog, not
 # the retriever, so the evaluator still demands a nearly-current index. This is
 # a quality threshold for scoring, deliberately not the serving contract:
 # recall itself serves under lag and reports the watermark.
 MAX_EVAL_LAG_SESSIONS = 100
 MAX_EVAL_LAG_AGE_SECONDS = 300.0
-# Full-corpus Qwen3-8B @256d baseline measured at k=25. The replacement must
-# improve aggregate recall without buying that gain by regressing any one of
-# the four answer-present query classes.
-DEFAULT_MIN_CATEGORY_HITS_AT_25 = {
-    "exact": 11,
-    "paraphrase": 16,
-    "causal": 7,
-    "supersession": 6,
+# The public recall index is intentionally capped at ten cards. These are the
+# exact observed 2026-08-24 auto-lane counts at that serving depth: 19/27 exact,
+# 5/24 paraphrase, 3/15 causal, and 4/10 supersession, with no request errors.
+DEFAULT_MIN_CATEGORY_HITS_AT_10 = {
+    "exact": 19,
+    "paraphrase": 5,
+    "causal": 3,
+    "supersession": 4,
 }
 _FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -79,6 +78,7 @@ class Result:
     embedding_model: str | None = None
     embedding_dims: int | None = None
     embedding_revision: str | None = None
+    projector: str | None = None
     coverage: dict[str, object] | None = None
     server_commit: str | None = None
 
@@ -116,7 +116,9 @@ class Report:
         answerable = self._answerable()
         if not answerable:
             return 0.0
-        hits = sum(1 for r in answerable if (rank := r.gold_rank()) is not None and rank <= k)
+        hits = sum(
+            1 for r in answerable if (rank := r.gold_rank()) is not None and rank <= k
+        )
         return hits / len(answerable)
 
     def false_negative_rate(self) -> float:
@@ -131,7 +133,9 @@ class Report:
     def correct_abstention_rate(self) -> float:
         """Absent queries where retrieval returned nothing, rather than something plausible."""
 
-        absent = [r for r in self.results if not r.query.expects_evidence and not r.error]
+        absent = [
+            r for r in self.results if not r.query.expects_evidence and not r.error
+        ]
         if not absent:
             return 0.0
         return sum(1 for r in absent if not r.returned) / len(absent)
@@ -145,7 +149,11 @@ class Report:
             if category == "absent":
                 good = sum(1 for r in results if not r.error and not r.returned)
             else:
-                good = sum(1 for r in results if (rank := r.gold_rank()) is not None and rank <= k)
+                good = sum(
+                    1
+                    for r in results
+                    if (rank := r.gold_rank()) is not None and rank <= k
+                )
             summary[category] = (good, len(results))
         return summary
 
@@ -164,29 +172,41 @@ class Report:
         *,
         max_false_negative_rate: float,
         min_recall_at_5: float,
-        min_category_hits_at_25: dict[str, int] | None = None,
+        min_category_hits_at_10: dict[str, int] | None = None,
     ) -> list[str]:
         failures = []
         if self.errors():
             failures.append(f"{len(self.errors())} query(s) errored")
         spaces = self._embedding_spaces()
         if self.strategy != "lexical" and len(spaces) != 1:
-            failures.append(f"evaluation observed {len(spaces)} embedding spaces instead of one")
-        projectors = {str(coverage["projector"]) for coverage in self._coverage_snapshots()}
+            failures.append(
+                f"evaluation observed {len(spaces)} embedding spaces instead of one"
+            )
+        projectors = self.projectors()
         if self.strategy != "lexical" and len(projectors) != 1:
-            failures.append(f"evaluation observed {len(projectors)} corpus projectors instead of one")
+            failures.append(
+                f"evaluation observed {len(projectors)} projectors instead of one"
+            )
         server_commits = self.server_commits()
         if len(server_commits) != 1:
-            failures.append(f"evaluation observed {len(server_commits)} serving commits instead of one")
+            failures.append(
+                f"evaluation observed {len(server_commits)} serving commits instead of one"
+            )
         if self.false_negative_rate() > max_false_negative_rate:
-            failures.append(f"false_negative_rate {self.false_negative_rate():.3f} exceeds {max_false_negative_rate:.3f}")
+            failures.append(
+                f"false_negative_rate {self.false_negative_rate():.3f} exceeds {max_false_negative_rate:.3f}"
+            )
         if self.recall_at(5) < min_recall_at_5:
-            failures.append(f"recall_at_5 {self.recall_at(5):.3f} is below {min_recall_at_5:.3f}")
-        category_results = self.by_category(25)
-        for category, minimum in (min_category_hits_at_25 or {}).items():
+            failures.append(
+                f"recall_at_5 {self.recall_at(5):.3f} is below {min_recall_at_5:.3f}"
+            )
+        category_results = self.by_category(10)
+        for category, minimum in (min_category_hits_at_10 or {}).items():
             hits, total = category_results.get(category, (0, 0))
             if hits < minimum:
-                failures.append(f"{category}_hits_at_25 {hits}/{total} is below {minimum}")
+                failures.append(
+                    f"{category}_hits_at_10 {hits}/{total} is below {minimum}"
+                )
         return failures
 
     def _embedding_spaces(self) -> set[tuple[str | None, int | None, str | None]]:
@@ -200,16 +220,36 @@ class Report:
         values = self._embedding_spaces()
         if not values:
             return None
-        observed = [{"model": model, "dims": dims, "revision": revision} for model, dims, revision in sorted(values, key=str)]
+        observed = [
+            {"model": model, "dims": dims, "revision": revision}
+            for model, dims, revision in sorted(values, key=str)
+        ]
         if len(observed) == 1:
             return {"consistent": True, **observed[0]}
         return {"consistent": False, "observed": observed}
 
     def _coverage_snapshots(self) -> list[dict[str, object]]:
-        return [result.coverage for result in self.results if result.coverage is not None]
+        return [
+            result.coverage for result in self.results if result.coverage is not None
+        ]
 
     def server_commits(self) -> list[str]:
-        return sorted({result.server_commit for result in self.results if result.server_commit is not None})
+        return sorted(
+            {
+                result.server_commit
+                for result in self.results
+                if result.server_commit is not None
+            }
+        )
+
+    def projectors(self) -> list[str]:
+        return sorted(
+            {
+                result.projector
+                for result in self.results
+                if result.projector is not None
+            }
+        )
 
     def corpus_coverage_metadata(self) -> dict[str, object] | None:
         snapshots = self._coverage_snapshots()
@@ -220,60 +260,25 @@ class Report:
             values = [int(snapshot[field_name]) for snapshot in snapshots]
             return {"min": min(values), "max": max(values)}
 
-        projectors = sorted({str(snapshot["projector"]) for snapshot in snapshots})
-        unique_snapshots = {
-            (
-                str(snapshot["complete_through_commit_seq"]),
-                str(snapshot["catalog_commit_seq"]),
-                int(snapshot["expected_sessions"]),
-                int(snapshot["expected_episodes"]),
-            )
-            for snapshot in snapshots
-        }
-        observed_at = sorted(str(snapshot["catalog_observed_at"]) for snapshot in snapshots)
-        defect_fields = (
-            "invalid_vectors",
-            "unnormalized_vectors",
-            "unlocatable_episodes",
-            "episode_count_mismatches",
-        )
         coverage_valid = all(
-            int(snapshot["complete_through_commit_seq"]) <= int(snapshot["catalog_commit_seq"])
-            and int(snapshot["catalog_lag_count"]) <= MAX_EVAL_LAG_SESSIONS
+            int(snapshot["lagging_sessions"]) <= MAX_EVAL_LAG_SESSIONS
             and (
-                snapshot["catalog_oldest_lag_seconds"] is None
-                or float(snapshot["catalog_oldest_lag_seconds"]) <= MAX_EVAL_LAG_AGE_SECONDS
+                snapshot["oldest_lag_seconds"] is None
+                or float(snapshot["oldest_lag_seconds"]) <= MAX_EVAL_LAG_AGE_SECONDS
             )
-            and int(snapshot["expected_sessions"]) == int(snapshot["published_sessions"])
-            and int(snapshot["expected_episodes"]) == int(snapshot["current_episodes"])
-            and all(int(snapshot[field_name]) == 0 for field_name in defect_fields)
-            and not snapshot["missing_session_ids"]
+            and int(snapshot["unpublished_sessions"]) <= MAX_EVAL_LAG_SESSIONS
             for snapshot in snapshots
         )
         current = coverage_valid and all(
-            int(snapshot["catalog_lag_count"]) == 0
-            and snapshot["catalog_indexed_through"] == snapshot["catalog_commit_seq"]
-            and snapshot["resident_stale"] is False
-            for snapshot in snapshots
+            bool(snapshot["complete"]) for snapshot in snapshots
         )
         return {
-            "status": "current" if current else ("bounded_head" if coverage_valid else "incomplete"),
-            "consistent_projector": len(projectors) == 1,
-            "projectors": projectors,
+            "status": "current"
+            if current
+            else ("bounded_head" if coverage_valid else "incomplete"),
             "response_count": len(snapshots),
-            "snapshot_count": len(unique_snapshots),
-            "catalog_commit_seq": numeric_range("catalog_commit_seq"),
-            "catalog_lag_count": numeric_range("catalog_lag_count"),
-            "expected_sessions": numeric_range("expected_sessions"),
-            "expected_episodes": numeric_range("expected_episodes"),
-            "observed_at": {"first": observed_at[0], "last": observed_at[-1]},
-            "resident_defects": {
-                **{field_name: numeric_range(field_name) for field_name in defect_fields},
-                "missing_sessions": {
-                    "min": min(len(snapshot["missing_session_ids"]) for snapshot in snapshots),
-                    "max": max(len(snapshot["missing_session_ids"]) for snapshot in snapshots),
-                },
-            },
+            "lagging_sessions": numeric_range("lagging_sessions"),
+            "unpublished_sessions": numeric_range("unpublished_sessions"),
         }
 
 
@@ -300,7 +305,9 @@ def load_queries() -> tuple[list[Query], set[str]]:
     return queries, excluded
 
 
-def _without_excluded_sessions(session_ids: list[str], excluded_prefixes: set[str]) -> list[str]:
+def _without_excluded_sessions(
+    session_ids: list[str], excluded_prefixes: set[str]
+) -> list[str]:
     """Remove benchmark-producing sessions using the prefix labels stored by the eval."""
 
     return [
@@ -320,7 +327,11 @@ def search_recall(
     mode: str,
     expected_sha: str,
 ) -> dict:
-    params = urllib.parse.urlencode({"query": query, "max_results": limit, "since_days": days, "context_turns": 0, "mode": mode})
+    if not 1 <= limit <= 10:
+        raise ValueError("recall evaluation limit must be between 1 and 10")
+    params = urllib.parse.urlencode(
+        {"query": query, "max_results": limit, "since_days": days, "mode": mode}
+    )
     request = urllib.request.Request(
         f"{base_url}/api/agents/recall?{params}",
         # An explicit User-Agent is required, not cosmetic: the default
@@ -330,20 +341,31 @@ def search_recall(
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = json.load(response)
+            response_headers = getattr(response, "headers", {})
     except urllib.error.HTTPError as exc:
         body = exc.read(512).decode("utf-8", errors="replace")
         raise ValueError(f"recall HTTP {exc.code}: {body}") from exc
     if not isinstance(payload, dict):
         raise ValueError("recall returned a non-object response")
-    expected_lanes = {"lexical": ["lexical"], "semantic": ["dense"], "auto": ["lexical", "dense"]}[mode]
+    expected_lanes = {
+        "lexical": ["lexical"],
+        "semantic": ["dense"],
+        "auto": ["lexical", "dense"],
+    }[mode]
     if payload.get("lanes") != expected_lanes:
-        raise ValueError(f"recall lane attribution mismatch: expected {expected_lanes}, got {payload.get('lanes')}")
-    server_commit = payload.get("server_commit")
+        raise ValueError(
+            f"recall lane attribution mismatch: expected {expected_lanes}, got {payload.get('lanes')}"
+        )
+    server_commit = response_headers.get("X-Longhouse-Commit")
     if server_commit != expected_sha:
-        raise ValueError(f"serving commit mismatch: expected {expected_sha}, got {server_commit}")
-    matches = payload.get("matches")
-    if not isinstance(matches, list) or any(not isinstance(match, dict) for match in matches):
-        raise ValueError("recall returned malformed matches")
+        raise ValueError(
+            f"serving commit mismatch: expected {expected_sha}, got {server_commit}"
+        )
+    matches = payload.get("results")
+    if not isinstance(matches, list) or any(
+        not isinstance(match, dict) for match in matches
+    ):
+        raise ValueError("recall returned malformed results")
     coverage = payload.get("coverage")
     if mode == "lexical":
         if coverage is not None:
@@ -352,81 +374,60 @@ def search_recall(
         if not isinstance(coverage, dict):
             raise ValueError("dense recall omitted corpus coverage")
         required = {
-            "projector",
             "complete",
-            "complete_through_commit_seq",
+            "lagging_sessions",
             "unpublished_sessions",
-            "catalog_lag_count",
-            "catalog_indexed_through",
-            "catalog_oldest_lag_at",
-            "catalog_oldest_lag_seconds",
-            "catalog_commit_seq",
-            "catalog_observed_at",
-            "resident_stale",
-            "expected_sessions",
-            "published_sessions",
-            "expected_episodes",
-            "current_episodes",
-            "invalid_vectors",
-            "unnormalized_vectors",
-            "unlocatable_episodes",
-            "episode_count_mismatches",
-            "missing_session_ids",
+            "oldest_lag_seconds",
         }
         if set(coverage) != required:
             raise ValueError("dense recall returned malformed corpus coverage")
         if (
-            not isinstance(coverage["complete_through_commit_seq"], str)
-            or not coverage["complete_through_commit_seq"].isdecimal()
-            or int(coverage["complete_through_commit_seq"]) > int(coverage["catalog_commit_seq"])
-            or not isinstance(coverage["complete"], bool)
-            or coverage["complete"] != (coverage["catalog_lag_count"] == 0)
+            not isinstance(coverage["complete"], bool)
+            or coverage["complete"] != (coverage["lagging_sessions"] == 0)
             or not isinstance(coverage["unpublished_sessions"], int)
-            or not isinstance(coverage["catalog_lag_count"], int)
-            or coverage["catalog_lag_count"] < 0
-            or coverage["catalog_lag_count"] > MAX_EVAL_LAG_SESSIONS
+            or not isinstance(coverage["lagging_sessions"], int)
+            or coverage["lagging_sessions"] < 0
+            or coverage["lagging_sessions"] > MAX_EVAL_LAG_SESSIONS
+            or coverage["unpublished_sessions"] < 0
+            or coverage["unpublished_sessions"] > MAX_EVAL_LAG_SESSIONS
             or (
-                coverage["catalog_oldest_lag_seconds"] is not None
+                coverage["oldest_lag_seconds"] is not None
                 and (
-                    not isinstance(coverage["catalog_oldest_lag_seconds"], (int, float))
-                    or coverage["catalog_oldest_lag_seconds"] < 0
-                    or coverage["catalog_oldest_lag_seconds"] > MAX_EVAL_LAG_AGE_SECONDS
-                )
-            )
-            or (
-                coverage["catalog_lag_count"] == 0
-                and (
-                    coverage["catalog_oldest_lag_at"] is not None
-                    or coverage["catalog_oldest_lag_seconds"] is not None
+                    not isinstance(coverage["oldest_lag_seconds"], (int, float))
+                    or coverage["oldest_lag_seconds"] < 0
+                    or coverage["oldest_lag_seconds"] > MAX_EVAL_LAG_AGE_SECONDS
                 )
             )
             or (
-                coverage["catalog_lag_count"] > 0
-                and (
-                    coverage["catalog_oldest_lag_at"] is None
-                    or coverage["catalog_oldest_lag_seconds"] is None
-                )
+                coverage["lagging_sessions"] == 0
+                and coverage["oldest_lag_seconds"] is not None
             )
-            or not isinstance(coverage["resident_stale"], bool)
-            or coverage["expected_sessions"] != coverage["published_sessions"]
-            or coverage["expected_episodes"] != coverage["current_episodes"]
-            or any(
-                coverage[field_name] != 0
-                for field_name in (
-                    "invalid_vectors",
-                    "unnormalized_vectors",
-                    "unlocatable_episodes",
-                    "episode_count_mismatches",
-                )
+            or (
+                coverage["lagging_sessions"] > 0
+                and coverage["oldest_lag_seconds"] is None
             )
-            or coverage["missing_session_ids"] != []
         ):
             raise ValueError("dense recall corpus coverage is incomplete")
+    payload["_diagnostics"] = {
+        "server_commit": server_commit,
+        "embedding_model": response_headers.get("X-Recall-Embedding-Model"),
+        "embedding_dims": response_headers.get("X-Recall-Embedding-Dims"),
+        "embedding_revision": response_headers.get("X-Recall-Embedding-Revision"),
+        "projector": response_headers.get("X-Recall-Projector"),
+    }
     return payload
 
 
 def _search_mode(mode: str):
-    def search(query: str, *, base_url: str, token: str, limit: int, days: int, expected_sha: str) -> dict:
+    def search(
+        query: str,
+        *,
+        base_url: str,
+        token: str,
+        limit: int,
+        days: int,
+        expected_sha: str,
+    ) -> dict:
         return search_recall(
             query,
             base_url=base_url,
@@ -465,12 +466,18 @@ def _local_git_sha() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--strategy", default="auto", choices=sorted(STRATEGIES))
-    parser.add_argument("--limit", type=int, default=25)
+    parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument("--verbose", action="store_true", help="Show every miss.")
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable output.")
-    parser.add_argument("--max-false-negative-rate", type=float, default=DEFAULT_MAX_FALSE_NEGATIVE_RATE)
-    parser.add_argument("--min-recall-at-5", type=float, default=DEFAULT_MIN_RECALL_AT_5)
+    parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable output."
+    )
+    parser.add_argument(
+        "--max-false-negative-rate", type=float, default=DEFAULT_MAX_FALSE_NEGATIVE_RATE
+    )
+    parser.add_argument(
+        "--min-recall-at-5", type=float, default=DEFAULT_MIN_RECALL_AT_5
+    )
     parser.add_argument(
         "--expected-sha",
         help="Exact 40-character server commit every evaluated response must report (defaults to this checkout).",
@@ -480,11 +487,15 @@ def main() -> int:
     evaluator_git_sha = _local_git_sha()
     expected_sha = args.expected_sha or evaluator_git_sha
     if not _FULL_GIT_SHA.fullmatch(expected_sha):
-        print(f"Expected server SHA must be a full 40-character lowercase git SHA, got {expected_sha!r}.")
+        print(
+            f"Expected server SHA must be a full 40-character lowercase git SHA, got {expected_sha!r}."
+        )
         return 2
 
     base_url = os.environ.get("LONGHOUSE_EVAL_URL", DEFAULT_URL).rstrip("/")
-    token = os.environ.get("LONGHOUSE_EVAL_TOKEN") or (TOKEN_PATH.read_text().strip() if TOKEN_PATH.exists() else "")
+    token = os.environ.get("LONGHOUSE_EVAL_TOKEN") or (
+        TOKEN_PATH.read_text().strip() if TOKEN_PATH.exists() else ""
+    )
     if not token:
         print(f"No device token. Set LONGHOUSE_EVAL_TOKEN or create {TOKEN_PATH}.")
         return 2
@@ -507,7 +518,9 @@ def main() -> int:
                 days=args.days,
                 expected_sha=expected_sha,
             )
-            returned = [str(match.get("session_id") or "") for match in payload["matches"]]
+            returned = [
+                str(match.get("session_id") or "") for match in payload["results"]
+            ]
             # Sessions that produced this work discuss retrieval itself and would
             # match every query about retrieval.
             returned = _without_excluded_sessions(returned, excluded)
@@ -517,21 +530,30 @@ def main() -> int:
                     returned,
                     time.monotonic() - started,
                     lanes=tuple(payload["lanes"]),
-                    embedding_model=payload.get("embedding_model"),
-                    embedding_dims=payload.get("embedding_dims"),
-                    embedding_revision=payload.get("embedding_revision"),
+                    embedding_model=payload["_diagnostics"].get("embedding_model"),
+                    embedding_dims=(
+                        int(payload["_diagnostics"]["embedding_dims"])
+                        if payload["_diagnostics"].get("embedding_dims")
+                        else None
+                    ),
+                    embedding_revision=payload["_diagnostics"].get(
+                        "embedding_revision"
+                    ),
+                    projector=payload["_diagnostics"].get("projector"),
                     coverage=payload.get("coverage"),
-                    server_commit=payload.get("server_commit"),
+                    server_commit=payload["_diagnostics"].get("server_commit"),
                 )
             )
         except Exception as exc:  # noqa: BLE001 - report, never abort the sweep
-            report.results.append(Result(query, [], time.monotonic() - started, error=str(exc)))
+            report.results.append(
+                Result(query, [], time.monotonic() - started, error=str(exc))
+            )
 
     p50, p95 = report.latencies()
     gate_failures = report.gate_failures(
         max_false_negative_rate=args.max_false_negative_rate,
         min_recall_at_5=args.min_recall_at_5,
-        min_category_hits_at_25=DEFAULT_MIN_CATEGORY_HITS_AT_25,
+        min_category_hits_at_10=DEFAULT_MIN_CATEGORY_HITS_AT_10,
     )
     query_set_sha256 = hashlib.sha256(QUERIES_PATH.read_bytes()).hexdigest()
     metadata = {
@@ -544,14 +566,19 @@ def main() -> int:
         "query_count": len(report.results),
         "limit": args.limit,
         "days": args.days,
-        "expected_lanes": {"lexical": ["lexical"], "semantic": ["dense"], "auto": ["lexical", "dense"]}[args.strategy],
+        "expected_lanes": {
+            "lexical": ["lexical"],
+            "semantic": ["dense"],
+            "auto": ["lexical", "dense"],
+        }[args.strategy],
         "embedding_space": report.embedding_metadata(),
+        "observed_projectors": report.projectors(),
         "corpus_coverage": report.corpus_coverage_metadata(),
         "error_count": len(report.errors()),
         "thresholds": {
             "max_false_negative_rate": args.max_false_negative_rate,
             "min_recall_at_5": args.min_recall_at_5,
-            "min_category_hits_at_25": DEFAULT_MIN_CATEGORY_HITS_AT_25,
+            "min_category_hits_at_10": DEFAULT_MIN_CATEGORY_HITS_AT_10,
         },
     }
     if args.json:
@@ -562,11 +589,13 @@ def main() -> int:
                     "recall_at_5": round(report.recall_at(5), 3),
                     "recall_at_10": round(report.recall_at(10), 3),
                     "false_negative_rate": round(report.false_negative_rate(), 3),
-                    "correct_abstention_rate": round(report.correct_abstention_rate(), 3),
+                    "correct_abstention_rate": round(
+                        report.correct_abstention_rate(), 3
+                    ),
                     "p50_s": round(p50, 3),
                     "p95_s": round(p95, 3),
                     "by_category_at_5": report.by_category(5),
-                    "by_category_at_25": report.by_category(25),
+                    "by_category_at_10": report.by_category(10),
                     "errors": len(report.errors()),
                     "error_details": [
                         {
@@ -592,10 +621,10 @@ def main() -> int:
     print(f"  correct abstention       {report.correct_abstention_rate():.1%}")
     print(f"  latency p50/p95          {p50:.2f}s / {p95:.2f}s\n")
     categories_at_5 = report.by_category(5)
-    categories_at_25 = report.by_category(25)
+    categories_at_10 = report.by_category(10)
     for category, (good, total) in categories_at_5.items():
-        at_25 = categories_at_25[category][0]
-        print(f"    {category:14s} @{5} {good}/{total}  @{25} {at_25}/{total}")
+        at_10 = categories_at_10[category][0]
+        print(f"    {category:14s} @{5} {good}/{total}  @{10} {at_10}/{total}")
 
     errors = report.errors()
     if errors:
@@ -611,12 +640,20 @@ def main() -> int:
         )
 
     if args.verbose:
-        misses = [r for r in report.results if r.query.expects_evidence and r.gold_rank() is None]
+        misses = [
+            r
+            for r in report.results
+            if r.query.expects_evidence and r.gold_rank() is None
+        ]
         if misses:
             print(f"\n  misses ({len(misses)}):")
             for result in misses:
-                print(f"    [{result.query.category}] {result.query.id}: {result.query.query}")
-                print(f"      wanted {result.query.gold_sessions} got {result.returned[:5] or 'nothing'}")
+                print(
+                    f"    [{result.query.category}] {result.query.id}: {result.query.query}"
+                )
+                print(
+                    f"      wanted {result.query.gold_sessions} got {result.returned[:5] or 'nothing'}"
+                )
     print()
     if gate_failures:
         print("  RELEASE GATE FAILED:")

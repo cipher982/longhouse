@@ -39,7 +39,6 @@ def test_timeline_router_exposes_browser_archive_routes():
     assert {
         "/timeline/sessions",
         "/timeline/sessions/summary",
-
         "/timeline/sessions/{session_id}",
         "/timeline/sessions/{session_id}/thread",
         "/timeline/sessions/{session_id}/turns",
@@ -52,6 +51,7 @@ def test_timeline_router_exposes_browser_archive_routes():
         "/timeline/sessions/{session_id}/resume-intent",
         "/timeline/filters",
         "/timeline/recall",
+        "/timeline/recall/context",
         "/timeline/demo",
     } <= timeline_paths
 
@@ -96,7 +96,6 @@ def test_short_lived_browser_auth_closes_db_after_validation():
     assert result is None
     assert db.closed is True
     auth.assert_called_once_with(request, db)
-
 
 
 def test_get_current_browser_route_user_accepts_query_token_for_sse():

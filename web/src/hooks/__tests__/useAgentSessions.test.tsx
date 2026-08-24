@@ -16,6 +16,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchAgentSessionPreview: vi.fn(),
   fetchAgentFilters: vi.fn(),
   fetchRecall: vi.fn(),
+  fetchRecallContext: vi.fn(),
 }));
 
 vi.mock("../../services/api", () => apiMocks);

@@ -1895,11 +1895,14 @@ class RecallContextTurn(BaseModel):
 
 
 class RecallMatch(BaseModel):
-    """A ranked recall match with bounded source-linked evidence."""
+    """Internal ranked recall candidate before it becomes a lean search card."""
 
     model_config = ConfigDict(extra="forbid")
 
     session_id: str
+    project: Optional[str] = None
+    provider: Optional[str] = None
+    started_at: Optional[str] = None
     chunk_index: int
     score: float
     evidence: Optional[str] = None
@@ -1908,6 +1911,8 @@ class RecallMatch(BaseModel):
     event_index_start: Optional[int] = None
     event_index_end: Optional[int] = None
     total_events: int = 0
+    matched_role: Optional[Literal["user", "assistant"]] = None
+    matched_tool_name: Optional[str] = None
     context: List[RecallContextTurn] = Field(default_factory=list)
     match_event_id: Optional[int] = None
     generation_id: Optional[str] = None
@@ -1919,11 +1924,100 @@ class RecallMatch(BaseModel):
     # a null context, so the highest-scoring recall results claimed to be the
     # most trustworthy while carrying nothing at all.
     evidence_status: Literal["complete", "partial", "unavailable", "not_requested"] = "unavailable"
-    evidence_reason: Optional[str] = None
+    evidence_reason: Optional[str] = Field(default=None, max_length=300)
     # Internal routing only. A semantic episode locates itself by position in the
     # published ordering rather than by event id; the hydrator needs that, the
     # caller does not, so it never reaches the wire.
     start_order_time_us: Optional[int] = Field(default=None, exclude=True)
+
+
+class RecallSearchResult(BaseModel):
+    """One Google-like recall card: source, stable click target, and raw snippet."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    ref: str = Field(pattern=r"^rr1_[A-Za-z0-9_-]{55}$")
+    session_id: str
+    project: Optional[str] = Field(default=None, max_length=200)
+    provider: Optional[str] = Field(default=None, max_length=64)
+    started_at: Optional[str] = Field(default=None, max_length=64)
+    total_events: int = Field(ge=0)
+    matched_role: Optional[Literal["user", "assistant"]] = None
+    matched_tool_name: Optional[str] = Field(default=None, max_length=128)
+    snippet: Optional[str] = None
+    snippet_unavailable_reason: Optional[str] = Field(default=None, max_length=120)
+    matched_by: List[Literal["lexical", "dense"]] = Field(min_length=1, max_length=2)
+
+    @model_validator(mode="after")
+    def validate_card(self) -> "RecallSearchResult":
+        try:
+            parsed_session = UUID(self.session_id)
+        except ValueError as exc:
+            raise ValueError("recall result session_id must be a UUID") from exc
+        if str(parsed_session) != self.session_id:
+            raise ValueError("recall result session_id must be canonical")
+        if len(self.matched_by) != len(set(self.matched_by)):
+            raise ValueError("recall result matched_by must be unique")
+        if bool(self.snippet) == bool(self.snippet_unavailable_reason):
+            raise ValueError("recall result requires either a snippet or an unavailable reason")
+        if self.snippet is not None and len(self.snippet.encode("utf-8")) > 320:
+            raise ValueError("recall result snippet exceeds 320 UTF-8 bytes")
+        return self
+
+
+class RecallExpandedTurn(BaseModel):
+    """One content-bearing turn returned after an agent opens a recall card."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    role: Literal["user", "assistant"]
+    content_text: str
+    is_match: bool
+    tool_name: Optional[str] = Field(default=None, max_length=128)
+    content_text_truncated: Optional[Literal[True]] = None
+    content_text_full_bytes: Optional[int] = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_truncation(self) -> "RecallExpandedTurn":
+        if (self.content_text_truncated is None) != (self.content_text_full_bytes is None):
+            raise ValueError("expanded recall truncation fields must appear together")
+        if self.content_text_full_bytes is not None and self.content_text_full_bytes <= len(self.content_text.encode("utf-8")):
+            raise ValueError("expanded recall full byte count must exceed returned content")
+        return self
+
+
+class RecallContextResponse(BaseModel):
+    """A bounded one-result expansion; full-session reads remain a separate action."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    ref: str = Field(pattern=r"^rr1_[A-Za-z0-9_-]{55}$")
+    session_id: str
+    turns: List[RecallExpandedTurn] = Field(max_length=11)
+    total_events: int = Field(ge=0)
+    content_byte_budget: int = Field(ge=0, le=8192)
+    content_bytes_returned: int = Field(ge=0)
+    max_content_bytes_applied: int = Field(ge=1, le=4000)
+    evidence_status: Literal["complete", "partial", "unavailable"]
+    evidence_reason: Optional[str] = Field(default=None, max_length=300)
+
+    @model_validator(mode="after")
+    def validate_context(self) -> "RecallContextResponse":
+        if self.content_bytes_returned > self.content_byte_budget:
+            raise ValueError("expanded recall exceeds its declared content budget")
+        matches = sum(1 for turn in self.turns if turn.is_match)
+        if self.evidence_status == "unavailable":
+            if self.turns or not self.evidence_reason:
+                raise ValueError("unavailable recall context requires no turns and a reason")
+        elif matches != 1:
+            raise ValueError("available recall context requires exactly one matching turn")
+        if self.evidence_status == "complete" and self.evidence_reason is not None:
+            raise ValueError("complete recall context cannot carry a failure reason")
+        if self.evidence_status == "partial" and not self.evidence_reason:
+            raise ValueError("partial recall context requires a reason")
+        if len(self.model_dump_json(exclude_none=True).encode("utf-8")) > 12 * 1024:
+            raise ValueError("expanded recall response exceeds its serialized ceiling")
+        return self
 
 
 # How many lagging session ids a coverage report names before it summarizes.
@@ -2023,18 +2117,37 @@ class RecallLaneFailure(BaseModel):
 
     lane: Literal["lexical", "dense"]
     status_code: int = Field(ge=400, le=599)
-    code: str = Field(min_length=1)
-    message: str = Field(min_length=1)
-    reason: Optional[str] = None
+    code: str = Field(min_length=1, max_length=64)
+    message: str = Field(min_length=1, max_length=300)
+    reason: Optional[str] = Field(default=None, max_length=300)
+
+
+class RecallCoverageSummary(BaseModel):
+    """Only the dense-corpus facts needed to judge a search result or miss."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    complete: bool
+    lagging_sessions: int = Field(ge=0)
+    unpublished_sessions: int = Field(ge=0)
+    oldest_lag_seconds: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_summary(self) -> "RecallCoverageSummary":
+        if self.complete != (self.lagging_sessions == 0):
+            raise ValueError("recall coverage completeness must match lagging_sessions")
+        if (self.lagging_sessions == 0) != (self.oldest_lag_seconds is None):
+            raise ValueError("recall coverage lag age must appear exactly when sessions lag")
+        return self
 
 
 class RecallResponse(BaseModel):
-    """Response for recall endpoint."""
+    """Lean search cards; callers expand one card through recall/context."""
 
     model_config = ConfigDict(extra="forbid")
 
-    matches: List[RecallMatch]
-    total: int
+    results: List[RecallSearchResult] = Field(max_length=10)
+    total: int = Field(ge=0, le=10)
     lanes: List[Literal["lexical", "dense"]] = Field(
         default_factory=list,
         description=(
@@ -2051,20 +2164,16 @@ class RecallResponse(BaseModel):
             "produced these results, `degraded` says what is missing and why."
         ),
     )
-    embedding_model: Optional[str] = None
-    embedding_dims: Optional[int] = None
-    embedding_revision: Optional[str] = None
-    coverage: Optional[RecallCoverage] = None
-    server_commit: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{40}$")
-    context_byte_budget: int = Field(default=0, ge=0)
-    context_bytes_returned: int = Field(default=0, ge=0)
+    coverage: Optional[RecallCoverageSummary] = None
 
     @model_validator(mode="after")
     def validate_recall_contract(self) -> "RecallResponse":
-        if self.total != len(self.matches):
-            raise ValueError("recall total must equal the number of matches")
-        if self.context_bytes_returned > self.context_byte_budget:
-            raise ValueError("recall context exceeds its declared response budget")
+        if self.total != len(self.results):
+            raise ValueError("recall total must equal the number of results")
+        if len({result.ref for result in self.results}) != len(self.results):
+            raise ValueError("recall result refs must be unique")
+        if len({result.session_id for result in self.results}) != len(self.results):
+            raise ValueError("recall results must contain at most one card per session")
         if not self.lanes or len(self.lanes) != len(set(self.lanes)):
             raise ValueError("recall lanes must be a non-empty unique list")
 
@@ -2074,49 +2183,17 @@ class RecallResponse(BaseModel):
             raise ValueError("recall cannot report the same lane failing twice")
         if lane_set & set(degraded_lanes):
             raise ValueError("a lane cannot both serve results and be reported as degraded")
-        embedding_identity = (self.embedding_model, self.embedding_dims, self.embedding_revision)
         if "dense" in lane_set:
-            if any(value is None for value in embedding_identity):
-                raise ValueError("dense recall requires a complete embedding-space identity")
-            assert self.embedding_model is not None and self.embedding_dims is not None and self.embedding_revision is not None
-            if (
-                not self.embedding_model
-                or self.embedding_dims <= 0
-                or len(self.embedding_revision) != 40
-                or any(char not in "0123456789abcdef" for char in self.embedding_revision)
-            ):
-                raise ValueError("dense recall embedding-space identity is invalid")
             if self.coverage is None:
-                raise ValueError("dense recall requires a complete corpus-coverage certificate")
-        elif any(value is not None for value in embedding_identity):
-            raise ValueError("lexical-only recall must not claim an embedding-space identity")
+                raise ValueError("dense recall requires a corpus-coverage summary")
         elif self.coverage is not None:
             raise ValueError("lexical-only recall must not claim dense corpus coverage")
 
-        for match in self.matches:
-            match_lanes = match.retrieval_lanes
-            if (
-                not match_lanes
-                or len(match_lanes) != len(set(match_lanes))
-                or not set(match_lanes).issubset(lane_set)
-                or set(match.lane_ranks) != set(match_lanes)
-                or any(type(rank) is not int or rank <= 0 for rank in match.lane_ranks.values())
-            ):
-                raise ValueError("recall match lane attribution is inconsistent")
-
-            has_evidence = bool(match.evidence)
-            has_context = bool(match.context)
-            if match.evidence_status == "complete":
-                if not has_evidence or not has_context or match.evidence_reason is not None:
-                    raise ValueError("complete recall evidence requires an anchor, context, and no failure reason")
-            elif match.evidence_status == "partial":
-                if not (has_evidence or has_context) or not match.evidence_reason:
-                    raise ValueError("partial recall evidence requires material and a reason")
-            elif match.evidence_status == "unavailable":
-                if has_evidence or has_context or not match.evidence_reason:
-                    raise ValueError("unavailable recall evidence requires no material and a reason")
-            elif match.evidence_reason is not None or has_context:
-                raise ValueError("not-requested recall evidence cannot claim context or a failure reason")
+        for result in self.results:
+            if not set(result.matched_by).issubset(lane_set):
+                raise ValueError("recall result lane attribution is inconsistent")
+        if len(self.model_dump_json(exclude_none=True).encode("utf-8")) > 12 * 1024:
+            raise ValueError("recall search response exceeds its serialized ceiling")
         return self
 
 

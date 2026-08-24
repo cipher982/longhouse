@@ -73,6 +73,7 @@ from zerg.services.session_shares import SessionShareError
 from zerg.services.session_shares import resolve_session_share
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import FiltersResponse
+from zerg.services.session_views import RecallContextResponse
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import SessionActionRequest
@@ -360,6 +361,26 @@ async def semantic_search_timeline_sessions(
     return result
 
 
+@router.get("/recall/context", response_model=RecallContextResponse, response_model_exclude_none=True)
+async def recall_timeline_context(
+    request: Request,
+    ref: str = Query(...),
+    before: int = Query(2, ge=0, le=5),
+    after: int = Query(2, ge=0, le=5),
+    max_content_bytes: int = Query(1_200, ge=200, le=4_000),
+    current_user=Depends(get_current_browser_user),
+) -> RecallContextResponse:
+    return await _search_router.recall_context(
+        request=request,
+        ref=ref,
+        before=before,
+        after=after,
+        max_content_bytes=max_content_bytes,
+        _auth=SimpleNamespace(owner_id=current_user.id),
+        _single=None,
+    )
+
+
 @router.get("/recall", response_model=RecallResponse, response_model_exclude_none=True)
 async def recall_timeline_sessions(
     request: Request,
@@ -369,9 +390,7 @@ async def recall_timeline_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
-    max_results: int = Query(5, ge=1, le=25, description="Max matches"),
-    context_turns: int = Query(0, ge=0, le=10, description="Context turns before/after match"),
-    context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
+    max_results: int = Query(5, ge=1, le=10, description="Max search-result cards"),
     mode: Literal["auto", "lexical", "semantic"] = Query(
         "auto",
         description="Recall lane: auto fuses lexical and semantic; lexical and semantic run one lane only.",
@@ -392,8 +411,6 @@ async def recall_timeline_sessions(
         include_test=include_test,
         since_days=since_days,
         max_results=max_results,
-        context_turns=context_turns,
-        context_mode=context_mode,
         include_automation=False,
         mode=mode,
         _auth=SimpleNamespace(owner_id=current_user.id),

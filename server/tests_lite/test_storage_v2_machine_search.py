@@ -53,19 +53,35 @@ def _coverage() -> dict[str, object]:
     }
 
 
-def test_recall_contract_accepts_evaluator_depth():
+def test_recall_contract_caps_search_cards_and_exposes_one_result_expansion():
     app = FastAPI()
     app.include_router(agents_search.router)
     operation = app.openapi()["paths"]["/agents/recall"]["get"]
     max_results = next(parameter for parameter in operation["parameters"] if parameter["name"] == "max_results")
-    context_turns = next(parameter for parameter in operation["parameters"] if parameter["name"] == "context_turns")
-
-    assert max_results["schema"]["maximum"] == 25
-    assert context_turns["schema"]["default"] == 0
+    assert max_results["schema"]["maximum"] == 10
+    assert all(parameter["name"] != "context_turns" for parameter in operation["parameters"])
+    context_operation = app.openapi()["paths"]["/agents/recall/context"]["get"]
+    assert {parameter["name"] for parameter in context_operation["parameters"]} == {
+        "ref",
+        "before",
+        "after",
+        "max_content_bytes",
+    }
 
 
 def test_recall_discovery_always_reserves_anchor_hydration_time():
     assert agents_search._discovery_budget(remaining_seconds=1.9) == pytest.approx(0.9)
+
+
+def test_recall_release_diagnostics_are_headers_not_json(monkeypatch):
+    import zerg.build_info as build_info
+
+    monkeypatch.setattr(build_info, "load", lambda: SimpleNamespace(commit="c" * 40))
+    response = Response()
+    agents_search._apply_recall_diagnostic_headers(response, include_dense=True)
+
+    assert response.headers["X-Longhouse-Commit"] == "c" * 40
+    assert response.headers["X-Recall-Embedding-Dims"].isdigit()
 
 
 def test_semantic_machine_search_uses_searchd_without_legacy_db(monkeypatch):
@@ -207,6 +223,7 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
         return {
             "evidence_status": "complete",
             "evidence_reason": None,
+            "anchor_event_id": 9,
             "total_events": 12,
             "context": [
                 {
@@ -224,8 +241,6 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
         }
 
     monkeypatch.setattr(agents_search, "search_storage_v2_context", context_v2)
-    monkeypatch.setattr(agents_search, "_server_build_commit", lambda: "c" * 40)
-
     response = asyncio.run(
         agents_search.recall_sessions(
             request=_request("/api/agents/recall"),
@@ -235,8 +250,6 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
             include_test=False,
             since_days=90,
             max_results=5,
-            context_turns=2,
-            context_mode="forensic",
             include_automation=False,
             mode="lexical",
             _auth=SimpleNamespace(owner_id=7),
@@ -245,12 +258,10 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     )
 
     assert response.total == 1
-    assert response.matches[0].evidence == "the migration completed"
-    assert response.matches[0].total_events == 12
-    assert response.matches[0].context[0].content_text == "please migrate"
-    assert response.server_commit == "c" * 40
-    assert response.context_byte_budget == agents_search.RECALL_CONTEXT_BYTE_BUDGET
-    assert response.context_bytes_returned == len("please migrate")
+    assert response.results[0].snippet == "the migration completed"
+    assert response.results[0].matched_by == ["lexical"]
+    assert response.results[0].ref.startswith("rr1_")
+    assert response.coverage is None
     assert observed["include_snippets"] is False
 
 
@@ -275,8 +286,6 @@ def test_recall_rejects_unknown_query_parameters_before_search():
                 include_test=False,
                 since_days=90,
                 max_results=5,
-                context_turns=2,
-                context_mode="forensic",
                 include_automation=False,
                 mode="lexical",
                 _auth=SimpleNamespace(owner_id=7),
@@ -288,14 +297,14 @@ def test_recall_rejects_unknown_query_parameters_before_search():
     assert exc_info.value.detail["parameters"] == ["limti"]
 
 
-def test_recall_rejects_unbounded_context_fanout_before_search():
+def test_recall_rejects_legacy_bulk_context_parameters_before_search():
     request = Request(
         {
             "type": "http",
             "method": "GET",
             "path": "/api/agents/recall",
             "headers": [],
-            "query_string": b"query=migration&max_results=20&context_turns=3",
+            "query_string": b"query=migration&context_turns=3",
         }
     )
 
@@ -308,9 +317,7 @@ def test_recall_rejects_unbounded_context_fanout_before_search():
                 provider=None,
                 include_test=False,
                 since_days=90,
-                max_results=20,
-                context_turns=3,
-                context_mode="forensic",
+                max_results=5,
                 include_automation=False,
                 mode="lexical",
                 _auth=SimpleNamespace(owner_id=7),
@@ -319,8 +326,8 @@ def test_recall_rejects_unbounded_context_fanout_before_search():
         )
 
     assert exc_info.value.status_code == 422
-    assert exc_info.value.detail["code"] == "recall_context_fanout_too_large"
-    assert exc_info.value.detail["requested_context_items"] == 140
+    assert exc_info.value.detail["code"] == "unknown_query_parameters"
+    assert exc_info.value.detail["parameters"] == ["context_turns"]
 
 
 def test_browser_recall_delegates_to_requested_canonical_pipeline(monkeypatch):
@@ -329,13 +336,15 @@ def test_browser_recall_delegates_to_requested_canonical_pipeline(monkeypatch):
     async def canonical_recall(**kwargs):
         observed.update(kwargs)
         return RecallResponse(
-            matches=[],
+            results=[],
             total=0,
             lanes=["lexical", "dense"],
-            embedding_model="google/embeddinggemma-300m",
-            embedding_dims=256,
-            embedding_revision="a" * 40,
-            coverage=_coverage(),
+            coverage={
+                "complete": True,
+                "lagging_sessions": 0,
+                "unpublished_sessions": 0,
+                "oldest_lag_seconds": None,
+            },
         )
 
     monkeypatch.setattr(timeline._search_router, "recall_sessions", canonical_recall)
@@ -349,8 +358,6 @@ def test_browser_recall_delegates_to_requested_canonical_pipeline(monkeypatch):
             include_test=False,
             since_days=90,
             max_results=5,
-            context_turns=2,
-            context_mode="forensic",
             mode="lexical",
             current_user=SimpleNamespace(id=7),
         )

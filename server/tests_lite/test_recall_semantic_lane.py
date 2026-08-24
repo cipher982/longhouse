@@ -72,8 +72,6 @@ async def _recall(*, mode: str):
         include_test=False,
         since_days=90,
         max_results=5,
-        context_turns=0,
-        context_mode="forensic",
         include_automation=False,
         mode=mode,
         _auth=_Auth(),
@@ -82,7 +80,13 @@ async def _recall(*, mode: str):
 
 
 def _match(session_id: str, score: float) -> RecallMatch:
-    return RecallMatch(session_id=session_id, chunk_index=0, score=score)
+    return RecallMatch(
+        session_id=session_id,
+        generation_id=str(uuid4()),
+        match_event_id=1,
+        chunk_index=0,
+        score=score,
+    )
 
 
 def _resident_coverage(*, stale: bool = False) -> agents_search._EmbeddingCoveragePayload:
@@ -102,6 +106,7 @@ def _resident_coverage(*, stale: bool = False) -> agents_search._EmbeddingCovera
         stale=stale,
     )
 
+
 @pytest.mark.asyncio
 async def test_dense_rpc_response_rejects_malformed_rows_and_envelopes(monkeypatch):
     class FakeSearch:
@@ -117,6 +122,9 @@ async def test_dense_rpc_response_rejects_malformed_rows_and_envelopes(monkeypat
                         "event_index_end": 1,
                         "generation_id": str(uuid4()),
                         "start_order_time_us": 1,
+                        "project": None,
+                        "provider": None,
+                        "started_at": None,
                     }
                 ],
                 "unexpected": True,
@@ -132,6 +140,7 @@ async def test_dense_rpc_response_rejects_malformed_rows_and_envelopes(monkeypat
             limit=5,
             timeout_seconds=1.0,
         )
+
 
 @pytest.mark.asyncio
 async def test_current_embedding_projection_opens_the_outer_coverage_gate(monkeypatch):
@@ -327,6 +336,9 @@ async def test_semantic_recall_carries_live_rpc_coverage_watermark(monkeypatch):
                     "event_index_end": 5,
                     "generation_id": str(uuid4()),
                     "start_order_time_us": 123,
+                    "project": "longhouse",
+                    "provider": "codex",
+                    "started_at": "2026-08-02T00:00:00+00:00",
                 }
             ],
             coverage=_resident_coverage(),
@@ -432,7 +444,7 @@ async def test_auto_mode_serves_lexical_when_the_dense_lane_is_down(monkeypatch)
 
     response = await _recall(mode="auto")
 
-    assert [match.session_id for match in response.matches] == [lexical_hit.session_id]
+    assert [result.session_id for result in response.results] == [lexical_hit.session_id]
     assert response.lanes == ["lexical"]
     # The caller must be able to tell a narrower answer from a complete one.
     assert [failure.lane for failure in response.degraded] == ["dense"]

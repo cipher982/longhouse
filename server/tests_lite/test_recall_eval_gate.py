@@ -18,41 +18,32 @@ sys.modules[_SPEC.name] = recall_eval
 _SPEC.loader.exec_module(recall_eval)
 
 
-def _coverage(*, commit_seq: str = "10", sessions: int = 5_901, episodes: int = 82_958) -> dict[str, object]:
+def _coverage(*, lagging_sessions: int = 0, unpublished_sessions: int = 0) -> dict[str, object]:
     return {
-        "projector": "embeddings-5090578d9565-256d-p3",
-        "complete": True,
-        "complete_through_commit_seq": commit_seq,
-        "unpublished_sessions": 0,
-        "catalog_lag_count": 0,
-        "catalog_indexed_through": commit_seq,
-        "catalog_oldest_lag_at": None,
-        "catalog_oldest_lag_seconds": None,
-        "catalog_commit_seq": commit_seq,
-        "catalog_observed_at": f"2026-08-02T00:00:{int(commit_seq) % 60:02d}+00:00",
-        "resident_stale": False,
-        "expected_sessions": sessions,
-        "published_sessions": sessions,
-        "expected_episodes": episodes,
-        "current_episodes": episodes,
-        "invalid_vectors": 0,
-        "unnormalized_vectors": 0,
-        "unlocatable_episodes": 0,
-        "episode_count_mismatches": 0,
-        "missing_session_ids": [],
+        "complete": lagging_sessions == 0,
+        "lagging_sessions": lagging_sessions,
+        "unpublished_sessions": unpublished_sessions,
+        "oldest_lag_seconds": 1.0 if lagging_sessions else None,
     }
 
 
 def _payload(*, coverage: dict[str, object] | None) -> dict[str, object]:
     return {
-        "matches": [],
+        "results": [],
         "total": 0,
         "lanes": ["dense"],
-        "embedding_model": "google/embeddinggemma-300m",
-        "embedding_dims": 256,
-        "embedding_revision": "a" * 40,
+        "degraded": [],
         "coverage": coverage,
-        "server_commit": "c" * 40,
+    }
+
+
+class _HTTPBody(io.BytesIO):
+    headers = {
+        "X-Longhouse-Commit": "c" * 40,
+        "X-Recall-Embedding-Model": "google/embeddinggemma-300m",
+        "X-Recall-Embedding-Dims": "256",
+        "X-Recall-Embedding-Revision": "a" * 40,
+        "X-Recall-Projector": "embeddings-a-256d-p3",
     }
 
 
@@ -62,7 +53,7 @@ def test_live_eval_request_requires_complete_coverage_and_real_result_depth(monk
     def urlopen(request, *, timeout):
         seen["params"] = parse_qs(urlparse(request.full_url).query)
         seen["timeout"] = timeout
-        return io.BytesIO(json.dumps(_payload(coverage=_coverage())).encode())
+        return _HTTPBody(json.dumps(_payload(coverage=_coverage())).encode())
 
     monkeypatch.setattr(recall_eval.urllib.request, "urlopen", urlopen)
 
@@ -70,30 +61,31 @@ def test_live_eval_request_requires_complete_coverage_and_real_result_depth(monk
         "why did we change it?",
         base_url="https://example.test",
         token="device-token",
-        limit=25,
+        limit=10,
         days=365,
         mode="semantic",
         expected_sha="c" * 40,
     )
 
     assert payload["coverage"]["complete"] is True
-    assert seen["params"]["max_results"] == ["25"]
+    assert payload["_diagnostics"]["projector"] == "embeddings-a-256d-p3"
+    assert seen["params"]["max_results"] == ["10"]
+    assert "context_turns" not in seen["params"]
     assert seen["params"]["mode"] == ["semantic"]
     assert seen["timeout"] == 30
 
-    malformed = _coverage()
-    malformed["current_episodes"] = 82_957
+    malformed = _coverage(lagging_sessions=101)
     monkeypatch.setattr(
         recall_eval.urllib.request,
         "urlopen",
-        lambda *_args, **_kwargs: io.BytesIO(json.dumps(_payload(coverage=malformed)).encode()),
+        lambda *_args, **_kwargs: _HTTPBody(json.dumps(_payload(coverage=malformed)).encode()),
     )
     with pytest.raises(ValueError, match="coverage is incomplete"):
         recall_eval.search_recall(
             "why did we change it?",
             base_url="https://example.test",
             token="device-token",
-            limit=25,
+            limit=10,
             days=365,
             mode="semantic",
             expected_sha="c" * 40,
@@ -104,7 +96,7 @@ def test_live_eval_request_requires_complete_coverage_and_real_result_depth(monk
             "why did we change it?",
             base_url="https://example.test",
             token="device-token",
-            limit=25,
+            limit=10,
             days=365,
             mode="semantic",
             expected_sha="d" * 40,
@@ -124,7 +116,8 @@ def test_report_records_corpus_range_and_fails_errors_or_mixed_spaces():
                 embedding_model="google/embeddinggemma-300m",
                 embedding_dims=256,
                 embedding_revision="a" * 40,
-                coverage=_coverage(commit_seq="10"),
+                projector="embeddings-a-256d-p3",
+                coverage=_coverage(),
                 server_commit="c" * 40,
             ),
             recall_eval.Result(
@@ -141,7 +134,8 @@ def test_report_records_corpus_range_and_fails_errors_or_mixed_spaces():
                 embedding_model="different-space",
                 embedding_dims=256,
                 embedding_revision="b" * 40,
-                coverage=_coverage(commit_seq="12", episodes=82_960),
+                projector="embeddings-b-256d-p3",
+                coverage=_coverage(),
                 server_commit="c" * 40,
             ),
         ],
@@ -149,14 +143,14 @@ def test_report_records_corpus_range_and_fails_errors_or_mixed_spaces():
 
     metadata = report.corpus_coverage_metadata()
     assert metadata["status"] == "current"
-    assert metadata["catalog_commit_seq"] == {"min": 10, "max": 12}
-    assert metadata["expected_episodes"] == {"min": 82_958, "max": 82_960}
+    assert metadata["lagging_sessions"] == {"min": 0, "max": 0}
+    assert metadata["unpublished_sessions"] == {"min": 0, "max": 0}
     assert report.false_negative_rate() == pytest.approx(1 / 3)
 
     failures = report.gate_failures(
         max_false_negative_rate=1.0,
         min_recall_at_5=0.0,
-        min_category_hits_at_25={},
+        min_category_hits_at_10={},
     )
     assert "1 query(s) errored" in failures
     assert "evaluation observed 2 embedding spaces instead of one" in failures

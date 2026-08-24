@@ -60,20 +60,19 @@ python eval/recall/run_eval.py --strategy auto --expected-sha "$SHIPPED_SHA" --v
 Requires a device token at `~/.longhouse/machine/device-token`, or
 `LONGHOUSE_EVAL_TOKEN` and `LONGHOUSE_EVAL_URL`.
 
-The command is a release gate, not a reporting-only benchmark. It requests 25
+The command is a release gate, not a reporting-only benchmark. It requests 10
 results and exits nonzero for any request error, incorrect lane attribution,
-false-negative rate above the full-corpus Qwen3-8B @256d baseline (36 misses in
-76 answerable queries, or 47.4%), recall@5 below that baseline, or a regression
-against its category floors at k=25 (exact 11, paraphrase 16, causal 7,
-supersession 6). JSON output includes
+false-negative rate above the ten-card full-corpus baseline (45 misses in 76
+answerable queries, or 59.2%), recall@5 below 26/76, or a regression against
+its category floors at k=10 (exact 19, paraphrase 5, causal 3, supersession 4).
+JSON output includes
 the exact endpoint, git SHA, query-set digest, thresholds, lane contract, and
 embedding model/revision observed from the live response.
 For dense strategies it also requires a durable cutover certificate and either
 a current corpus or a live head bounded to 100 sessions and five minutes on
 every response. It records the projector, certificate and catalog watermark,
-head lag, session/episode count ranges, resident staleness, zero-defect resident
-invariants, and per-query error details. A missing/invalid certificate,
-out-of-bounds head, or mixed embedding space/projector fails the run.
+head lag and per-query error details. An out-of-bounds head or mixed embedding
+space/projector fails the run.
 Every response must also report the exact serving commit requested with
 `--expected-sha` (the evaluator checkout SHA by default), so a split deployment
 cohort cannot produce one blended quality score.

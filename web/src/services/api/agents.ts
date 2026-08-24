@@ -1223,49 +1223,11 @@ export interface SemanticSearchResponse {
   has_real_sessions: boolean;
 }
 
-export interface RecallMatch {
-  session_id: string;
-  chunk_index: number;
-  score: number;
-  evidence: string | null;
-  retrieval_lanes: Array<"lexical" | "dense">;
-  lane_ranks: Partial<Record<"lexical" | "dense", number>>;
-  event_index_start: number | null;
-  event_index_end: number | null;
-  total_events: number;
-  context: RecallContextTurn[];
-  match_event_id: number | null;
-  evidence_status: "complete" | "partial" | "unavailable" | "not_requested";
-  evidence_reason: string | null;
-}
-
-export interface RecallContextTurn {
-  search_event_id: number;
-  event_id: string;
-  source_object_id: string;
-  record_ordinal: number;
-  order_time_us: number;
-  role: string;
-  content_text: string;
-  tool_name?: string | null;
-  content_text_truncated?: true;
-  content_text_full_bytes?: number;
-}
-
-export interface RecallResponse {
-  matches: RecallMatch[];
-  total: number;
-  lanes: Array<"lexical" | "dense">;
-  embedding_model: string | null;
-  embedding_dims: number | null;
-  embedding_revision: string | null;
-  coverage: RecallCoverage | null;
-  server_commit: string | null;
-  context_byte_budget: number;
-  context_bytes_returned: number;
-}
-
-export type RecallCoverage = components["schemas"]["RecallCoverage"];
+export type RecallSearchResult = components["schemas"]["RecallSearchResult"];
+export type RecallExpandedTurn = components["schemas"]["RecallExpandedTurn"];
+export type RecallResponse = components["schemas"]["RecallResponse"];
+export type RecallCoverageSummary = components["schemas"]["RecallCoverageSummary"];
+export type RecallContextResponse = components["schemas"]["RecallContextResponse"];
 
 export interface RecallFilters {
   query: string;
@@ -1274,7 +1236,6 @@ export interface RecallFilters {
   mode?: "auto" | "lexical" | "semantic";
   since_days?: number;
   max_results?: number;
-  context_turns?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1302,7 +1263,7 @@ export async function fetchSemanticSearch(
 }
 
 /**
- * Recall: turn-level semantic search with context windows.
+ * Recall: compact turn-level search cards.
  */
 export async function fetchRecall(
   filters: RecallFilters,
@@ -1315,11 +1276,24 @@ export async function fetchRecall(
   if (filters.since_days) params.set("since_days", String(filters.since_days));
   if (filters.max_results)
     params.set("max_results", String(filters.max_results));
-  if (filters.context_turns)
-    params.set("context_turns", String(filters.context_turns));
-
   return request<RecallResponse>(
     `${TIMELINE_API_PREFIX}/recall?${params.toString()}`,
+    { method: "GET" },
+  );
+}
+
+/** Open one recall result under the server's fixed total content budget. */
+export async function fetchRecallContext(
+  ref: string,
+  options: { before?: number; after?: number; max_content_bytes?: number } = {},
+): Promise<RecallContextResponse> {
+  const params = new URLSearchParams({ ref });
+  if (options.before !== undefined) params.set("before", String(options.before));
+  if (options.after !== undefined) params.set("after", String(options.after));
+  if (options.max_content_bytes !== undefined)
+    params.set("max_content_bytes", String(options.max_content_bytes));
+  return request<RecallContextResponse>(
+    `${TIMELINE_API_PREFIX}/recall/context?${params.toString()}`,
     { method: "GET" },
   );
 }

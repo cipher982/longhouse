@@ -23,6 +23,7 @@ import {
   fetchAgentSessionPreview,
   fetchAgentFilters,
   fetchRecall,
+  fetchRecallContext,
   type AgentSessionFilters,
   type TimelineSessionsListResponse,
   type AgentSession,
@@ -37,6 +38,7 @@ import {
   type AgentFiltersResponse,
   type RecallFilters,
   type RecallResponse,
+  type RecallContextResponse,
 } from "../services/api";
 
 /**
@@ -359,5 +361,16 @@ export function useRecall(
     enabled: options.enabled !== false && !!filters.query,
     staleTime: 60_000,
     gcTime: 5 * 60_000,
+  });
+}
+
+/** Fetch one bounded recall expansion only after the user opens its card. */
+export function useRecallContext(ref: string | null) {
+  return useQuery<RecallContextResponse>({
+    queryKey: ["recall-context", ref],
+    queryFn: () => fetchRecallContext(ref!),
+    enabled: !!ref,
+    staleTime: 5 * 60_000,
+    gcTime: 10 * 60_000,
   });
 }

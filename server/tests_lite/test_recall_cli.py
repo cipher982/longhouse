@@ -23,6 +23,7 @@ class _Client:
     def __init__(self, response: _Response):
         self.response = response
         self.params: dict | None = None
+        self.url: str | None = None
 
     def __enter__(self):
         return self
@@ -30,8 +31,9 @@ class _Client:
     def __exit__(self, *_args):
         return False
 
-    def get(self, _url: str, *, headers: dict, params: dict) -> _Response:
+    def get(self, url: str, *, headers: dict, params: dict) -> _Response:
         assert headers == {"X-Agents-Token": "device-token"}
+        self.url = url
         self.params = params
         return self.response
 
@@ -46,54 +48,46 @@ def _wire(monkeypatch, payload: dict) -> _Client:
 
 def _payload() -> dict:
     return {
-        "matches": [
+        "results": [
             {
+                "ref": "rr1_" + "A" * 55,
                 "session_id": "11111111-1111-4111-8111-111111111111",
-                "chunk_index": 0,
-                "score": 0.03,
-                "evidence": "The IMEI was recorded.",
-                "retrieval_lanes": ["lexical", "dense"],
-                "lane_ranks": {"lexical": 1, "dense": 3},
+                "project": "g55",
+                "provider": "codex",
+                "started_at": "2026-08-20T12:00:00Z",
+                "snippet": "The IMEI was recorded in the device notes.",
+                "snippet_unavailable_reason": None,
                 "total_events": 42,
-                "context": [
-                    {
-                        "search_event_id": 9,
-                        "role": "assistant",
-                        "content_text": "The IMEI was recorded in the device notes.",
-                        "tool_name": None,
-                    }
-                ],
-                "match_event_id": 9,
-                "evidence_status": "complete",
-                "evidence_reason": None,
+                "matched_role": "assistant",
+                "matched_tool_name": None,
+                "matched_by": ["lexical", "dense"],
             }
         ],
         "total": 1,
         "lanes": ["lexical", "dense"],
         "degraded": [],
-        "context_byte_budget": 16384,
-        "context_bytes_returned": 42,
     }
 
 
-def test_recall_readable_output_uses_the_current_context_contract(monkeypatch):
+def test_recall_readable_output_is_a_compact_browseable_index(monkeypatch):
     client = _wire(monkeypatch, _payload())
 
-    result = CliRunner().invoke(app, ["recall", "IMEI", "--context-turns", "1"])
+    result = CliRunner().invoke(app, ["recall", "IMEI"])
 
     assert result.exit_code == 0, result.output
     assert "The IMEI was recorded in the device notes." in result.output
-    assert "Lexical #1 + Semantic #3" in result.output
-    assert "3%" not in result.output
+    assert "g55 · codex" in result.output
+    assert "assistant · 42 events" in result.output
+    assert "https://longhouse.test/timeline/11111111-1111-4111-8111-111111111111" in result.output
+    assert "longhouse recall-context rr1_" in result.output
     assert client.params == {
         "query": "IMEI",
         "since_days": 14,
         "max_results": 5,
-        "context_turns": 1,
     }
 
 
-def test_recall_json_is_compact_and_defaults_to_anchor_only(monkeypatch):
+def test_recall_json_is_compact_and_never_requests_bulk_context(monkeypatch):
     client = _wire(monkeypatch, _payload())
 
     result = CliRunner().invoke(app, ["recall", "IMEI", "--json"])
@@ -102,5 +96,30 @@ def test_recall_json_is_compact_and_defaults_to_anchor_only(monkeypatch):
     assert len(result.output.splitlines()) == 1
     assert json.loads(result.output) == _payload()
     assert client.params is not None
-    assert client.params["context_turns"] == 0
+    assert "context_turns" not in client.params
     assert client.params["max_results"] == 5
+
+
+def test_recall_context_opens_exactly_one_ref(monkeypatch):
+    result_ref = "rr1_" + "A" * 55
+    client = _wire(
+        monkeypatch,
+        {
+            "ref": result_ref,
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "turns": [{"role": "assistant", "content_text": "The IMEI was recorded.", "is_match": True}],
+            "total_events": 42,
+            "content_byte_budget": 6000,
+            "content_bytes_returned": 22,
+            "max_content_bytes_applied": 1200,
+            "evidence_status": "complete",
+            "evidence_reason": None,
+        },
+    )
+
+    result = CliRunner().invoke(app, ["recall-context", result_ref])
+
+    assert result.exit_code == 0, result.output
+    assert "* [assistant] The IMEI was recorded." in result.output
+    assert client.url == "https://longhouse.test/api/agents/recall/context"
+    assert client.params == {"ref": result_ref, "before": 2, "after": 2, "max_content_bytes": 1200}

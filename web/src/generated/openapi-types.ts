@@ -2127,6 +2127,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/recall/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recall Timeline Context */
+        get: operations["recall_timeline_context_timeline_recall_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/recall": {
         parameters: {
             query?: never;
@@ -2935,6 +2952,26 @@ export interface paths {
          * @description Search sessions by semantic similarity, scoped to the owner's storage-v2 catalog.
          */
         get: operations["semantic_search_sessions_agents_sessions_semantic_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/recall/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recall Context
+         * @description Open one recall card under a fixed total evidence budget.
+         */
+        get: operations["recall_context_agents_recall_context_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7923,20 +7960,51 @@ export interface components {
             note?: string | null;
         };
         /**
-         * RecallContextTurn
-         * @description One bounded conversation turn surrounding a recall match.
+         * RecallContextResponse
+         * @description A bounded one-result expansion; full-session reads remain a separate action.
          */
-        RecallContextTurn: {
-            /** Search Event Id */
-            search_event_id: number;
-            /** Event Id */
-            event_id: string;
-            /** Source Object Id */
-            source_object_id: string;
-            /** Record Ordinal */
-            record_ordinal: number;
-            /** Order Time Us */
-            order_time_us: number;
+        RecallContextResponse: {
+            /** Ref */
+            ref: string;
+            /** Session Id */
+            session_id: string;
+            /** Turns */
+            turns: components["schemas"]["RecallExpandedTurn"][];
+            /** Total Events */
+            total_events: number;
+            /** Content Byte Budget */
+            content_byte_budget: number;
+            /** Content Bytes Returned */
+            content_bytes_returned: number;
+            /** Max Content Bytes Applied */
+            max_content_bytes_applied: number;
+            /**
+             * Evidence Status
+             * @enum {string}
+             */
+            evidence_status: "complete" | "partial" | "unavailable";
+            /** Evidence Reason */
+            evidence_reason?: string | null;
+        };
+        /**
+         * RecallCoverageSummary
+         * @description Only the dense-corpus facts needed to judge a search result or miss.
+         */
+        RecallCoverageSummary: {
+            /** Complete */
+            complete: boolean;
+            /** Lagging Sessions */
+            lagging_sessions: number;
+            /** Unpublished Sessions */
+            unpublished_sessions: number;
+            /** Oldest Lag Seconds */
+            oldest_lag_seconds?: number | null;
+        };
+        /**
+         * RecallExpandedTurn
+         * @description One content-bearing turn returned after an agent opens a recall card.
+         */
+        RecallExpandedTurn: {
             /**
              * Role
              * @enum {string}
@@ -7944,94 +8012,14 @@ export interface components {
             role: "user" | "assistant";
             /** Content Text */
             content_text: string;
+            /** Is Match */
+            is_match: boolean;
             /** Tool Name */
             tool_name?: string | null;
             /** Content Text Truncated */
             content_text_truncated?: true | null;
             /** Content Text Full Bytes */
             content_text_full_bytes?: number | null;
-        };
-        /**
-         * RecallCoverage
-         * @description What the dense lane actually searched, and how far it is proven current.
-         *
-         *     This used to assert a totally complete corpus: equality between expected and
-         *     published counts, an empty missing-session list, and a live head inside fixed
-         *     age/size bounds. On an append-only corpus those predicates are false almost
-         *     always -- one session mid-projection made them false for the whole tenant --
-         *     so the dense lane answered nothing during ordinary operation while reporting
-         *     a typed "incomplete corpus" fault that read like corruption.
-         *
-         *     Completeness of a moving corpus is freshness, not integrity. So coverage now
-         *     reports a watermark: the corpus is proven current through
-         *     ``complete_through_commit_seq``, with the lag beyond it named explicitly.
-         *     Physical integrity is still absolute -- the four corruption counters below
-         *     stay ``Literal[0]`` and still fail the request closed, because a corrupt or
-         *     unlocatable vector is wrong rather than merely stale.
-         */
-        RecallCoverage: {
-            /** Projector */
-            projector: string;
-            /** Search Store Id */
-            search_store_id: string;
-            /** Search Schema Generation */
-            search_schema_generation: string;
-            /** Complete Through Commit Seq */
-            complete_through_commit_seq: string;
-            /**
-             * Complete
-             * @description True when nothing is lagging: the watermark is the catalog head.
-             */
-            complete: boolean;
-            /** Catalog Lag Count */
-            catalog_lag_count: number;
-            /** Catalog Indexed Through */
-            catalog_indexed_through: string;
-            /** Catalog Oldest Lag At */
-            catalog_oldest_lag_at?: string | null;
-            /** Catalog Oldest Lag Seconds */
-            catalog_oldest_lag_seconds?: number | null;
-            /** Catalog Commit Seq */
-            catalog_commit_seq: string;
-            /** Catalog Observed At */
-            catalog_observed_at: string;
-            /** Resident Stale */
-            resident_stale: boolean;
-            /** Expected Sessions */
-            expected_sessions: number;
-            /** Published Sessions */
-            published_sessions: number;
-            /** Expected Episodes */
-            expected_episodes: number;
-            /** Current Episodes */
-            current_episodes: number;
-            /**
-             * Invalid Vectors
-             * @constant
-             */
-            invalid_vectors: 0;
-            /**
-             * Unnormalized Vectors
-             * @constant
-             */
-            unnormalized_vectors: 0;
-            /**
-             * Unlocatable Episodes
-             * @constant
-             */
-            unlocatable_episodes: 0;
-            /**
-             * Episode Count Mismatches
-             * @constant
-             */
-            episode_count_mismatches: 0;
-            /** Missing Session Ids */
-            missing_session_ids?: string[];
-            /**
-             * Unpublished Sessions
-             * @default 0
-             */
-            unpublished_sessions: number;
         };
         /**
          * RecallLaneFailure
@@ -8053,59 +8041,12 @@ export interface components {
             reason?: string | null;
         };
         /**
-         * RecallMatch
-         * @description A ranked recall match with bounded source-linked evidence.
-         */
-        RecallMatch: {
-            /** Session Id */
-            session_id: string;
-            /** Chunk Index */
-            chunk_index: number;
-            /** Score */
-            score: number;
-            /** Evidence */
-            evidence?: string | null;
-            /** Retrieval Lanes */
-            retrieval_lanes?: ("lexical" | "dense")[];
-            /** Lane Ranks */
-            lane_ranks?: {
-                [key: string]: number;
-            };
-            /** Event Index Start */
-            event_index_start?: number | null;
-            /** Event Index End */
-            event_index_end?: number | null;
-            /**
-             * Total Events
-             * @default 0
-             */
-            total_events: number;
-            /** Context */
-            context?: components["schemas"]["RecallContextTurn"][];
-            /** Match Event Id */
-            match_event_id?: number | null;
-            /** Generation Id */
-            generation_id?: string | null;
-            /** Source Object Id */
-            source_object_id?: string | null;
-            /** Record Ordinal */
-            record_ordinal?: number | null;
-            /**
-             * Evidence Status
-             * @default unavailable
-             * @enum {string}
-             */
-            evidence_status: "complete" | "partial" | "unavailable" | "not_requested";
-            /** Evidence Reason */
-            evidence_reason?: string | null;
-        };
-        /**
          * RecallResponse
-         * @description Response for recall endpoint.
+         * @description Lean search cards; callers expand one card through recall/context.
          */
         RecallResponse: {
-            /** Matches */
-            matches: components["schemas"]["RecallMatch"][];
+            /** Results */
+            results: components["schemas"]["RecallSearchResult"][];
             /** Total */
             total: number;
             /**
@@ -8118,25 +8059,35 @@ export interface components {
              * @description Lanes that were requested but could not run. Present so a partial answer is never mistaken for a complete one: `lanes` says what produced these results, `degraded` says what is missing and why.
              */
             degraded?: components["schemas"]["RecallLaneFailure"][];
-            /** Embedding Model */
-            embedding_model?: string | null;
-            /** Embedding Dims */
-            embedding_dims?: number | null;
-            /** Embedding Revision */
-            embedding_revision?: string | null;
-            coverage?: components["schemas"]["RecallCoverage"] | null;
-            /** Server Commit */
-            server_commit?: string | null;
-            /**
-             * Context Byte Budget
-             * @default 0
-             */
-            context_byte_budget: number;
-            /**
-             * Context Bytes Returned
-             * @default 0
-             */
-            context_bytes_returned: number;
+            coverage?: components["schemas"]["RecallCoverageSummary"] | null;
+        };
+        /**
+         * RecallSearchResult
+         * @description One Google-like recall card: source, stable click target, and raw snippet.
+         */
+        RecallSearchResult: {
+            /** Ref */
+            ref: string;
+            /** Session Id */
+            session_id: string;
+            /** Project */
+            project?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Total Events */
+            total_events: number;
+            /** Matched Role */
+            matched_role?: ("user" | "assistant") | null;
+            /** Matched Tool Name */
+            matched_tool_name?: string | null;
+            /** Snippet */
+            snippet?: string | null;
+            /** Snippet Unavailable Reason */
+            snippet_unavailable_reason?: string | null;
+            /** Matched By */
+            matched_by: ("lexical" | "dense")[];
         };
         /**
          * ResetType
@@ -16038,6 +15989,40 @@ export interface operations {
             };
         };
     };
+    recall_timeline_context_timeline_recall_context_get: {
+        parameters: {
+            query: {
+                ref: string;
+                before?: number;
+                after?: number;
+                max_content_bytes?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecallContextResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     recall_timeline_sessions_timeline_recall_get: {
         parameters: {
             query: {
@@ -16051,12 +16036,8 @@ export interface operations {
                 include_test?: boolean;
                 /** @description Days to look back */
                 since_days?: number;
-                /** @description Max matches */
+                /** @description Max search-result cards */
                 max_results?: number;
-                /** @description Context turns before/after match */
-                context_turns?: number;
-                /** @description Context projection mode: forensic|active_context */
-                context_mode?: string;
                 /** @description Recall lane: auto fuses lexical and semantic; lexical and semantic run one lane only. */
                 mode?: "auto" | "lexical" | "semantic";
             };
@@ -17621,6 +17602,43 @@ export interface operations {
             };
         };
     };
+    recall_context_agents_recall_context_get: {
+        parameters: {
+            query: {
+                /** @description Opaque result reference returned by recall */
+                ref: string;
+                /** @description Conversation turns before the match */
+                before?: number;
+                /** @description Conversation turns after the match */
+                after?: number;
+                max_content_bytes?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecallContextResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     recall_sessions_agents_recall_get: {
         parameters: {
             query: {
@@ -17634,12 +17652,8 @@ export interface operations {
                 include_test?: boolean;
                 /** @description Days to look back */
                 since_days?: number;
-                /** @description Max matches */
+                /** @description Max search-result cards */
                 max_results?: number;
-                /** @description Context turns before/after match */
-                context_turns?: number;
-                /** @description Context projection mode: forensic|active_context */
-                context_mode?: "forensic" | "active_context";
                 /** @description Include Hatch automation sessions in recall results */
                 include_automation?: boolean;
                 mode?: "auto" | "lexical" | "semantic";
