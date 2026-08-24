@@ -417,15 +417,19 @@ def main() -> int:
         try:
             reports.append(run(attempt))
         except ApiError as error:
-            # The API failing is not a verdict about this provider. Say so
-            # separately, and still count it: a check that could not run is not
-            # a check that passed.
+            # `adapter_unavailable` is the machine saying it does not offer this
+            # provider's Console turn. That is provider availability, not an API
+            # failure, and calling it an error blames the wrong system.
+            unavailable = error.status == 409 and "adapter_unavailable" in str(error)
             reports.append(
                 {
                     "artifact_kind": "console_served_state_e2e",
                     "schema_version": 1,
                     "provider": provider,
-                    "verdict": "error",
+                    # The API failing is not a verdict about this provider. Say
+                    # so separately, and still count it: a check that could not
+                    # run is not a check that passed.
+                    "verdict": "unavailable" if unavailable else "error",
                     "failures": [str(error)],
                 }
             )
