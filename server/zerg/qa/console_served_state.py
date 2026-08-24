@@ -49,7 +49,13 @@ REGISTRATION = ProducerRegistration(
     scenario_id=SCENARIO_ID,
     scenario_revision=1,
     assertion_cells=((ASSERTION_LIVE, None), (ASSERTION_SETTLED, None)),
-    providers=PROVIDERS,
+    # The subject under test is Longhouse, not a provider release, so this
+    # declares no providers and pins no provider artifact -- the factory
+    # validator rejects a longhouse_product registration that does either
+    # (resume_assurance.py:266). A provider still runs; it is the vehicle that
+    # produces a Console turn, chosen at runtime from what the machine offers.
+    # The served-state contract is Longhouse's and must hold whichever one drove.
+    providers=(),
     platforms=("linux",),
     architectures=("x86_64", "aarch64"),
     modes=("console",),
@@ -62,8 +68,7 @@ REGISTRATION = ProducerRegistration(
         "state_axis_settled",
     ),
     acquisition_methods=("staged_release", "observed_install"),
-    credential_binding_ids=(),
-    credential_binding_ids_by_provider={provider: (f"{provider}_provider_token", "runtime_host_control") for provider in PROVIDERS},
+    credential_binding_ids=("runtime_host_control",),
     sandbox_policy="provider-qualification-bwrap-v3",
     network_policy="shared_provider_egress",
     required_artifacts=("console_served_state_observation", "cleanup_receipt"),
@@ -72,7 +77,7 @@ REGISTRATION = ProducerRegistration(
     oracle_source="server/zerg/qa/console_served_state_core.py",
     oracle_entrypoint="settlement_state",
     executable_module="zerg.qa.console_served_state",
-    provider_artifact_required=True,
+    provider_artifact_required=False,
     subject_kind="longhouse_product",
 )
 

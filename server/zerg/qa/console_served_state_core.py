@@ -84,13 +84,31 @@ def _home() -> Path:
     return Path(os.environ.get("LONGHOUSE_HOME") or Path.home() / ".longhouse").expanduser()
 
 
+# The factory projects the `runtime_host_control` binding as exactly these two
+# names (assurance.py:1580). This module only ever read the laptop's names, so
+# as a factory producer it would have found no credentials and failed on an
+# empty API URL -- an oracle that cannot authenticate is an oracle that never
+# runs. Both callers are real: the factory sets the RUNTIME_ names, a manual
+# run on a workstation sets the shorter ones or has a machine state file.
+_API_URL_ENV = ("LONGHOUSE_RUNTIME_API_URL", "LONGHOUSE_API_URL")
+_TOKEN_ENV = ("LONGHOUSE_RUNTIME_AGENTS_TOKEN", "LONGHOUSE_MACHINE_TOKEN")
+
+
+def _first_env(names: tuple[str, ...]) -> str:
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _defaults() -> tuple[str, str]:
-    api_url = os.environ.get("LONGHOUSE_API_URL", "").strip()
+    api_url = _first_env(_API_URL_ENV)
     if not api_url:
         state = _home() / "machine" / "state.json"
         if state.exists():
             api_url = str(json.loads(state.read_text()).get("runtime_url") or "").strip()
-    token = os.environ.get("LONGHOUSE_MACHINE_TOKEN", "").strip()
+    token = _first_env(_TOKEN_ENV)
     token_path = _home() / "machine" / "device-token"
     if not token and token_path.exists():
         token = token_path.read_text(encoding="utf-8").strip()
