@@ -7923,6 +7923,35 @@ export interface components {
             note?: string | null;
         };
         /**
+         * RecallContextTurn
+         * @description One bounded conversation turn surrounding a recall match.
+         */
+        RecallContextTurn: {
+            /** Search Event Id */
+            search_event_id: number;
+            /** Event Id */
+            event_id: string;
+            /** Source Object Id */
+            source_object_id: string;
+            /** Record Ordinal */
+            record_ordinal: number;
+            /** Order Time Us */
+            order_time_us: number;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+            /** Content Text */
+            content_text: string;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Content Text Truncated */
+            content_text_truncated?: true | null;
+            /** Content Text Full Bytes */
+            content_text_full_bytes?: number | null;
+        };
+        /**
          * RecallCoverage
          * @description What the dense lane actually searched, and how far it is proven current.
          *
@@ -8025,7 +8054,7 @@ export interface components {
         };
         /**
          * RecallMatch
-         * @description A single recall match with context.
+         * @description A ranked recall match with bounded source-linked evidence.
          */
         RecallMatch: {
             /** Session Id */
@@ -8034,24 +8063,8 @@ export interface components {
             chunk_index: number;
             /** Score */
             score: number;
-            /** Chunk Id */
-            chunk_id?: number | null;
-            /** Chunk Uid */
-            chunk_uid?: string | null;
-            /** Parent Chunk Id */
-            parent_chunk_id?: number | null;
-            /** Context Chunk Id */
-            context_chunk_id?: number | null;
-            /** Chunk Kind */
-            chunk_kind?: string | null;
-            /** Context Text */
-            context_text?: string | null;
-            /** Intent */
-            intent?: string | null;
             /** Evidence */
             evidence?: string | null;
-            /** Structured Hits */
-            structured_hits?: string[];
             /** Retrieval Lanes */
             retrieval_lanes?: ("lexical" | "dense")[];
             /** Lane Ranks */
@@ -8068,9 +8081,7 @@ export interface components {
              */
             total_events: number;
             /** Context */
-            context?: {
-                [key: string]: unknown;
-            }[];
+            context?: components["schemas"]["RecallContextTurn"][];
             /** Match Event Id */
             match_event_id?: number | null;
             /** Generation Id */
@@ -8116,6 +8127,16 @@ export interface components {
             coverage?: components["schemas"]["RecallCoverage"] | null;
             /** Server Commit */
             server_commit?: string | null;
+            /**
+             * Context Byte Budget
+             * @default 0
+             */
+            context_byte_budget: number;
+            /**
+             * Context Bytes Returned
+             * @default 0
+             */
+            context_bytes_returned: number;
         };
         /**
          * ResetType
