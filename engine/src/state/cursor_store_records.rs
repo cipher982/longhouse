@@ -94,7 +94,7 @@ pub fn oldest_undrained_epoch(
         .transpose()
 }
 
-/// Delete copied Cursor bytes the Runtime Host has fully receipted.
+/// Discard copied Cursor payload bytes the Runtime Host has fully receipted.
 ///
 /// Claude and Codex are re-read from their `.jsonl` files by byte offset, so
 /// the engine keeps only a cursor for them. Cursor keeps chats in its own blob
@@ -103,6 +103,11 @@ pub fn oldest_undrained_epoch(
 /// weight afterwards — and nothing ever deleted it. On the machine that
 /// motivated this, `cursor_store_raw_record` was 8.5GB of 9.7GB, with 501,511
 /// rows (5.97GB) belonging to epochs that had been fully receipted and ended.
+///
+/// The compact hash/position rows remain as the source's identity and logical
+/// length. Only `record_bytes` is emptied. Deleting the rows would make a live
+/// open epoch look truncated to capture, lose content-hash deduplication, and
+/// cause already-receipted Cursor snapshot records to be spooled again.
 ///
 /// The predicate is keyed on **positions, not row counts**. `last_position` is
 /// exclusive: envelopes cover `[range_start, range_end)` and a receipt advances
@@ -122,9 +127,11 @@ pub fn oldest_undrained_epoch(
 /// a fully receipted prefix is just as safe to remove while its next position
 /// is preserved by the durable lane cursor.
 pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
-    let deleted = conn.execute(
-        "DELETE FROM cursor_store_raw_record
-         WHERE source_epoch IN (
+    let drained = conn.execute(
+        "UPDATE cursor_store_raw_record
+         SET record_bytes = X''
+         WHERE length(record_bytes) > 0
+           AND source_epoch IN (
              SELECT epoch.source_epoch
              FROM source_epoch_registry AS epoch
              JOIN source_epoch_lane_state AS durable
@@ -142,7 +149,7 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
          )",
         [],
     )?;
-    u64::try_from(deleted).context("drained Cursor record count is negative")
+    u64::try_from(drained).context("drained Cursor record count is negative")
 }
 
 pub fn cursor_record_hash(bytes: &[u8]) -> String {
@@ -343,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn the_drain_removes_only_fully_receipted_epochs() {
+    fn the_drain_discards_only_receipted_payloads_and_preserves_identity() {
         // The whole risk of this feature is deleting evidence that was never
         // shipped, so every retention reason gets its own epoch here.
         let temp = tempfile::NamedTempFile::new().unwrap();
@@ -389,16 +396,38 @@ mod tests {
         let deleted = drain_receipted_cursor_records(&conn).unwrap();
 
         assert_eq!(deleted, 3, "expected every fully receipted epoch");
-        assert_eq!(cursor_record_count(&conn, drained).unwrap(), 0);
+        assert_eq!(cursor_record_count(&conn, drained).unwrap(), 2);
         assert_eq!(cursor_record_count(&conn, partial).unwrap(), 2, "unshipped");
         assert_eq!(cursor_record_count(&conn, pending).unwrap(), 1, "pending");
-        assert_eq!(cursor_record_count(&conn, open).unwrap(), 0, "open is still drainable");
+        assert_eq!(cursor_record_count(&conn, open).unwrap(), 1, "identity retained");
+        let payload_bytes = |epoch: Uuid| -> i64 {
+            conn.query_row(
+                "SELECT COALESCE(SUM(length(record_bytes)), 0)
+                 FROM cursor_store_raw_record WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(payload_bytes(drained), 0, "receipted bytes discarded");
+        assert_eq!(payload_bytes(open), 0, "open receipted bytes discarded");
+        assert_eq!(payload_bytes(partial), 4, "unshipped bytes retained");
+        assert_eq!(payload_bytes(pending), 2, "pending bytes retained");
 
         // A later append to the still-open epoch must continue after the
-        // durable cursor rather than restarting at position zero.
-        append_unseen_cursor_records(&mut conn, open, &[b"d1".to_vec()]).unwrap();
+        // durable cursor rather than restarting at position zero. The compact
+        // hash row also prevents a fresh snapshot from re-adding d0.
         assert_eq!(
-            cursor_records_from(&conn, open, 0, 10, 1024).unwrap(),
+            append_unseen_cursor_records(
+                &mut conn,
+                open,
+                &[b"d0".to_vec(), b"d1".to_vec()]
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            cursor_records_from(&conn, open, 1, 10, 1024).unwrap(),
             vec![CursorRawRecord {
                 source_position: 1,
                 bytes: b"d1".to_vec()
@@ -423,8 +452,8 @@ mod tests {
             }]
         );
 
-        // Idempotent: the predicate is position-based, so a second pass over an
-        // already-drained epoch finds nothing rather than mis-reading counts.
+        // Idempotent: empty payloads are not updated again, while the new
+        // unshipped tail prevents the open epoch from qualifying.
         assert_eq!(drain_receipted_cursor_records(&conn).unwrap(), 0);
     }
 

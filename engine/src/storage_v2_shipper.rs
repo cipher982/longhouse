@@ -4154,6 +4154,78 @@ mod tests {
     }
 
     #[test]
+    fn cursor_open_epoch_drain_keeps_identity_and_ships_only_the_new_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let first = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        let first_epoch = first.source_epoch;
+        let first_end = first.range_end;
+        acknowledge_prepared(&mut conn, &first);
+
+        let drained = cursor_store_records::drain_receipted_cursor_records(&conn).unwrap();
+        assert!(drained > 0);
+        let retained_rows = cursor_store_records::cursor_record_count(&conn, first_epoch).unwrap();
+        assert_eq!(retained_rows, first_end);
+        let retained_payload_bytes: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(length(record_bytes)), 0)
+                 FROM cursor_store_raw_record WHERE source_epoch = ?1",
+                [first_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retained_payload_bytes, 0);
+
+        assert!(
+            prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+                .unwrap()
+                .is_none(),
+            "an unchanged source must not rotate or re-spool after drain"
+        );
+        assert_eq!(
+            source_epoch::active_source_epoch(
+                &conn,
+                "cursor",
+                &first.envelope.opaque_source_id
+            )
+            .unwrap(),
+            Some(first_epoch)
+        );
+        assert_eq!(
+            cursor_store_records::cursor_record_count(&conn, first_epoch).unwrap(),
+            retained_rows,
+            "snapshot hashes must suppress already-receipted records"
+        );
+
+        let mut extended_root = vec![0xbb; 32];
+        extended_root.extend_from_slice(&[0xdd; 32]);
+        set_cursor_root(&store, CURSOR_ROOT_B, &extended_root);
+        store
+            .execute(
+                "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                params![
+                    CURSOR_MESSAGE_B,
+                    br#"{"role":"assistant","content":[{"type":"text","text":"after drain"}]}"#
+                ],
+            )
+            .unwrap();
+
+        let tail = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(tail.source_epoch, first_epoch);
+        assert_eq!(tail.range_start, first_end);
+        assert!(tail.envelope.render.unwrap().records.iter().any(|record| {
+            record.content_text.as_deref() == Some("after drain")
+        }));
+    }
+
+    #[test]
     fn cursor_renders_blob_first_referenced_after_its_raw_receipt() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("store.db");
