@@ -92,13 +92,18 @@ def _is_internal_canary(facts: WorkspaceSessionFacts) -> bool:
     )
 
 
-def classify_human_workspace_candidate(
+def _admissible_workspace_facts(
     facts: WorkspaceSessionFacts,
     *,
     device_id: str,
     since: datetime,
 ) -> tuple[str, datetime] | None:
-    """Return path/time only when canonical facts prove a human workspace."""
+    """Exclusions every workspace candidate must survive, whoever authored it.
+
+    These are the disqualifications that hold regardless of provenance: wrong
+    machine, unusable path, too old, excluded environment, system-hidden,
+    sidechain, automation origin, internal canary, proof environment.
+    """
 
     if facts.device_id != device_id:
         return None
@@ -120,10 +125,6 @@ def classify_human_workspace_candidate(
         return None
     if _normalized_token(facts.origin_kind) in HIDDEN_FROM_DEFAULT_ORIGIN_KINDS:
         return None
-    # Transcript roles, prompts, cwd shape, and absence of an automation marker
-    # never manufacture human authorship.
-    if _normalized_token(facts.launch_actor) not in HUMAN_LAUNCH_ACTORS:
-        return None
     if _is_internal_canary(facts):
         return None
     if (
@@ -136,6 +137,59 @@ def classify_human_workspace_candidate(
     ):
         return None
     return path, used_at
+
+
+def classify_human_workspace_candidate(
+    facts: WorkspaceSessionFacts,
+    *,
+    device_id: str,
+    since: datetime,
+) -> tuple[str, datetime] | None:
+    """Return path/time only when canonical facts prove a human workspace."""
+
+    admissible = _admissible_workspace_facts(facts, device_id=device_id, since=since)
+    if admissible is None:
+        return None
+    # Transcript roles, prompts, cwd shape, and absence of an automation marker
+    # never manufacture human authorship.
+    if _normalized_token(facts.launch_actor) not in HUMAN_LAUNCH_ACTORS:
+        return None
+    return admissible
+
+
+def classify_checkout_workspace_candidate(
+    facts: WorkspaceSessionFacts,
+    *,
+    device_id: str,
+    since: datetime,
+) -> tuple[str, datetime] | None:
+    """A tracked checkout is a workspace even when authorship is unproven.
+
+    This deliberately does not claim the session was human-authored, and does
+    not weaken the rule above. It answers a different and cheaper question:
+    is this directory a project worth offering as a place to work?
+
+    It exists because the human stamp is produced by exactly one thing --
+    Longhouse's own wrapper observing an interactive TTY. A session discovered
+    and ingested from a provider's own archive can never earn it, so a
+    developer who installs Longhouse on a laptop they have worked on for a year
+    would otherwise be shown an empty workspace picker beside a free-text path
+    box. Under the laptop-first activation path that is the common case, not an
+    edge one.
+
+    ``git_repo`` is positive evidence, not the absence of a negative: the
+    session ran inside a tracked checkout. That is what separates a project
+    from the scratch directories automation actually generates -- and where
+    automation does run inside a real repository, the directory it names is a
+    real one to suggest, so the leak is benign.
+    """
+
+    admissible = _admissible_workspace_facts(facts, device_id=device_id, since=since)
+    if admissible is None:
+        return None
+    if not str(facts.git_repo or "").strip():
+        return None
+    return admissible
 
 
 def _recency_weight(age_days: float) -> int:
@@ -192,7 +246,12 @@ def rank_human_workspace_candidates(
 
     groups: dict[str, _Group] = {}
     for item in facts:
-        candidate = classify_human_workspace_candidate(item, device_id=device_id, since=since)
+        # A proven human workspace first; failing that, a tracked checkout.
+        # Both survive the same exclusions -- the second only forgoes the
+        # authorship stamp that ingested sessions can never earn.
+        candidate = classify_human_workspace_candidate(item, device_id=device_id, since=since) or classify_checkout_workspace_candidate(
+            item, device_id=device_id, since=since
+        )
         if candidate is None:
             continue
         path, used_at = candidate

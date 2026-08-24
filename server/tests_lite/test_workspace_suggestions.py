@@ -484,3 +484,97 @@ def test_endpoint_returns_scoped_workspaces(tmp_path):
         assert body["workspaces"][0]["label"] == "zerg (main)"
     finally:
         api_app.dependency_overrides.clear()
+
+
+def _ingested_facts(
+    path: str,
+    *,
+    git_repo: str | None = "git@github.com:cipher982/longhouse.git",
+    origin_kind: str | None = None,
+    is_sidechain: bool = False,
+    system_hidden: bool = False,
+):
+    """A session Longhouse discovered rather than launched: no human stamp.
+
+    This is what every session a new user brings with them looks like.
+    """
+
+    now = datetime.now(timezone.utc)
+    return WorkspaceSessionFacts(
+        device_id="cinder",
+        provider="claude",
+        environment="production",
+        project="longhouse",
+        cwd=path,
+        git_repo=git_repo,
+        git_branch="main",
+        last_activity_at=now,
+        started_at=now,
+        first_user_message_preview=None,
+        origin_kind=origin_kind,
+        hidden_from_default_timeline=system_hidden,
+        user_hidden_from_timeline=False,
+        # The stamp comes only from Longhouse's wrapper watching a TTY, so an
+        # ingested session can never carry one.
+        launch_actor=None,
+        is_sidechain=is_sidechain,
+    )
+
+
+def test_an_ingested_checkout_is_suggestable_without_a_human_stamp():
+    # The cliff this closes: a developer installs Longhouse on the laptop they
+    # have worked on for a year, and every imported session is unstamped, so
+    # the workspace picker would otherwise be empty beside a free-text path box.
+    now = datetime.now(timezone.utc)
+    entries = rank_human_workspace_candidates(
+        [_ingested_facts("/Users/d/git/longhouse")],
+        device_id="cinder",
+        now=now,
+        days_back=30,
+        limit=10,
+    )
+    assert [entry.path for entry in entries] == ["/Users/d/git/longhouse"]
+
+
+def test_an_ingested_session_outside_a_checkout_is_not_suggested():
+    # git_repo is the positive evidence. Without it there is nothing
+    # distinguishing a project from the scratch directory automation generates,
+    # and absence of an automation marker must not stand in for authorship.
+    now = datetime.now(timezone.utc)
+    entries = rank_human_workspace_candidates(
+        [_ingested_facts("/private/tmp/scratch-run-41", git_repo=None)],
+        device_id="cinder",
+        now=now,
+        days_back=30,
+        limit=10,
+    )
+    assert entries == []
+
+
+def test_a_checkout_does_not_readmit_work_the_exclusions_already_rejected():
+    # The checkout path forgoes the authorship stamp and nothing else. Every
+    # other disqualification still applies, or this becomes a way for hidden
+    # automation to reach the picker through a real repository.
+    now = datetime.now(timezone.utc)
+    for label, facts in [
+        ("automation origin", _ingested_facts("/Users/d/git/a", origin_kind="hatch_automation")),
+        ("sidechain", _ingested_facts("/Users/d/git/b", is_sidechain=True)),
+        ("system hidden", _ingested_facts("/Users/d/git/c", system_hidden=True)),
+    ]:
+        entries = rank_human_workspace_candidates(
+            [facts], device_id="cinder", now=now, days_back=30, limit=10
+        )
+        assert entries == [], label
+
+
+def test_a_checkout_on_another_machine_stays_on_that_machine():
+    now = datetime.now(timezone.utc)
+    facts = _ingested_facts("/Users/d/git/longhouse")
+    entries = rank_human_workspace_candidates(
+        [facts],
+        device_id="cube",
+        now=now,
+        days_back=30,
+        limit=10,
+    )
+    assert entries == []

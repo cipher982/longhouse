@@ -1581,8 +1581,17 @@ async def test_enrollment_excludes_revoked_and_workspaces_are_owner_device_scope
             "machine.workspace.list.v2",
             {"owner_id": 7, "device_id": "cinder", "limit": 12, "days_back": 45},
         )
+        # `untyped` is a session with no launch actor -- what every session
+        # Longhouse ingested rather than launched looks like, because the human
+        # stamp comes only from our own wrapper watching a TTY. It is now
+        # suggestable on the strength of being a tracked checkout, which is
+        # what makes the picker non-empty for someone who has just installed.
+        # Every other exclusion in this fixture still holds: the canary
+        # workspace, the system-hidden session, the subagent sidechain, and the
+        # other device's session are all still absent.
         assert [row["path"] for row in workspaces["workspaces"]] == [
             "/Users/david/git/zerg",
+            "/Users/david/git/untyped",
             "/Users/david/git/user-hidden",
         ]
         assert workspaces["workspaces"][0]["label"] == "longhouse (main)"
