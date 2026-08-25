@@ -36,7 +36,7 @@ export default function TermsPage() {
         <p className="info-page-subtitle">
           The deal between you and the hosted Longhouse service.
         </p>
-        <p className="info-page-updated">Last updated: August 24, 2026</p>
+        <p className="info-page-updated">Last updated: August 25, 2026</p>
 
         <div className="legal-content">
           <h2>What This Covers</h2>
@@ -97,9 +97,19 @@ export default function TermsPage() {
           <h2>Data Retention and Deletion</h2>
           <p>
             We keep your sessions until you delete them or ask us to. Nothing expires on a timer.
-            Deletion requests go to <a href="mailto:support@longhouse.ai">support@longhouse.ai</a>{" "}
-            from the account's email address, and we complete them within 7 days. Copies can survive
-            in off-site backups until those rotate out. Full detail is in the{" "}
+            There is no delete button in the app yet, so requests go to{" "}
+            <a href="mailto:support@longhouse.ai">support@longhouse.ai</a> from the account's email
+            address, and we run them within 7 days.
+          </p>
+          <p>
+            The deletion itself is immediate. It removes the session from the live service — the
+            catalog rows, the search index and its embeddings, and the stored transcript bytes —
+            and it reports anything it could not reach rather than claiming everything is gone.
+            Off-site backups are the exception: a snapshot taken before you deleted still holds
+            the data until that snapshot rotates out, and we don't restore deleted data. Because
+            transcripts routinely capture live credentials, rotate any secret that appeared in one
+            instead of relying on deletion — the detail is on our{" "}
+            <Link to="/security">Security</Link> page and in the{" "}
             <Link to="/privacy">Privacy Policy</Link>.
           </p>
           <p>

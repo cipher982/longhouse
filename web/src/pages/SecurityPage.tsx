@@ -12,7 +12,7 @@ export default function SecurityPage() {
   usePageMeta({
     title: "Security - Longhouse",
     description:
-      "How Longhouse protects your data: TLS on the hosted service, secure authentication, encrypted credentials, revocable device tokens, and responsible disclosure.",
+      "How Longhouse protects your data: TLS on the hosted service, secure authentication, encrypted credentials, revocable device tokens, how long we keep transcripts, and responsible disclosure.",
   });
 
   return (
@@ -101,12 +101,38 @@ export default function SecurityPage() {
             Anyone who can read your Longhouse account can read those values.
           </p>
 
+          <h2>Retention and Deletion</h2>
+          <p>
+            We keep your transcripts until you delete them. Nothing expires on a timer, and we
+            don't thin old history to save space.
+          </p>
+          <p>
+            There is no delete button in the app yet, so you email us and we run it within 7 days.
+            The deletion itself is immediate: it removes the session from the live service — the
+            catalog rows, the search index and its embeddings, and the stored transcript bytes. A
+            real delete, not a flag that hides the session from view. The server reports what it
+            removed, and it names anything it could not reach instead of claiming a clean sweep:
+            today that always includes an older archive copy of the transcript on the server, and
+            any media file another session still points at.
+          </p>
+          <p>
+            Backups are the honest exception. We back the hosted database up off-site, encrypted,
+            and a snapshot taken before you deleted something still holds it until that snapshot
+            ages out — daily copies for two weeks, then thinned weekly, monthly, and yearly copies
+            beyond that. We never restore deleted data back into the service.
+          </p>
+          <p>
+            So deleting a session is not the same as un-leaking a secret. If a transcript ever
+            held a live key, token, or password, rotate it. Rotation is the only thing that
+            actually revokes it.
+          </p>
+
           <h2>Your Controls</h2>
           <p>You have control over your data:</p>
           <ul>
             <li><strong>View</strong> - See your sessions and timeline data</li>
             <li><strong>Revoke</strong> - Revoke a device token, or disconnect an integration and delete its credentials</li>
-            <li><strong>Delete</strong> - Deletion is partly manual today; the exact path is in our <Link to="/privacy">Privacy Policy</Link></li>
+            <li><strong>Delete</strong> - Delete a session or your whole history. There is no delete button in the app yet, so email <a href="mailto:support@longhouse.ai">support@longhouse.ai</a> from your account address and we run it</li>
           </ul>
 
           <h2>Responsible Disclosure</h2>
