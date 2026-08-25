@@ -832,14 +832,21 @@ async fn spawn_client(
                 .await
                 .context("timed out waiting for websocket listen URL")?
                 .context("app-server websocket listener did not announce a URL")?;
-            let ws_url = if config.proxy_codex_ws {
-                crate::codex_ws_relay::spawn(&upstream_ws_url)
+            let (ws_url, relay_auth_token) = if config.proxy_codex_ws {
+                // The relay authenticates its inbound connections, so the canary
+                // has to be a real client of it: mint the token, hand it to the
+                // relay, and present it on the upgrade. Connecting bare gets a
+                // 401 before the app-server is ever reached.
+                let token = crate::codex_ws_relay::generate_auth_token();
+                let relay_url = crate::codex_ws_relay::spawn(&upstream_ws_url, &token)
                     .await
-                    .with_context(|| format!("spawning WS relay in front of {upstream_ws_url}"))?
+                    .with_context(|| format!("spawning WS relay in front of {upstream_ws_url}"))?;
+                (relay_url, Some(token))
             } else {
-                upstream_ws_url
+                (upstream_ws_url, None)
             };
-            let (ws_stream, _response) = connect_async(ws_url.as_str())
+            let request = ws_client_request(&ws_url, relay_auth_token.as_deref())?;
+            let (ws_stream, _response) = connect_async(request)
                 .await
                 .with_context(|| format!("connecting websocket client to {ws_url}"))?;
             let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -891,6 +898,29 @@ async fn spawn_client(
         pending_methods: BTreeMap::new(),
         ws_url,
     })
+}
+
+/// The websocket upgrade the canary connects with. `relay_auth_token` is
+/// `Some` exactly when the relay is in front of the app-server; codex's own
+/// loopback listener does not read the header.
+fn ws_client_request(
+    ws_url: &str,
+    relay_auth_token: Option<&str>,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let mut request = ws_url
+        .into_client_request()
+        .with_context(|| format!("building app-server request for {ws_url}"))?;
+    if let Some(token) = relay_auth_token {
+        request.headers_mut().insert(
+            tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+            format!("Bearer {token}")
+                .parse()
+                .context("relay token is not a valid header value")?,
+        );
+    }
+    Ok(request)
 }
 
 fn app_server_command(
@@ -1773,6 +1803,30 @@ mod tests {
             extract_websocket_listen_url("readyz: http://127.0.0.1:4601/readyz"),
             None
         );
+    }
+
+    #[test]
+    fn the_relay_path_presents_the_bearer_the_relay_demands() {
+        // The relay 401s an unauthenticated upgrade, so a canary that connected
+        // bare could not reach the app-server at all -- the proxied lane would
+        // fail before observing anything.
+        let token = crate::codex_ws_relay::generate_auth_token();
+        let proxied = ws_client_request("ws://127.0.0.1:4601", Some(&token)).unwrap();
+        assert_eq!(
+            proxied
+                .headers()
+                .get(tokio_tungstenite::tungstenite::http::header::AUTHORIZATION)
+                .unwrap(),
+            &format!("Bearer {token}")
+        );
+
+        // Codex's own listener is not behind the relay in that mode and does not
+        // read the header; sending a token there would only widen its reach.
+        let direct = ws_client_request("ws://127.0.0.1:4601", None).unwrap();
+        assert!(direct
+            .headers()
+            .get(tokio_tungstenite::tungstenite::http::header::AUTHORIZATION)
+            .is_none());
     }
 
     #[test]

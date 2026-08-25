@@ -547,7 +547,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "e595c71787838819f14415727df0a1fc76ed3e9f08aceef5313b0bf0df0b62aa"
+      "adapter_digest": "2af424840496ee0fd4f83ce78cc063e11b33bd8a66fbca862c48cf879e97f0b0"
     },
     {
       "provider": "claude",

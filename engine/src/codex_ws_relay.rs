@@ -8,8 +8,10 @@
 //! future consumers). The relay:
 //!
 //! - Binds an ephemeral localhost port.
-//! - Requires `Authorization: Bearer <auth_token()>` on the inbound HTTP
-//!   upgrade. Loopback TCP carries no permission bits, and everything behind
+//! - Requires `Authorization: Bearer <token>` on the inbound HTTP upgrade,
+//!   where the token is the one its caller minted and passed to `spawn` — one
+//!   token per relay, never a process-wide constant. Loopback TCP carries no
+//!   permission bits, and everything behind
 //!   this socket — the live transcript, `turn/start`, `turn/steer` — is
 //!   reachable by any local process that can `connect()`, including the
 //!   model's own shell tool. The handshake bytes are forwarded verbatim once
@@ -34,7 +36,6 @@
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use rand::RngCore as _;
-use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -44,29 +45,28 @@ use tokio::net::{TcpListener, TcpStream};
 const MAX_REQUEST_HEAD: usize = 16 * 1024;
 const REQUEST_HEAD_TIMEOUT: Duration = Duration::from_secs(10);
 
-static AUTH_TOKEN: OnceLock<String> = OnceLock::new();
-
-/// The bearer token every relay connection must present.
+/// Mint the bearer token for one relay.
 ///
-/// One bridge process owns one managed session, so a per-process token is a
-/// per-session token. The bridge publishes it in its 0600 state file, which is
-/// how out-of-process clients (`longhouse codex` send/steer, the `--remote`
-/// TUI) get it.
-pub fn auth_token() -> &'static str {
-    AUTH_TOKEN.get_or_init(|| {
-        let mut bytes = [0_u8; 24];
-        rand::rngs::OsRng.fill_bytes(&mut bytes);
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-    })
+/// The caller owns the value and decides who gets it: the bridge publishes its
+/// token in its 0600 state file, which is how out-of-process clients
+/// (`longhouse codex` send/steer, the `--remote` TUI) reach that session's
+/// relay. Nothing is cached here on purpose — a process-wide token would let
+/// any relay in the process accept another relay's clients, which is a property
+/// no caller should have to reason about.
+pub fn generate_auth_token() -> String {
+    let mut bytes = [0_u8; 24];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Spawn a relay in front of `upstream_url`. Returns the `ws://...` URL the
-/// relay is listening on.
+/// Spawn a relay in front of `upstream_url`, guarded by `auth_token`. Returns
+/// the `ws://...` URL the relay is listening on.
 ///
 /// The relay task runs for the lifetime of the tokio runtime. Accepts are
 /// per-inbound so the same relay serves the bridge's own client plus any
-/// `codex --remote` TUI that shows up later.
-pub async fn spawn(upstream_url: &str) -> Result<String> {
+/// `codex --remote` TUI that shows up later — every one of them presenting this
+/// relay's token, and no other relay's.
+pub async fn spawn(upstream_url: &str, auth_token: &str) -> Result<String> {
     let upstream_addr = upstream_url
         .strip_prefix("ws://")
         .ok_or_else(|| anyhow!("codex WS relay only supports ws:// URLs, got {upstream_url}"))?
@@ -79,6 +79,7 @@ pub async fn spawn(upstream_url: &str) -> Result<String> {
         .local_addr()
         .context("reading codex WS relay listen addr")?;
     let relay_url = format!("ws://{}", local_addr);
+    let expected_bearer = format!("Bearer {auth_token}");
 
     tokio::spawn(async move {
         loop {
@@ -90,6 +91,7 @@ pub async fn spawn(upstream_url: &str) -> Result<String> {
                 }
             };
             let upstream_addr = upstream_addr.clone();
+            let expected_bearer = expected_bearer.clone();
             tokio::spawn(async move {
                 let _ = inbound.set_nodelay(true);
                 let head = match read_request_head(&mut inbound).await {
@@ -99,7 +101,7 @@ pub async fn spawn(upstream_url: &str) -> Result<String> {
                         return;
                     }
                 };
-                if !head_is_authorized(&head) {
+                if !head_is_authorized(&head, &expected_bearer) {
                     let _ = inbound
                         .write_all(
                             b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -157,12 +159,13 @@ async fn read_request_head(inbound: &mut TcpStream) -> Result<Vec<u8>> {
         .map_err(|_| anyhow!("timed out reading the request head"))?
 }
 
-fn head_is_authorized(head: &[u8]) -> bool {
-    let expected = format!("Bearer {}", auth_token());
+fn head_is_authorized(head: &[u8], expected_bearer: &str) -> bool {
     String::from_utf8_lossy(head)
         .lines()
         .filter_map(|line| line.split_once(':'))
-        .any(|(name, value)| name.eq_ignore_ascii_case("authorization") && value.trim() == expected)
+        .any(|(name, value)| {
+            name.eq_ignore_ascii_case("authorization") && value.trim() == expected_bearer
+        })
 }
 
 fn set_large_socket_buffers(sock: &TcpStream) {
@@ -194,32 +197,87 @@ fn set_large_socket_buffers(sock: &TcpStream) {
 mod tests {
     use super::*;
 
+    fn upgrade_head(token: Option<&str>) -> String {
+        match token {
+            Some(token) => format!(
+                "GET / HTTP/1.1\r\nHost: relay\r\nUpgrade: websocket\r\nAuthorization: Bearer {token}\r\n\r\n"
+            ),
+            None => "GET / HTTP/1.1\r\nHost: relay\r\nUpgrade: websocket\r\n\r\n".to_string(),
+        }
+    }
+
     #[test]
     fn only_the_relay_token_opens_the_socket() {
-        let authorized = format!(
-            "GET / HTTP/1.1\r\nHost: 127.0.0.1:1\r\nUpgrade: websocket\r\nAuthorization: Bearer {}\r\n\r\n",
-            auth_token()
-        );
-        assert!(head_is_authorized(authorized.as_bytes()));
-        assert!(!head_is_authorized(
-            b"GET / HTTP/1.1\r\nHost: 127.0.0.1:1\r\nUpgrade: websocket\r\n\r\n"
+        let token = generate_auth_token();
+        let expected = format!("Bearer {token}");
+        assert!(head_is_authorized(
+            upgrade_head(Some(&token)).as_bytes(),
+            &expected
         ));
+        assert!(!head_is_authorized(upgrade_head(None).as_bytes(), &expected));
         assert!(!head_is_authorized(
-            b"GET / HTTP/1.1\r\nAuthorization: Bearer guessed-token\r\n\r\n"
+            upgrade_head(Some("guessed-token")).as_bytes(),
+            &expected
         ));
+    }
+
+    #[test]
+    fn each_relay_mints_its_own_token() {
+        // The token used to be a process-wide OnceLock, so every relay in the
+        // process accepted every other relay's clients. Two mints must differ,
+        // and one must not open the other.
+        let first = generate_auth_token();
+        let second = generate_auth_token();
+        assert_ne!(first, second);
+        assert!(!head_is_authorized(
+            upgrade_head(Some(&first)).as_bytes(),
+            &format!("Bearer {second}")
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_relay_refuses_another_relays_token() {
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = upstream.accept().await {
+                tokio::spawn(async move {
+                    let _ = read_request_head(&mut sock).await;
+                    let _ = sock.write_all(b"UPSTREAM-REACHED").await;
+                });
+            }
+        });
+
+        let mine = generate_auth_token();
+        let theirs = generate_auth_token();
+        let relay_url = spawn(&format!("ws://{upstream_addr}"), &mine).await.unwrap();
+        let relay_addr = relay_url.strip_prefix("ws://").unwrap().to_string();
+
+        let mut foreign = TcpStream::connect(&relay_addr).await.unwrap();
+        foreign
+            .write_all(upgrade_head(Some(&theirs)).as_bytes())
+            .await
+            .unwrap();
+        let mut refusal = Vec::new();
+        foreign.read_to_end(&mut refusal).await.unwrap();
+        assert!(String::from_utf8_lossy(&refusal).starts_with("HTTP/1.1 401"));
     }
 
     #[tokio::test]
     async fn unauthenticated_connections_never_reach_upstream() {
         // Stands in for codex's app-server: reports back whether the relay
         // forwarded the handshake, and whether the bearer survived it.
+        let token = generate_auth_token();
+        let expected = format!("Bearer {token}");
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
+        let upstream_expected = expected.clone();
         tokio::spawn(async move {
             while let Ok((mut sock, _)) = upstream.accept().await {
+                let upstream_expected = upstream_expected.clone();
                 tokio::spawn(async move {
                     let head = read_request_head(&mut sock).await.unwrap();
-                    let reply = if head_is_authorized(&head) {
+                    let reply = if head_is_authorized(&head, &upstream_expected) {
                         b"UPSTREAM-AUTH".as_slice()
                     } else {
                         b"UPSTREAM-NONE".as_slice()
@@ -229,12 +287,14 @@ mod tests {
             }
         });
 
-        let relay_url = spawn(&format!("ws://{upstream_addr}")).await.unwrap();
+        let relay_url = spawn(&format!("ws://{upstream_addr}"), &token)
+            .await
+            .unwrap();
         let relay_addr = relay_url.strip_prefix("ws://").unwrap().to_string();
 
         let mut anonymous = TcpStream::connect(&relay_addr).await.unwrap();
         anonymous
-            .write_all(b"GET / HTTP/1.1\r\nHost: relay\r\nUpgrade: websocket\r\n\r\n")
+            .write_all(upgrade_head(None).as_bytes())
             .await
             .unwrap();
         let mut refusal = Vec::new();
@@ -243,13 +303,7 @@ mod tests {
 
         let mut authorized = TcpStream::connect(&relay_addr).await.unwrap();
         authorized
-            .write_all(
-                format!(
-                    "GET / HTTP/1.1\r\nHost: relay\r\nUpgrade: websocket\r\nAuthorization: Bearer {}\r\n\r\n",
-                    auth_token()
-                )
-                .as_bytes(),
-            )
+            .write_all(upgrade_head(Some(&token)).as_bytes())
             .await
             .unwrap();
         let mut spliced = [0_u8; 13];

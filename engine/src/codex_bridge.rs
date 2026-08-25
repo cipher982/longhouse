@@ -2950,6 +2950,32 @@ fn write_coordination_token_file(config: &BridgeRunConfig) -> Result<Option<Priv
     .map(Some)
 }
 
+/// Shape the environment the codex app-server child is handed.
+///
+/// `api_token` is the permanent device token: owner-wide, non-expiring, and
+/// inherited by every grandchild the app-server spawns. Codex has no
+/// session-scoped hook token, and nothing in the Codex lane reads
+/// LONGHOUSE_HOOK_TOKEN — hook results arrive as `hook/completed` over the
+/// app-server socket — so the variable stays scrubbed rather than filled in
+/// with owner authority.
+///
+/// The same token also arrives here by inheritance, under a different name:
+/// `codex-bridge start` puts it in CODEX_BRIDGE_TOKEN_ENV so the `run` process
+/// can authenticate to the Runtime Host, and this process is that `run`
+/// process. The overlay scrubs that key too (see NEVER_INHERITED_KEYS), and it
+/// is removed explicitly here because this is the single spawn site that would
+/// otherwise hand the device token to the model. The bridge keeps the value in
+/// `config.api_token`, in memory, and the child gets none of it.
+///
+/// This is a named function rather than inline calls so a test can hand the
+/// same shaping to a real child process and read back what it actually
+/// inherited — see `the_app_server_child_is_handed_no_device_token`.
+fn apply_app_server_env(command: &mut Command, config: &BridgeRunConfig) {
+    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id)
+        .apply(command, &[("LONGHOUSE_HOOK_URL", &config.api_url)]);
+    command.env_remove(CODEX_BRIDGE_TOKEN_ENV);
+}
+
 async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> {
     let mut command = Command::new(&config.codex_bin);
     let coordination_command =
@@ -2958,8 +2984,9 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     // One token guards both hops: the relay demands it, forwards the handshake
     // verbatim, and codex validates the same bearer on its own listener. That
     // port is loopback too, so leaving it open would move the unauthenticated
-    // door rather than close it.
-    let ws_auth_token = crate::codex_ws_relay::auth_token().to_string();
+    // door rather than close it. It is minted here, per bridge process, and
+    // handed to the relay below — nothing else in the process can reach it.
+    let ws_auth_token = crate::codex_ws_relay::generate_auth_token();
     let ws_token_file =
         PrivateTokenFile::write(config.state_file.with_extension("ws-token"), &ws_auth_token)?;
     command.args(codex_app_server_args(
@@ -2970,14 +2997,7 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
             .map(|file| file.path.as_path()),
         &ws_token_file.path,
     ));
-    // `api_token` is the permanent device token: owner-wide, non-expiring, and
-    // inherited by every grandchild the app-server spawns. Codex has no
-    // session-scoped hook token, and nothing in the Codex lane reads
-    // LONGHOUSE_HOOK_TOKEN — hook results arrive as `hook/completed` over the
-    // app-server socket — so the variable stays scrubbed rather than filled in
-    // with owner authority.
-    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id)
-        .apply(&mut command, &[("LONGHOUSE_HOOK_URL", &config.api_url)]);
+    apply_app_server_env(&mut command, config);
     command
         .current_dir(&config.cwd)
         .stdin(Stdio::null())
@@ -3046,10 +3066,9 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     // internal mpsc(128) from filling under bursty streaming and killing the
     // WS. The same relay also fronts the remote TUI since ws_url gets written
     // to the state file. See engine/src/codex_ws_relay.rs.
-    let ws_url = crate::codex_ws_relay::spawn(&upstream_ws_url)
+    let ws_url = crate::codex_ws_relay::spawn(&upstream_ws_url, &ws_auth_token)
         .await
         .with_context(|| format!("spawning codex WS relay in front of {upstream_ws_url}"))?;
-    let ws_auth_token = crate::codex_ws_relay::auth_token().to_string();
     let (ws_stream, _response) = connect_async(relay_client_request(&ws_url, &ws_auth_token)?)
         .await
         .with_context(|| format!("connecting bridge client to {ws_url}"))?;
@@ -6982,6 +7001,79 @@ mod tests {
                 ]
             }]
         })
+    }
+
+    #[test]
+    fn the_device_token_is_never_inherited_by_the_app_server() {
+        // `codex-bridge start` hands the permanent device token to the `run`
+        // process in this variable, and the app-server is that process's child.
+        // Without the key in the scrub list, `codex` -- and every shell command
+        // the model runs under it -- inherits owner-wide, non-expiring
+        // credentials. The explicit env_remove in spawn_app_server_client is the
+        // second layer; this is the one that survives a regenerated contract.
+        assert!(
+            crate::managed_identity::never_inherited_keys().contains(&CODEX_BRIDGE_TOKEN_ENV),
+            "{CODEX_BRIDGE_TOKEN_ENV} must be in NEVER_INHERITED_KEYS; add it to \
+             NEVER_INHERITED in scripts/generate/managed_identity_contract_rs.py"
+        );
+    }
+
+    /// The finding, pinned at the only level that can be wrong: what the child
+    /// process actually inherits.
+    ///
+    /// The contract test above proves the key is in the scrub list; this proves
+    /// the scrub list is reaching this spawn site. `codex-bridge start` really
+    /// does put the permanent device token in the `run` process's own
+    /// environment, so the test poisons the parent the same way and then reads
+    /// back a real child's `environ`. Anything that reintroduces the leak —
+    /// dropping the `env_remove`, shaping the env before the overlay scrubs it,
+    /// or a launcher setting the token back — fails here.
+    ///
+    /// Mutating the process environment is why `make test-engine` pins
+    /// `--test-threads=1`; the previous value is restored before any assert so
+    /// a failure cannot leave it poisoned for the next test.
+    #[tokio::test]
+    async fn the_app_server_child_is_handed_no_device_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = make_test_run_config(&temp);
+        config.api_token = "device-token-sentinel-9f3c4d".to_string();
+
+        let previous = std::env::var(CODEX_BRIDGE_TOKEN_ENV).ok();
+        std::env::set_var(CODEX_BRIDGE_TOKEN_ENV, &config.api_token);
+        let mut command = Command::new("/usr/bin/env");
+        apply_app_server_env(&mut command, &config);
+        let spawned = command.output().await;
+        match previous {
+            Some(value) => std::env::set_var(CODEX_BRIDGE_TOKEN_ENV, value),
+            None => std::env::remove_var(CODEX_BRIDGE_TOKEN_ENV),
+        }
+
+        let output = spawned.expect("running /usr/bin/env");
+        assert!(output.status.success(), "/usr/bin/env failed: {output:?}");
+        let child_env = String::from_utf8_lossy(&output.stdout);
+
+        assert!(
+            !child_env.contains(&config.api_token),
+            "the device token reached the app-server child's environment"
+        );
+        assert!(
+            !child_env.contains(CODEX_BRIDGE_TOKEN_ENV),
+            "{CODEX_BRIDGE_TOKEN_ENV} reached the app-server child's environment"
+        );
+        assert!(
+            !child_env.contains("LONGHOUSE_HOOK_TOKEN="),
+            "the Codex lane sets no hook token; owner authority must stay out of the child"
+        );
+        // The overlay still has to do its actual job, or a test that scrubbed
+        // everything would pass while managed identity silently disappeared.
+        assert!(
+            child_env.contains("LONGHOUSE_MANAGED_PROVIDER=codex"),
+            "the app-server child lost its managed identity: {child_env}"
+        );
+        assert!(
+            child_env.contains(&format!("LONGHOUSE_MANAGED_SESSION_ID={}", config.session_id)),
+            "the app-server child lost its session id: {child_env}"
+        );
     }
 
     #[test]
