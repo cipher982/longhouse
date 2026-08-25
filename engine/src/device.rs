@@ -2971,11 +2971,26 @@ fn service_environment(
     machine: &NativeMachineStateDetail,
     home: &Path,
 ) -> Vec<(String, String)> {
+    // CLAUDE_CONFIG_DIR is deliberately absent. It used to be exported here as
+    // `home/.claude` -- always the default, never a user choice -- on the
+    // assumption that naming the directory Claude would pick anyway is a no-op.
+    // It is not. Claude Code keys its stored credential on whether the config
+    // dir was configured, so exporting the default made the CLI stop finding a
+    // credential it holds, and every Console turn answered
+    // "Not logged in · Please run /login" on a machine whose own terminal
+    // reported a healthy Max subscription.
+    //
+    // Measured on macOS, where that credential lives in the login Keychain:
+    //
+    //     HOME+PATH                  loggedIn=false
+    //     +USER                      loggedIn=true
+    //     +CLAUDE_CONFIG_DIR         loggedIn=false
+    //     +USER +CLAUDE_CONFIG_DIR   loggedIn=false
+    //
+    // This plist carried USER and CLAUDE_CONFIG_DIR, which is the bottom row.
+    // Unset, Claude resolves the same ~/.claude for transcripts and state, so
+    // dropping it changes nothing else.
     let mut env = vec![
-        (
-            "CLAUDE_CONFIG_DIR".to_string(),
-            home.join(".claude").display().to_string(),
-        ),
         (
             "LONGHOUSE_HOME".to_string(),
             longhouse_home.display().to_string(),
@@ -5900,6 +5915,17 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         assert!(content.contains("<string>work-macbook-dev</string>"));
         assert!(content.contains("<key>LONGHOUSE_MACHINE_GENERATION</key>"));
         assert!(content.contains("<key>LONGHOUSE_MACHINE_STATE_HASH</key>"));
+        // Exporting CLAUDE_CONFIG_DIR here, even as the default ~/.claude that
+        // Claude would resolve on its own, made the CLI stop finding its stored
+        // credential. Every Console turn on this machine then answered
+        // "Not logged in · Please run /login" while the user's own terminal
+        // reported a healthy Max subscription, because a login shell can read
+        // the macOS Keychain entry and a launchd service with this variable set
+        // cannot. Naming the default is not a no-op.
+        assert!(
+            !content.contains("CLAUDE_CONFIG_DIR"),
+            "the service must not export CLAUDE_CONFIG_DIR: {content}"
+        );
         assert!(state.path().join("agent").join("logs").exists());
     }
 

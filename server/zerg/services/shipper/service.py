@@ -145,6 +145,34 @@ def _resolve_claude_dir(claude_dir: str | None) -> Path:
     return Path.home() / ".claude"
 
 
+def _service_claude_config_env(claude_dir: Path) -> dict[str, str]:
+    """Pass CLAUDE_CONFIG_DIR to the service only when it is not the default.
+
+    Setting this variable is not a no-op even when it names the directory Claude
+    would have chosen anyway. Claude Code keys its stored credential on whether
+    the config dir was configured, so exporting the default path makes the CLI
+    stop finding a credential it holds -- and every Console turn then answers
+    "Not logged in · Please run /login" on a machine whose own terminal reports
+    a healthy subscription.
+
+    Measured on macOS, where the credential lives in the login Keychain rather
+    than a file:
+
+        HOME+PATH                  loggedIn=false
+        +USER                      loggedIn=true
+        +CLAUDE_CONFIG_DIR         loggedIn=false
+        +USER +CLAUDE_CONFIG_DIR   loggedIn=false
+
+    The engine's launchd plist carried USER and CLAUDE_CONFIG_DIR, which is the
+    bottom row. Omitting the default is behaviour-preserving for everything
+    else: unset, Claude resolves the same ~/.claude for transcripts and state.
+    A genuinely custom directory is still exported, because then the engine and
+    the CLI must agree on a location neither can infer.
+    """
+
+    return {} if claude_dir == Path.home() / ".claude" else {"CLAUDE_CONFIG_DIR": str(claude_dir)}
+
+
 def _find_project_root() -> Path | None:
     """Locate the project root containing pyproject.toml (dev installs)."""
     current = Path(__file__).resolve()
@@ -350,7 +378,7 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
 
     program_args = "\n".join(f"        <string>{saxutils.escape(str(arg))}</string>" for arg in args)
     environment = {
-        "CLAUDE_CONFIG_DIR": str(claude_dir),
+        **_service_claude_config_env(claude_dir),
         "LONGHOUSE_HOME": str(longhouse_home),
         "LONGHOUSE_LOG_DIR": str(log_dir),
         "PATH": _common_service_path(),
@@ -416,7 +444,7 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
         f"{machine_name_arg}"
     )
     environment_lines = [
-        f'Environment="CLAUDE_CONFIG_DIR={claude_dir}"',
+        *(f'Environment="{key}={value}"' for key, value in _service_claude_config_env(claude_dir).items()),
         f'Environment="LONGHOUSE_HOME={longhouse_home}"',
         f'Environment="LONGHOUSE_LOG_DIR={log_dir}"',
         f'Environment="PATH={_common_service_path()}"',
