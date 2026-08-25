@@ -766,14 +766,28 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                     require_assistant_marker=True,
                     timeout=args.live_timeout_secs,
                 )
-                delivered = (
-                    provider_response_correlation.get("timed_out") is False
-                    and provider_response_correlation.get("marker_observed_in_assistant") is True
-                )
-
                 inbox_item = _find_inbound_directed_input(args.api_url, target_token, target.session_id, input_id)
                 inbox_source_session_id = (inbox_item or {}).get("source_session_id")
                 source_attribution_matches = inbox_source_session_id == source.session_id
+
+                # Visibility is the target session being served the directed
+                # input with its attribution intact -- the same Longhouse fact
+                # codex_coordination_native and claude_coordination_directed_input
+                # already assert under this id, both of them reading the target's
+                # inbound list and nothing else.
+                #
+                # This lane alone required the model to echo a marker back, which
+                # asserts the provider answered, not that Longhouse delivered. A
+                # Cursor turn that never replied therefore reported
+                # attributed_input_visible false while every Longhouse-side fact
+                # in the same observation was true: persisted, receipt linked,
+                # inbox item present, attribution matched. That is what the
+                # escalating regression on 0c65706aae55 was made of.
+                #
+                # The correlation is still observed and retained below, because
+                # "the provider never answered" is worth having in the evidence.
+                # It just does not get to decide a Longhouse contract.
+                delivered = inbox_item is not None and source_attribution_matches
 
                 observation = {
                     "source_ready": source_ready_marker in source_ready_reply,

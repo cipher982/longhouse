@@ -476,6 +476,119 @@ def test_run_coordination_directed_input_retains_asymmetric_assertions_in_one_ob
     assert result["status"] == "pass"
     assert result["observation_scope"] == "scenario"
     assert result["assertions"]["provider_input_receipt_linked"] is False
+    # "Specifically" is the whole point of this case, and it only became true
+    # once the provider's marker echo stopped deciding this assertion. The
+    # stubbed correlation above times out, and the Longhouse-side facts are all
+    # intact -- inbox item present, attribution matching -- so delivery holds.
+    assert result["assertions"]["attributed_input_visible"] is True
+
+
+def test_a_provider_that_never_replies_does_not_fail_longhouse_delivery(tmp_path: Path, monkeypatch) -> None:
+    """The incident on 0c65706aae55, reduced.
+
+    Every Longhouse-side fact held -- persisted, receipt linked, inbox item
+    present, attribution matched -- and the Cursor turn produced no assistant
+    events before the budget ran out. This lane reported attributed_input_visible
+    false on that, the candidate lane rolled it up as a Longhouse regression, and
+    the obligation escalated for 38 hours against a product that had done its job.
+    """
+    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence-no-reply")
+    args.variant = execution_variant_key(
+        provider="cursor",
+        assertion_id="attributed_input_visible",
+        scenario_id="cursor_coordination_directed_input",
+        variant=None,
+    )
+    source = _fake_session("source-session-3", tmp_path / "src-cwd3")
+    target = _fake_session("target-session-3", tmp_path / "tgt-cwd3")
+    sessions = iter([source, target])
+    tokens = iter(["source-token-3", "target-token-3"])
+    _install_fake_machine(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
+    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
+    monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: a[3])
+    monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(
+        m,
+        "_wait_assistant_response_after_marker",
+        lambda *a, **k: (
+            {"events": []},
+            {
+                "method": "assistant_marker_then_new_assistant_event",
+                "timed_out": True,
+                "marker_observed_in_assistant": False,
+                "new_assistant_events": 0,
+            },
+        ),
+    )
+    monkeypatch.setattr(m, "_mint_coordination_token", lambda *a, **k: next(tokens))
+    monkeypatch.setattr(
+        m,
+        "_create_directed_input",
+        lambda *a, **k: {"id": 11, "source_session_id": "source-session-3", "input_receipt": {"ok": True}},
+    )
+    monkeypatch.setattr(m, "_wait_until", _deterministic_wait_until)
+    monkeypatch.setattr(
+        m,
+        "_find_inbound_directed_input",
+        lambda api_url, token, session_id, input_id: {"id": input_id, "source_session_id": "source-session-3"},
+    )
+
+    result = m.run_coordination(args)
+
+    assert result["assertions"]["attributed_input_visible"] is True
+    assert result["assertions"]["directed_input_persisted"] is True
+    # The provider's silence is still retained as evidence; it just does not
+    # decide a Longhouse contract.
+    assert result["observation"]["provider_response_correlation"]["timed_out"] is True
+
+
+def test_an_input_the_target_is_never_served_still_fails(tmp_path: Path, monkeypatch) -> None:
+    # The other direction, so the assertion is not merely always true: no inbox
+    # item means Longhouse did not make the input visible to the target.
+    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence-not-served")
+    args.variant = execution_variant_key(
+        provider="cursor",
+        assertion_id="attributed_input_visible",
+        scenario_id="cursor_coordination_directed_input",
+        variant=None,
+    )
+    source = _fake_session("source-session-4", tmp_path / "src-cwd4")
+    target = _fake_session("target-session-4", tmp_path / "tgt-cwd4")
+    sessions = iter([source, target])
+    tokens = iter(["source-token-4", "target-token-4"])
+    _install_fake_machine(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
+    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
+    monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: a[3])
+    monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(
+        m,
+        "_wait_assistant_response_after_marker",
+        lambda *a, **k: (
+            {"events": []},
+            {"method": "assistant_marker_then_new_assistant_event", "timed_out": False, "marker_observed_in_assistant": True},
+        ),
+    )
+    monkeypatch.setattr(m, "_mint_coordination_token", lambda *a, **k: next(tokens))
+    monkeypatch.setattr(
+        m,
+        "_create_directed_input",
+        lambda *a, **k: {"id": 12, "source_session_id": "source-session-4", "input_receipt": {"ok": True}},
+    )
+    monkeypatch.setattr(m, "_wait_until", _deterministic_wait_until)
+    monkeypatch.setattr(m, "_find_inbound_directed_input", lambda *a, **k: None)
+
+    result = m.run_coordination(args)
+
     assert result["assertions"]["attributed_input_visible"] is False
 
 
