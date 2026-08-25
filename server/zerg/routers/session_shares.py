@@ -1,4 +1,22 @@
-"""Browser and public endpoints for explicit session share links."""
+"""Browser and public endpoints for explicit session share links -- DISABLED.
+
+Nothing in this module is served. ``router`` and ``public_router`` -- the two
+names ``main.py`` mounts -- are empty on purpose; every handler below is
+decorated onto ``_shelved``/``_shelved_public``, which nothing includes.
+
+The blocker is the schema, not the code. ``SessionShare`` and
+``SessionShareEvent`` (``zerg/models/session_share.py``) are declared on the
+archive ``Base``. Every real deployment runs the live catalog, and catalogd
+creates its own set of schemas -- the share tables are in none of them, so a
+share has nowhere to be written. ``server/tests_lite/test_session_shares.py``
+passes because it calls ``Base.metadata.create_all()`` against a schema
+production never has; that is why this shipped looking green.
+
+The design is worth reviving: HMAC tokens hashed at rest, TTL-bounded,
+revocable, with the only real audit table in the codebase. To bring it back,
+give the two tables a home catalogd actually creates, point ``router`` and
+``public_router`` at the shelved routers, and run ``make generate-sdk``.
+"""
 
 from __future__ import annotations
 
@@ -29,8 +47,20 @@ from zerg.services.session_shares import revoke_session_share
 from zerg.services.session_views import SessionSharerResponse
 from zerg.utils.time import UTCBaseModel
 
-router = APIRouter(tags=["session-shares"], dependencies=[Depends(require_single_tenant)])
-public_router = APIRouter(
+# The two routers ``main.py`` includes. Empty is how "not registered" is
+# expressed from inside this file, and it is the stronger of the two disables:
+# mounting the handlers to return 404/501 would keep four dead endpoints in the
+# published OpenAPI schema -- still advertising a capability that cannot
+# exist -- and would leave the unauthenticated
+# ``/public/session-shares/{token}/preview`` route reachable. With nothing
+# mounted there is no route to match, so no handler, no dependency chain, and
+# no contract for clients to generate against.
+router = APIRouter()
+public_router = APIRouter()
+
+# Shelved, not deleted. Everything below hangs off these; nothing includes them.
+_shelved = APIRouter(tags=["session-shares"], dependencies=[Depends(require_single_tenant)])
+_shelved_public = APIRouter(
     prefix="/public/session-shares",
     tags=["session-shares"],
     dependencies=[Depends(require_single_tenant)],
@@ -154,7 +184,7 @@ def _require_session_owner(db: Session | None, *, session_id: UUID, user_id: int
     _raise_share_error(SessionShareNotFound())
 
 
-@router.post("/timeline/sessions/{session_id}/shares", response_model=SessionShareResponse)
+@_shelved.post("/timeline/sessions/{session_id}/shares", response_model=SessionShareResponse)
 def create_timeline_session_share(
     session_id: UUID,
     body: CreateSessionShareRequest | None = None,
@@ -190,7 +220,7 @@ def create_timeline_session_share(
     )
 
 
-@router.delete("/timeline/session-shares/{share_id}", response_model=SessionShareResolveResponse)
+@_shelved.delete("/timeline/session-shares/{share_id}", response_model=SessionShareResolveResponse)
 def revoke_timeline_session_share(
     share_id: int,
     db: Session | None = Depends(_share_store_db_dependency),
@@ -210,7 +240,7 @@ def revoke_timeline_session_share(
     )
 
 
-@router.get("/timeline/session-shares/{token}/resolve", response_model=SessionShareResolveResponse)
+@_shelved.get("/timeline/session-shares/{token}/resolve", response_model=SessionShareResolveResponse)
 def resolve_timeline_session_share(
     token: str,
     db: Session | None = Depends(_share_store_db_dependency),
@@ -230,7 +260,7 @@ def resolve_timeline_session_share(
     )
 
 
-@public_router.get("/{token}/preview", response_model=SessionSharePreviewResponse)
+@_shelved_public.get("/{token}/preview", response_model=SessionSharePreviewResponse)
 def preview_public_session_share(
     token: str,
     db: Session | None = Depends(_share_store_db_dependency),

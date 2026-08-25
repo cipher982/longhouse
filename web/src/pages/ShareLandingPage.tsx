@@ -1,3 +1,16 @@
+/**
+ * ShareLandingPage — SHELVED. Nothing routes here.
+ *
+ * Session sharing is disabled: `SessionShare`/`SessionShareEvent` live on the
+ * archive `Base`, and catalogd — which every real deployment runs — creates a
+ * different set of schemas, so the tables do not exist and no share link can be
+ * minted. The server routes are shelved the same way in
+ * `server/zerg/routers/session_shares.py`; that file holds the full explanation.
+ *
+ * Reviving this means re-adding the "/share/:token" route in `routes/App.tsx`
+ * and restoring the `share_token` param handling in `SessionDetailPage`.
+ */
+
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate, useParams } from "react-router-dom";

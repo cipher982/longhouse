@@ -43,10 +43,8 @@ import { config } from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { getSessionStartedLabel } from "../lib/sessionTiming";
 import { getSessionCardText } from "../lib/sessionUtils";
-import { buildSessionShareUrl, copyToClipboard } from "../lib/clipboard";
 import { useMarkSessionRead } from "../hooks/useMarkSessionRead";
 import {
-  createSessionShare,
   createSessionResumeIntent,
   respondToPauseRequest,
   setSessionAction,
@@ -65,21 +63,18 @@ function SessionDetailWorkspaceRoute({
   sessionId,
   debugTelemetry,
   sharedByUserId,
-  shareToken,
 }: {
   highlightEventId: AgentEventId | null;
   returnTo: string;
   sessionId: string | null;
   debugTelemetry: boolean;
   sharedByUserId: number | null;
-  shareToken: string | null;
 }) {
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
   const workspace = useSessionWorkspace(sessionId, {
     highlightEventId,
     shared_by: sharedByUserId,
-    share_token: shareToken,
   });
 
   const {
@@ -114,7 +109,7 @@ function SessionDetailWorkspaceRoute({
   useMarkSessionRead({
     sessionId,
     sessionState: session?.session_state,
-    disabled: sharedByUserId != null || shareToken != null,
+    disabled: sharedByUserId != null,
   });
   const sessionStartedLabel = useMemo(
     () => getSessionStartedLabel(session, nowMs),
@@ -137,7 +132,6 @@ function SessionDetailWorkspaceRoute({
   const queryClient = useQueryClient();
   const [confirmingArchive, setConfirmingArchive] = useState(false);
   const [hidingSession, setHidingSession] = useState(false);
-  const [copyingShareLink, setCopyingShareLink] = useState(false);
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeIntent, setResumeIntent] = useState<SessionResumeIntent | null>(null);
 
@@ -180,33 +174,6 @@ function SessionDetailWorkspaceRoute({
       setHidingSession(false);
     }
   }, [session, hidingSession, queryClient, handleBack]);
-
-  const handleCopyShareLink = useCallback(async () => {
-    if (!session) return;
-    const currentUserId = currentUser?.id ?? null;
-    if (currentUserId === null || currentUserId === undefined) {
-      return;
-    }
-    if (config.demoMode) {
-      toast(DEMO_READ_ONLY_MESSAGE);
-      return;
-    }
-    setCopyingShareLink(true);
-    try {
-      const share = await createSessionShare(session.id, {});
-      const url = buildSessionShareUrl(window.location.origin, share.share_url || share.token);
-      const ok = await copyToClipboard(url);
-      if (ok) {
-        toast.success("Link copied");
-      } else {
-        toast.error("Couldn't copy link — copy it from the address bar");
-      }
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Couldn't create share link");
-    } finally {
-      setCopyingShareLink(false);
-    }
-  }, [session, currentUser]);
 
   const handleResume = useCallback(async () => {
     if (!session || resumeLoading) return;
@@ -279,8 +246,8 @@ function SessionDetailWorkspaceRoute({
       ? session
       : { ...session, loop_mode: effectiveLoopMode };
 
-  // Shared-by pill render conditions and the copy-link button availability.
-  // These depend on `displaySession` (declared just above) and the current viewer.
+  // Shared-by pill render conditions. These depend on `displaySession`
+  // (declared just above) and the current viewer.
   const sessionSharer = displaySession.sharer ?? null;
   const currentUserId = currentUser?.id ?? null;
   // Defense in depth: the server already hides self-share, but if the cached
@@ -290,7 +257,6 @@ function SessionDetailWorkspaceRoute({
     sessionSharer !== null &&
     sessionSharer !== undefined &&
     (currentUserId === null || sessionSharer.id !== currentUserId);
-  const shouldShowCopyLinkButton = currentUserId !== null && currentUserId !== undefined;
   const sharedByDisplayName = sessionSharer?.display_name?.trim() || "a teammate";
 
   const branchSourceSession = currentThreadSession || session;
@@ -405,19 +371,6 @@ function SessionDetailWorkspaceRoute({
           {resumeLoading ? "Checking…" : `Resume on ${runtimeHostLabel}`}
         </Button>
       ) : null}
-      {shouldShowCopyLinkButton ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void handleCopyShareLink()}
-          disabled={copyingShareLink}
-          title="Copy a link to this session"
-          aria-label="Copy link to this session"
-          data-testid="session-copy-link-button"
-        >
-          {copyingShareLink ? "Copying" : "Copy link"}
-        </Button>
-      ) : null}
       <Button
         variant="ghost"
         size="sm"
@@ -528,7 +481,6 @@ function SessionDetailWorkspaceRoute({
           onVisibleSelectionChange={handleVisibleSelectionChange}
           headerLeft={headerLeft}
           headerRight={headerRight}
-          renderMedia={!shareToken}
           listRef={registerTimelineList}
           dock={
             <div
@@ -663,7 +615,6 @@ export default function SessionDetailPage() {
     if (!Number.isFinite(parsed) || parsed < 1) return null;
     return Math.trunc(parsed);
   }, [searchParams]);
-  const shareToken = searchParams.get("share_token") || null;
   const returnTo =
     (location.state as { from?: string } | null)?.from ?? "/timeline";
 
@@ -692,7 +643,6 @@ export default function SessionDetailPage() {
       returnTo={returnTo}
       debugTelemetry={debugTelemetry}
       sharedByUserId={sharedByUserId}
-      shareToken={shareToken}
     />
   );
 }

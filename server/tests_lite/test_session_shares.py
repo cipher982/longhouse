@@ -1,9 +1,27 @@
-"""Tests for explicit signed session share links."""
+"""Session sharing is disabled: nothing mints a share link, nothing serves one.
+
+``zerg/routers/session_shares.py`` holds the reasoning. The short version:
+``SessionShare`` and ``SessionShareEvent`` are declared on the archive ``Base``,
+every real deployment runs the live catalog, and catalogd creates a different
+set of schemas -- so the tables do not exist where a share would have to be
+written. The two routers ``main.py`` includes are empty, and the handlers are
+shelved on routers nothing includes.
+
+The suite this file replaced asserted the whole share lifecycle against a
+schema production never has: it called ``Base.metadata.create_all()``, minted
+tokens over HTTP, and passed. That is precisely how a capability that could not
+work shipped looking green, so the tests here pin the disable itself rather
+than re-testing the shelved handlers through the archive schema. Coverage of
+the workspace route's ``share_token`` attribution went with them: its only
+token source was the endpoint that no longer exists.
+
+``test_create_share_fails_closed_when_signing_secret_is_weak`` stays. It is a
+service-level property that a revival must not lose, and it needs no route.
+"""
 
 from __future__ import annotations
 
 import os
-import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -15,33 +33,32 @@ from cryptography.fernet import Fernet
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
-os.environ["JWT_SECRET"] = "lh-share-tests-secret"
+os.environ.setdefault("JWT_SECRET", "lh-share-tests-secret")
 os.environ.setdefault("INTERNAL_API_SECRET", "lh-test-internal")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "lh-test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "lh-test-google-client")
 
-import zerg.dependencies.auth as auth_deps
-from zerg.auth.session_tokens import SESSION_COOKIE_NAME
-from zerg.auth.session_tokens import SESSION_TOKEN_KIND
-from zerg.auth.session_tokens import _encode_jwt
-from zerg.database import Base
-from zerg.database import get_db
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.main import api_app
-from zerg.models import User
-from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionInput
-from zerg.models.session_share import SessionShare
-from zerg.models.session_share import SessionShareEvent
-from zerg.services.session_shares import SessionShareMisconfigured
-from zerg.services.session_shares import create_session_share
-from zerg.services.session_workspace import get_legacy_workspace_session_factory
-from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+import zerg.dependencies.auth as auth_deps  # noqa: E402
+from zerg.database import Base  # noqa: E402
+from zerg.database import make_engine  # noqa: E402
+from zerg.database import make_sessionmaker  # noqa: E402
+from zerg.main import api_app  # noqa: E402
+from zerg.models import User  # noqa: E402
+from zerg.models.agents import AgentSession  # noqa: E402
+from zerg.routers import session_shares  # noqa: E402
+from zerg.services.session_shares import SessionShareMisconfigured  # noqa: E402
+from zerg.services.session_shares import create_session_share  # noqa: E402
 
-# Share-token signing reads this legacy export; keep it immune to local .env values.
-auth_deps.JWT_SECRET = "lh-share-tests-secret"
+# Every path the shelved handlers used to answer on, as a client would send it.
+# Shaped like a share token so the routes match, but deliberately
+# low-entropy: nothing here should look like a real credential.
+SHARE_TOKEN = "lhshr_0000.not-a-real-share-token-for-tests-only"
+SHARE_REQUESTS = (
+    ("POST", f"/timeline/sessions/{uuid4()}/shares"),
+    ("DELETE", "/timeline/session-shares/1"),
+    ("GET", f"/timeline/session-shares/{SHARE_TOKEN}/resolve"),
+    ("GET", f"/public/session-shares/{SHARE_TOKEN}/preview"),
+)
 
 
 def _make_db(tmp_path):
@@ -52,286 +69,91 @@ def _make_db(tmp_path):
     return make_sessionmaker(engine)
 
 
-def _seed_user(db, *, user_id: int, email: str, display_name: str | None) -> User:
-    user = User(id=user_id, email=email, display_name=display_name, role="USER")
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
+def test_the_included_share_routers_are_empty():
+    """The two names ``main.py`` mounts carry no routes at all.
+
+    Emptiness is the disable. Mounting the handlers to return 404 or 501 would
+    keep four dead endpoints in the published schema and leave the
+    unauthenticated preview route reachable; with nothing mounted there is no
+    route to match and no dependency chain to run.
+    """
+
+    assert session_shares.router.routes == []
+    assert session_shares.public_router.routes == []
+    # Shelved, not deleted -- the handlers still exist, on routers nothing
+    # includes. If someone deletes the file's contents this test still passes,
+    # so state the other half: the shelf is not empty either.
+    shelved_paths = {route.path for route in session_shares._shelved.routes}
+    shelved_public_paths = {route.path for route in session_shares._shelved_public.routes}
+    assert shelved_paths == {
+        "/timeline/sessions/{session_id}/shares",
+        "/timeline/session-shares/{share_id}",
+        "/timeline/session-shares/{token}/resolve",
+    }
+    assert shelved_public_paths == {"/public/session-shares/{token}/preview"}
 
 
-def _seed_session(db) -> str:
-    session = AgentSession(
-        id=uuid4(),
-        provider="codex",
-        environment="development",
-        project="share-test",
-        device_name="cinder",
-        summary="Private implementation details stay out of public previews.",
-        summary_title="Signed Share Test",
-        cwd="/Users/example/git/zerg",
-        started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
-        ended_at=None,
-        user_messages=1,
-        assistant_messages=1,
-        tool_calls=0,
-    )
-    db.add(session)
-    db.flush()
-    upsert_timeline_card_from_session(db, session)
-    db.commit()
-    return str(session.id)
+def test_no_share_route_is_mounted_on_the_api():
+    """Nothing in the served app answers on a share path.
+
+    Checked against the route table rather than a status code: an unknown
+    token 404s from a *mounted* handler too, so a 404 alone cannot tell
+    "unmounted" from "not found".
+    """
+
+    mounted = {getattr(route, "path", "") for route in api_app.routes}
+    assert not [path for path in mounted if "session-shares" in path or path.endswith("/shares")]
 
 
-def _seed_session_input_owner(db, *, session_id: str, owner_id: int) -> None:
-    db.add(
-        SessionInput(
-            session_id=session_id,
-            owner_id=owner_id,
-            body="shareable prompt",
-            intent="auto",
-            status="delivered",
-        )
-    )
-    db.commit()
+def test_share_endpoints_are_absent_from_the_published_schema():
+    """No client can generate against a capability that cannot exist."""
+
+    paths = api_app.openapi()["paths"]
+    assert not [path for path in paths if "session-shares" in path or path.endswith("/shares")]
 
 
-def _issue_session_cookie(user_id: int = 1) -> str:
-    return _encode_jwt(
-        {"sub": str(user_id), "typ": SESSION_TOKEN_KIND, "exp": int(time.time()) + 300},
-        auth_deps.get_settings().jwt_secret,
-    )
+@pytest.mark.parametrize(("method", "path"), SHARE_REQUESTS)
+def test_every_share_request_is_unroutable(method, path):
+    """Including the unauthenticated public preview, which needed no cookie."""
 
-
-def _make_client(session_local) -> "TestClient":
     from fastapi.testclient import TestClient
 
     api_app.dependency_overrides.clear()
-
-    def override_db():
-        with session_local() as db:
-            yield db
-
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[get_legacy_workspace_session_factory] = lambda: session_local
-    api_app.dependency_overrides[require_single_tenant] = lambda: None
-    return TestClient(api_app)
-
-
-def _force_browser_jwt_mode():
-    auth_deps._strategy_cache.clear()
-    from unittest.mock import patch
-
-    return patch.object(auth_deps, "AUTH_DISABLED", False)
-
-
-def _seed_users_and_session(session_local) -> str:
-    """Seed the cast plus a session user 2 demonstrably owns.
-
-    Sharing fails closed unless the caller owns the session (an input they
-    authored, or the device token it was ingested under), so the default
-    fixture stamps user 2 as the input owner.
-    """
-    with session_local() as db:
-        _seed_user(db, user_id=1, email="viewer@example.com", display_name="Viewer")
-        _seed_user(db, user_id=2, email="david@example.com", display_name="David Rose")
-        _seed_user(db, user_id=3, email="other@example.com", display_name="Other")
-        session_id = _seed_session(db)
-        _seed_session_input_owner(db, session_id=session_id, owner_id=2)
-        return session_id
-
-
-def _create_share(client, session_id: str, *, user_id: int = 2, note: str | None = "for review"):
-    with _force_browser_jwt_mode():
-        client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie(user_id=user_id))
-        return client.post(
-            f"/timeline/sessions/{session_id}/shares",
-            json={"note": note, "expires_in_days": 30},
-        )
-
-
-def test_create_share_returns_signed_url_and_stores_only_hash(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id = _seed_users_and_session(session_local)
-    client = _make_client(session_local)
-
     try:
-        response = _create_share(client, session_id)
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["session_id"] == session_id
-        assert body["token"].startswith("lhshr_")
-        assert body["share_url"] == f"/share/{body['token']}"
-        assert body["sharer"] == {"id": 2, "display_name": "David Rose"}
-        assert body["expires_at"] is not None
-
-        with session_local() as db:
-            share = db.query(SessionShare).one()
-            assert share.token_hash != body["token"]
-            assert len(share.token_hash) == 64
-            assert share.note == "for review"
-            events = db.query(SessionShareEvent).all()
-            assert [event.event_type for event in events] == ["created"]
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_create_share_requires_matching_input_owner_when_owner_signal_exists(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id = _seed_users_and_session(session_local)
-    with session_local() as db:
-        _seed_session_input_owner(db, session_id=session_id, owner_id=2)
-    client = _make_client(session_local)
-
-    try:
-        blocked = _create_share(client, session_id, user_id=3)
-        assert blocked.status_code == 404, blocked.text
-
-        allowed = _create_share(client, session_id, user_id=2)
-        assert allowed.status_code == 200, allowed.text
-        assert allowed.json()["sharer"] == {"id": 2, "display_name": "David Rose"}
+        with TestClient(api_app) as client:
+            response = client.request(method, path, json={"note": None, "expires_in_days": 30})
+        assert response.status_code == 404, response.text
     finally:
         api_app.dependency_overrides.clear()
 
 
 def test_create_share_fails_closed_when_signing_secret_is_weak(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id = _seed_users_and_session(session_local)
+    """A share token is an HMAC; without a real key it must not be minted.
+
+    Service-level, so it survives the routes being shelved -- and it is the
+    property a revival most needs to keep.
+    """
 
     from unittest.mock import patch
 
+    session_local = _make_db(tmp_path)
     with session_local() as db:
+        db.add(User(id=2, email="sharer@example.com", display_name="Sharer", role="USER"))
+        session = AgentSession(
+            id=uuid4(),
+            provider="codex",
+            environment="development",
+            project="share-test",
+            device_name="cinder",
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+        )
+        db.add(session)
+        db.commit()
+        session_id = str(session.id)
+
         with patch.object(auth_deps, "JWT_SECRET", ""):
             with pytest.raises(SessionShareMisconfigured):
                 create_session_share(db, session_id=session_id, created_by_user_id=2)
-
-
-def test_public_preview_is_safe_and_resolve_audits_access(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id = _seed_users_and_session(session_local)
-    client = _make_client(session_local)
-
-    try:
-        created = _create_share(client, session_id, note="look at the launch path")
-        assert created.status_code == 200, created.text
-        token = created.json()["token"]
-
-        preview = client.get(f"/public/session-shares/{token}/preview")
-        assert preview.status_code == 200, preview.text
-        preview_body = preview.json()
-        assert preview_body["provider"] == "codex"
-        assert preview_body["device_name"] == "cinder"
-        assert preview_body["note"] == "look at the launch path"
-        assert preview_body["sharer"] == {"id": 2, "display_name": "David Rose"}
-        assert "session_id" not in preview_body
-        assert "summary" not in preview_body
-        assert "cwd" not in preview_body
-
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie(user_id=1))
-            resolved = client.get(f"/timeline/session-shares/{token}/resolve")
-        assert resolved.status_code == 200, resolved.text
-        assert resolved.json()["session_id"] == session_id
-
-        with session_local() as db:
-            share = db.query(SessionShare).one()
-            assert share.access_count == 1
-            assert share.last_accessed_at is not None
-            events = db.query(SessionShareEvent).order_by(SessionShareEvent.id).all()
-            assert [event.event_type for event in events] == ["created", "resolved"]
-            assert events[1].actor_user_id == 1
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_workspace_share_token_resolves_sharer_and_hides_self(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id = _seed_users_and_session(session_local)
-    client = _make_client(session_local)
-
-    try:
-        created = _create_share(client, session_id, user_id=2)
-        token = created.json()["token"]
-
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie(user_id=1))
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=10&share_token={token}")
-        assert response.status_code == 200, response.text
-        assert response.json()["session"]["sharer"] == {"id": 2, "display_name": "David Rose"}
-
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie(user_id=2))
-            self_response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=10&share_token={token}")
-        assert self_response.status_code == 200, self_response.text
-        assert self_response.json()["session"]["sharer"] is None
-
-        with session_local() as db:
-            # The landing-page resolve endpoint owns auditing. The workspace
-            # param is attribution only, so polling does not inflate access_count.
-            assert db.query(SessionShare).one().access_count == 0
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_share_token_supersedes_legacy_shared_by(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id = _seed_users_and_session(session_local)
-    client = _make_client(session_local)
-
-    try:
-        created = _create_share(client, session_id, user_id=2)
-        token = created.json()["token"]
-
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie(user_id=1))
-            response = client.get(
-                f"/timeline/sessions/{session_id}/workspace?limit=10&share_token={token}&shared_by=3"
-            )
-        assert response.status_code == 200, response.text
-        assert response.json()["session"]["sharer"] == {"id": 2, "display_name": "David Rose"}
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_revoked_expired_and_tampered_share_links_are_rejected(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id = _seed_users_and_session(session_local)
-    client = _make_client(session_local)
-
-    try:
-        created = _create_share(client, session_id, user_id=2)
-        token = created.json()["token"]
-        share_id = created.json()["id"]
-
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie(user_id=3))
-            forbidden = client.delete(f"/timeline/session-shares/{share_id}")
-        assert forbidden.status_code == 404
-
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie(user_id=2))
-            revoked = client.delete(f"/timeline/session-shares/{share_id}")
-        assert revoked.status_code == 200, revoked.text
-
-        assert client.get(f"/public/session-shares/{token}/preview").status_code == 410
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie(user_id=1))
-            workspace = client.get(f"/timeline/sessions/{session_id}/workspace?limit=10&share_token={token}")
-        assert workspace.status_code == 410
-
-        expired = _create_share(client, session_id, user_id=2)
-        expired_token = expired.json()["token"]
-        with session_local() as db:
-            share = db.query(SessionShare).filter(SessionShare.id == expired.json()["id"]).one()
-            share.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-            db.commit()
-        assert client.get(f"/public/session-shares/{expired_token}/preview").status_code == 410
-
-        tampered_token = expired_token[:-1] + ("a" if expired_token[-1] != "a" else "b")
-        assert client.get(f"/public/session-shares/{tampered_token}/preview").status_code == 404
-
-        with session_local() as db:
-            events = db.query(SessionShareEvent).order_by(SessionShareEvent.id).all()
-            assert "revoked" in [event.event_type for event in events]
-    finally:
-        api_app.dependency_overrides.clear()

@@ -1774,111 +1774,20 @@ describe("SessionDetailPage — signed copy link + shared attribution", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders the Copy link button when a user is signed in", () => {
+  // Session sharing is shelved: its tables live on the archive schema and do
+  // not exist under the live catalog, so the routes are unmounted and the UI
+  // offers nothing. What matters now is that the affordance is absent -- the
+  // tests that used to prove it worked would otherwise just fail loudly and
+  // get deleted without anything taking their place.
+  it("offers no share affordance while sharing is shelved", () => {
     renderSessionDetailPageAt("/timeline/session-codex", {
       user: { id: 1, email: "david@example.com", display_name: "David Rose" },
     });
-    expect(
-      screen.getByTestId("session-copy-link-button"),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /copy link/i })).not.toBeInTheDocument();
+    expect(agentApiMocks.createSessionShare).not.toHaveBeenCalled();
   });
 
-  it("creates a signed share URL and shows a success toast", async () => {
-    const user = userEvent.setup();
-    renderSessionDetailPageAt("/timeline/session-codex", {
-      user: { id: 7, email: "tester@example.com", display_name: "Tester" },
-    });
 
-    await user.click(screen.getByTestId("session-copy-link-button"));
-
-    expect(agentApiMocks.createSessionShare).toHaveBeenCalledWith("session-codex", {});
-    expect(clipboardMocks.buildSessionShareUrl).toHaveBeenCalledWith(
-      expect.stringMatching(/^https?:\/\/[^/]+$/),
-      "/share/lhshr_test_token",
-    );
-    expect(clipboardMocks.copyToClipboard).toHaveBeenCalledTimes(1);
-    const copiedText = clipboardMocks.copyToClipboard.mock.calls[0]?.[0] as string;
-    expect(copiedText).toMatch(/^https?:\/\/[^/]+\/share\/lhshr_test_token$/);
-    expect(toast.success).toHaveBeenCalledWith("Link copied");
-  });
-
-  it("shows an error toast when clipboard write fails", async () => {
-    const user = userEvent.setup();
-    clipboardMocks.copyToClipboard.mockResolvedValueOnce(false);
-    renderSessionDetailPageAt("/timeline/session-codex", {
-      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
-    });
-
-    await user.click(screen.getByTestId("session-copy-link-button"));
-
-    expect(toast.error).toHaveBeenCalledWith(
-      expect.stringContaining("Couldn't copy link"),
-    );
-  });
-
-  it("shows an error toast when the share endpoint fails", async () => {
-    const user = userEvent.setup();
-    agentApiMocks.createSessionShare.mockRejectedValueOnce(new Error("share failed"));
-    renderSessionDetailPageAt("/timeline/session-codex", {
-      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
-    });
-
-    await user.click(screen.getByTestId("session-copy-link-button"));
-
-    expect(clipboardMocks.copyToClipboard).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith("Couldn't create share link");
-  });
-
-  it("passes share_token to the workspace hook", () => {
-    renderSessionDetailPageAt("/timeline/session-codex?share_token=lhshr_shared", {
-      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
-    });
-
-    expect(workspaceMocks.useSessionWorkspace).toHaveBeenCalledWith(
-      "session-codex",
-      expect.objectContaining({
-        share_token: "lhshr_shared",
-      }),
-    );
-  });
-
-  it("suppresses media tiles on share_token views until media bytes support share auth", () => {
-    renderSessionDetailPageAt("/timeline/session-codex?share_token=lhshr_shared", {
-      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
-      projectionItems: [
-        {
-          kind: "event",
-          session_id: "session-codex",
-          timestamp: "2026-03-22T22:00:01Z",
-          event: {
-            id: 40,
-            role: "assistant",
-            content_text: "Shared transcript row with media.",
-            tool_name: null,
-            tool_input_json: null,
-            tool_output_text: null,
-            tool_call_id: null,
-            timestamp: "2026-03-22T22:00:01Z",
-            in_active_context: true,
-            media_refs: [
-              {
-                sha256: "abc123def4567890",
-                blob_url: "/api/media/abc123/blob",
-                thumb_url: "/api/media/abc123/thumb",
-                mime_type: "image/png",
-                bytes: 1024,
-                media_state: "present",
-              },
-            ],
-          },
-        },
-      ],
-    });
-
-    expect(screen.getByText("Shared transcript row with media.")).toBeInTheDocument();
-    expect(screen.queryByTestId("session-event-media")).not.toBeInTheDocument();
-    expect(screen.queryByAltText("Session media abc123def456")).not.toBeInTheDocument();
-  });
 
   it("does not render the Shared by pill when ?shared_by is absent", () => {
     renderSessionDetailPageAt("/timeline/session-codex", {
