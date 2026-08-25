@@ -8,20 +8,6 @@ os.environ.setdefault("TESTING", "1")
 from zerg.services.memory_paths import normalize_memory_path
 from zerg.services.memory_paths import normalize_memory_prefix
 from zerg.services.memory_summarizer import _should_skip_summary
-from zerg.tools.builtin.memory_tools import memory_read
-from zerg.tools.builtin.memory_tools import memory_write
-
-
-def test_memory_tools_fail_cleanly_when_disabled(monkeypatch):
-    monkeypatch.delenv("MEMORY_FILES_ENABLED", raising=False)
-
-    write_result = memory_write("notes/test.md", "hello")
-    read_result = memory_read("notes/test.md")
-
-    assert write_result["ok"] is False
-    assert read_result["ok"] is False
-    assert write_result["user_message"] == "Memory Files are disabled for this Longhouse instance."
-    assert read_result["user_message"] == "Memory Files are disabled for this Longhouse instance."
 
 
 def test_normalize_memory_path_rejects_absolute_and_traversal():

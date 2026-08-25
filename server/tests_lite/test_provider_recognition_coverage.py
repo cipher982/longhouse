@@ -8,7 +8,7 @@ Two hand-written provider lists silently excluded Cursor for a month:
   reconcile what is running against what Longhouse believes.
 - `session_turns.py` filtered managed turns on a control-plane tuple that
   predated Cursor, so every Cursor Helm managed turn was missing from
-  `/api/observability/*` and `/api/agents/turns`.
+  `/api/observability/*`.
 
 Both now derive from the provider contract. These tests keep them derived.
 """
@@ -60,7 +60,7 @@ def test_managed_turn_control_planes_cover_every_contract_plane() -> None:
         for plane in contract.control_planes:
             assert plane in planes, (
                 f"{contract.provider}'s control plane {plane} is missing from the managed-turn "
-                "filter, so its turns would not reach /api/observability or /api/agents/turns"
+                "filter, so its turns would not reach /api/observability"
             )
 
 

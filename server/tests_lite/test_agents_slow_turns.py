@@ -43,21 +43,21 @@ def _make_db(tmp_path):
 
 def _make_client(SessionLocal):
     from zerg.dependencies.agents_auth import require_single_tenant
-    from zerg.dependencies.agents_auth import verify_agents_token
+    from zerg.dependencies.auth import get_current_user
     from zerg.main import api_app
 
     def override_get_db():
         with SessionLocal() as db:
             yield db
 
-    def override_verify_agents_token():
-        return SimpleNamespace(device_id="slow-turns", id="token-1", owner_id=1)
+    def override_get_current_user():
+        return SimpleNamespace(id=1, email="owner@example.com", role="USER")
 
     def override_require_single_tenant():
         return None
 
     api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    api_app.dependency_overrides[get_current_user] = override_get_current_user
     api_app.dependency_overrides[require_single_tenant] = override_require_single_tenant
     client = TestClient(api_app)
     return client, api_app
@@ -317,7 +317,7 @@ def test_slow_turns_route_returns_managed_completed_turns_with_machine_health(tm
 
     client, api_app_ref = _make_client(SessionLocal)
     try:
-        response = client.get("/agents/turns/slow?hours_back=24&min_total_turn_time_ms=30000&stale_after_seconds=3600")
+        response = client.get("/observability/turns/slow?hours_back=24&min_total_turn_time_ms=30000&stale_after_seconds=3600")
         assert response.status_code == 200, response.text
 
         payload = response.json()
@@ -465,7 +465,7 @@ def test_slow_turns_route_supports_filters_machine_status_and_pagination(tmp_pat
     client, api_app_ref = _make_client(SessionLocal)
     try:
         response = client.get(
-            "/agents/turns/slow"
+            "/observability/turns/slow"
             "?provider=claude"
             "&project=zerg"
             "&state=durable"
@@ -489,7 +489,7 @@ def test_slow_turns_route_supports_filters_machine_status_and_pagination(tmp_pat
         assert item["total_turn_time_ms"] == 50000
 
         degraded = client.get(
-            "/agents/turns/slow"
+            "/observability/turns/slow"
             "?provider=claude"
             "&project=hdr"
             "&machine_status=degraded"
@@ -582,7 +582,7 @@ def test_turn_summary_route_returns_overall_and_provider_percentiles(tmp_path, m
 
     client, api_app_ref = _make_client(SessionLocal)
     try:
-        response = client.get("/agents/turns/summary?hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600")
+        response = client.get("/observability/turns/summary?hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600")
         assert response.status_code == 200, response.text
 
         payload = response.json()
@@ -631,7 +631,7 @@ def test_turn_summary_route_returns_overall_and_provider_percentiles(tmp_path, m
         ]
 
         higher_threshold = client.get(
-            "/agents/turns/summary?hours_back=24&slow_threshold_ms=60000&stale_after_seconds=3600"
+            "/observability/turns/summary?hours_back=24&slow_threshold_ms=60000&stale_after_seconds=3600"
         )
         assert higher_threshold.status_code == 200, higher_threshold.text
         higher_payload = higher_threshold.json()
@@ -739,7 +739,7 @@ def test_turn_summary_route_respects_machine_status_and_state_filters(tmp_path, 
     client, api_app_ref = _make_client(SessionLocal)
     try:
         response = client.get(
-            "/agents/turns/summary"
+            "/observability/turns/summary"
             "?provider=claude"
             "&project=zerg"
             "&state=durable"
@@ -824,7 +824,7 @@ def test_slow_turns_route_excludes_old_turns_and_preserves_total_for_overflow_of
 
     client, api_app_ref = _make_client(SessionLocal)
     try:
-        response = client.get("/agents/turns/slow?hours_back=1&min_total_turn_time_ms=30000&offset=5")
+        response = client.get("/observability/turns/slow?hours_back=1&min_total_turn_time_ms=30000&offset=5")
         assert response.status_code == 200, response.text
 
         payload = response.json()
@@ -876,7 +876,7 @@ def test_slow_turns_route_supports_completed_failed_state_filter(tmp_path, monke
 
     client, api_app_ref = _make_client(SessionLocal)
     try:
-        response = client.get("/agents/turns/slow?hours_back=24&min_total_turn_time_ms=30000&state=failed")
+        response = client.get("/observability/turns/slow?hours_back=24&min_total_turn_time_ms=30000&state=failed")
         assert response.status_code == 200, response.text
 
         payload = response.json()
@@ -929,7 +929,7 @@ def test_turn_summary_route_materializes_managed_native_turns(tmp_path, monkeypa
 
     client, api_app_ref = _make_client(SessionLocal)
     try:
-        response = client.get("/agents/turns/summary?hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600")
+        response = client.get("/observability/turns/summary?hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600")
         assert response.status_code == 200, response.text
 
         payload = response.json()

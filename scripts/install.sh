@@ -310,9 +310,11 @@ install_native_pair() {
 download_and_install_macos_app_release_asset() {
     local cli_version="$1"
     local asset_name=""
+    local base_url=""
     local asset_url=""
     local tmp_dir=""
     local archive_path=""
+    local checksums_path=""
     local extracted_app=""
 
     case "$(uname -m)" in
@@ -325,9 +327,11 @@ download_and_install_macos_app_release_asset() {
             ;;
     esac
 
-    asset_url="https://github.com/cipher982/longhouse/releases/download/v${cli_version}/${asset_name}"
+    base_url="https://github.com/cipher982/longhouse/releases/download/v${cli_version}"
+    asset_url="$base_url/$asset_name"
     tmp_dir="$(mktemp -d)"
     archive_path="$tmp_dir/$asset_name"
+    checksums_path="$tmp_dir/local-runtime-checksums.txt"
     extracted_app="$tmp_dir/Longhouse.app"
 
     info "Falling back to release asset install for Longhouse.app (${asset_name})"
@@ -339,29 +343,22 @@ download_and_install_macos_app_release_asset() {
         return 1
     fi
 
-    # Integrity check: if the release publishes a <asset>.sha256 sidecar, verify
-    # it. If absent, warn and continue (download is over HTTPS from the canonical
-    # GitHub releases host). Set LONGHOUSE_REQUIRE_CHECKSUM=1 to fail closed when
-    # no checksum is published.
-    local checksum_url="${asset_url}.sha256"
-    local checksum_path="$tmp_dir/${asset_name}.sha256"
-    if curl -fsL "$checksum_url" -o "$checksum_path" 2>/dev/null; then
-        local expected actual
-        expected="$(awk '{print $1}' "$checksum_path" | head -1)"
-        actual="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
-        if [[ -z "$expected" || "$expected" != "$actual" ]]; then
-            rm -rf "$tmp_dir"
-            error "Checksum mismatch for $asset_name (expected $expected, got $actual)"
-            return 1
-        fi
-        info "Verified Longhouse.app checksum (sha256)"
-    elif [[ "${LONGHOUSE_REQUIRE_CHECKSUM:-0}" == "1" ]]; then
+    # Integrity check: the release publishes every asset digest in
+    # local-runtime-checksums.txt — the same manifest install_native_pair
+    # verifies the native pair against. Fail closed: a missing manifest or a
+    # missing entry for this asset stops the install before it replaces
+    # /Applications/Longhouse.app.
+    if ! curl -fsSL "$base_url/local-runtime-checksums.txt" -o "$checksums_path"; then
         rm -rf "$tmp_dir"
-        error "No published checksum for $asset_name and LONGHOUSE_REQUIRE_CHECKSUM=1"
+        error "Could not download local-runtime-checksums.txt from $base_url"
         return 1
-    else
-        warn "No published checksum for $asset_name; proceeding (HTTPS from github.com)"
     fi
+    if ! verify_release_checksum "$checksums_path" "$asset_name" "$archive_path"; then
+        rm -rf "$tmp_dir"
+        error "Checksum mismatch for $asset_name"
+        return 1
+    fi
+    info "Verified Longhouse.app checksum (sha256)"
 
     if ! ditto -x -k "$archive_path" "$tmp_dir"; then
         rm -rf "$tmp_dir"

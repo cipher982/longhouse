@@ -67,6 +67,27 @@ docker/*
 # and staged directly into server/zerg/build_identity.json, so it rides along
 # via the `!server/` allowlist above — no extra .build/ allowlist needed.
 
+# Keep test/QA machinery and local scratch state out of the runtime image.
+# `docker/runtime.dockerfile` copies server/ to /app and runs with
+# PYTHONPATH=/app, so server/apscheduler/ — a hand-written stub whose scheduler
+# reports running while running nothing — shadows the real dependency inside
+# the container. Nothing on the serve path imports zerg/qa/ (the endpoint reads
+# zerg/services/provider_capability_schema.py) or zerg/testing/ (tool stubs are
+# E2E-only, and E2E runs from source, not this image).
+server/tests
+server/tests/**
+server/tests_lite
+server/tests_lite/**
+server/zerg/qa
+server/zerg/qa/**
+server/zerg/testing
+server/zerg/testing/**
+server/apscheduler
+server/apscheduler/**
+server/*.db
+server/*.db-shm
+server/*.db-wal
+
 # Ignore heavyweight/generated content inside the allowlisted trees.
 server/.venv
 server/.venv/**

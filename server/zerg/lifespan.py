@@ -333,17 +333,6 @@ async def lifespan(app: FastAPI):
         with _timed_startup_step("single_tenant_startup"):
             _enforce_single_tenant_startup(app)
 
-        # Auto-seed
-        if not catalog_mode and not _settings.testing:
-            try:
-                from zerg.services.auto_seed import run_auto_seed
-
-                with _timed_startup_step("auto_seed"):
-                    seed_results = run_auto_seed()
-                logger.info(f"Auto-seed complete: {seed_results}")
-            except Exception as e:
-                logger.warning(f"Auto-seed failed (non-fatal): {e}")
-
         # Demo session seeding
         if not catalog_mode and _settings.demo_mode and not _settings.testing:
             try:
@@ -508,13 +497,6 @@ async def lifespan(app: FastAPI):
                 await stop_maintenance_loop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop maintenance loop")
-
-            try:
-                from zerg.tools.mcp_adapter import MCPManager
-
-                await MCPManager().shutdown_stdio_processes()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to shutdown MCP stdio processes")
 
         from zerg.utils.async_runner import get_shared_runner
 

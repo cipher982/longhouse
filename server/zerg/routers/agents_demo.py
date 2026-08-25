@@ -1,4 +1,4 @@
-"""Agents API — demo seed and test cleanup endpoints."""
+"""Agents API — demo seed endpoints."""
 
 import logging
 from datetime import datetime
@@ -15,11 +15,8 @@ from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.services.agents import AgentsStore
 from zerg.services.demo_seed import delete_demo_sessions
 from zerg.services.demo_seed import seed_missing_demo_sessions
-from zerg.services.session_views import CleanupRequest
-from zerg.services.session_views import CleanupResponse
 from zerg.services.session_views import DemoSeedResponse
 
 logger = logging.getLogger(__name__)
@@ -80,22 +77,3 @@ async def reset_demo_sessions(
         sessions_created=deleted,
         sessions_deleted=deleted,
     )
-
-
-@router.delete("/test-cleanup", response_model=CleanupResponse)
-async def cleanup_test_sessions(
-    body: CleanupRequest,
-    db: Session = Depends(get_db),
-) -> CleanupResponse:
-    """Delete test sessions by project pattern (dev-only)."""
-    _settings = get_settings()
-    if not _settings.auth_disabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Test cleanup only available in dev mode (AUTH_DISABLED=1)",
-        )
-
-    store = AgentsStore(db)
-    deleted = store.delete_sessions_by_project_patterns(body.project_patterns)
-
-    return CleanupResponse(deleted=deleted)

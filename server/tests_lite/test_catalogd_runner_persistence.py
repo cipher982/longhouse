@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-import zerg.database as database_module
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.models.user import User
 from zerg.services import runner_catalog
-from zerg.tools.builtin import runner_tools
 
 
 @pytest.fixture
@@ -114,37 +111,3 @@ async def test_catalogd_owns_runner_registration_and_job_history(daemon_paths):
     finally:
         await client.close()
         await daemon.close()
-
-
-def test_runner_tool_catalog_mode_never_constructs_runtime_engine(monkeypatch):
-    monkeypatch.setattr(runner_tools, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(
-        runner_tools,
-        "get_catalog_session_factory",
-        lambda: pytest.fail("Runtime Host must not construct a live-catalog SQLAlchemy engine"),
-    )
-    monkeypatch.setattr(
-        "zerg.services.runner_catalog.operation",
-        lambda operation_name, **_params: {
-            "runner": {
-                "id": 4,
-                "owner_id": 7,
-                "name": "cinder",
-                "availability_policy": "always_on",
-                "labels": None,
-                "capabilities": ["exec.full"],
-                "status": "offline",
-                "last_seen_at": None,
-                "auth_secret_hash": "hash",
-                "runner_metadata": None,
-                "created_at": "2026-07-12T00:00:00",
-                "updated_at": "2026-07-12T00:00:00",
-            }
-        }
-        if operation_name == "get_by_name"
-        else {},
-    )
-    monkeypatch.setattr(runner_tools, "get_credential_resolver", lambda: SimpleNamespace(owner_id=7))
-
-    assert runner_tools._resolve_target(7, "cinder") == (4, "cinder")

@@ -4499,13 +4499,15 @@ class AgentsStore:
             if not matching_ids:
                 return stmt, True
             return stmt.where(AgentEvent.id.in_(matching_ids)), False
-        # LIKE fallback: cover same fields as FTS index (content_text + tool_output_text)
-        like = f"%{query}%"
+        # LIKE fallback: cover same fields as FTS index (content_text + tool_output_text).
+        # Escape LIKE metacharacters so `%`/`_` in the query stay literal.
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         return (
             stmt.where(
                 or_(
-                    AgentEvent.content_text.ilike(like),
-                    AgentEvent.tool_output_text.ilike(like),
+                    AgentEvent.content_text.ilike(like, escape="\\"),
+                    AgentEvent.tool_output_text.ilike(like, escape="\\"),
                 )
             ),
             False,

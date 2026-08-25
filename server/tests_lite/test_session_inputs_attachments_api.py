@@ -142,6 +142,9 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
     )
     response = await route.create_session_input_with_attachments(
         session_id=str(session_id),
+        # A native client sends neither Origin nor Sec-Fetch-Site, so the
+        # cross-origin form guard lets it through.
+        request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
         text="look",
         intent="auto",
         client_request_id="catalog-attachment-1",
