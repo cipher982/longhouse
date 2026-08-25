@@ -22,6 +22,7 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "lh-test-google-client")
 
 import zerg.dependencies.auth as auth_deps
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
+from zerg.auth.session_tokens import SESSION_TOKEN_KIND
 from zerg.auth.session_tokens import _encode_jwt
 from zerg.database import Base
 from zerg.database import get_db
@@ -97,7 +98,7 @@ def _seed_session_input_owner(db, *, session_id: str, owner_id: int) -> None:
 
 def _issue_session_cookie(user_id: int = 1) -> str:
     return _encode_jwt(
-        {"sub": str(user_id), "exp": int(time.time()) + 300},
+        {"sub": str(user_id), "typ": SESSION_TOKEN_KIND, "exp": int(time.time()) + 300},
         auth_deps.get_settings().jwt_secret,
     )
 
@@ -125,11 +126,19 @@ def _force_browser_jwt_mode():
 
 
 def _seed_users_and_session(session_local) -> str:
+    """Seed the cast plus a session user 2 demonstrably owns.
+
+    Sharing fails closed unless the caller owns the session (an input they
+    authored, or the device token it was ingested under), so the default
+    fixture stamps user 2 as the input owner.
+    """
     with session_local() as db:
         _seed_user(db, user_id=1, email="viewer@example.com", display_name="Viewer")
         _seed_user(db, user_id=2, email="david@example.com", display_name="David Rose")
         _seed_user(db, user_id=3, email="other@example.com", display_name="Other")
-        return _seed_session(db)
+        session_id = _seed_session(db)
+        _seed_session_input_owner(db, session_id=session_id, owner_id=2)
+        return session_id
 
 
 def _create_share(client, session_id: str, *, user_id: int = 2, note: str | None = "for review"):

@@ -61,9 +61,14 @@ def test_missing_permission_mode_defaults_to_bypass():
     assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=0" in cmd
 
 
-def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
-    """remote_approve launches return a session-scoped hook token bound to
-    the session; bypass launches return none (gate dormant, device token rejected)."""
+def test_launch_response_mints_scoped_hook_token_for_every_permission_mode():
+    """Every managed launch returns a session-scoped hook token bound to the session.
+
+    The engine exports this token to the provider instead of the durable device
+    token, which authorizes the whole owner account, so the scoped token is not
+    specific to remote_approve — that mode merely also needs it to authenticate
+    the permission gate.
+    """
     from uuid import uuid4
 
     import zerg.services.session_chat_impl as impl
@@ -117,15 +122,13 @@ def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
         decoded = validate_managed_session_token(resp.hook_token)
         assert decoded is not None and decoded.session_id == str(sid)
 
-        session.permission_mode = "bypass"
-        resp_bypass = impl._managed_local_launch_response(None, result, owner_id=42)
-        assert resp_bypass.permission_mode == "bypass"
-        assert resp_bypass.hook_token is None
-
-        session.permission_mode = "provider_local"
-        resp_provider_local = impl._managed_local_launch_response(None, result, owner_id=42)
-        assert resp_provider_local.permission_mode == "provider_local"
-        assert resp_provider_local.hook_token is None
+        for mode in ("bypass", "provider_local"):
+            session.permission_mode = mode
+            resp_mode = impl._managed_local_launch_response(None, result, owner_id=42)
+            assert resp_mode.permission_mode == mode
+            assert resp_mode.hook_token and resp_mode.hook_token.startswith("zst_")
+            decoded_mode = validate_managed_session_token(resp_mode.hook_token)
+            assert decoded_mode is not None and decoded_mode.session_id == str(sid)
     finally:
         impl.project_session_kernel_fields = saved
 

@@ -45,6 +45,10 @@ from zerg.utils.time import utc_now_naive
 
 # Cookie name for browser-based auth (must match routers/auth.py)
 SESSION_COOKIE_NAME = "longhouse_session"
+# ``typ`` stamped on browser session JWTs. Managed-session (``zst_``) tokens are
+# signed with the same ``JWT_SECRET``, so browser auth must require this claim
+# instead of accepting any HS256 token that carries a ``sub``.
+SESSION_TOKEN_KIND = "session"
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -283,9 +287,16 @@ class JWTAuthStrategy(AuthStrategy):
         try:
             from jose import jwt  # type: ignore
 
-            return jwt.decode(token, self._secret, algorithms=["HS256"])
+            payload: dict[str, Any] = jwt.decode(token, self._secret, algorithms=["HS256"])
         except ModuleNotFoundError:
-            return _decode_jwt_fallback(token, self._secret)
+            payload = _decode_jwt_fallback(token, self._secret)
+
+        # Signature + expiry are not enough: every managed-session (`zst_`)
+        # token is signed with the same secret, so require the browser kind.
+        if str(payload.get("typ") or "") != SESSION_TOKEN_KIND:
+            raise ValueError("Not a browser session token")
+
+        return payload
 
     # Internal ----------------------------------------------------------
 
@@ -561,6 +572,7 @@ def _hosted_audience(settings) -> str:
 
 
 __all__ = [
+    "SESSION_TOKEN_KIND",
     "AuthStrategy",
     "DevAuthStrategy",
     "HostedCPAuthStrategy",

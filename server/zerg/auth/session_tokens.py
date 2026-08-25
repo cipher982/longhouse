@@ -13,6 +13,7 @@ from typing import Optional
 
 from fastapi import Response
 from zerg.auth.strategy import SESSION_COOKIE_NAME
+from zerg.auth.strategy import SESSION_TOKEN_KIND
 from zerg.config import get_settings
 
 _settings = get_settings()
@@ -90,6 +91,7 @@ def _issue_access_token(
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "email": email,
+        "typ": SESSION_TOKEN_KIND,
         "exp": int(expiry.timestamp()),
     }
 
@@ -138,6 +140,7 @@ __all__ = [
     "REFRESH_COOKIE_NAME",
     "REFRESH_COOKIE_PATH",
     "SESSION_COOKIE_NAME",
+    "SESSION_TOKEN_KIND",
     "_clear_refresh_cookie",
     "_clear_session_cookie",
     "_encode_jwt",

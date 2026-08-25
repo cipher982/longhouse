@@ -8,6 +8,7 @@ agent-to-agent send authority.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -18,16 +19,34 @@ from uuid import UUID
 from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import _encode_jwt
 from zerg.auth.strategy import _decode_jwt_fallback
+from zerg.auth.strategy import _hosted_audience
+from zerg.config import get_settings
 
 MANAGED_SESSION_TOKEN_KIND = "managed_session"
 MANAGED_SESSION_TOKEN_PREFIX = "zst_"
 MANAGED_SESSION_TOKEN_LIFETIME = timedelta(hours=72)
+MANAGED_SESSION_TOKEN_ISSUER = "longhouse-runtime-host"
+MANAGED_SESSION_SELF_HOST_AUDIENCE = "self-host"
 MANAGED_SESSION_SCOPE_HOOK = "hook"
 MANAGED_SESSION_SCOPE_COORDINATION = "coordination"
 MANAGED_SESSION_SCOPES = {
     MANAGED_SESSION_SCOPE_HOOK,
     MANAGED_SESSION_SCOPE_COORDINATION,
 }
+
+
+def _managed_session_audience() -> str:
+    """Instance identity a managed-session token is bound to.
+
+    Every hosted tenant container currently receives the same ``JWT_SECRET``, so
+    a token minted for one tenant must not validate on another. ``INSTANCE_ID``
+    is that tenant identity; hosted runtimes fail closed when it is unset.
+    """
+
+    settings = get_settings()
+    if getattr(settings, "control_plane_url", None):
+        return _hosted_audience(settings)
+    return os.getenv("INSTANCE_ID", "").strip() or MANAGED_SESSION_SELF_HOST_AUDIENCE
 
 
 @dataclass(frozen=True)
@@ -64,6 +83,8 @@ def issue_managed_session_token(
         "sid": normalized_session_id,
         "typ": MANAGED_SESSION_TOKEN_KIND,
         "scp": normalized_scope,
+        "iss": MANAGED_SESSION_TOKEN_ISSUER,
+        "aud": _managed_session_audience(),
         "exp": int(expiry.timestamp()),
     }
     if normalized_project is not None:
@@ -84,9 +105,20 @@ def validate_managed_session_token(token: str) -> ManagedSessionToken | None:
         return None
 
     try:
+        expected_audience = _managed_session_audience()
+    except Exception:
+        return None
+
+    try:
         from jose import jwt  # type: ignore
 
-        payload = jwt.decode(encoded, JWT_SECRET, algorithms=["HS256"])
+        payload = jwt.decode(
+            encoded,
+            JWT_SECRET,
+            algorithms=["HS256"],
+            audience=expected_audience,
+            issuer=MANAGED_SESSION_TOKEN_ISSUER,
+        )
     except ModuleNotFoundError:
         try:
             payload = _decode_jwt_fallback(encoded, JWT_SECRET)
@@ -96,6 +128,13 @@ def validate_managed_session_token(token: str) -> ManagedSessionToken | None:
         return None
 
     if str(payload.get("typ") or "") != MANAGED_SESSION_TOKEN_KIND:
+        return None
+    # The fallback decoder checks signature and expiry only, so bind the token
+    # to this instance here: the shared secret makes another tenant's token
+    # otherwise indistinguishable from ours.
+    if str(payload.get("iss") or "") != MANAGED_SESSION_TOKEN_ISSUER:
+        return None
+    if str(payload.get("aud") or "") != expected_audience:
         return None
     scope = str(payload.get("scp") or "").strip()
     if scope not in MANAGED_SESSION_SCOPES:
@@ -130,6 +169,7 @@ def validate_managed_session_token(token: str) -> ManagedSessionToken | None:
 __all__ = [
     "MANAGED_SESSION_SCOPE_COORDINATION",
     "MANAGED_SESSION_SCOPE_HOOK",
+    "MANAGED_SESSION_TOKEN_ISSUER",
     "MANAGED_SESSION_TOKEN_KIND",
     "MANAGED_SESSION_TOKEN_LIFETIME",
     "MANAGED_SESSION_TOKEN_PREFIX",

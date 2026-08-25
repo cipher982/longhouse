@@ -32,6 +32,7 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 import zerg.dependencies.auth as auth_deps
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
+from zerg.auth.session_tokens import SESSION_TOKEN_KIND
 from zerg.auth.session_tokens import _encode_jwt
 from zerg.database import Base
 from zerg.database import get_db
@@ -82,7 +83,7 @@ def _seed_session(db) -> str:
 
 def _issue_session_cookie(user_id: int = 1) -> str:
     return _encode_jwt(
-        {"sub": str(user_id), "exp": int(time.time()) + 300},
+        {"sub": str(user_id), "typ": SESSION_TOKEN_KIND, "exp": int(time.time()) + 300},
         auth_deps.get_settings().jwt_secret,
     )
 
