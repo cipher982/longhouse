@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 import typer
 
 from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.services.shipper.token import normalize_zerg_url
 
 app = typer.Typer(help="Longhouse server commands")
 
@@ -597,13 +598,23 @@ def serve(
         typer.secho(f"  Public:   {public_url}/", fg=typer.colors.CYAN)
     typer.echo("")
 
-    if is_public_interface and lan_ip:
-        typer.echo("  To connect from another machine:")
-        typer.secho(f"    longhouse connect --url http://{lan_ip}:{port}", fg=typer.colors.BRIGHT_BLACK)
-    if public_url:
+    typer.echo("  To connect this machine:")
+    typer.secho(f"    longhouse connect --url http://127.0.0.1:{port}", fg=typer.colors.BRIGHT_BLACK)
+    if public_url and public_url.startswith("https://"):
         typer.echo("  To connect from any machine (via your domain):")
         typer.secho(f"    longhouse connect --url {public_url}", fg=typer.colors.BRIGHT_BLACK)
-    if is_public_interface or public_url:
+    typer.echo("")
+
+    # Plaintext http:// is only accepted for loopback (normalize_zerg_url is the
+    # same rule connect enforces): device tokens ride as a plain header and
+    # transcripts stream over the same socket, so a LAN or public http:// URL
+    # ships every secret in a transcript in the clear.
+    if _host_is_public(host) or (public_url and normalize_zerg_url(public_url) is None):
+        typer.secho("  This port is reachable off this machine, but Longhouse only accepts", fg=typer.colors.YELLOW)
+        typer.secho("  plaintext http:// over loopback — device tokens and transcripts must", fg=typer.colors.YELLOW)
+        typer.secho("  not cross a network unencrypted. Put TLS in front (Caddy, nginx, or", fg=typer.colors.YELLOW)
+        typer.secho("  `tailscale serve`) and connect other machines with:", fg=typer.colors.YELLOW)
+        typer.secho("    longhouse connect --url https://<your-domain>", fg=typer.colors.BRIGHT_BLACK)
         typer.echo("")
 
     try:
@@ -644,7 +655,8 @@ def serve(
         # structured application records in the journal; uvicorn.error still
         # logs real server failures. Uvicorn's own log config is applied at
         # startup, so suppressing uvicorn.access in configure_logging is not
-        # enough.
+        # enough. The audit trail is AccessLogMiddleware, which logs the same
+        # request facts with the poll paths filtered out.
         access_log=False,
         # Machine Agent control uses an app-level heartbeat. Uvicorn protocol
         # pings have been flaky behind hosted proxies for non-browser clients,

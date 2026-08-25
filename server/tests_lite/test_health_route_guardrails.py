@@ -15,6 +15,20 @@ from zerg.database import make_engine
 from zerg.routers import health as health_router
 
 
+def _trusted_request() -> SimpleNamespace:
+    """A caller /health treats as trusted.
+
+    The TestClient host is no longer trusted on its own, so verbose-check
+    assertions must present the internal token like any other operator caller.
+    """
+    from zerg.config import get_settings
+
+    return SimpleNamespace(
+        client=SimpleNamespace(host="testclient"),
+        headers={"X-Internal-Token": get_settings().internal_api_secret},
+    )
+
+
 def _stub_build_identity(monkeypatch):
     monkeypatch.setattr(
         "zerg.build_info.load",
@@ -90,10 +104,7 @@ def test_health_reports_saturated_writer_without_entering_writer_lane(tmp_path, 
     )
 
     payload = health_router.health_check(
-        SimpleNamespace(
-            client=SimpleNamespace(host="testclient"),
-            headers={},
-        )
+        _trusted_request()
     )
 
     assert payload["checks"]["write_serializer"]["status"] == "pass"
@@ -157,10 +168,7 @@ def test_health_reports_sqlite_wal_checkpoint_metrics(tmp_path, monkeypatch):
     )
 
     payload = health_router.health_check(
-        SimpleNamespace(
-            client=SimpleNamespace(host="testclient"),
-            headers={},
-        )
+        _trusted_request()
     )
 
     sqlite_wal = payload["checks"]["sqlite_wal"]
@@ -204,10 +212,7 @@ def test_health_reports_archive_degraded_for_stale_active_writer_with_queued_wor
     )
 
     response = health_router.health_check(
-        SimpleNamespace(
-            client=SimpleNamespace(host="testclient"),
-            headers={},
-        )
+        _trusted_request()
     )
 
     assert response["status"] == "degraded"
@@ -363,10 +368,7 @@ def test_health_reports_archive_wal_pressure_as_degraded(tmp_path, monkeypatch):
     )
 
     response = health_router.health_check(
-        SimpleNamespace(
-            client=SimpleNamespace(host="testclient"),
-            headers={},
-        )
+        _trusted_request()
     )
 
     assert response["status"] == "degraded"
@@ -500,10 +502,7 @@ def test_health_fails_stale_live_ingest_writer_with_queued_work(tmp_path, monkey
     )
 
     response = health_router.health_check(
-        SimpleNamespace(
-            client=SimpleNamespace(host="testclient"),
-            headers={},
-        )
+        _trusted_request()
     )
 
     assert response.status_code == 503
@@ -544,10 +543,7 @@ def test_health_fails_stale_non_archive_writer_with_queued_work(tmp_path, monkey
     )
 
     response = health_router.health_check(
-        SimpleNamespace(
-            client=SimpleNamespace(host="testclient"),
-            headers={},
-        )
+        _trusted_request()
     )
 
     assert response.status_code == 503
@@ -599,10 +595,7 @@ def test_health_fails_stale_live_writer_with_queued_work(tmp_path, monkeypatch):
     )
 
     response = health_router.health_check(
-        SimpleNamespace(
-            client=SimpleNamespace(host="testclient"),
-            headers={},
-        )
+        _trusted_request()
     )
 
     assert response.status_code == 503

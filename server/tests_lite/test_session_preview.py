@@ -94,7 +94,7 @@ def test_preview_returns_public_safe_metadata():
     assert body["started_at"] is not None
     assert body["ended_at"] is None
     assert body["owner_display_name"] == "David Rose"
-    assert body["owner_email_local"] == "david010"
+    assert "owner_email_local" not in body
     # No content-derived fields must leak through.
     for forbidden in (
         "summary_title",
@@ -108,8 +108,9 @@ def test_preview_returns_public_safe_metadata():
         "device_id",
     ):
         assert forbidden not in body, f"{forbidden!r} leaked into preview response"
-    # Public-cache header so the login page can refetch cheaply.
-    assert "max-age" in resp.headers.get("cache-control", "")
+    # Never shared-cacheable: this is per-session metadata on an
+    # unauthenticated route.
+    assert resp.headers.get("cache-control") == "private, no-store"
 
 
 def test_preview_falls_back_to_email_local_when_display_name_is_blank():
@@ -124,9 +125,12 @@ def test_preview_falls_back_to_email_local_when_display_name_is_blank():
 
     assert resp.status_code == 200
     body = resp.json()
-    # First user by id is the one with display_name=None.
     assert body["owner_display_name"] is None
-    assert body["owner_email_local"] == "david010"
+    # This route is unauthenticated. A blank display name must degrade to
+    # nothing, not to the email local-part -- that turned the preview into
+    # anonymous de-anonymization of the instance owner.
+    assert "owner_email_local" not in body
+    assert "david010" not in resp.text
 
 
 def test_preview_404_on_unknown_prefix():
@@ -205,7 +209,7 @@ def test_preview_works_when_no_user_is_configured():
     assert resp.status_code == 200
     body = resp.json()
     assert body["owner_display_name"] is None
-    assert body["owner_email_local"] is None
+    assert "owner_email_local" not in body
 
 
 def test_preview_reads_public_metadata_from_live_catalog(tmp_path, monkeypatch):

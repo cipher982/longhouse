@@ -320,7 +320,6 @@ async def _handle_exec_error(
 def get_install_script(
     enroll_token: str | None = None,
     runner_name: str | None = None,
-    longhouse_url: str | None = None,
     mode: str | None = None,
 ) -> Response:
     """Return shell script for one-liner runner installation.
@@ -372,28 +371,19 @@ def get_install_script(
             status_code=400,
         )
 
-    # Resolve API URL
-    api_url = None
-    if longhouse_url:
-        if not re.match(r"^https?://[A-Za-z0-9._-]+(:[0-9]+)?(/.*)?$", longhouse_url):
-            return Response(
-                content="Error: Invalid longhouse_url format",
-                media_type="text/plain",
-                status_code=400,
-            )
-        api_url = longhouse_url
-    if not api_url:
-        if not settings.app_public_url:
-            if settings.testing:
-                api_url = "http://localhost:30080"
-            else:
-                return Response(
-                    content="Error: APP_PUBLIC_URL not configured on server",
-                    media_type="text/plain",
-                    status_code=500,
-                )
-        else:
-            api_url = settings.app_public_url
+    # Resolve API URL. Server-side only: a caller-supplied URL would make this
+    # domain serve an authentic-looking installer that enrolls the runner into
+    # someone else's control plane.
+    if settings.app_public_url:
+        api_url = settings.app_public_url
+    elif settings.testing:
+        api_url = "http://localhost:30080"
+    else:
+        return Response(
+            content="Error: APP_PUBLIC_URL not configured on server",
+            media_type="text/plain",
+            status_code=500,
+        )
 
     binary_url = f"https://github.com/cipher982/longhouse/releases/download/{settings.runner_binary_tag}"
     update_manifest_url = "https://github.com/cipher982/longhouse/releases/latest/download/longhouse-runner-manifest.json"

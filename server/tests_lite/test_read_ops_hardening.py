@@ -27,9 +27,15 @@ def _client():
 
 
 def test_health_trusted_caller_sees_verbose_checks():
-    """TestClient is loopback/testclient → trusted → full checks present."""
+    """An internal-token caller is trusted → full checks present.
+
+    The TestClient host is not a trust signal on its own; trust comes from
+    loopback with no public origin, the internal token, or an admin session.
+    """
+    from zerg.config import get_settings
+
     with _client() as client:
-        resp = client.get("/api/health")
+        resp = client.get("/api/health", headers={"X-Internal-Token": get_settings().internal_api_secret})
     # Healthy in test env → 200 with verbose checks.
     assert resp.status_code == 200
     body = resp.json()

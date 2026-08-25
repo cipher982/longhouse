@@ -4,6 +4,7 @@ Extracted from main.py — these probe endpoints are logically separate
 from the app factory and router registration.
 """
 
+import hmac
 import os
 import sqlite3
 from pathlib import Path
@@ -170,17 +171,18 @@ def _request_is_trusted(request: Request) -> bool:
     # through to the explicit token/admin checks instead.
     client_host = request.client.host if request.client else None
     public_origin_configured = bool(settings.public_site_url or settings.app_public_url or settings.public_api_url)
-    if not public_origin_configured and client_host in ("127.0.0.1", "::1", "localhost", "testclient"):
-        return True
-    # The test client always presents as a trusted local caller.
-    if client_host == "testclient":
+    if not public_origin_configured and client_host in ("127.0.0.1", "::1", "localhost"):
         return True
 
     # NB: `auth_disabled` does NOT grant trust on its own — a --allow-public-no-auth
     # instance is network-reachable. Trust comes only from loopback (no public
     # origin), an explicit internal/metrics token, or an authenticated admin.
     internal = request.headers.get("X-Internal-Token")
-    if internal and settings.internal_api_secret and internal == settings.internal_api_secret:
+    if (
+        internal
+        and settings.internal_api_secret
+        and hmac.compare_digest(internal.encode("utf-8"), settings.internal_api_secret.encode("utf-8"))
+    ):
         return True
 
     # Authenticated admin browser session — ONLY when auth is enabled. On an

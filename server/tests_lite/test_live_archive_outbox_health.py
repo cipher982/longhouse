@@ -25,6 +25,15 @@ import zerg.routers.health as health_mod  # noqa: E402
 import zerg.database as db_mod  # noqa: E402
 
 
+def _trusted_headers() -> dict[str, str]:
+    """Verbose /health checks require an operator signal.
+
+    Loopback-by-TestClient is no longer trusted on its own, so these
+    infra-detail assertions authenticate with the internal token.
+    """
+    return {"X-Internal-Token": get_settings().internal_api_secret}
+
+
 def _make_live_store(tmp_path):
     live_engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
     initialize_live_database(live_engine)
@@ -64,7 +73,7 @@ def test_outbox_stats_populate_when_live_session_exists(tmp_path):
     saved = _patch_for_live(live_url, LiveSession)
     try:
         with TestClient(app) as client:
-            resp = client.get("/health")
+            resp = client.get("/health", headers=_trusted_headers())
     finally:
         _unpatch(*saved)
 
@@ -107,7 +116,7 @@ def test_outbox_status_warns_on_failed_count(tmp_path):
     saved = _patch_for_live(live_url, LiveSession)
     try:
         with TestClient(app) as client:
-            resp = client.get("/health")
+            resp = client.get("/health", headers=_trusted_headers())
     finally:
         _unpatch(*saved)
 
@@ -148,7 +157,7 @@ def test_outbox_status_warns_when_pending_row_is_old(tmp_path):
     saved = _patch_for_live(live_url, LiveSession)
     try:
         with TestClient(app) as client:
-            resp = client.get("/health")
+            resp = client.get("/health", headers=_trusted_headers())
     finally:
         _unpatch(*saved)
 

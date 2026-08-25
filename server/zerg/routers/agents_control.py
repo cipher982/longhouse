@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents/control", tags=["agents"])
 
 CONTROL_HEARTBEAT_TIMEOUT_SECS = 90
+CONTROL_HELLO_TIMEOUT_SECS = 10
 
 
 def _auth_disabled_identity(hello: Mapping[str, Any]) -> tuple[int, str]:
@@ -177,29 +178,40 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
     console_reconcile_task: asyncio.Task[None] | None = None
 
     try:
-        db = None if database_module.live_catalog_enabled() else get_catalog_session_factory()()
-        await websocket.accept()
         if not settings.testing and not settings.single_tenant:
             await _close_control_ws(websocket, code=1011, reason="Multi-tenant agents control is not implemented")
             return
 
+        # Authenticate *before* accepting the handshake, the same way
+        # routers/websocket.py does. One event loop serves every connection, so
+        # an unauthenticated caller must never reach the point where the server
+        # holds an accepted socket and waits on it.
+        token = await asyncio.to_thread(_validate_websocket_device_token, websocket)
+        if token is None and not settings.auth_disabled:
+            await _close_control_ws(websocket, code=4401, reason="Invalid or missing device token")
+            return
+
+        db = None if database_module.live_catalog_enabled() else get_catalog_session_factory()()
+        await websocket.accept()
+
         try:
-            hello = await websocket.receive_json()
+            hello = await asyncio.wait_for(websocket.receive_json(), timeout=CONTROL_HELLO_TIMEOUT_SECS)
+        except asyncio.TimeoutError:
+            await _close_control_ws(websocket, reason="Timed out waiting for hello message")
+            return
         except WebSocketDisconnect:
             return
         except Exception:
             await _close_control_ws(websocket, reason="Invalid hello message")
             return
 
-        if hello.get("type") != "hello":
+        if not isinstance(hello, Mapping) or hello.get("type") != "hello":
             await _close_control_ws(websocket, reason="Expected hello message")
             return
 
-        token = await asyncio.to_thread(_validate_websocket_device_token, websocket)
         identity = _control_identity(hello, token, auth_disabled=settings.auth_disabled)
         if identity is None:
-            reason = "Device token does not match hello device_id" if token is not None else "Invalid or missing device token"
-            await _close_control_ws(websocket, reason=reason)
+            await _close_control_ws(websocket, reason="Device token does not match hello device_id")
             return
         owner_id, device_id = identity
 

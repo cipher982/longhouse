@@ -135,11 +135,18 @@ def get_zerg_url(config_dir: Path | None = None) -> str | None:
     return state.runtime_url if state else None
 
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
 def normalize_zerg_url(url: object | None) -> str | None:
     """Return a valid Longhouse URL or None.
 
     This guards against poisoned config like Typer OptionInfo objects being
-    stringified into the persisted url file.
+    stringified into the persisted url file, and against plaintext `http://`
+    to anything but loopback: the engine maps the stored URL to `ws://`, so a
+    non-loopback `http://` ships the device token as a cleartext header and
+    every transcript over the same unencrypted socket. Remote Runtime Hosts
+    must terminate TLS.
     """
     if not isinstance(url, str):
         return None
@@ -152,6 +159,8 @@ def normalize_zerg_url(url: object | None) -> str | None:
 
     parsed = urlparse(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.hostname is None:
+        return None
+    if parsed.scheme == "http" and parsed.hostname.lower() not in LOOPBACK_HOSTS:
         return None
 
     return normalized

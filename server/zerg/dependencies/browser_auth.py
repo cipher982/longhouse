@@ -51,26 +51,41 @@ def _hosted_runtime_bearer(request: Request) -> str | None:
     return token
 
 
+def _stamp_principal(request: Request, user):
+    """Record who this request resolved to, for the access log.
+
+    The access-log middleware reads scope["state"], which the route handler
+    shares, so stamping here is what turns every log line from "anonymous"
+    into an answer to "who read this transcript".
+    """
+    if user is not None:
+        try:
+            request.state.principal = f"user:{user.id}"
+        except Exception:  # pragma: no cover - state is always present in ASGI
+            pass
+    return user
+
+
 def _get_browser_session_user(request: Request, db=None):
     """Validate browser auth (cookie or device-token bearer) and return user."""
     if auth_deps.AUTH_DISABLED:
-        return auth_deps._get_strategy().get_current_user(request, db)
+        return _stamp_principal(request, auth_deps._get_strategy().get_current_user(request, db))
 
     hosted_bearer = _hosted_runtime_bearer(request)
     if hosted_bearer:
         user = auth_deps._get_strategy().validate_ws_token(hosted_bearer, db)
         if user is not None:
-            return user
+            return _stamp_principal(request, user)
 
     session_token = request.cookies.get(SESSION_COOKIE_NAME)
     if session_token:
         user = auth_deps._get_strategy().validate_ws_token(session_token, db)
         if user is not None:
-            return user
+            return _stamp_principal(request, user)
 
     device_token = _device_token_bearer(request)
     if device_token:
-        return auth_deps._get_strategy().validate_ws_token(device_token, db)
+        return _stamp_principal(request, auth_deps._get_strategy().validate_ws_token(device_token, db))
 
     return None
 

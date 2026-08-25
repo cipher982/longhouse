@@ -26,6 +26,7 @@ from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.services.media_store import MAX_MEDIA_BYTES
 from zerg.services.media_store import absolute_media_path
 from zerg.services.media_store import claim_media
 from zerg.services.media_store import is_valid_sha256
@@ -69,6 +70,42 @@ class MediaUploadResponse(BaseModel):
 
 def _content_type(request: Request) -> str:
     return (request.headers.get("content-type") or "application/octet-stream").split(";", 1)[0].strip().lower()
+
+
+async def _read_bounded_body(request: Request) -> bytes:
+    """Read an upload body without ever buffering more than one media object.
+
+    `await request.body()` buffers whatever the client sends before
+    store_media_blob() gets to check the size, so the ceiling has to be applied
+    while the stream is still arriving.
+    """
+
+    content_encoding = (request.headers.get("content-encoding") or "identity").strip().lower()
+    if content_encoding not in {"", "identity"}:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="media upload accepts identity encoding only",
+        )
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            size = int(declared)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid content-length") from exc
+        if size > MAX_MEDIA_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"media exceeds {MAX_MEDIA_BYTES} bytes",
+            )
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_MEDIA_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"media exceeds {MAX_MEDIA_BYTES} bytes",
+            )
+        body.extend(chunk)
+    return bytes(body)
 
 
 def _row_or_404(db: Session, sha256: str) -> MediaObject:
@@ -168,12 +205,13 @@ async def put_media_blob(
 ) -> MediaUploadResponse:
     """Upload a media blob once, keyed by sha256."""
 
+    data = await _read_bounded_body(request)
     try:
         stored = store_media_blob(
             db,
             sha256=sha256,
             mime_type=_content_type(request),
-            data=await request.body(),
+            data=data,
             first_seen_session_id=first_seen_session_id,
         )
     except ValueError as exc:

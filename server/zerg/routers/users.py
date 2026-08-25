@@ -15,6 +15,7 @@ from fastapi import Depends
 from fastapi import File
 from fastapi import HTTPException
 from fastapi import Query
+from fastapi import Request
 from fastapi import UploadFile
 from fastapi import status
 from pydantic import BaseModel
@@ -23,6 +24,8 @@ from sqlalchemy.orm import Session
 
 import zerg.database as database_module
 from zerg.auth.catalog_gateway import update_user
+from zerg.config import get_settings
+from zerg.config import resolve_cors_origins
 from zerg.database import get_db
 
 # Auth guard ---------------------------------------------------------------
@@ -279,14 +282,38 @@ async def update_current_user_client_presence(
 # ---------------------------------------------------------------------------
 
 
+def _reject_cross_origin_form_post(request: Request) -> None:
+    """Reject a cross-origin browser submit of this multipart route.
+
+    ``multipart/form-data`` is a CORS-simple content type, so a form on another
+    origin can POST here with the session cookie attached and CORS never gets to
+    preflight it. Cookies are ``SameSite=Lax``, but tenants are subdomains of one
+    site, so SameSite cannot separate them either. Non-browser clients (iOS, CLI)
+    send neither header and are unaffected.
+    """
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if fetch_site is not None and fetch_site not in ("same-origin", "none"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="cross-origin request rejected")
+    origin = request.headers.get("Origin")
+    if origin is None:
+        return
+    allowed = {f"{request.url.scheme}://{request.url.netloc}"}
+    allowed.update(o for o in resolve_cors_origins(get_settings()) if o != "*")
+    if origin not in allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="cross-origin request rejected")
+
+
 @router.post("/users/me/avatar", response_model=UserOut, status_code=status.HTTP_200_OK)
 @publish_event(EventType.USER_UPDATED)
 async def upload_current_user_avatar(
+    request: Request,
     *,
     file: UploadFile = File(..., description="Avatar image file (PNG/JPEG/WebP ≤2 MB)"),
     current_user=Depends(get_current_user),
 ):
     """Handle *multipart/form-data* avatar upload for the authenticated user."""
+
+    _reject_cross_origin_form_post(request)
 
     avatar_url = store_avatar_for_user(file)
 

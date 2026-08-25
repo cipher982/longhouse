@@ -10,6 +10,8 @@ load_dotenv(override=False)
 
 # fmt: off
 # ruff: noqa: E402
+import asyncio
+
 from zerg.config import get_settings
 from zerg.config import resolve_cors_origins
 from zerg.config import validate_public_origin_config
@@ -98,7 +100,6 @@ from zerg.lifespan import lifespan
 from zerg.openapi_schema import build_api_openapi_schema
 from zerg.openapi_schema import export_openapi_schema
 from zerg.routers.admin import router as admin_router
-from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agents_backfill import router as agents_backfill_router
 from zerg.routers.agents_control import router as agents_control_router
 from zerg.routers.agents_demo import router as agents_demo_router
@@ -114,7 +115,6 @@ from zerg.routers.agents_source_lines import router as agents_source_lines_route
 from zerg.routers.agents_state_diagnostics import health_router as agents_state_diagnostics_health_router
 from zerg.routers.agents_state_diagnostics import router as agents_state_diagnostics_router
 from zerg.routers.agents_storage_v2 import router as agents_storage_v2_router
-from zerg.routers.agents_turns import router as agents_turns_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.health import router as health_router
@@ -137,14 +137,13 @@ from zerg.routers.session_inputs_attachments import agents_router as agents_sess
 from zerg.routers.session_inputs_attachments import router as session_inputs_attachments_router
 from zerg.routers.session_shares import public_router as session_shares_public_router
 from zerg.routers.session_shares import router as session_shares_router
-from zerg.routers.skills import router as skills_router
 from zerg.routers.system import router as system_router
 from zerg.routers.telemetry import admin_router as telemetry_admin_router
 from zerg.routers.telemetry import beacon_router as telemetry_beacon_router
 from zerg.routers.telemetry import canary_router as telemetry_canary_router
-from zerg.routers.timeline import canary_stream_router as timeline_canary_stream_router
 from zerg.routers.timeline import router as timeline_router
 from zerg.routers.timeline import timeline_stream_router
+from zerg.routers.user_data import router as user_data_router
 from zerg.routers.users import router as users_router
 from zerg.routers.websocket import router as websocket_router
 from zerg.services.public_downloads import PublicDownloadUnavailable
@@ -154,8 +153,24 @@ from zerg.services.public_downloads import download_macos_desktop_app_response
 # FastAPI application
 # ---------------------------------------------------------------------------
 
-app = FastAPI(redirect_slashes=True, lifespan=lifespan)
-api_app = FastAPI(redirect_slashes=True)
+# Docs and the raw schema describe the whole /api/agents/* machine surface and
+# load an unpinned CDN bundle on the origin that holds longhouse_session. Keep
+# them for local work; never expose them on a deployed instance.
+_docs_enabled = _settings.testing or _settings.auth_disabled or _settings.dev_admin
+
+app = FastAPI(
+    redirect_slashes=True,
+    lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
+api_app = FastAPI(
+    redirect_slashes=True,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 
 
 # Set health app reference for readyz/health endpoints that need app.state
@@ -237,16 +252,24 @@ from zerg.middleware.safe_error_response import SafeErrorResponseMiddleware
 
 app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 
+from zerg.middleware.security_headers import SecurityHeadersMiddleware
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+from zerg.middleware.access_log import AccessLogMiddleware
+
+app.add_middleware(AccessLogMiddleware)
+
 # ---------------------------------------------------------------------------
 # API routers
 # ---------------------------------------------------------------------------
 api_app.include_router(models_router, prefix=MODELS_PREFIX)
 api_app.include_router(websocket_router)
 api_app.include_router(admin_router)
-api_app.include_router(admin_bootstrap_router)
 api_app.include_router(runners_router)
 api_app.include_router(auth_router)
 api_app.include_router(users_router)
+api_app.include_router(user_data_router)
 api_app.include_router(system_router)
 api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)
@@ -256,7 +279,6 @@ api_app.include_router(telemetry_canary_router)
 api_app.include_router(observability_router)
 api_app.include_router(agents_observability_router)
 api_app.include_router(provider_capability_proofs_router)
-api_app.include_router(skills_router)
 api_app.include_router(session_chat_router)
 api_app.include_router(agents_session_chat_router)
 api_app.include_router(session_shares_router)
@@ -265,7 +287,6 @@ api_app.include_router(session_inputs_attachments_router)
 api_app.include_router(agents_session_inputs_attachments_router)
 api_app.include_router(timeline_stream_router)
 api_app.include_router(timeline_router)
-api_app.include_router(timeline_canary_stream_router)
 api_app.include_router(agents_control_router)
 api_app.include_router(agents_ingest_router)
 api_app.include_router(agents_machine_presence_router)
@@ -279,7 +300,6 @@ api_app.include_router(agents_state_diagnostics_health_router)
 api_app.include_router(agents_state_diagnostics_router)
 api_app.include_router(agents_source_lines_router)
 api_app.include_router(agents_storage_v2_router)
-api_app.include_router(agents_turns_router)
 api_app.include_router(agents_backfill_router)
 api_app.include_router(agents_demo_router)
 api_app.include_router(heartbeat_router)
@@ -364,6 +384,11 @@ async def download_macos_desktop_app():
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+# A short link is a convenience, not a capability. Below 8 hex chars the route
+# stops resolving links and starts enumerating the instance.
+SHORT_LINK_MIN_PREFIX = 8
+
+
 @app.get("/s/{prefix}", include_in_schema=False)
 async def short_session_link(prefix: str):
     """Resolve a short session link (/s/<id-prefix>) to the full timeline URL.
@@ -382,12 +407,12 @@ async def short_session_link(prefix: str):
     from zerg.services.catalog_read_gateway import resolve_session_prefix
 
     cleaned = (prefix or "").strip().lower()
-    if not cleaned or any(ch not in "0123456789abcdef-" for ch in cleaned):
+    if len(cleaned) < SHORT_LINK_MIN_PREFIX or any(ch not in "0123456789abcdef-" for ch in cleaned):
         return RedirectResponse(url="/timeline", status_code=302)
 
     if live_catalog_enabled():
         try:
-            resolution = resolve_session_prefix(cleaned)
+            resolution = await asyncio.to_thread(resolve_session_prefix, cleaned)
         except CatalogReadError as exc:
             raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
         if resolution.get("status") == "unique":
@@ -429,12 +454,12 @@ async def short_session_link_preview(prefix: str):
     from zerg.services.catalog_read_gateway import resolve_session_prefix
 
     cleaned = (prefix or "").strip().lower()
-    if not cleaned or any(ch not in "0123456789abcdef-" for ch in cleaned):
+    if len(cleaned) < SHORT_LINK_MIN_PREFIX or any(ch not in "0123456789abcdef-" for ch in cleaned):
         raise HTTPException(status_code=404, detail="Session not found")
 
     if live_catalog_enabled():
         try:
-            resolution = resolve_session_prefix(cleaned)
+            resolution = await asyncio.to_thread(resolve_session_prefix, cleaned)
         except CatalogReadError as exc:
             raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
         if resolution.get("status") != "unique":
@@ -448,7 +473,6 @@ async def short_session_link_preview(prefix: str):
             "started_at": session.get("started_at"),
             "ended_at": session.get("ended_at"),
             "owner_display_name": owner.get("display_name"),
-            "owner_email_local": owner.get("email_local"),
         }
     else:
         with catalog_db_session() as db:
@@ -469,11 +493,6 @@ async def short_session_link_preview(prefix: str):
             session_row = row[0]
             owner_row = db.query(User.display_name, User.email).order_by(User.id.asc()).first()
         owner_display_name = (owner_row[0] or "").strip() or None if owner_row is not None else None
-        owner_email_local = None
-        if owner_row is not None:
-            email = (owner_row[1] or "").strip()
-            if email and "@" in email:
-                owner_email_local = email.split("@", 1)[0] or None
         session_payload = {
             "session_id": str(session_row[0]),
             "provider": session_row.provider,
@@ -481,12 +500,11 @@ async def short_session_link_preview(prefix: str):
             "started_at": session_row.started_at.isoformat() if session_row.started_at else None,
             "ended_at": session_row.ended_at.isoformat() if session_row.ended_at else None,
             "owner_display_name": owner_display_name,
-            "owner_email_local": owner_email_local,
         }
 
     return JSONResponse(
         content=session_payload,
-        headers={"Cache-Control": "public, max-age=60"},
+        headers={"Cache-Control": "private, no-store"},
     )
 
 

@@ -25,6 +25,7 @@ import zerg.services.managed_control_dispatcher as managed_control_dispatcher_mo
 import zerg.services.session_chat_impl as session_chat_impl_module
 import zerg.services.session_turns as session_turns_module
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from zerg.config import get_settings as config_get_settings
 from zerg.database import Base
 from zerg.database import get_pool_status
 from zerg.database import initialize_live_database
@@ -63,9 +64,9 @@ BLOCKED_WRITER_TIMEOUT_SECONDS = ROUTE_TIMEOUT_SECONDS + 3.0
 
 
 class _FakeRequest:
-    def __init__(self, body: bytes = b"{}") -> None:
+    def __init__(self, body: bytes = b"{}", headers: dict[str, str] | None = None) -> None:
         self.client = SimpleNamespace(host="testclient")
-        self.headers = {}
+        self.headers = headers or {}
         self._body = body
 
     async def body(self) -> bytes:
@@ -262,7 +263,9 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
         health = await asyncio.wait_for(
             asyncio.to_thread(
                 health_router.health_check,
-                _FakeRequest(),
+                # Verbose /health checks require an operator signal; the test
+                # client host is not trusted on its own.
+                _FakeRequest(headers={"X-Internal-Token": config_get_settings().internal_api_secret}),
             ),
             timeout=1.0,
         )

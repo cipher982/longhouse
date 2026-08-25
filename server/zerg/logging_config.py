@@ -81,7 +81,6 @@ NOISY_MODULES = (
     "zerg.routers.websocket",
     "zerg.websocket.manager",
     "zerg.events.event_bus",
-    "zerg.services.auto_seed",
     # Third-party libraries
     "openai",
     "openai._base_client",
@@ -113,6 +112,9 @@ def configure_logging(log_level_name: str) -> None:
     for noisy_mod in NOISY_MODULES:
         logging.getLogger(noisy_mod).setLevel(logging.WARNING)
 
-    # SSE and uvicorn noise
+    # SSE and uvicorn noise. uvicorn.access stays pinned: it logs every
+    # presence/heartbeat poll, which is why request logging was off at all.
+    # zerg.middleware.access_log carries the audit trail instead, with the
+    # poll paths filtered out — keep that logger at the root level.
     logging.getLogger("sse_starlette").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

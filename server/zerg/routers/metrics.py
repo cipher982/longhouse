@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import time
@@ -35,8 +36,6 @@ def _metrics_access_allowed(request: Request) -> bool:
 
     client_host = request.client.host if request.client else None
     public_origin_configured = bool(settings.public_site_url or settings.app_public_url or settings.public_api_url)
-    if client_host == "testclient":
-        return True
     if not public_origin_configured and client_host in ("127.0.0.1", "::1", "localhost"):
         return True
 
@@ -46,11 +45,15 @@ def _metrics_access_allowed(request: Request) -> bool:
         auth_header = request.headers.get("Authorization") or ""
         if auth_header.lower().startswith("bearer "):
             presented = presented or auth_header[7:].strip()
-        if presented and presented == metrics_token:
+        if presented and hmac.compare_digest(presented.encode("utf-8"), metrics_token.encode("utf-8")):
             return True
 
     internal = request.headers.get("X-Internal-Token")
-    if internal and settings.internal_api_secret and internal == settings.internal_api_secret:
+    if (
+        internal
+        and settings.internal_api_secret
+        and hmac.compare_digest(internal.encode("utf-8"), settings.internal_api_secret.encode("utf-8"))
+    ):
         return True
 
     return False

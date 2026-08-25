@@ -307,17 +307,42 @@ def test_runner_doctor_distinguishes_outdated_runner_on_legacy_layout(tmp_path: 
         db.close()
 
 
-def test_runner_preflight_distinguishes_unknown_runner(tmp_path: Path):
+def test_runner_preflight_does_not_reveal_whether_a_runner_exists(tmp_path: Path):
+    """Preflight is unauthenticated, so rejections must not enumerate runners.
+
+    An unknown name and a wrong secret for a real runner return the identical
+    ``invalid_credentials`` body; the specific cause is server-side logging only.
+    """
     client, api_app, db, user = _make_client(tmp_path)
     try:
-        response = client.post(
+        runner_crud.create_runner(
+            db=db,
+            owner_id=user.id,
+            name="real-runner",
+            auth_secret="runner-secret",
+            capabilities=["exec.full"],
+            metadata={},
+        )
+
+        unknown = client.post(
             "/runners/preflight",
             json={"runner_name": "missing-runner", "secret": "bad-secret"},
         )
-        assert response.status_code == 200
-        payload = response.json()
+        wrong_secret = client.post(
+            "/runners/preflight",
+            json={"runner_name": "real-runner", "secret": "bad-secret"},
+        )
+
+        assert unknown.status_code == 200
+        assert wrong_secret.status_code == 200
+        payload = unknown.json()
         assert payload["authenticated"] is False
-        assert payload["reason_code"] == "runner_not_found"
+        assert payload["reason_code"] == "invalid_credentials"
+        # The echoed runner_name came from the caller; everything Longhouse
+        # itself says about the rejection must be identical.
+        assert {k: v for k, v in wrong_secret.json().items() if k != "runner_name"} == {
+            k: v for k, v in payload.items() if k != "runner_name"
+        }
     finally:
         api_app.dependency_overrides.clear()
         db.close()

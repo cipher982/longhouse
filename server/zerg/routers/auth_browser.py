@@ -6,11 +6,12 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import os
 import secrets
 import time
 import urllib.parse
 import uuid
-from collections import defaultdict
+from collections import OrderedDict
 from collections import deque
 from datetime import datetime
 from datetime import timedelta
@@ -97,13 +98,38 @@ async def _issue_session(
 
 _PASSWORD_RATE_LIMIT_MAX_ATTEMPTS = 5
 _PASSWORD_RATE_LIMIT_WINDOW_SECONDS = 60
-_PASSWORD_RATE_LIMIT_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
+# Hard ceiling on distinct keys we track, so a spoofed key space can't grow the dict.
+_PASSWORD_RATE_LIMIT_MAX_KEYS = 1024
+_PASSWORD_RATE_LIMIT_BUCKETS: OrderedDict[str, deque[float]] = OrderedDict()
+
+
+def _trusted_proxy_hops() -> int:
+    """How many appending reverse proxies sit in front of this instance.
+
+    Read per call rather than at import so process env changes take effect.
+    """
+    try:
+        return max(int(os.getenv("TRUSTED_PROXY_HOPS", "0")), 0)
+    except ValueError:
+        return 0
 
 
 def _get_client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Rate-limit key for the caller, counted from the RIGHT of X-Forwarded-For.
+
+    Our documented proxies append (`$proxy_add_x_forwarded_for` in nginx, same in
+    Caddy), so with N trusted proxies the client address is the Nth entry from the
+    right and everything left of it is attacker-supplied. With no trusted proxies
+    configured (the default) the direct peer is the only honest source.
+    """
+    hops = _trusted_proxy_hops()
+    if hops:
+        forwarded = request.headers.get("x-forwarded-for")
+        chain = [part.strip() for part in (forwarded or "").split(",") if part.strip()]
+        # A chain shorter than the configured hop count means the proxies aren't
+        # appending the way we expect — fall back to the direct peer.
+        if len(chain) >= hops:
+            return chain[-hops]
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
@@ -112,9 +138,14 @@ def _get_client_ip(request: Request) -> str:
 def _check_password_rate_limit(key: str) -> int | None:
     now = time.monotonic()
     window_start = now - _PASSWORD_RATE_LIMIT_WINDOW_SECONDS
-    bucket = _PASSWORD_RATE_LIMIT_BUCKETS[key]
+    bucket = _PASSWORD_RATE_LIMIT_BUCKETS.get(key)
+    if bucket is None:
+        return None
     while bucket and bucket[0] < window_start:
         bucket.popleft()
+    if not bucket:
+        del _PASSWORD_RATE_LIMIT_BUCKETS[key]
+        return None
     if len(bucket) >= _PASSWORD_RATE_LIMIT_MAX_ATTEMPTS:
         retry_after = int(_PASSWORD_RATE_LIMIT_WINDOW_SECONDS - (now - bucket[0])) + 1
         return max(retry_after, 1)
@@ -122,7 +153,14 @@ def _check_password_rate_limit(key: str) -> int | None:
 
 
 def _record_password_failure(key: str) -> None:
-    _PASSWORD_RATE_LIMIT_BUCKETS[key].append(time.monotonic())
+    now = time.monotonic()
+    window_start = now - _PASSWORD_RATE_LIMIT_WINDOW_SECONDS
+    for stale in [k for k, b in _PASSWORD_RATE_LIMIT_BUCKETS.items() if not b or b[-1] < window_start]:
+        del _PASSWORD_RATE_LIMIT_BUCKETS[stale]
+    _PASSWORD_RATE_LIMIT_BUCKETS.setdefault(key, deque()).append(now)
+    _PASSWORD_RATE_LIMIT_BUCKETS.move_to_end(key)
+    while len(_PASSWORD_RATE_LIMIT_BUCKETS) > _PASSWORD_RATE_LIMIT_MAX_KEYS:
+        _PASSWORD_RATE_LIMIT_BUCKETS.popitem(last=False)
 
 
 def _clear_password_failures(key: str) -> None:
@@ -500,7 +538,8 @@ async def password_login(
         )
 
     if settings.longhouse_password_hash:
-        password_ok = _verify_password_hash(body.password, settings.longhouse_password_hash)
+        # pbkdf2/argon2/bcrypt verification is CPU-bound; keep it off the event loop.
+        password_ok = await asyncio.to_thread(_verify_password_hash, body.password, settings.longhouse_password_hash)
     else:
         password_ok = secrets.compare_digest(body.password, settings.longhouse_password)
 
@@ -539,7 +578,8 @@ async def cli_login(
         )
 
     if settings.longhouse_password_hash:
-        password_ok = _verify_password_hash(body.password, settings.longhouse_password_hash)
+        # pbkdf2/argon2/bcrypt verification is CPU-bound; keep it off the event loop.
+        password_ok = await asyncio.to_thread(_verify_password_hash, body.password, settings.longhouse_password_hash)
     else:
         password_ok = secrets.compare_digest(body.password, settings.longhouse_password)
 

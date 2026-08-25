@@ -25,6 +25,17 @@ class RunnerAuthResult:
     runner: Runner | None = None
 
 
+# Every credential rejection looks identical to the caller. Both callers are
+# unauthenticated surfaces (preflight, runner websocket), so telling "unknown
+# runner" apart from "wrong secret" apart from "revoked" would let anyone
+# enumerate which runners exist. The specific cause is logged server-side.
+_CREDENTIALS_REJECTED = RunnerAuthResult(
+    authenticated=False,
+    reason_code="invalid_credentials",
+    summary="Longhouse rejected these runner credentials.",
+)
+
+
 def authenticate_runner_identity(
     db: Session | None,
     *,
@@ -63,49 +74,25 @@ def authenticate_runner_identity(
 
     elif runner_id:
         runner = runner_crud.get_runner(db, runner_id)
-        if not runner:
-            return RunnerAuthResult(
-                authenticated=False,
-                reason_code="runner_not_found",
-                summary=f"Longhouse does not know runner id {runner_id}.",
-            )
     elif runner_name:
         stmt = select(Runner).where(Runner.name == runner_name)
         candidates = db.execute(stmt).scalars().all()
-        if not candidates:
-            return RunnerAuthResult(
-                authenticated=False,
-                reason_code="runner_not_found",
-                summary=f"Longhouse does not know runner '{runner_name}'.",
-            )
-
         matching = [candidate for candidate in candidates if secrets.compare_digest(computed_hash, candidate.auth_secret_hash)]
         if len(matching) > 1:
             logger.warning("Multiple runners matched name '%s' and the same secret hash; using first match", runner_name)
-        runner = matching[0] if matching else candidates[0]
+        runner = matching[0] if matching else None
 
     if runner is None:
-        return RunnerAuthResult(
-            authenticated=False,
-            reason_code="runner_not_found",
-            summary="Longhouse could not resolve this runner.",
-        )
+        logger.info("Runner auth rejected: no runner matches id=%s name=%s", runner_id, runner_name)
+        return _CREDENTIALS_REJECTED
 
     if not secrets.compare_digest(computed_hash, runner.auth_secret_hash):
-        return RunnerAuthResult(
-            authenticated=False,
-            reason_code="invalid_secret",
-            summary="Longhouse rejected the configured runner secret.",
-            runner=runner,
-        )
+        logger.info("Runner auth rejected: wrong secret for runner %s", runner.id)
+        return _CREDENTIALS_REJECTED
 
     if runner.status == "revoked":
-        return RunnerAuthResult(
-            authenticated=False,
-            reason_code="runner_revoked",
-            summary="This runner was revoked in Longhouse and cannot reconnect.",
-            runner=runner,
-        )
+        logger.info("Runner auth rejected: runner %s is revoked", runner.id)
+        return _CREDENTIALS_REJECTED
 
     return RunnerAuthResult(
         authenticated=True,

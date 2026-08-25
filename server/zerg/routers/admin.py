@@ -1,3 +1,4 @@
+import hmac
 import logging
 import os
 from datetime import datetime
@@ -250,7 +251,7 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user):
         if not request.confirmation_password:
             raise HTTPException(status_code=400, detail="Password confirmation required for database reset in production")
 
-        if request.confirmation_password != settings.db_reset_password:
+        if not hmac.compare_digest(request.confirmation_password.encode("utf-8"), settings.db_reset_password.encode("utf-8")):
             logger.warning(f"Failed database reset attempt by {getattr(current_user, 'email', 'unknown')} - incorrect password")
             raise HTTPException(status_code=403, detail="Incorrect confirmation password")
 

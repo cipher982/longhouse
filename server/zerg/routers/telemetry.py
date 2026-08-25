@@ -16,6 +16,7 @@ endpoint stays internal/admin-only.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import time
 from collections import deque
@@ -56,7 +57,9 @@ def canary_token_matches(request: Request) -> bool:
     """True if the request carries a valid X-Canary-Token."""
     settings = get_settings()
     header_token = request.headers.get("X-Canary-Token", "")
-    return bool(settings.canary_token and header_token and header_token == settings.canary_token)
+    if not settings.canary_token or not header_token:
+        return False
+    return hmac.compare_digest(header_token.encode("utf-8"), settings.canary_token.encode("utf-8"))
 
 
 def require_canary_token(request: Request) -> None:

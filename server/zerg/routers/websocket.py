@@ -11,11 +11,14 @@ import json
 import logging
 import uuid
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 
+from zerg.config import get_settings
+from zerg.config import resolve_cors_origins
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
 
@@ -28,6 +31,20 @@ from zerg.websocket.manager import topic_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _origin_is_allowed(origin: str) -> bool:
+    """Same-site check for the handshake.
+
+    Browsers exempt WebSocket upgrades from CORS, so ``Origin`` is the only
+    same-site signal the handshake carries.  Loopback origins stay allowed:
+    dev and E2E serve the frontend from assorted localhost ports that are
+    never in a deployment's CORS allowlist.  Non-browser clients (engine, iOS)
+    send no ``Origin`` at all and are not checked.
+    """
+    if origin in resolve_cors_origins(get_settings()):
+        return True
+    return urlparse(origin).hostname in {"localhost", "127.0.0.1", "::1"}
 
 
 @router.websocket("/ws")
@@ -53,6 +70,14 @@ async def websocket_endpoint(
     worker_id = websocket.query_params.get("worker")
     worker_token = set_test_worker_id(worker_id) if worker_id else None
     logger.info(f"New WebSocket connection attempt from client {client_id}")
+
+    origin = websocket.headers.get("origin")
+    if origin and not _origin_is_allowed(origin):
+        logger.info("WebSocket rejected cross-origin handshake from %s (client %s)", origin, client_id)
+        await websocket.close(code=4403, reason="Forbidden origin")
+        if worker_token is not None:
+            reset_test_worker_id(worker_token)
+        return
 
     # ------------------------------------------------------------------
     # Authenticate BEFORE accepting the WebSocket handshake.  If auth fails
