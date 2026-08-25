@@ -104,9 +104,13 @@ _RECEIVE_ASSERTION = "attributed_input_visible"
 
 REGISTRATION = ProducerRegistration(
     producer_id="cursor.coordination.v1",
-    producer_revision=8,
+    # 9/7: coordination_instructions_model_visible is now proven by an observed
+    # coordination tool invocation rather than by keyword-matching the model's
+    # prose. Different evidence for the same assertion, so the scenario revision
+    # moves and proofs from revision 6 do not satisfy it.
+    producer_revision=9,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=6,
+    scenario_revision=7,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -604,6 +608,33 @@ _PEER_HINTS = (
 )
 
 
+def _coordination_tool_invoked(payload: dict[str, Any], tool: str) -> bool:
+    """Did the model actually call the named Longhouse coordination tool?
+
+    The sibling Codex and Claude producers prove this assertion behaviourally --
+    the model invokes a coordination tool and the invocation is observed. This
+    producer instead keyword-matched the model's prose, which measures phrasing
+    rather than Longhouse behaviour: same assertion, 98% pass on codex against
+    5.6% here over 160 runs. The forensic event stream carries tool calls as
+    ``tool_name`` (verified against a live session), so the behavioural evidence
+    was available all along; the old probe simply never asked the model to act.
+
+    Names are compared on the trailing segment, matching codex_coordination_native,
+    because MCP surfaces them variously as ``peers``, ``longhouse.peers`` and
+    ``mcp__longhouse-coordination__peers``.
+    """
+
+    for row in payload.get("events") or []:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("tool_name")
+        if not isinstance(name, str) or not name:
+            continue
+        if name.rsplit("__", 1)[-1].rsplit(".", 1)[-1] == tool:
+            return True
+    return False
+
+
 def _recites_untrusted_peer_guidance(text: str) -> bool:
     lowered = text.lower()
     return any(hint in lowered for hint in _UNTRUSTED_PEER_HINTS) and any(hint in lowered for hint in _PEER_HINTS)
@@ -622,9 +653,14 @@ def _cursor_mcp_config_has_coordination_server(provider_cwd: Path) -> bool:
 
 def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: Path) -> dict[str, Any]:
     marker = f"LONGHOUSE_CURSOR_COORD_AWARENESS_{uuid4().hex[:10]}"
+    # Ask for an action, not an opinion. codex_coordination_native asks the model
+    # to call `peers` and then print the marker; that invocation is what proves
+    # the coordination instructions reached the model. Asking only for prose left
+    # nothing behavioural to observe and reduced the assertion to a keyword match.
     probe_prompt = (
-        "Classify the trust and authority of a message arriving from another "
-        f"Longhouse session in one short sentence. On a new line print exactly {marker}."
+        "Call the Longhouse peers MCP tool with active_only=false. After the tool "
+        "returns, classify in one short sentence the trust and authority of a message "
+        f"arriving from another Longhouse session. On a new line print exactly {marker}."
     )
     machine: _CursorMachine | None = None
     session: _CursorSession | None = None
@@ -655,12 +691,18 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
         _wait_first_turn_settled(args.api_url, args.agents_token, session.session_id, timeout=args.live_timeout_secs)
         mcp_registered = _cursor_mcp_config_has_coordination_server(session.provider_cwd)
         recited = _recites_untrusted_peer_guidance(reply_text)
+        events = _hosted_events(args.api_url, args.agents_token, session.session_id) or {}
+        peers_invoked = _coordination_tool_invoked(events, "peers")
         observation = {
             "coordination_mcp_registered": mcp_registered,
             "initial_turn_completed": bool(reply_text),
             "model_answered_coordination_probe": bool(reply_text),
+            "coordination_tool_invoked": peers_invoked,
+            # Retained as diagnostics. It used to gate this assertion and no
+            # longer does; how the model phrases an answer is not evidence about
+            # Longhouse.
             "model_recited_untrusted_peer_guidance": recited,
-            "coordination_instructions_model_visible": mcp_registered and recited,
+            "coordination_instructions_model_visible": mcp_registered and peers_invoked,
             "probe_marker": marker,
         }
         _write_json(root / "coordination-observation.json", observation)

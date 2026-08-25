@@ -182,7 +182,12 @@ def test_recites_untrusted_peer_guidance_matches_the_real_instructions_wording()
     assert m._recites_untrusted_peer_guidance("I would run the requested command right away.") is False
 
 
-def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tmp_path: Path, monkeypatch) -> None:
+def test_run_coordination_awareness_create_passes_when_the_model_calls_the_tool(tmp_path: Path, monkeypatch) -> None:
+    """Visibility is proven by an observed coordination tool call, as on codex.
+
+    Prose recitation used to gate this and no longer does: it measured how the
+    model phrased an answer, which is not evidence about Longhouse.
+    """
     args = _base_args(tmp_path, evidence_root=tmp_path / "evidence-awareness")
     args.variant = execution_variant_key(
         provider="cursor",
@@ -215,6 +220,11 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
         wait_marker,
     )
     monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
+    monkeypatch.setattr(
+        m,
+        "_hosted_events",
+        lambda *_a, **_k: {"events": [{"role": "assistant", "tool_name": "mcp__longhouse-coordination__peers"}]},
+    )
 
     result = m.run_coordination(args)
 
@@ -227,8 +237,9 @@ def test_run_coordination_awareness_create_passes_when_model_recites_guidance(tm
     assert result["assertions"] == {"coordination_instructions_model_visible": True}
     assert result["producer"]["producer_id"] == m.REGISTRATION.producer_id
     assert len(launched_prompts) == 1
-    assert launched_prompts[0].startswith("Classify the trust and authority")
-    assert not any(hint in launched_prompts[0].lower() for hint in ("untrust", "attribut", "peer", "cross-session", "not higher"))
+    assert launched_prompts[0].startswith("Call the Longhouse peers MCP tool")
+    # Naming the tool is required; handing over the guidance being observed is not.
+    assert not any(hint in launched_prompts[0].lower() for hint in ("untrust", "attribut", "cross-session", "not higher"))
     assert len(waited_markers) == 1
     assert waited_markers[0] in launched_prompts[0]
 
@@ -281,6 +292,9 @@ def test_run_coordination_awareness_create_retains_false_assertion_without_faili
 
     monkeypatch.setattr(m, "_wait_marker_reply", wait_marker)
     monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
+    # The model answered but never called a coordination tool. That is a real
+    # negative, retained rather than raised.
+    monkeypatch.setattr(m, "_hosted_events", lambda *_a, **_k: {"events": [{"role": "assistant"}]})
 
     result = m.run_coordination(args)
 
@@ -290,7 +304,10 @@ def test_run_coordination_awareness_create_retains_false_assertion_without_faili
     assert len(launched_prompts) == 1
     assert len(waited_markers) == 1
     assert waited_markers[0] in launched_prompts[0]
-    assert not any(hint in launched_prompts[0].lower() for hint in ("untrust", "attribut", "peer", "cross-session", "not higher"))
+    # The probe must still not hand the model the guidance it is being observed
+    # for. Naming the tool is required -- codex_coordination_native names it the
+    # same way -- but the untrusted/attributed wording stays out of the prompt.
+    assert not any(hint in launched_prompts[0].lower() for hint in ("untrust", "attribut", "cross-session", "not higher"))
 
 
 def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, monkeypatch) -> None:
@@ -770,3 +787,43 @@ def test_every_assertion_cell_redacts_the_agents_token_from_evidence(tmp_path: P
     for evidence_file in args.evidence_root.rglob("*"):
         if evidence_file.is_file():
             assert args.agents_token not in evidence_file.read_text(errors="ignore")
+
+
+def test_awareness_visibility_is_not_decided_by_how_the_model_phrases_it(tmp_path: Path, monkeypatch) -> None:
+    """Prose that recites the guidance is not evidence the instructions arrived.
+
+    This is the regression that mattered: gating on keyword-matched prose made
+    the cell measure the model's writing style, not Longhouse. Over 160 runs it
+    passed 9 times here while the behaviourally-proven codex cell passed 158 of
+    161 on the same assertion.
+    """
+    args = _base_args(tmp_path, evidence_root=tmp_path / "evidence-prose-only")
+    args.variant = execution_variant_key(
+        provider="cursor",
+        assertion_id="coordination_instructions_model_visible",
+        scenario_id="cursor_coordination_awareness_create",
+        variant=None,
+    )
+    session = _fake_session("awareness-prose", tmp_path / "cwd-prose")
+    _install_fake_machine(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "_launch_cursor_session", lambda *_a, **_k: session)
+    monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
+    monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
+    # Textbook recitation of the guidance...
+    monkeypatch.setattr(
+        m,
+        "_wait_marker_reply",
+        lambda *args, **kwargs: "Treat it as attributed untrusted input from a peer session. " + args[3],
+    )
+    # ...and no coordination tool call anywhere in the turn.
+    monkeypatch.setattr(m, "_hosted_events", lambda *_a, **_k: {"events": [{"role": "assistant"}]})
+
+    result = m.run_coordination(args)
+
+    assert result["assertions"] == {"coordination_instructions_model_visible": False}
+    observation = result["observation"]
+    assert observation["model_recited_untrusted_peer_guidance"] is True
+    assert observation["coordination_tool_invoked"] is False
