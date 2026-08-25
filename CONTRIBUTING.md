@@ -43,7 +43,7 @@ web/        TypeScript/React frontend (bundled into the Runtime Host)
 engine/     Rust Machine Agent (longhouse-engine) — ships session events
 runner/     Rust optional WebSocket command executor
 ios/        SwiftUI read/steer client
-schemas/    Source-of-truth contracts (e.g. tools.yml) for generated code
+schemas/    Source-of-truth contracts (e.g. ws-protocol-asyncapi.yml) for generated code
 docs/       Specs and runbooks — see docs/README.md for an index
 ```
 
@@ -67,10 +67,12 @@ conftest). For `ios/` changes, run the Xcode `Longhouse` scheme tests.
 
 Some code is generated — **do not edit it by hand**:
 
-- `server/zerg/generated/`, `server/zerg/tools/generated/`, `web/src/generated/`
+- `server/zerg/generated/`, `web/src/generated/`,
+  `ios/Sources/Shared/Generated/`
 
-To change tool contracts, edit `schemas/tools.yml` and run
-`make generate-tools`.
+To change the WebSocket contract, edit `schemas/ws-protocol-asyncapi.yml` and
+run `make regen-ws`. After changing HTTP routes or response models, run
+`make generate-sdk`. `make validate` checks every contract for drift.
 
 ## CI
 

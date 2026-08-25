@@ -64,7 +64,6 @@ const CRITICAL_ENDPOINTS = [
   '/api/ops/timeseries',
   '/api/ops/top',
   '/api/users/me',
-  '/api/automations',
 ];
 
 function parseOpenApiDocument(json: string): OpenApiDocument {
@@ -80,7 +79,7 @@ function loadOpenApiSchema(schemaPath: string): OpenApiDocument {
     return parseOpenApiDocument(readFileSync(schemaPath, 'utf-8'));
   }
 
-  const backendDir = join(__dirname, '../../backend');
+  const backendDir = join(__dirname, '../../server');
   const schemaJson = execFileSync(
     'uv',
     ['run', 'python', 'scripts/export_openapi.py', '--stdout'],

@@ -222,72 +222,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/admin/bootstrap/runners": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Seed Runners
-         * @description Seed runners for the admin user.
-         *
-         *     This replaces file-based seeding from ~/.config/zerg/runners.json.
-         *     Idempotent - skips runners that already exist.
-         */
-        post: operations["seed_runners_admin_bootstrap_runners_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/admin/bootstrap/credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Seed Credentials
-         * @description Seed connector credentials for the admin user.
-         *
-         *     All credentials are Fernet-encrypted before storage.
-         *     Idempotent - skips credentials that already exist.
-         */
-        post: operations["seed_credentials_admin_bootstrap_credentials_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/admin/bootstrap/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Bootstrap Status
-         * @description Get status of what's configured vs missing.
-         */
-        get: operations["get_bootstrap_status_admin_bootstrap_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/runners/install.sh": {
         parameters: {
             query?: never;
@@ -980,6 +914,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/user-data/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete User Session
+         * @description Delete one of the caller's sessions from every store that can be reached.
+         *
+         *     A caller who cannot prove ownership gets 404 whether the session never
+         *     existed, belongs to someone else, or was already deleted. Distinguishing
+         *     those would turn a guessed UUID into an existence oracle.
+         */
+        delete: operations["delete_user_session_user_data_sessions__session_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/user-data/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete User Account Data
+         * @description Delete every session of the caller's that can be reached owner-scoped.
+         */
+        delete: operations["delete_user_account_data_user_data_account_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/info": {
         parameters: {
             query?: never;
@@ -1361,131 +1339,6 @@ export interface paths {
         get: operations["list_provider_capabilities_agents_provider_capabilities_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skills": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Skills
-         * @description List all available skills.
-         *
-         *     Returns skills from all sources (bundled, user, workspace) with
-         *     eligibility information based on current environment.
-         */
-        get: operations["list_skills_skills_get"];
-        put?: never;
-        /**
-         * Create Skill
-         * @description Create a new user-managed skill.
-         */
-        post: operations["create_skill_skills_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skills/commands": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Skill Commands
-         * @description List user-invocable skill commands.
-         *
-         *     Returns skills that can be invoked via slash commands,
-         *     formatted for UI command palettes.
-         */
-        get: operations["list_skill_commands_skills_commands_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skills/prompt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Skills Prompt
-         * @description Generate skills prompt for system prompt injection.
-         *
-         *     Returns a formatted markdown prompt containing eligible skills,
-         *     suitable for including in a runtime/system prompt.
-         */
-        get: operations["get_skills_prompt_skills_prompt_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skills/{skill_name}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Skill
-         * @description Get detailed information about a specific skill.
-         *
-         *     Returns the skill's content, requirements, and eligibility status.
-         */
-        get: operations["get_skill_skills__skill_name__get"];
-        put?: never;
-        post?: never;
-        /**
-         * Delete Skill
-         * @description Delete a user-managed skill.
-         */
-        delete: operations["delete_skill_skills__skill_name__delete"];
-        options?: never;
-        head?: never;
-        /**
-         * Update Skill
-         * @description Update an existing user-managed skill.
-         */
-        patch: operations["update_skill_skills__skill_name__patch"];
-        trace?: never;
-    };
-    "/api/skills/reload": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reload Skills
-         * @description Reload skills from filesystem.
-         *
-         *     Forces a reload of all skills, useful after adding/modifying skills.
-         */
-        post: operations["reload_skills_skills_reload_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2555,30 +2408,6 @@ export interface paths {
         };
         /** Export Timeline Session */
         get: operations["export_timeline_session_timeline_sessions__session_id__export_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/canary/sessions/{session_id}/workspace/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Stream Canary Workspace
-         * @description Canary-only SSE: same generator as the browser endpoint, token-auth.
-         *
-         *     The always-on canary observer on the build host uses this; requires X-Canary-Token
-         *     matching LONGHOUSE_CANARY_TOKEN. Admin users can still use the browser
-         *     endpoint.
-         */
-        get: operations["stream_canary_workspace_canary_sessions__session_id__workspace_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3927,46 +3756,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/turns/slow": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Slow Turns
-         * @description List recent slow managed turns across sessions, enriched with current machine health.
-         */
-        get: operations["list_slow_turns_agents_turns_slow_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/turns/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Summarize Turns
-         * @description Summarize recent completed managed turns overall and by provider.
-         */
-        get: operations["summarize_turns_agents_turns_summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agents/backfill-summaries": {
         parameters: {
             query?: never;
@@ -4095,26 +3884,6 @@ export interface paths {
          * @description Delete all demo-seeded sessions (provider_session_id LIKE 'demo-%').
          */
         delete: operations["reset_demo_sessions_agents_demo_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/test-cleanup": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Cleanup Test Sessions
-         * @description Delete test sessions by project pattern (dev-only).
-         */
-        delete: operations["cleanup_test_sessions_agents_test_cleanup_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4556,6 +4325,47 @@ export interface components {
              */
             last_seen_at: string;
         };
+        /** AccountDeletionRequest */
+        AccountDeletionRequest: {
+            /**
+             * Confirm
+             * @description Must be true. Account data deletion is immediate and irreversible.
+             */
+            confirm: boolean;
+        };
+        /** AccountDeletionResponse */
+        AccountDeletionResponse: {
+            /** Owner Id */
+            owner_id: number;
+            /** Sessions Deleted */
+            sessions_deleted: number;
+            /**
+             * Complete
+             * @description True only when nothing was left behind. When false, `partial` names every store that still holds data.
+             */
+            complete: boolean;
+            /**
+             * Partial
+             * @description Human-readable statements of what was NOT deleted. Empty only when `complete` is true.
+             */
+            partial: string[];
+            /** Raw Objects Deleted */
+            raw_objects_deleted: number;
+            /** Render Objects Deleted */
+            render_objects_deleted: number;
+            /** Media Objects Deleted */
+            media_objects_deleted: number;
+            /** Media Objects Retained Shared */
+            media_objects_retained_shared: number;
+            /** Object Bytes Deleted */
+            object_bytes_deleted: number;
+            /** Manifest Rows Retired */
+            manifest_rows_retired: number;
+            /** Live Rows Removed */
+            live_rows_removed: number;
+            /** Search Indexes Removed */
+            search_indexes_removed: number;
+        };
         /**
          * ActiveSessionResponse
          * @description Response for active session summary (Live Sessions UI).
@@ -4979,55 +4789,6 @@ export interface components {
             file: string;
         };
         /**
-         * BootstrapStatusItem
-         * @description Status of a single bootstrap category.
-         */
-        BootstrapStatusItem: {
-            /**
-             * Configured
-             * @description Whether this category is configured
-             */
-            configured: boolean;
-            /**
-             * Details
-             * @description Additional details
-             */
-            details?: string | null;
-        };
-        /**
-         * BootstrapStatusResponse
-         * @description Response showing what's configured vs missing.
-         */
-        BootstrapStatusResponse: {
-            /** @description Runners status */
-            runners: components["schemas"]["BootstrapStatusItem"];
-            /** @description Personal credentials status */
-            credentials: components["schemas"]["BootstrapStatusItem"];
-        };
-        /**
-         * BootstrapSuccessResponse
-         * @description Generic success response for bootstrap operations.
-         */
-        BootstrapSuccessResponse: {
-            /**
-             * Success
-             * @default true
-             */
-            success: boolean;
-            /**
-             * Message
-             * @description Operation result message
-             */
-            message: string;
-            /**
-             * Details
-             * @description Additional details
-             */
-            details?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
          * BudgetInfo
          * @description Budget information with limit and usage.
          */
@@ -5043,25 +4804,6 @@ export interface components {
         CLILoginRequest: {
             /** Password */
             password: string;
-        };
-        /**
-         * CleanupRequest
-         * @description Request for test cleanup.
-         */
-        CleanupRequest: {
-            /**
-             * Project Patterns
-             * @description LIKE patterns to match (e.g., 'test-%', 'ratelimit-%')
-             */
-            project_patterns: string[];
-        };
-        /**
-         * CleanupResponse
-         * @description Response for test cleanup.
-         */
-        CleanupResponse: {
-            /** Deleted */
-            deleted: number;
         };
         /**
          * ConfigureTestSessionRuntimeRequest
@@ -5298,16 +5040,6 @@ export interface components {
              * @description When the token was created
              */
             created_at: string;
-        };
-        /**
-         * CredentialsSeedRequest
-         * @description Request to seed connector credentials for the admin user.
-         *
-         *     Each top-level key is a connector type whose value is that connector's
-         *     credential object; all values are Fernet-encrypted before storage.
-         */
-        CredentialsSeedRequest: {
-            [key: string]: unknown;
         };
         /**
          * CursorRoleBackfillResponse
@@ -7015,18 +6747,6 @@ export interface components {
             /** Blob Url */
             blob_url: string;
         };
-        /**
-         * MissingRequirementsResponse
-         * @description Missing requirements in API response.
-         */
-        MissingRequirementsResponse: {
-            /** Bins */
-            bins?: string[];
-            /** Env */
-            env?: string[];
-            /** Config */
-            config?: string[];
-        };
         /** NativeHandoffRequest */
         NativeHandoffRequest: {
             /** Code */
@@ -8565,34 +8285,6 @@ export interface components {
             message: string;
         };
         /**
-         * RunnerSeedItem
-         * @description Single runner configuration for seeding.
-         */
-        RunnerSeedItem: {
-            /**
-             * Name
-             * @description Runner name
-             */
-            name: string;
-            /**
-             * Secret
-             * @description Plaintext secret (will be hashed)
-             */
-            secret: string;
-            /**
-             * Labels
-             * @description Optional labels
-             */
-            labels?: {
-                [key: string]: string;
-            } | null;
-            /**
-             * Capabilities
-             * @description Runner capabilities
-             */
-            capabilities?: string[];
-        };
-        /**
          * RunnerStatusItem
          * @description Individual runner status for summary.
          */
@@ -8674,19 +8366,6 @@ export interface components {
              * @description New capabilities
              */
             capabilities?: string[] | null;
-        };
-        /**
-         * RunnersSeedRequest
-         * @description Request to seed runners for the admin user.
-         *
-         *     This replaces file-based seeding from ~/.config/zerg/runners.json.
-         */
-        RunnersSeedRequest: {
-            /**
-             * Runners
-             * @description List of runners to seed
-             */
-            runners: components["schemas"]["RunnerSeedItem"][];
         };
         /** RuntimeEventBatchIngest */
         RuntimeEventBatchIngest: {
@@ -9269,6 +8948,39 @@ export interface components {
              * @description Local reattach command for managed-local sessions
              */
             attach_command?: string | null;
+        };
+        /** SessionDeletionResponse */
+        SessionDeletionResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Already Deleted */
+            already_deleted: boolean;
+            /**
+             * Complete
+             * @description True only when nothing was left behind. When false, `partial` names every store that still holds data.
+             */
+            complete: boolean;
+            /**
+             * Partial
+             * @description Human-readable statements of what was NOT deleted. Empty only when `complete` is true.
+             */
+            partial: string[];
+            /** Raw Objects Deleted */
+            raw_objects_deleted: number;
+            /** Render Objects Deleted */
+            render_objects_deleted: number;
+            /** Media Objects Deleted */
+            media_objects_deleted: number;
+            /** Media Objects Retained Shared */
+            media_objects_retained_shared: number;
+            /** Object Bytes Deleted */
+            object_bytes_deleted: number;
+            /** Manifest Rows Retired */
+            manifest_rows_retired: number;
+            /** Live Rows Removed */
+            live_rows_removed: number;
+            /** Search Index Removed */
+            search_index_removed: boolean;
         };
         /** SessionDispositionFacts */
         SessionDispositionFacts: {
@@ -11236,161 +10948,6 @@ export interface components {
          * @enum {string}
          */
         SignalTier: "none" | "phase_signal" | "process_binding" | "transcript_progress";
-        /**
-         * SkillCommandResponse
-         * @description User-invocable skill command.
-         */
-        SkillCommandResponse: {
-            /** Name */
-            name: string;
-            /** Description */
-            description: string;
-            /**
-             * Emoji
-             * @default
-             */
-            emoji: string;
-        };
-        /**
-         * SkillCreateRequest
-         * @description Create a user-managed skill.
-         */
-        SkillCreateRequest: {
-            /**
-             * Content
-             * @description Full SKILL.md content
-             */
-            content: string;
-        };
-        /**
-         * SkillDetailResponse
-         * @description Detailed skill information.
-         */
-        SkillDetailResponse: {
-            /** Name */
-            name: string;
-            /** Description */
-            description: string;
-            /**
-             * Emoji
-             * @default
-             */
-            emoji: string;
-            /** Tool Dispatch */
-            tool_dispatch?: string | null;
-            /** Source */
-            source: string;
-            /** Eligible */
-            eligible: boolean;
-            /** User Invocable */
-            user_invocable: boolean;
-            /** Model Invocable */
-            model_invocable: boolean;
-            missing_requirements: components["schemas"]["MissingRequirementsResponse"];
-            /**
-             * Homepage
-             * @default
-             */
-            homepage: string;
-            /**
-             * Content
-             * @default
-             */
-            content: string;
-            requirements: components["schemas"]["SkillRequirementsResponse"];
-            /**
-             * Base Dir
-             * @default
-             */
-            base_dir: string;
-        };
-        /**
-         * SkillListResponse
-         * @description Response for listing skills.
-         */
-        SkillListResponse: {
-            /** Skills */
-            skills: components["schemas"]["SkillResponse"][];
-            /** Total */
-            total: number;
-            /** Eligible Count */
-            eligible_count: number;
-        };
-        /**
-         * SkillPromptResponse
-         * @description Response for skill prompt generation.
-         */
-        SkillPromptResponse: {
-            /** Prompt */
-            prompt: string;
-            /** Skill Count */
-            skill_count: number;
-            /** Version */
-            version: number;
-        };
-        /**
-         * SkillRequirementsResponse
-         * @description Skill requirements in API response.
-         */
-        SkillRequirementsResponse: {
-            /**
-             * Bins
-             * @description Required binaries
-             */
-            bins?: string[];
-            /**
-             * Env
-             * @description Required env vars
-             */
-            env?: string[];
-            /**
-             * Config
-             * @description Required config keys
-             */
-            config?: string[];
-        };
-        /**
-         * SkillResponse
-         * @description Skill information in API response.
-         */
-        SkillResponse: {
-            /** Name */
-            name: string;
-            /** Description */
-            description: string;
-            /**
-             * Emoji
-             * @default
-             */
-            emoji: string;
-            /** Tool Dispatch */
-            tool_dispatch?: string | null;
-            /** Source */
-            source: string;
-            /** Eligible */
-            eligible: boolean;
-            /** User Invocable */
-            user_invocable: boolean;
-            /** Model Invocable */
-            model_invocable: boolean;
-            missing_requirements: components["schemas"]["MissingRequirementsResponse"];
-            /**
-             * Homepage
-             * @default
-             */
-            homepage: string;
-        };
-        /**
-         * SkillUpdateRequest
-         * @description Update a user-managed skill.
-         */
-        SkillUpdateRequest: {
-            /**
-             * Content
-             * @description Updated SKILL.md content
-             */
-            content?: string | null;
-        };
         /** SlowTurnItemResponse */
         SlowTurnItemResponse: {
             /** Turn Id */
@@ -12810,113 +12367,11 @@ export interface operations {
             };
         };
     };
-    seed_runners_admin_bootstrap_runners_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunnersSeedRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BootstrapSuccessResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    seed_credentials_admin_bootstrap_credentials_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CredentialsSeedRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BootstrapSuccessResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_bootstrap_status_admin_bootstrap_status_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BootstrapStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_install_script_runners_install_sh_get: {
         parameters: {
             query?: {
                 enroll_token?: string | null;
                 runner_name?: string | null;
-                longhouse_url?: string | null;
                 mode?: string | null;
             };
             header?: never;
@@ -13920,6 +13375,70 @@ export interface operations {
             };
         };
     };
+    delete_user_session_user_data_sessions__session_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDeletionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_user_account_data_user_data_account_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountDeletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountDeletionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     system_info_system_info_get: {
         parameters: {
             query?: never;
@@ -14550,273 +14069,6 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
-                };
-            };
-        };
-    };
-    list_skills_skills_get: {
-        parameters: {
-            query?: {
-                /** @description Workspace path to load skills from */
-                workspace_path?: string | null;
-                /** @description Filter by source (bundled, user, workspace) */
-                source?: string | null;
-                /** @description Only return eligible skills */
-                eligible_only?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_skill_skills_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SkillCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_skill_commands_skills_commands_get: {
-        parameters: {
-            query?: {
-                workspace_path?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillCommandResponse"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_skills_prompt_skills_prompt_get: {
-        parameters: {
-            query?: {
-                workspace_path?: string | null;
-                /** @description Comma-separated skill names/patterns to include */
-                allowed?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillPromptResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_skill_skills__skill_name__get: {
-        parameters: {
-            query?: {
-                workspace_path?: string | null;
-            };
-            header?: never;
-            path: {
-                skill_name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_skill_skills__skill_name__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                skill_name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_skill_skills__skill_name__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                skill_name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SkillUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reload_skills_skills_reload_post: {
-        parameters: {
-            query?: {
-                workspace_path?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -16897,40 +16149,6 @@ export interface operations {
             query?: {
                 /** @description Branch projection mode for export: head|all */
                 branch_mode?: string;
-            };
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stream_canary_workspace_canary_sessions__session_id__workspace_stream_get: {
-        parameters: {
-            query?: {
-                skip_initial?: boolean;
-                known_workspace_fingerprint?: string | null;
             };
             header?: never;
             path: {
@@ -19414,102 +18632,6 @@ export interface operations {
             };
         };
     };
-    list_slow_turns_agents_turns_slow_get: {
-        parameters: {
-            query?: {
-                /** @description Filter by session provider */
-                provider?: string | null;
-                /** @description Filter by project */
-                project?: string | null;
-                /** @description Filter by device */
-                device_id?: string | null;
-                /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
-                state?: string | null;
-                /** @description Filter by current machine transport state */
-                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
-                /** @description Only return completed turns at or above this total duration */
-                min_total_turn_time_ms?: number;
-                /** @description Only consider turns submitted within this recent window */
-                hours_back?: number;
-                /** @description Max slow-turn rows to return */
-                limit?: number;
-                /** @description Offset for pagination */
-                offset?: number;
-                /** @description Treat heartbeats older than this as offline when enriching machine status */
-                stale_after_seconds?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SlowTurnsListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    summarize_turns_agents_turns_summary_get: {
-        parameters: {
-            query?: {
-                /** @description Filter by session provider */
-                provider?: string | null;
-                /** @description Filter by project */
-                project?: string | null;
-                /** @description Filter by device */
-                device_id?: string | null;
-                /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
-                state?: string | null;
-                /** @description Filter by current machine transport state */
-                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
-                /** @description Count turns at or above this total duration as slow */
-                slow_threshold_ms?: number;
-                /** @description Only consider completed turns submitted within this recent window */
-                hours_back?: number;
-                /** @description Treat heartbeats older than this as offline when enriching machine status */
-                stale_after_seconds?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ManagedTurnsSummaryEnvelopeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     backfill_progress_agents_backfill_summaries_get: {
         parameters: {
             query?: never;
@@ -19744,39 +18866,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DemoSeedResponse"];
-                };
-            };
-        };
-    };
-    cleanup_test_sessions_agents_test_cleanup_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CleanupRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CleanupResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
