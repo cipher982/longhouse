@@ -2517,9 +2517,41 @@ fn run_once_provider_prompt(user_prompt: &str, is_resume: bool) -> String {
     }
 }
 
+/// Is this authority a loopback address, the only place plaintext is allowed?
+///
+/// `rest` is everything after the scheme, so authority plus path.
+fn is_loopback_authority(rest: &str) -> bool {
+    use std::net::IpAddr;
+
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority.rsplit('@').next().unwrap_or_default();
+    let host = match authority.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    let host = host.to_ascii_lowercase();
+    host == "localhost"
+        || host
+            .parse::<IpAddr>()
+            .map(|address| address.is_loopback())
+            .unwrap_or(false)
+}
+
 fn control_ws_url(api_url: &str) -> Result<String> {
     let base = api_url.trim().trim_end_matches('/');
     if let Some(rest) = base.strip_prefix("http://") {
+        // Plaintext is loopback-only. Everything on this channel is sensitive:
+        // the never-expiring device token rides as a header and every
+        // transcript ships through it, so `ws://` to a remote host hands a LAN
+        // sniffer the credential. Worse, the engine authenticates to the server
+        // and the server never authenticates back, so whoever answers the
+        // handshake can start turns on this machine.
+        if !is_loopback_authority(rest) {
+            bail!(
+                "refusing plaintext api_url {api_url}: http:// is allowed only for loopback \
+                 (localhost, 127.0.0.1, ::1) — use https://"
+            );
+        }
         return Ok(format!("ws://{rest}/api/agents/control/ws"));
     }
     if let Some(rest) = base.strip_prefix("https://") {
@@ -2954,6 +2986,32 @@ mod tests {
             control_ws_url("https://demo.longhouse.ai/").unwrap(),
             "wss://demo.longhouse.ai/api/agents/control/ws"
         );
+    }
+
+    #[test]
+    fn control_ws_url_allows_plaintext_only_for_loopback() {
+        for allowed in [
+            "http://127.0.0.1:8000",
+            "http://localhost:8000",
+            "http://[::1]:8000",
+        ] {
+            assert!(
+                control_ws_url(allowed).is_ok(),
+                "{allowed} should be allowed"
+            );
+        }
+        for refused in [
+            "http://demo.longhouse.ai",
+            "http://192.168.1.20:8000",
+            "http://localhost.attacker.example:8000",
+            "http://user@evil.example/",
+        ] {
+            let err = control_ws_url(refused).unwrap_err().to_string();
+            assert!(
+                err.contains("refusing plaintext api_url"),
+                "{refused} should be refused, got: {err}"
+            );
+        }
     }
 
     #[test]

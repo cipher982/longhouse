@@ -181,9 +181,26 @@ where
 }
 
 fn coordination_mcp_enabled() -> bool {
-    std::env::var("LONGHOUSE_COORDINATION_TOKEN")
+    coordination_token().is_some()
+}
+
+/// The coordination authority this managed session was launched with. Codex is
+/// the one provider that cannot be handed a secret through its config without
+/// it landing in the app-server's argv, so its bridge writes the token to a
+/// 0600 file and names the path instead.
+fn coordination_token() -> Option<String> {
+    if let Some(token) = std::env::var("LONGHOUSE_COORDINATION_TOKEN")
         .ok()
-        .is_some_and(|token| !token.trim().is_empty())
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+    {
+        return Some(token);
+    }
+    let path = std::env::var("LONGHOUSE_COORDINATION_TOKEN_FILE").ok()?;
+    std::fs::read_to_string(path.trim())
+        .ok()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
 }
 
 async fn handle_rpc_line(
@@ -421,9 +438,9 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
     let client = reqwest::Client::new();
     let base = config.api_url.trim_end_matches('/');
     let request_token = if matches!(name, "send" | "inbox" | "reply") {
-        match std::env::var("LONGHOUSE_COORDINATION_TOKEN") {
-            Ok(token) if !token.trim().is_empty() => token,
-            _ => {
+        match coordination_token() {
+            Some(token) => token,
+            None => {
                 return tool_result(
                     id,
                     json!({"error":"coordination authority is unavailable for this managed session"}),
@@ -1251,6 +1268,9 @@ fn handle_http_request(
 ) -> HttpResponse {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/health") => {
+            if !channel_token_matches(&request, state) {
+                return HttpResponse::empty(403);
+            }
             HttpResponse::json(200, serde_json::to_value(state.health_payload()).unwrap())
         }
         ("POST", "/inject") => handle_inject_request(request, state, outbound),
@@ -1258,11 +1278,11 @@ fn handle_http_request(
     }
 }
 
-fn handle_inject_request(
-    request: HttpRequest,
-    state: &BridgeState,
-    outbound: &mpsc::UnboundedSender<Value>,
-) -> HttpResponse {
+/// The channel port is loopback TCP, which carries no permission bits. Every
+/// route behind it — health included, since it names the session, its pids and
+/// its state root — is gated on the token the bridge wrote to its 0600 state
+/// file.
+fn channel_token_matches(request: &HttpRequest, state: &BridgeState) -> bool {
     let expected = state.auth_token();
     let provided = request
         .headers
@@ -1270,7 +1290,15 @@ fn handle_inject_request(
         .find(|(key, _)| key == "x-longhouse-channel-token")
         .map(|(_, value)| value.as_str())
         .unwrap_or("");
-    if !expected.is_empty() && provided != expected {
+    expected.is_empty() || provided == expected
+}
+
+fn handle_inject_request(
+    request: HttpRequest,
+    state: &BridgeState,
+    outbound: &mpsc::UnboundedSender<Value>,
+) -> HttpResponse {
+    if !channel_token_matches(&request, state) {
         return HttpResponse::empty(403);
     }
     let payload: Value = match serde_json::from_slice(&request.body) {
@@ -1641,8 +1669,18 @@ mod tests {
         assert!(port > 0);
 
         let client = reqwest::Client::new();
+        let unauthenticated_health = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            unauthenticated_health.status(),
+            reqwest::StatusCode::FORBIDDEN
+        );
         let health = client
             .get(format!("http://127.0.0.1:{port}/health"))
+            .header("X-Longhouse-Channel-Token", "bridge-test-token")
             .send()
             .await
             .unwrap();

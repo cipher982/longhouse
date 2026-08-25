@@ -60,6 +60,10 @@ const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const TUI_OWNED_RESUME_TIMEOUT_SECS: u64 = 30;
 const TUI_OWNED_RESUME_PROBE_TIMEOUT_SECS: u64 = 2;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
+/// Provider-private variable Codex reads the relay bearer token from, so the
+/// token stays out of the TUI's argv. Named for Codex, not Longhouse: the
+/// managed-identity overlay owns `LONGHOUSE_*` and scrubs it.
+const CODEX_REMOTE_TOKEN_ENV: &str = "CODEX_REMOTE_AUTH_TOKEN";
 const LONGHOUSE_COORDINATION_TOOLS: &[&str] = &[
     "search_sessions",
     "recall",
@@ -291,6 +295,11 @@ pub struct BridgeStateFile {
     #[serde(default)]
     pub launch_mode: Option<String>,
     pub ws_url: Option<String>,
+    /// Bearer token the app-server relay requires. Loopback TCP carries no
+    /// permission bits, so this file — mode 0600 — is what actually scopes
+    /// `ws_url` to its owner.
+    #[serde(default)]
+    pub ws_auth_token: Option<String>,
     pub thread_id: Option<String>,
     pub thread_path: Option<String>,
     pub pid: u32,
@@ -387,6 +396,8 @@ pub struct BridgeStartSummary {
     pub log_file: String,
     pub pid: u32,
     pub ws_url: String,
+    /// Bearer token the relay requires. Whoever drives `ws_url` needs it.
+    pub ws_auth_token: String,
     /// None until a thread exists, either from TUI attach or detached-UI `thread/start`.
     pub thread_id: Option<String>,
     pub thread_path: Option<String>,
@@ -425,6 +436,13 @@ struct RpcClient {
     pending_methods: BTreeMap<u64, String>,
     next_request_id: u64,
     ws_url: String,
+    /// Bearer token the relay in front of the app-server requires. Absent for
+    /// clients that talk to a relay someone else spawned.
+    ws_auth_token: Option<String>,
+    /// 0600 secret files held for the app-server's lifetime; dropping them
+    /// removes the files.
+    #[allow(dead_code)]
+    token_files: Vec<PrivateTokenFile>,
 }
 
 #[derive(Debug, Clone)]
@@ -1090,12 +1108,17 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
                 .ws_url
                 .clone()
                 .context("bridge marked ready without ws_url")?;
+            let ws_auth_token = state
+                .ws_auth_token
+                .clone()
+                .context("bridge marked ready without ws_auth_token")?;
             return Ok(BridgeStartSummary {
                 session_id: state.session_id,
                 state_file: paths.state_file.display().to_string(),
                 log_file: paths.log_file.display().to_string(),
                 pid: state.pid,
                 ws_url,
+                ws_auth_token,
                 thread_id: state.thread_id.clone(),
                 thread_path: state.thread_path,
             });
@@ -1197,8 +1220,10 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         }
     };
     let ws_url = client.ws_url.clone();
+    let ws_auth_token = client.ws_auth_token.clone();
     let mut starting_state = initial_state.clone();
     starting_state.ws_url = Some(ws_url.clone());
+    starting_state.ws_auth_token = ws_auth_token.clone();
     starting_state.app_server_pid = client.child_pid;
     starting_state.app_server_process_start_time = app_server_process_start_time.clone();
     starting_state.app_server_pgid = client.child_pgid;
@@ -1363,6 +1388,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             codex_bin: config.codex_bin.clone(),
             launch_mode: initial_state.launch_mode.clone(),
             ws_url: Some(ws_url.clone()),
+            ws_auth_token: ws_auth_token.clone(),
             thread_id: initial_thread_id.clone(),
             thread_path: initial_thread_path.clone(),
             pid,
@@ -1995,7 +2021,11 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
         .ws_url
         .clone()
         .context("bridge state is missing ws_url")?;
-    let mut client = connect_remote_client(&ws_url).await?;
+    let ws_auth_token = state
+        .ws_auth_token
+        .clone()
+        .context("bridge state is missing ws_auth_token")?;
+    let mut client = connect_remote_client(&ws_url, &ws_auth_token).await?;
     initialize_client(&mut client).await?;
 
     let response = send_request(
@@ -2444,8 +2474,12 @@ pub async fn cmd_codex_bridge_steer(
         .ws_url
         .clone()
         .ok_or(BridgeSteerError::MissingState("ws_url"))?;
+    let ws_auth_token = state
+        .ws_auth_token
+        .clone()
+        .ok_or(BridgeSteerError::MissingState("ws_auth_token"))?;
 
-    let mut client = connect_remote_client(&ws_url)
+    let mut client = connect_remote_client(&ws_url, &ws_auth_token)
         .await
         .map_err(BridgeSteerError::Protocol)?;
     initialize_client(&mut client)
@@ -2521,8 +2555,12 @@ pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result
         .ws_url
         .clone()
         .context("bridge state is missing ws_url")?;
+    let ws_auth_token = state
+        .ws_auth_token
+        .clone()
+        .context("bridge state is missing ws_auth_token")?;
 
-    let mut client = connect_remote_client(&ws_url).await?;
+    let mut client = connect_remote_client(&ws_url, &ws_auth_token).await?;
     initialize_client(&mut client).await?;
     let _ = send_request(
         &mut client,
@@ -2549,6 +2587,10 @@ fn build_codex_bridge_attach_command(
         .ws_url
         .clone()
         .context("bridge state is missing ws_url")?;
+    let ws_auth_token = state
+        .ws_auth_token
+        .clone()
+        .context("bridge state is missing ws_auth_token")?;
     let codex_bin = config
         .codex_bin
         .clone()
@@ -2562,8 +2604,13 @@ fn build_codex_bridge_attach_command(
         .arg("tui_app_server")
         .arg("--remote")
         .arg(&ws_url)
+        // Codex reads the relay bearer token out of the named variable, so the
+        // credential never reaches the TUI's argv.
+        .arg("--remote-auth-token-env")
+        .arg(CODEX_REMOTE_TOKEN_ENV)
         .current_dir(PathBuf::from(state.cwd));
     ManagedIdentity::new(ManagedProvider::Codex, &config.session_id).apply(&mut command, &[]);
+    command.env(CODEX_REMOTE_TOKEN_ENV, &ws_auth_token);
 
     Ok((command, codex_bin))
 }
@@ -2758,8 +2805,24 @@ fn write_state_file_inner(path: &Path, state: &BridgeStateFile, durable: bool) -
     let tmp = path.with_extension("json.tmp");
     {
         use std::io::Write as _;
-        let mut file =
-            fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        // The state file carries `ws_auth_token`, the only credential guarding
+        // the app-server relay, so it is owner-readable only.
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&tmp)
+            .with_context(|| format!("creating {}", tmp.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("restricting {}", tmp.display()))?;
+        }
         file.write_all(&serde_json::to_vec_pretty(&next)?)
             .with_context(|| format!("writing {}", tmp.display()))?;
         if durable {
@@ -2827,18 +2890,94 @@ fn read_log_tail(path: &Path, max_chars: usize) -> String {
     truncate_tail_chars(&text, max_chars)
 }
 
+/// Codex's only config surface is `-c key=value`, which lands in the
+/// app-server's argv — readable by `ps` from inside the model's own shell, and
+/// world-readable through `/proc/<pid>/cmdline` on Linux. The coordination
+/// token therefore goes to a 0600 file and Codex is handed the path, the same
+/// shape as the Claude launcher naming its 0600 MCP config on the command
+/// line. The file lives as long as the app-server, because Codex spawns the
+/// coordination MCP server lazily.
+#[derive(Debug)]
+struct PrivateTokenFile {
+    path: PathBuf,
+}
+
+impl PrivateTokenFile {
+    fn write(path: PathBuf, token: &str) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let _ = fs::remove_file(&path);
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&path)
+            .with_context(|| format!("creating {}", path.display()))?;
+        std::io::Write::write_all(&mut file, token.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        drop(file);
+        // Codex requires an absolute path for `--ws-token-file`, and a bridge
+        // started with a relative state root would otherwise hand it one the
+        // app-server rejects.
+        let path = fs::canonicalize(&path).unwrap_or(path);
+        Ok(Self { path })
+    }
+}
+
+impl Drop for PrivateTokenFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn write_coordination_token_file(config: &BridgeRunConfig) -> Result<Option<PrivateTokenFile>> {
+    let Some(token) = std::env::var("LONGHOUSE_COORDINATION_TOKEN")
+        .ok()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+    else {
+        return Ok(None);
+    };
+    PrivateTokenFile::write(
+        config.state_file.with_extension("coordination-token"),
+        &token,
+    )
+    .map(Some)
+}
+
 async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> {
     let mut command = Command::new(&config.codex_bin);
     let coordination_command =
         std::env::current_exe().context("resolving Longhouse engine for Codex coordination MCP")?;
-    command.args(codex_app_server_args(config, &coordination_command));
-    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id).apply(
-        &mut command,
-        &[
-            ("LONGHOUSE_HOOK_URL", &config.api_url),
-            ("LONGHOUSE_HOOK_TOKEN", &config.api_token),
-        ],
-    );
+    let coordination_token_file = write_coordination_token_file(config)?;
+    // One token guards both hops: the relay demands it, forwards the handshake
+    // verbatim, and codex validates the same bearer on its own listener. That
+    // port is loopback too, so leaving it open would move the unauthenticated
+    // door rather than close it.
+    let ws_auth_token = crate::codex_ws_relay::auth_token().to_string();
+    let ws_token_file =
+        PrivateTokenFile::write(config.state_file.with_extension("ws-token"), &ws_auth_token)?;
+    command.args(codex_app_server_args(
+        config,
+        &coordination_command,
+        coordination_token_file
+            .as_ref()
+            .map(|file| file.path.as_path()),
+        &ws_token_file.path,
+    ));
+    // `api_token` is the permanent device token: owner-wide, non-expiring, and
+    // inherited by every grandchild the app-server spawns. Codex has no
+    // session-scoped hook token, and nothing in the Codex lane reads
+    // LONGHOUSE_HOOK_TOKEN — hook results arrive as `hook/completed` over the
+    // app-server socket — so the variable stays scrubbed rather than filled in
+    // with owner authority.
+    ManagedIdentity::new(ManagedProvider::Codex, &config.session_id)
+        .apply(&mut command, &[("LONGHOUSE_HOOK_URL", &config.api_url)]);
     command
         .current_dir(&config.cwd)
         .stdin(Stdio::null())
@@ -2910,7 +3049,8 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     let ws_url = crate::codex_ws_relay::spawn(&upstream_ws_url)
         .await
         .with_context(|| format!("spawning codex WS relay in front of {upstream_ws_url}"))?;
-    let (ws_stream, _response) = connect_async(ws_url.as_str())
+    let ws_auth_token = crate::codex_ws_relay::auth_token().to_string();
+    let (ws_stream, _response) = connect_async(relay_client_request(&ws_url, &ws_auth_token)?)
         .await
         .with_context(|| format!("connecting bridge client to {ws_url}"))?;
     let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -2961,7 +3101,31 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         pending_methods: BTreeMap::new(),
         next_request_id: 1,
         ws_url,
+        ws_auth_token: Some(ws_auth_token),
+        token_files: coordination_token_file
+            .into_iter()
+            .chain(std::iter::once(ws_token_file))
+            .collect(),
     })
+}
+
+/// A relay connection that carries the bearer token the relay demands.
+fn relay_client_request(
+    ws_url: &str,
+    ws_auth_token: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let mut request = ws_url
+        .into_client_request()
+        .with_context(|| format!("building app-server request for {ws_url}"))?;
+    request.headers_mut().insert(
+        tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+        format!("Bearer {ws_auth_token}")
+            .parse()
+            .context("app-server relay token is not a valid header value")?,
+    );
+    Ok(request)
 }
 
 #[cfg(unix)]
@@ -2977,7 +3141,12 @@ async fn capture_dedicated_child_pgid(child_pid: Option<u32>) -> Option<i32> {
     None
 }
 
-fn codex_app_server_args(config: &BridgeRunConfig, coordination_command: &Path) -> Vec<OsString> {
+fn codex_app_server_args(
+    config: &BridgeRunConfig,
+    coordination_command: &Path,
+    coordination_token_file: Option<&Path>,
+    ws_token_file: &Path,
+) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("-c"),
         OsString::from(CODEX_DISABLE_UPDATE_CHECK_CONFIG),
@@ -3001,14 +3170,13 @@ fn codex_app_server_args(config: &BridgeRunConfig, coordination_command: &Path) 
         "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID={}",
         serde_json::to_string(&config.session_id).expect("session id is serializable")
     )));
-    if let Ok(token) = std::env::var("LONGHOUSE_COORDINATION_TOKEN") {
-        if !token.trim().is_empty() {
-            args.push(OsString::from("-c"));
-            args.push(OsString::from(format!(
-                "mcp_servers.longhouse.env.LONGHOUSE_COORDINATION_TOKEN={}",
-                serde_json::to_string(&token).expect("coordination token is serializable")
-            )));
-        }
+    if let Some(token_file) = coordination_token_file {
+        args.push(OsString::from("-c"));
+        args.push(OsString::from(format!(
+            "mcp_servers.longhouse.env.LONGHOUSE_COORDINATION_TOKEN_FILE={}",
+            serde_json::to_string(&token_file.display().to_string())
+                .expect("coordination token path is serializable")
+        )));
     }
     if let Some(effort) = config.model_reasoning_effort.as_deref() {
         args.push(OsString::from("-c"));
@@ -3030,6 +3198,10 @@ fn codex_app_server_args(config: &BridgeRunConfig, coordination_command: &Path) 
         OsString::from("app-server"),
         OsString::from("--listen"),
         OsString::from("ws://127.0.0.1:0"),
+        OsString::from("--ws-auth"),
+        OsString::from("capability-token"),
+        OsString::from("--ws-token-file"),
+        OsString::from(ws_token_file),
         OsString::from("--enable"),
         OsString::from("hooks"),
         OsString::from("--enable"),
@@ -3044,8 +3216,8 @@ fn codex_app_server_args(config: &BridgeRunConfig, coordination_command: &Path) 
     args
 }
 
-async fn connect_remote_client(ws_url: &str) -> Result<RpcClient> {
-    let (ws_stream, _response) = connect_async(ws_url)
+async fn connect_remote_client(ws_url: &str, ws_auth_token: &str) -> Result<RpcClient> {
+    let (ws_stream, _response) = connect_async(relay_client_request(ws_url, ws_auth_token)?)
         .await
         .with_context(|| format!("connecting remote bridge client to {ws_url}"))?;
     let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -3098,6 +3270,8 @@ async fn connect_remote_client(ws_url: &str) -> Result<RpcClient> {
         pending_methods: BTreeMap::new(),
         next_request_id: 1,
         ws_url: ws_url.to_string(),
+        ws_auth_token: None,
+        token_files: Vec::new(),
     })
 }
 
@@ -6548,6 +6722,7 @@ mod tests {
             codex_bin: fake_codex.display().to_string(),
             launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
             ws_url: Some("ws://127.0.0.1:4800".to_string()),
+            ws_auth_token: Some("relay-test-token".to_string()),
             thread_id: Some("thread-123".to_string()),
             thread_path: None,
             pid: 42,
@@ -6591,8 +6766,19 @@ mod tests {
                 "tui_app_server".to_string(),
                 "--remote".to_string(),
                 "ws://127.0.0.1:4800".to_string(),
+                "--remote-auth-token-env".to_string(),
+                CODEX_REMOTE_TOKEN_ENV.to_string(),
             ]
         );
+        assert!(
+            !args.iter().any(|arg| arg.contains("relay-test-token")),
+            "the relay token must never reach the TUI's argv"
+        );
+        assert!(command.get_envs().any(|(name, value)| {
+            name == CODEX_REMOTE_TOKEN_ENV
+                && value.map(|value| value.to_string_lossy().into_owned())
+                    == Some("relay-test-token".to_string())
+        }));
         assert_eq!(
             command.get_current_dir(),
             Some(temp.path()),
@@ -6634,6 +6820,7 @@ mod tests {
             codex_bin: fake_codex.display().to_string(),
             launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
             ws_url: Some("ws://127.0.0.1:4800".to_string()),
+            ws_auth_token: Some("relay-test-token".to_string()),
             thread_id: None,
             thread_path: None,
             pid: 42,
@@ -6804,11 +6991,18 @@ mod tests {
         config.approval_policy = Some("never".to_string());
         config.sandbox = Some("danger-full-access".to_string());
         let coordination_command = temp.path().join("longhouse-engine");
+        let coordination_token_file = temp.path().join("session-123.coordination-token");
+        let ws_token_file = temp.path().join("session-123.ws-token");
 
-        let args = codex_app_server_args(&config, &coordination_command)
-            .into_iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
+        let args = codex_app_server_args(
+            &config,
+            &coordination_command,
+            Some(coordination_token_file.as_path()),
+            ws_token_file.as_path(),
+        )
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
 
         let mut expected = vec![
             "-c".to_string(),
@@ -6831,6 +7025,15 @@ mod tests {
             "-c".to_string(),
             "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID=\"session-123\"".to_string(),
         ]);
+        // The coordination secret itself never reaches argv; Codex is given
+        // the path to the 0600 file holding it.
+        expected.extend([
+            "-c".to_string(),
+            format!(
+                "mcp_servers.longhouse.env.LONGHOUSE_COORDINATION_TOKEN_FILE={}",
+                serde_json::to_string(&coordination_token_file.display().to_string()).unwrap()
+            ),
+        ]);
         expected.extend([
             "--ask-for-approval".to_string(),
             "never".to_string(),
@@ -6839,6 +7042,10 @@ mod tests {
             "app-server".to_string(),
             "--listen".to_string(),
             "ws://127.0.0.1:0".to_string(),
+            "--ws-auth".to_string(),
+            "capability-token".to_string(),
+            "--ws-token-file".to_string(),
+            ws_token_file.display().to_string(),
             "--enable".to_string(),
             "hooks".to_string(),
             "--enable".to_string(),
@@ -7015,6 +7222,7 @@ mod tests {
             codex_bin: "codex".to_string(),
             launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
             ws_url: Some("ws://127.0.0.1:4800".to_string()),
+            ws_auth_token: Some("relay-test-token".to_string()),
             thread_id: Some("thr-primary".to_string()),
             thread_path: Some(rollout.display().to_string()),
             pid: 42,
@@ -7067,6 +7275,7 @@ mod tests {
             codex_bin: "codex".to_string(),
             launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
             ws_url: Some("ws://127.0.0.1:4800".to_string()),
+            ws_auth_token: Some("relay-test-token".to_string()),
             thread_id: Some("thr-primary".to_string()),
             thread_path: Some(primary.display().to_string()),
             pid: 42,
@@ -7810,6 +8019,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
 
         let initialize_task = tokio::spawn(async move {
@@ -7970,6 +8181,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://127.0.0.1:1".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
 
         let event = recv_event(&mut client).await.unwrap();
@@ -8000,6 +8213,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://127.0.0.1:1".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
 
         let event = recv_event(&mut client).await.unwrap();
@@ -8027,6 +8242,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://127.0.0.1:1".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
 
         let status = observe_owned_child_exit(&mut client, Duration::from_millis(25))
@@ -9888,6 +10105,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
 
         handle_bridge_followup(
@@ -10186,6 +10405,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.state.thread_id = Some("thr_test".to_string());
@@ -10302,6 +10523,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.state.thread_id = Some("thr_test".to_string());
@@ -10391,6 +10614,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.state.thread_id = Some("thr_test".to_string());
@@ -10519,6 +10744,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.state.thread_id = Some("thr_test".to_string());
@@ -10576,6 +10803,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.state.thread_id = Some("thr_test".to_string());
@@ -10632,6 +10861,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.state.thread_id = Some("thr_test".to_string());
@@ -10776,6 +11007,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.state.thread_id = Some("thr_test".to_string());
@@ -10909,6 +11142,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.state.thread_id = Some("thr_test".to_string());
@@ -11035,6 +11270,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.runtime.runtime_tx = Some(runtime_tx);
@@ -11091,6 +11328,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.state.thread_id = Some("thr-parent".to_string());
@@ -11146,6 +11385,8 @@ mod tests {
             pending_methods: BTreeMap::new(),
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
+            ws_auth_token: None,
+            token_files: Vec::new(),
         };
         let mut context = make_test_context(&temp);
         context.runtime.runtime_tx = Some(runtime_tx);

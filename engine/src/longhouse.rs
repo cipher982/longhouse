@@ -453,6 +453,7 @@ struct MachineState {
 #[derive(Deserialize)]
 struct BridgeStartResponse {
     ws_url: String,
+    ws_auth_token: String,
     thread_id: Option<String>,
 }
 
@@ -469,6 +470,8 @@ struct BridgeState {
     #[serde(default)]
     app_server_process_start_time: Option<String>,
     ws_url: Option<String>,
+    #[serde(default)]
+    ws_auth_token: Option<String>,
     status: Option<String>,
     thread_id: Option<String>,
     #[serde(default)]
@@ -1510,10 +1513,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         } else {
             "bypass"
         });
+    // Only a session-scoped hook token may reach the provider. The device
+    // token authorizes the whole owner account and is inherited by every
+    // grandchild `claude` spawns, so when Longhouse did not mint one the
+    // variable is omitted rather than substituted.
     let hook_token = response
         .as_ref()
-        .and_then(|response| response.hook_token.as_deref())
-        .unwrap_or(&token);
+        .and_then(|response| response.hook_token.as_deref());
     let coordination_token = response
         .as_ref()
         .and_then(|response| response.coordination_token())
@@ -1544,26 +1550,26 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     // channel server reads them, and inheriting another session's would point
     // this one at the wrong channel.
     let cwd_string = cwd.to_string_lossy().into_owned();
+    let mut identity_env: Vec<(&str, &str)> = vec![
+        ("LONGHOUSE_CHANNEL_SESSION_ID", &session_id),
+        ("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id),
+        ("LONGHOUSE_CHANNEL_CWD", &cwd_string),
+        ("LONGHOUSE_HOOK_URL", &url),
+        (
+            "LONGHOUSE_PERMISSION_HOOK_ENABLED",
+            if permission_mode == "remote_approve" {
+                "1"
+            } else {
+                "0"
+            },
+        ),
+    ];
+    if let Some(hook_token) = hook_token {
+        identity_env.push(("LONGHOUSE_HOOK_TOKEN", hook_token));
+    }
     ManagedIdentity::new(ManagedProvider::Claude, &session_id)
         .with_run_id(&run_id)
-        .apply(
-            &mut command,
-            &[
-                ("LONGHOUSE_CHANNEL_SESSION_ID", &session_id),
-                ("LONGHOUSE_PROVIDER_SESSION_ID", &provider_session_id),
-                ("LONGHOUSE_CHANNEL_CWD", &cwd_string),
-                ("LONGHOUSE_HOOK_URL", &url),
-                ("LONGHOUSE_HOOK_TOKEN", hook_token),
-                (
-                    "LONGHOUSE_PERMISSION_HOOK_ENABLED",
-                    if permission_mode == "remote_approve" {
-                        "1"
-                    } else {
-                        "0"
-                    },
-                ),
-            ],
-        );
+        .apply(&mut command, &identity_env);
     let contract_path = claude_contract_path(&session_id)?;
     let retained_contract_existed = contract_path.is_file();
     let connection_id = Uuid::new_v4().to_string();
@@ -2641,6 +2647,7 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     let tui_result = run_codex_tui_with_recovery(
         &codex_bin,
         &bridge.ws_url,
+        &bridge.ws_auth_token,
         &cwd,
         &session_id,
         None,
@@ -2815,6 +2822,7 @@ fn launch_managed_codex_resume(
     let tui_result = run_codex_tui_with_recovery(
         codex_bin,
         &bridge.ws_url,
+        &bridge.ws_auth_token,
         cwd,
         &response.session_id,
         Some(&target.thread_id),
@@ -3025,6 +3033,7 @@ fn process_start_identity(pid: u32) -> Option<String> {
 fn run_codex_tui(
     codex_bin: &str,
     ws_url: &str,
+    ws_auth_token: &str,
     cwd: &Path,
     session_id: &str,
     resume_thread_id: Option<&str>,
@@ -3035,6 +3044,7 @@ fn run_codex_tui(
     let mut command = build_codex_tui_command(
         codex_bin,
         ws_url,
+        ws_auth_token,
         cwd,
         session_id,
         resume_thread_id,
@@ -3045,9 +3055,15 @@ fn run_codex_tui(
     run_foreground_command(&mut command).context("run stock Codex TUI")
 }
 
+/// Provider-private variable Codex reads the relay bearer token from. Must
+/// match `CODEX_REMOTE_TOKEN_ENV` in codex_bridge.rs; the `longhouse` binary
+/// does not share that module.
+const CODEX_REMOTE_TOKEN_ENV: &str = "CODEX_REMOTE_AUTH_TOKEN";
+
 fn build_codex_tui_command(
     codex_bin: &str,
     ws_url: &str,
+    ws_auth_token: &str,
     cwd: &Path,
     session_id: &str,
     resume_thread_id: Option<&str>,
@@ -3071,14 +3087,19 @@ fn build_codex_tui_command(
     }
     command
         .args(["--enable", "tui_app_server", "--remote", ws_url])
+        // Codex reads the relay bearer token out of the named variable, so the
+        // credential never reaches the TUI's argv.
+        .args(["--remote-auth-token-env", CODEX_REMOTE_TOKEN_ENV])
         .current_dir(cwd);
     ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command, &[]);
+    command.env(CODEX_REMOTE_TOKEN_ENV, ws_auth_token);
     command
 }
 
 fn run_codex_tui_with_recovery(
     codex_bin: &str,
     ws_url: &str,
+    ws_auth_token: &str,
     cwd: &Path,
     session_id: &str,
     resume_thread_id: Option<&str>,
@@ -3089,6 +3110,7 @@ fn run_codex_tui_with_recovery(
     let exit = run_codex_tui(
         codex_bin,
         ws_url,
+        ws_auth_token,
         cwd,
         session_id,
         resume_thread_id,
@@ -3103,6 +3125,7 @@ fn run_codex_tui_with_recovery(
     run_codex_tui(
         codex_bin,
         ws_url,
+        ws_auth_token,
         cwd,
         session_id,
         resume_thread_id,
@@ -3279,11 +3302,16 @@ fn codex_bridge_reattachable(session_id: &str) -> bool {
     {
         return false;
     }
-    bridge_readyz_healthy(state.ws_url.as_deref())
+    bridge_readyz_healthy(state.ws_url.as_deref(), state.ws_auth_token.as_deref())
 }
 
-fn bridge_readyz_healthy(ws_url: Option<&str>) -> bool {
+fn bridge_readyz_healthy(ws_url: Option<&str>, ws_auth_token: Option<&str>) -> bool {
     let Some(ws_url) = ws_url.filter(|value| !value.trim().is_empty()) else {
+        return false;
+    };
+    // The relay in front of the app-server rejects unauthenticated requests,
+    // so a probe without the token proves nothing about codex.
+    let Some(ws_auth_token) = ws_auth_token.filter(|value| !value.trim().is_empty()) else {
         return false;
     };
     let Ok(mut readyz_url) = reqwest::Url::parse(ws_url) else {
@@ -3315,6 +3343,7 @@ fn bridge_readyz_healthy(ws_url: Option<&str>) -> bool {
                     .build()
                     .ok()?
                     .get(readyz_url)
+                    .bearer_auth(ws_auth_token)
                     .send()
                     .await
                     .ok()
@@ -4230,6 +4259,10 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
         .ws_url
         .filter(|url| !url.trim().is_empty())
         .context("managed Codex session is not reattachable")?;
+    let ws_auth_token = state
+        .ws_auth_token
+        .filter(|token| !token.trim().is_empty())
+        .context("managed Codex session is not reattachable")?;
     let codex_bin = resolve_codex_binary(args.codex_bin.or(Some(state.codex_bin)))?;
     if let Err(error) = record_codex_contract(
         &args.session_id,
@@ -4247,6 +4280,7 @@ fn attach_managed_codex(args: CodexAttachArgs) -> anyhow::Result<()> {
     let tui_result = run_codex_tui_with_recovery(
         &codex_bin,
         &ws_url,
+        &ws_auth_token,
         Path::new(&state.cwd),
         &args.session_id,
         state.thread_id.as_deref(),
@@ -4458,6 +4492,7 @@ mod tests {
         let command = build_codex_tui_command(
             "codex",
             "ws://127.0.0.1:4321",
+            "relay-test-token",
             Path::new("/tmp"),
             "11111111-1111-4111-8111-111111111111",
             Some("22222222-2222-4222-8222-222222222222"),
@@ -4474,6 +4509,18 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == ["--remote", "ws://127.0.0.1:4321"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--remote-auth-token-env", CODEX_REMOTE_TOKEN_ENV]));
+        assert!(
+            !args.iter().any(|arg| arg.contains("relay-test-token")),
+            "the relay token must never reach the TUI's argv"
+        );
+        assert!(command.get_envs().any(|(name, value)| {
+            name == CODEX_REMOTE_TOKEN_ENV
+                && value.map(|value| value.to_string_lossy().into_owned())
+                    == Some("relay-test-token".to_string())
+        }));
     }
 
     #[test]

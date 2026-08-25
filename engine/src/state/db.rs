@@ -74,11 +74,22 @@ pub fn open_connection(db_path: &Path) -> Result<Connection> {
 /// Open (or create) the shipper database with WAL mode and proper pragmas.
 pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
     let path = resolve_db_path(db_path)?;
+    // `:memory:` is a SQLite keyword, not a file. Creating it as one to set a
+    // mode leaves a stray `:memory:` file in whatever directory the process
+    // happened to be in, so the on-disk work is skipped for it entirely.
+    let on_disk = !is_sqlite_keyword_path(&path);
 
     // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating DB directory: {}", parent.display()))?;
+    if on_disk {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating DB directory: {}", parent.display()))?;
+            #[cfg(unix)]
+            restrict_agent_dir(parent);
+        }
+
+        #[cfg(unix)]
+        restrict_db_files(&path)?;
     }
 
     let conn = Connection::open(&path)
@@ -498,6 +509,72 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Does this path name an in-memory database rather than a file on disk?
+///
+/// SQLite reads `:memory:` and the empty string as "no file". Everything the
+/// private-mode work does — creating the file, chmodding it and its WAL
+/// sidecars — is meaningless for those and would create real files named after
+/// the keyword.
+fn is_sqlite_keyword_path(path: &Path) -> bool {
+    matches!(path.to_str(), Some(":memory:") | Some(""))
+}
+
+/// Tighten `~/.longhouse/agent` to 0700 when that is where this database lives.
+///
+/// Scoped to the agent directory on purpose. `open_db` is also called with
+/// temporary paths whose parent is the shared system temp directory, and a
+/// chmod 0700 on that would be a far worse bug than the one being fixed. A
+/// directory Longhouse does not own keeps the mode its owner chose.
+#[cfg(unix)]
+fn restrict_agent_dir(parent: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(agent_dir) = config::get_agent_dir() else {
+        return;
+    };
+    if parent != agent_dir {
+        return;
+    }
+    if let Err(err) = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)) {
+        tracing::warn!(
+            "Could not restrict agent directory {}: {err}",
+            parent.display()
+        );
+    }
+}
+
+/// Create the database 0600, and tighten it plus its WAL sidecars on every open.
+///
+/// This spool re-derives the provider transcripts — verbatim prompts, tool
+/// output, absolute workspace paths — that Claude Code keeps at 0600 in a 0700
+/// directory. Creating the file before SQLite does is what makes the sidecars
+/// private too: SQLite copies the database file's mode onto the `-wal` and
+/// `-shm` files it derives. Databases an earlier build already created
+/// world-readable are tightened here rather than left as they are.
+#[cfg(unix)]
+fn restrict_db_files(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("creating SQLite DB: {}", path.display()))?;
+
+    for suffix in ["", "-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_owned();
+        sidecar.push(suffix);
+        let sidecar = PathBuf::from(sidecar);
+        if !sidecar.exists() {
+            continue;
+        }
+        std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("restricting SQLite DB file: {}", sidecar.display()))?;
+    }
+    Ok(())
+}
+
 /// Resolve the default DB path: `~/.longhouse/agent/longhouse-shipper.db`.
 fn default_db_path() -> Result<PathBuf> {
     let path = config::get_agent_db_path()?;
@@ -527,6 +604,60 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn database_and_wal_sidecar_are_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DB_FILENAME);
+        let conn = open_db(Some(&path)).unwrap();
+        conn.execute(
+            "INSERT INTO file_state (path, provider, last_updated) VALUES ('p', 'claude', 'now')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert_eq!(mode_of(&path), 0o600, "transcript spool must stay private");
+        let wal = dir.path().join(format!("{DB_FILENAME}-wal"));
+        if wal.exists() {
+            assert_eq!(mode_of(&wal), 0o600, "WAL sidecar must stay private");
+        }
+    }
+
+    #[test]
+    fn in_memory_database_creates_no_file() {
+        // Deliberately no `set_current_dir`: the process CWD is global state
+        // and this binary's tests run in parallel. A relative `:memory:` file
+        // would land in the CWD, so checking the CWD is both correct and safe.
+        let stray = Path::new(":memory:");
+        assert!(!stray.exists(), "a previous run already leaked `:memory:`");
+        open_db(Some(stray)).unwrap();
+        assert!(
+            !stray.exists(),
+            "`:memory:` is a SQLite keyword and must never become a file"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn world_readable_database_is_tightened_on_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DB_FILENAME);
+        drop(open_db(Some(&path)).unwrap());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        drop(open_db(Some(&path)).unwrap());
+        assert_eq!(mode_of(&path), 0o600);
     }
 
     #[test]
