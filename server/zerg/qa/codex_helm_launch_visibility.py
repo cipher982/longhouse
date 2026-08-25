@@ -507,6 +507,15 @@ def _human_launch_sequence(
             process=fresh_tui.process,
         )
         fresh_registration = _safe_registration(fresh_record)
+        # Record the session before asserting anything about it. The bridge is
+        # already running by the time registration returns, and only
+        # ``created_session_ids`` tells the finally block to stop it. Waiting for
+        # canonical visibility first meant every failed launch leaked its
+        # codex-bridge and app-server for the life of the container -- 96
+        # orphaned processes in 21 hours on clifford. The automation lane below
+        # already reads the id in this order.
+        session_id = str(fresh_registration["session_id"])
+        created_session_ids.append(session_id)
         fresh_canonical = _wait_canonical_launch(
             args,
             registration=fresh_record,
@@ -517,8 +526,6 @@ def _human_launch_sequence(
             expect_visible=True,
             launched_at=launched_at,
         )
-        session_id = str(fresh_registration["session_id"])
-        created_session_ids.append(session_id)
         seed_receipt = _seed_codex_rollout(
             fresh_tui,
             codex_home=Path(environment["CODEX_HOME"]),
