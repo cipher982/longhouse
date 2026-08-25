@@ -770,6 +770,19 @@ fn native_auth(args: AuthArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Bytes accepted for the callback request line plus its headers.
+const CALLBACK_MAX_HEAD_BYTES: usize = 8 * 1024;
+/// Bytes accepted for the callback request body. A device token is ~60 bytes.
+const CALLBACK_MAX_BODY_BYTES: usize = 4 * 1024;
+/// `accept` stays unbounded — the human takes as long as they take in the
+/// browser — but once a browser has connected the rest is machine-speed.
+const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+struct CallbackRequest {
+    method: String,
+    params: std::collections::HashMap<String, String>,
+}
+
 fn browser_device_token(runtime_url: &str, device: Option<&str>) -> anyhow::Result<String> {
     let listener = TcpListener::bind("127.0.0.1:0").context("start local device-auth callback")?;
     listener
@@ -778,9 +791,10 @@ fn browser_device_token(runtime_url: &str, device: Option<&str>) -> anyhow::Resu
     let port = listener.local_addr()?.port();
     let state = Uuid::new_v4().to_string();
     let device = device.unwrap_or("this Mac");
+    let runtime_url = runtime_url.trim_end_matches('/');
     let connect_url = format!(
         "{}/settings/devices?connect=1&callback={}&state={}&device={}",
-        runtime_url.trim_end_matches('/'),
+        runtime_url,
         percent_encode(&format!("http://127.0.0.1:{port}/connected")),
         state,
         percent_encode(device),
@@ -795,30 +809,119 @@ fn browser_device_token(runtime_url: &str, device: Option<&str>) -> anyhow::Resu
         .spawn()
         .with_context(|| format!("open {connect_url}"))?;
     println!("Finish connecting this device in your browser…");
+    serve_callback(&listener, &state, runtime_url, CALLBACK_READ_TIMEOUT)
+}
+
+/// Accept the browser's callback connection, read the token out of it and
+/// answer. Split out from `browser_device_token` so tests can drive the whole
+/// socket path — accept, bounded read, response — with real bytes on a real
+/// TcpStream instead of only exercising the parser.
+fn serve_callback(
+    listener: &TcpListener,
+    state: &str,
+    runtime_url: &str,
+    read_timeout: Duration,
+) -> anyhow::Result<String> {
     let (mut stream, _) = listener
         .accept()
         .context("wait for browser device authorization")?;
-    let mut request_line = String::new();
-    BufReader::new(stream.try_clone()?)
-        .read_line(&mut request_line)
-        .context("read device authorization callback")?;
-    let target = request_line.split_whitespace().nth(1).unwrap_or("");
-    let params = target
-        .split_once('?')
-        .map(|(_, query)| query_params(query))
-        .unwrap_or_default();
-    let received_state = params.get("state").map(String::as_str);
-    let token = params.get("token").map(String::as_str).unwrap_or("");
-    let response = if received_state == Some(state.as_str()) && token.starts_with("zdt_") {
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<h1>Longhouse connected</h1><p>You can return to the app.</p>"
-    } else {
-        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n<h1>Longhouse connection failed</h1><p>Return to the app and try again.</p>"
-    };
+    stream
+        .set_read_timeout(Some(read_timeout))
+        .context("bound device authorization callback read")?;
+    let token = read_callback_request(&mut BufReader::new(stream.try_clone()?))
+        .and_then(|request| callback_token(&request, state));
+    // Redirect back to the Runtime Host either way, so the browser's current
+    // history entry is that clean URL rather than the callback the token was
+    // posted to. A 303 turns the POST into a GET, so reloading the page the
+    // user lands on cannot resubmit anything.
+    let outcome = i32::from(token.is_ok());
+    let response = format!(
+        "HTTP/1.1 303 See Other\r\nLocation: {runtime_url}/settings/devices?connected={outcome}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
     stream.write_all(response.as_bytes()).ok();
-    if received_state != Some(state.as_str()) || !token.starts_with("zdt_") {
+    stream.flush().ok();
+    token
+}
+
+/// Read the browser's device-authorization callback.
+///
+/// The token arrives in a POST body, never a query string, so it is never
+/// written into browser history — which means this listener has to speak enough
+/// HTTP to find a body: request line, headers, then exactly the declared
+/// `Content-Length`. The head is bounded as it is read and the declared body
+/// length is checked before anything is allocated for it.
+fn read_callback_request<R: BufRead>(reader: &mut R) -> anyhow::Result<CallbackRequest> {
+    let mut budget = CALLBACK_MAX_HEAD_BYTES;
+    let request_line = read_head_line(reader, &mut budget)?;
+    let method = request_line
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let mut content_length = 0usize;
+    let mut content_type = String::new();
+    loop {
+        let header = read_head_line(reader, &mut budget)?;
+        if header.is_empty() {
+            break;
+        }
+        let Some((name, value)) = header.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("content-length") {
+            content_length = value
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|length| *length <= CALLBACK_MAX_BODY_BYTES)
+                .context("device authorization callback body was unreadable or too large")?;
+        } else if name.eq_ignore_ascii_case("content-type") {
+            content_type = value.trim().to_ascii_lowercase();
+        }
+    }
+    let mut body = vec![0u8; content_length];
+    reader
+        .read_exact(&mut body)
+        .context("read device authorization callback body")?;
+    let body = String::from_utf8_lossy(&body);
+    let params = if content_type.starts_with("application/json") {
+        json_params(&body)
+    } else {
+        form_params(&body)
+    };
+    Ok(CallbackRequest { method, params })
+}
+
+fn callback_token(request: &CallbackRequest, expected_state: &str) -> anyhow::Result<String> {
+    let token = request
+        .params
+        .get("token")
+        .map(String::as_str)
+        .unwrap_or_default();
+    let state = request.params.get("state").map(String::as_str);
+    if request.method != "POST" || state != Some(expected_state) || !token.starts_with("zdt_") {
         anyhow::bail!("browser device authorization was rejected or expired");
     }
     Ok(token.to_string())
+}
+
+fn read_head_line<R: BufRead>(reader: &mut R, budget: &mut usize) -> anyhow::Result<String> {
+    if *budget == 0 {
+        anyhow::bail!("device authorization callback headers were too large");
+    }
+    let mut line = String::new();
+    let read = (&mut *reader)
+        .take(*budget as u64)
+        .read_line(&mut line)
+        .context("read device authorization callback")?;
+    if read == 0 {
+        anyhow::bail!("device authorization callback ended before its headers did");
+    }
+    if !line.ends_with('\n') {
+        anyhow::bail!("device authorization callback headers were too large");
+    }
+    *budget -= read;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
 fn percent_encode(value: &str) -> String {
@@ -833,14 +936,60 @@ fn percent_encode(value: &str) -> String {
     })
 }
 
-fn query_params(query: &str) -> std::collections::HashMap<String, String> {
-    query
-        .split('&')
+fn form_params(body: &str) -> std::collections::HashMap<String, String> {
+    body.split('&')
         .filter_map(|part| {
             let (key, value) = part.split_once('=')?;
-            Some((key.to_string(), value.to_string()))
+            Some((form_decode(key), form_decode(value)))
         })
         .collect()
+}
+
+fn json_params(body: &str) -> std::collections::HashMap<String, String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .map(|object| {
+            object
+                .iter()
+                .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn form_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 3 <= bytes.len() => {
+                match std::str::from_utf8(&bytes[index + 1..index + 3])
+                    .ok()
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                {
+                    Some(byte) => {
+                        decoded.push(byte);
+                        index += 3;
+                    }
+                    None => {
+                        decoded.push(b'%');
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn native_machine_repair(args: MachineRepairArgs) -> anyhow::Result<()> {
@@ -4605,12 +4754,320 @@ mod tests {
             percent_encode("http://127.0.0.1:1234/connected?x=1"),
             "http%3A%2F%2F127.0.0.1%3A1234%2Fconnected%3Fx%3D1"
         );
-        let values = query_params("state=abc-123&token=zdt_native_token");
+        let values = form_params("state=abc-123&token=zdt_native-token_1");
         assert_eq!(values.get("state").map(String::as_str), Some("abc-123"));
         assert_eq!(
             values.get("token").map(String::as_str),
-            Some("zdt_native_token")
+            Some("zdt_native-token_1")
         );
+    }
+
+    fn form_post_callback(body: &str) -> Vec<u8> {
+        format!(
+            "POST /connected HTTP/1.1\r\nHost: 127.0.0.1:1234\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn browser_auth_callback_takes_the_token_from_a_form_post_body() {
+        // The browser hands the token over as a top-level form POST so it never
+        // enters history; the listener has to read past the request line to see
+        // it. This is the exact byte shape a form submission produces.
+        let raw = form_post_callback("state=abc-123&token=zdt_native+token%2Fone");
+        let request = read_callback_request(&mut raw.as_slice()).unwrap();
+        assert_eq!(request.method, "POST");
+        let token = callback_token(&request, "abc-123").unwrap();
+        assert_eq!(token, "zdt_native token/one");
+        // A different browser tab's state must not authorize this CLI.
+        assert!(callback_token(&request, "other-state").is_err());
+    }
+
+    #[test]
+    fn browser_auth_callback_takes_the_token_from_a_json_post_body() {
+        let body = "{\"state\":\"abc-123\",\"token\":\"zdt_native_token\"}";
+        let raw = format!(
+            "POST /connected HTTP/1.1\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes();
+        let request = read_callback_request(&mut raw.as_slice()).unwrap();
+        assert_eq!(
+            callback_token(&request, "abc-123").unwrap(),
+            "zdt_native_token"
+        );
+    }
+
+    #[test]
+    fn browser_auth_callback_rejects_a_token_carried_in_the_query_string() {
+        // Query-string delivery is the vulnerability: it writes a non-expiring
+        // device token into browser history. It is not accepted, on any method.
+        let raw = b"GET /connected?state=abc-123&token=zdt_native_token HTTP/1.1\r\nHost: 127.0.0.1:1234\r\n\r\n";
+        let request = read_callback_request(&mut raw.as_slice()).unwrap();
+        assert_eq!(request.method, "GET");
+        assert!(request.params.is_empty());
+        assert!(callback_token(&request, "abc-123").is_err());
+    }
+
+    #[test]
+    fn browser_auth_callback_does_not_trust_content_length() {
+        // A declared body far larger than any token must be refused before it
+        // is allocated, not read into memory.
+        let raw = b"POST /connected HTTP/1.1\r\nContent-Length: 4294967296\r\n\r\n";
+        assert!(read_callback_request(&mut raw.as_slice()).is_err());
+        // ...and neither the head nor the body may run on unbounded.
+        let mut oversized = b"POST /connected HTTP/1.1\r\n".to_vec();
+        oversized.extend(
+            std::iter::repeat_n(b"X-Filler: pad\r\n".to_vec(), CALLBACK_MAX_HEAD_BYTES / 8)
+                .flatten(),
+        );
+        assert!(read_callback_request(&mut oversized.as_slice()).is_err());
+    }
+
+    #[test]
+    fn browser_auth_callback_reads_a_body_split_across_reads() {
+        // A form POST does not have to arrive in one segment; the body is read
+        // by declared length, not by whatever the first read returned.
+        let raw = form_post_callback("state=abc-123&token=zdt_native_token");
+        let split = raw.len() - 9;
+        let mut chunked = std::io::BufReader::new(ChunkedReader {
+            chunks: vec![raw[..split].to_vec(), raw[split..].to_vec()],
+        });
+        let request = read_callback_request(&mut chunked).unwrap();
+        assert_eq!(
+            callback_token(&request, "abc-123").unwrap(),
+            "zdt_native_token"
+        );
+    }
+
+    /// The bytes Chrome actually puts on the wire for the hidden form built in
+    /// `deliverToken` (web/src/pages/DevicesPage.tsx): a top-level, cross-site,
+    /// urlencoded form POST with a full navigation header block. Both halves of
+    /// this handshake were changed at once, so the engine side is only proven
+    /// by feeding it the real request shape, not a hand-trimmed one.
+    fn browser_form_post(port: u16, body: &str) -> Vec<u8> {
+        format!(
+            "POST /connected HTTP/1.1\r\n\
+             Host: 127.0.0.1:{port}\r\n\
+             Connection: keep-alive\r\n\
+             Content-Length: {length}\r\n\
+             Cache-Control: max-age=0\r\n\
+             Upgrade-Insecure-Requests: 1\r\n\
+             Origin: https://longhouse.ai\r\n\
+             Content-Type: application/x-www-form-urlencoded\r\n\
+             User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36\r\n\
+             Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8\r\n\
+             Sec-Fetch-Site: cross-site\r\n\
+             Sec-Fetch-Mode: navigate\r\n\
+             Sec-Fetch-User: ?1\r\n\
+             Sec-Fetch-Dest: document\r\n\
+             Referer: https://longhouse.ai/\r\n\
+             Accept-Encoding: gzip, deflate, br, zstd\r\n\
+             Accept-Language: en-US,en;q=0.9\r\n\
+             \r\n\
+             {body}",
+            length = body.len(),
+        )
+        .into_bytes()
+    }
+
+    /// Run the real listener half of `longhouse auth --browser` on a background
+    /// thread and hand back the port a browser would post to.
+    fn spawn_callback_listener(
+        state: &str,
+        read_timeout: Duration,
+    ) -> (u16, std::thread::JoinHandle<anyhow::Result<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state = state.to_string();
+        let handle = std::thread::spawn(move || {
+            serve_callback(&listener, &state, "https://longhouse.ai", read_timeout)
+        });
+        (port, handle)
+    }
+
+    fn connect_to_callback(port: u16) -> std::net::TcpStream {
+        let client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        client
+    }
+
+    fn read_callback_response(client: &mut std::net::TcpStream) -> String {
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        response
+    }
+
+    #[test]
+    fn browser_auth_callback_accepts_a_real_browser_form_post_end_to_end() {
+        // The whole listener path, over a real socket: accept, bounded read of
+        // request line + headers + exactly Content-Length body bytes, token
+        // out, 303 back. This is the half that shipped broken last time.
+        let state = "8f1c0f6e-1c1c-4a5e-9d21-7d0d2b8a51aa";
+        let (port, handle) = spawn_callback_listener(state, Duration::from_secs(10));
+        let mut client = connect_to_callback(port);
+        let raw = browser_form_post(port, &format!("state={state}&token=zdt_live_device_token"));
+        // A browser is free to flush the head and the body separately; the
+        // listener must not depend on one read returning the whole request.
+        let split = raw.len() - 12;
+        client.write_all(&raw[..split]).unwrap();
+        client.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        client.write_all(&raw[split..]).unwrap();
+        client.flush().unwrap();
+
+        let token = handle.join().unwrap().unwrap();
+        assert_eq!(token, "zdt_live_device_token");
+        let response = read_callback_response(&mut client);
+        assert!(
+            response.starts_with("HTTP/1.1 303 See Other\r\n"),
+            "unexpected response: {response}"
+        );
+        assert!(
+            response.contains("Location: https://longhouse.ai/settings/devices?connected=1\r\n"),
+            "unexpected response: {response}"
+        );
+        // The browser must land somewhere that holds no credential.
+        assert!(!response.contains("zdt_"), "token leaked into {response}");
+    }
+
+    #[test]
+    fn browser_auth_callback_rejects_a_state_from_another_tab_over_a_socket() {
+        let (port, handle) = spawn_callback_listener("expected-state", Duration::from_secs(10));
+        let mut client = connect_to_callback(port);
+        client
+            .write_all(&browser_form_post(
+                port,
+                "state=some-other-tab&token=zdt_live_device_token",
+            ))
+            .unwrap();
+        client.flush().unwrap();
+
+        assert!(handle.join().unwrap().is_err());
+        assert!(read_callback_response(&mut client)
+            .contains("Location: https://longhouse.ai/settings/devices?connected=0\r\n"));
+    }
+
+    #[test]
+    fn browser_auth_callback_rejects_a_malformed_body_over_a_socket() {
+        // Correctly framed request, garbage payload: it must be refused and
+        // answered, not left half-read with the browser hanging on a response.
+        let (port, handle) = spawn_callback_listener("expected-state", Duration::from_secs(10));
+        let mut client = connect_to_callback(port);
+        client
+            .write_all(&browser_form_post(port, "%%%not=a=form&&&\0\u{1}binary"))
+            .unwrap();
+        client.flush().unwrap();
+
+        assert!(handle.join().unwrap().is_err());
+        assert!(read_callback_response(&mut client)
+            .contains("Location: https://longhouse.ai/settings/devices?connected=0\r\n"));
+    }
+
+    #[test]
+    fn browser_auth_callback_refuses_an_oversized_body_without_reading_it() {
+        // A declared body far past the cap is refused off the header alone: the
+        // listener answers before the sender has written a single body byte, so
+        // there is nothing to over-read and nothing to buffer.
+        let (port, handle) = spawn_callback_listener("expected-state", Duration::from_secs(10));
+        let mut client = connect_to_callback(port);
+        client
+            .write_all(
+                format!(
+                    "POST /connected HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n",
+                    CALLBACK_MAX_BODY_BYTES * 4096
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        client.flush().unwrap();
+
+        let started = std::time::Instant::now();
+        assert!(handle.join().unwrap().is_err());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "listener waited on a body it had already refused"
+        );
+        assert!(read_callback_response(&mut client)
+            .contains("Location: https://longhouse.ai/settings/devices?connected=0\r\n"));
+    }
+
+    #[test]
+    fn browser_auth_callback_does_not_hang_on_a_body_that_never_arrives() {
+        // A sender that declares an acceptable length, dribbles a few bytes and
+        // then goes silent is bounded by the read timeout, not by the sender's
+        // patience. The client socket is deliberately kept alive for the whole
+        // test so nothing but the timeout can end the read.
+        //
+        // Note what this does and does not bound: the timeout is per read, so a
+        // sender that keeps dripping bytes slower than the timeout holds the
+        // socket for as long as it likes. Total bytes are still capped by the
+        // head and body budgets, and the cost of that is a stalled CLI on a
+        // random loopback port with a human sitting at the terminal -- no
+        // credential is at risk -- so it is bounded, not deadlined, on purpose.
+        let read_timeout = Duration::from_millis(250);
+        let (port, handle) = spawn_callback_listener("expected-state", read_timeout);
+        let mut client = connect_to_callback(port);
+        client
+            .write_all(b"POST /connected HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 512\r\n\r\nstate=")
+            .unwrap();
+        client.flush().unwrap();
+
+        let started = std::time::Instant::now();
+        assert!(handle.join().unwrap().is_err());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "listener blocked on a body that never arrived"
+        );
+        drop(client);
+    }
+
+    #[test]
+    fn browser_auth_callback_does_not_hang_on_headers_that_never_end() {
+        // Headers with no terminating blank line stop at the head budget, so a
+        // sender cannot hold the listener open by never finishing its request.
+        let (port, handle) = spawn_callback_listener("expected-state", Duration::from_secs(10));
+        let mut client = connect_to_callback(port);
+        let mut head = b"POST /connected HTTP/1.1\r\n".to_vec();
+        head.extend(
+            std::iter::repeat_n(
+                b"X-Filler: pad\r\n".to_vec(),
+                CALLBACK_MAX_HEAD_BYTES / 8,
+            )
+            .flatten(),
+        );
+        // The listener refuses partway through, so the write end may break.
+        client.write_all(&head).ok();
+        client.flush().ok();
+
+        let started = std::time::Instant::now();
+        assert!(handle.join().unwrap().is_err());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "listener kept reading headers past its budget"
+        );
+    }
+
+    struct ChunkedReader {
+        chunks: Vec<Vec<u8>>,
+    }
+
+    impl std::io::Read for ChunkedReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.chunks.is_empty() {
+                return Ok(0);
+            }
+            let chunk = self.chunks.remove(0);
+            let len = chunk.len().min(buf.len());
+            buf[..len].copy_from_slice(&chunk[..len]);
+            if len < chunk.len() {
+                self.chunks.insert(0, chunk[len..].to_vec());
+            }
+            Ok(len)
+        }
     }
 
     #[test]

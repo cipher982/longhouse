@@ -60,25 +60,52 @@ export default function DevicesPage() {
     }
   })();
 
+  // The CLI's callback answers 303 back to this page, so the request that
+  // carried the token is never left as the current history entry. `connected`
+  // is the only trace of it, and it carries no credential.
+  const connectOutcome = (() => {
+    const value = new URLSearchParams(window.location.search).get("connected");
+    if (value === "1") return "ok";
+    if (value === "0") return "failed";
+    return null;
+  })();
+
   // Ready signal for tests
   useReadinessFlag({ ready: !isLoading });
 
-  // Hand the token to the waiting CLI as a top-level navigation carrying query
-  // params. This transport is not a style choice: the callback listener in
-  // `browser_device_token` (engine/src/longhouse.rs) reads exactly one request
-  // line and parses the token out of its query string, so a POST body never
-  // reaches it. A top-level navigation is also the only shape that reliably
-  // crosses from https://longhouse.ai to http://127.0.0.1 — subresource
-  // requests to a loopback port are subject to private-network preflights the
-  // raw listener cannot answer. `replace` keeps the token-bearing URL out of
-  // the back stack; removing it from browser history entirely needs the engine
-  // listener to accept a POST body first.
+  // Hand the token to the waiting CLI as a top-level form POST. Two constraints
+  // pin that shape, and neither is a style choice:
+  //   * The token must not ride in a URL. Device tokens never expire and
+  //     authorize the whole agents surface, so a query-string callback writes a
+  //     live credential into browser history permanently.
+  //   * It cannot be fetch/XHR. A subresource request from https://longhouse.ai
+  //     to http://127.0.0.1 triggers a private-network preflight that the raw
+  //     TcpListener in `browser_device_token` (engine/src/longhouse.rs) cannot
+  //     answer. Top-level navigations are exempt from that preflight, and
+  //     127.0.0.1 is a potentially-trustworthy origin, so the submission is not
+  //     treated as mixed content either.
+  // The listener reads the request line, the headers and Content-Length bytes
+  // of body, then answers 303 back to this page — so the callback URL never
+  // survives as a history entry at all.
   const deliverToken = (token: string) => {
     if (!connectRequest) return;
-    const callback = new URL(connectRequest.callback.toString());
-    callback.searchParams.set("state", connectRequest.state);
-    callback.searchParams.set("token", token);
-    window.location.replace(callback.toString());
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = connectRequest.callback.toString();
+    form.enctype = "application/x-www-form-urlencoded";
+    form.hidden = true;
+    for (const [name, value] of [
+      ["state", connectRequest.state],
+      ["token", token],
+    ]) {
+      const field = document.createElement("input");
+      field.type = "hidden";
+      field.name = name;
+      field.value = value;
+      form.appendChild(field);
+    }
+    document.body.appendChild(form);
+    form.submit();
   };
 
   const handleCreate = (e: FormEvent) => {
@@ -151,6 +178,17 @@ export default function DevicesPage() {
         title="Device Tokens"
         description="Manage tokens that authenticate CLI tools with this Longhouse instance."
       />
+
+      {connectOutcome && (
+        <div className="token-reveal">
+          <h4>{connectOutcome === "ok" ? "Device connected" : "Device connection failed"}</h4>
+          <p className="token-reveal-hint">
+            {connectOutcome === "ok"
+              ? "The native client on that device holds its own token now."
+              : "The device did not accept the token. Run longhouse auth again on that device."}
+          </p>
+        </div>
+      )}
 
       {connectRequest && (
         <div className="token-reveal">
