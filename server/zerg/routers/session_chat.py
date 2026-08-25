@@ -1303,7 +1303,7 @@ async def draft_reply_for_live_session(
 ):
     """Generate a suggested next user message for a live managed-local session."""
     request_id = str(uuid.uuid4())[:8]
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
     try:
         max_chars = (body or SessionDraftReplyRequest()).max_chars
@@ -1419,7 +1419,7 @@ async def interrupt_live_session(
 ) -> SessionInterruptResponse:
     """Browser-authenticated explicit interrupt for managed-local sessions."""
     request_id = str(uuid.uuid4())[:8]
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     _assert_live_session_action_available(db, source_session, action="interrupt", owner_id=current_user.id)
     return await _interrupt_live_session_response(
         db=db,
@@ -1507,7 +1507,7 @@ async def terminate_live_session(
 ) -> SessionTerminateResponse:
     """Browser-authenticated explicit terminate for managed-local sessions."""
     request_id = str(uuid.uuid4())[:8]
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     _assert_live_session_action_available(db, source_session, action="terminate", owner_id=current_user.id)
     return await _terminate_live_session_response(
         db=db,
@@ -1557,9 +1557,9 @@ async def list_pause_requests_endpoint(
     session_id: str,
     status_filter: str | None = PAUSE_PENDING_STATUS,
     db: Session = Depends(_catalog_control_db_dependency),
-    _current_user: User = Depends(get_current_browser_route_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ) -> PauseRequestListResponse:
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     return await _list_pause_requests_response(
         source_session=source_session,
         status_filter=status_filter,
@@ -1575,7 +1575,7 @@ async def respond_to_pause_request_endpoint(
     db: Session = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> PauseRequestResponseResponse:
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     return await _respond_to_pause_request(
         source_session=source_session,
         owner_id=current_user.id,
@@ -2997,7 +2997,7 @@ async def list_session_inputs_endpoint(
     request: Request,
     response: Response,
     db: Session = Depends(_catalog_control_db_dependency),
-    _current_user: User = Depends(get_current_browser_route_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ):
     """List queued + recently-failed inputs for the chip UI.
 
@@ -3007,7 +3007,7 @@ async def list_session_inputs_endpoint(
     304. A 304 is ~1ms vs ~9ms for the full response, which matters
     at the aggregate QPS of many active session-detail pages.
     """
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     if database_module.live_catalog_enabled():
         state = await _catalog_recent_input_summaries(source_session.id)
         if state is None:
@@ -3035,9 +3035,9 @@ async def cancel_live_session_input_endpoint(
     session_id: str,
     live_input_id: str,
     db: Session = Depends(_catalog_control_db_dependency),
-    _current_user: User = Depends(get_current_browser_route_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ) -> dict:
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     if database_module.live_catalog_enabled():
         row = await cancel_live_queued_receipt_catalog(
             session_id=source_session.id,
@@ -3082,9 +3082,9 @@ async def cancel_session_input_endpoint(
     session_id: str,
     input_id: int,
     db: Session | None = Depends(_catalog_control_db_dependency),
-    _current_user: User = Depends(get_current_browser_route_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ) -> dict:
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     if database_module.live_catalog_enabled():
         state = await _catalog_recent_input_summaries(source_session.id)
         if state is None:

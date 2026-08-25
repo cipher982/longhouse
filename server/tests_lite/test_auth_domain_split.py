@@ -71,11 +71,8 @@ def test_timeline_stream_routes_are_on_short_lived_auth_router():
 def test_timeline_stream_endpoints_do_not_request_db_dependency():
     stream_params = signature(timeline_router.stream_timeline_sessions).parameters
     workspace_params = signature(timeline_router.stream_session_workspace).parameters
-    canary_params = signature(timeline_router.stream_canary_workspace).parameters
-
     assert "db" not in stream_params
     assert "db" not in workspace_params
-    assert "db" not in canary_params
 
 
 def test_short_lived_browser_auth_closes_db_after_validation():

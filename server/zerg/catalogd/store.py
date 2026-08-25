@@ -3418,7 +3418,7 @@ class CatalogStore:
                 if session is None or not session.primary_thread_id:
                     orm.rollback()
                     return {"found": False}
-                if not self._session_belongs_to_owner(
+                if not self._session_explicitly_belongs_to_owner(
                     connection,
                     session_id=str(data["session_id"]),
                     owner_id=int(data["owner_id"]),
@@ -3781,7 +3781,7 @@ class CatalogStore:
 
     def read_current_console_turn(self, *, session_id: str, owner_id: int) -> dict[str, Any]:
         with self.engine.connect() as connection:
-            if not self._session_belongs_to_owner(
+            if not self._session_explicitly_belongs_to_owner(
                 connection,
                 session_id=session_id,
                 owner_id=owner_id,
@@ -5096,7 +5096,7 @@ class CatalogStore:
     def read_session(self, *, session_id: str, owner_id: int | None = None) -> dict[str, Any]:
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
-            if owner_id is not None and not self._session_belongs_to_owner(
+            if owner_id is not None and not self._session_explicitly_belongs_to_owner(
                 connection,
                 session_id=session_id,
                 owner_id=owner_id,
@@ -5386,6 +5386,46 @@ class CatalogStore:
             }
 
     @staticmethod
+    def _resolve_session_owner_id(connection: Any, *, session_id: str) -> str | None:
+        """Resolve the durable owner binding for one session, or None when unbound."""
+
+        live_owner = connection.execute(select(LiveSession.owner_id).where(LiveSession.session_id == session_id)).scalar_one_or_none()
+        if live_owner is not None:
+            return str(live_owner)
+        storage_owner = connection.execute(
+            select(StorageSession.owner_id).where(StorageSession.session_id == session_id)
+        ).scalar_one_or_none()
+        if storage_owner is not None:
+            return str(storage_owner)
+
+        # A Helm launch binds its owner on the attempt row before any transcript
+        # ingest exists, so it is the only durable owner a freshly launched
+        # managed session has. Ambiguous attempts bind nothing.
+        launch_owners = {
+            str(row.owner_id)
+            for row in connection.execute(
+                select(LiveSessionLaunchAttempt.owner_id).where(
+                    LiveSessionLaunchAttempt.session_id == session_id,
+                    LiveSessionLaunchAttempt.owner_id.is_not(None),
+                )
+            )
+        }
+        if len(launch_owners) == 1:
+            return launch_owners.pop()
+
+        catalog_origin = connection.execute(
+            select(LiveSessionCatalog.origin_kind).where(LiveSessionCatalog.session_id == session_id)
+        ).scalar_one_or_none()
+        if catalog_origin != "console":
+            return None
+        outbox_owner = connection.execute(
+            select(func.json_extract(LiveArchiveOutbox.payload_json, "$.session.owner_id")).where(
+                LiveArchiveOutbox.idempotency_key == f"console_session_create.v1:{session_id}"
+            )
+        ).scalar_one_or_none()
+        return str(outbox_owner) if outbox_owner is not None else None
+
+    @staticmethod
     def _session_explicitly_belongs_to_owner(connection: Any, *, session_id: str, owner_id: int) -> bool:
         """Fail closed unless a durable row explicitly binds the session owner."""
 
@@ -5394,64 +5434,7 @@ class CatalogStore:
         ).scalar_one_or_none()
         if owner_exists is None:
             return False
-        owner_text = str(owner_id)
-        live_owner = connection.execute(select(LiveSession.owner_id).where(LiveSession.session_id == session_id)).scalar_one_or_none()
-        if live_owner is not None:
-            return str(live_owner) == owner_text
-        storage_owner = connection.execute(
-            select(StorageSession.owner_id).where(StorageSession.session_id == session_id)
-        ).scalar_one_or_none()
-        if storage_owner is not None:
-            return str(storage_owner) == owner_text
-
-        catalog_origin = connection.execute(
-            select(LiveSessionCatalog.origin_kind).where(LiveSessionCatalog.session_id == session_id)
-        ).scalar_one_or_none()
-        if catalog_origin != "console":
-            return False
-        outbox_owner = connection.execute(
-            select(func.json_extract(LiveArchiveOutbox.payload_json, "$.session.owner_id")).where(
-                LiveArchiveOutbox.idempotency_key == f"console_session_create.v1:{session_id}"
-            )
-        ).scalar_one_or_none()
-        return outbox_owner is not None and str(outbox_owner) == owner_text
-
-    @staticmethod
-    def _session_belongs_to_owner(connection: Any, *, session_id: str, owner_id: int) -> bool:
-        """Validate catalog session ownership, including single-tenant legacy cards."""
-
-        owner_exists = connection.execute(
-            select(LiveUser.id).where(LiveUser.id == owner_id, LiveUser.is_active.is_(True))
-        ).scalar_one_or_none()
-        if owner_exists is None:
-            return False
-
-        owner_text = str(owner_id)
-        live_owner = connection.execute(select(LiveSession.owner_id).where(LiveSession.session_id == session_id)).scalar_one_or_none()
-        if live_owner is not None:
-            return str(live_owner) == owner_text
-
-        storage_owner = connection.execute(
-            select(StorageSession.owner_id).where(StorageSession.session_id == session_id)
-        ).scalar_one_or_none()
-        if storage_owner is not None:
-            return str(storage_owner) == owner_text
-
-        # Legacy live cards predate per-session ownership. They are still
-        # unambiguously owned by the one active tenant in this catalog.
-        catalog_row = connection.execute(
-            select(LiveSessionCatalog.session_id, LiveSessionCatalog.origin_kind).where(LiveSessionCatalog.session_id == session_id)
-        ).one_or_none()
-        if catalog_row is None:
-            return False
-        if catalog_row.origin_kind == "console":
-            outbox_owner = connection.execute(
-                select(func.json_extract(LiveArchiveOutbox.payload_json, "$.session.owner_id")).where(
-                    LiveArchiveOutbox.idempotency_key == f"console_session_create.v1:{session_id}"
-                )
-            ).scalar_one_or_none()
-            return outbox_owner is not None and str(outbox_owner) == owner_text
-        return True
+        return CatalogStore._resolve_session_owner_id(connection, session_id=session_id) == str(owner_id)
 
     def create_directed_input(
         self,
@@ -5507,9 +5490,9 @@ class CatalogStore:
                 }
             if source_session_id == target_session_id:
                 return {"invalid": "same_session", "commit_seq": str(_current_commit_seq(connection))}
-            if not self._session_belongs_to_owner(connection, session_id=source_session_id, owner_id=owner_id):
+            if not self._session_explicitly_belongs_to_owner(connection, session_id=source_session_id, owner_id=owner_id):
                 return {"not_found": "source", "commit_seq": str(_current_commit_seq(connection))}
-            if not self._session_belongs_to_owner(connection, session_id=target_session_id, owner_id=owner_id):
+            if not self._session_explicitly_belongs_to_owner(connection, session_id=target_session_id, owner_id=owner_id):
                 return {"not_found": "target", "commit_seq": str(_current_commit_seq(connection))}
             if reply_to_id is not None:
                 parent = connection.execute(select(table).where(table.c.id == reply_to_id, table.c.owner_id == owner_id)).mappings().first()
@@ -5597,7 +5580,7 @@ class CatalogStore:
         table = LiveDirectedInput.__table__
         receipt_table = LiveSessionInputReceipt.__table__
         with _read_snapshot(self.engine) as connection:
-            if not self._session_belongs_to_owner(connection, session_id=session_id, owner_id=owner_id):
+            if not self._session_explicitly_belongs_to_owner(connection, session_id=session_id, owner_id=owner_id):
                 return {"found": False, "directed_inputs": [], "commit_seq": str(_current_commit_seq(connection))}
             query = select(table).where(table.c.owner_id == owner_id, table.c.id > after_id)
             if direction == "inbound":
@@ -6060,8 +6043,11 @@ class CatalogStore:
                     "started_at": _encode_datetime(match["started_at"]),
                     "ended_at": _encode_datetime(match["ended_at"]),
                 }
+                owner_ref = self._resolve_session_owner_id(connection, session_id=str(match["session_id"]))
                 owner_row = (
-                    connection.execute(select(user.c.display_name, user.c.email).order_by(user.c.id.asc()).limit(1)).mappings().first()
+                    connection.execute(select(user.c.display_name, user.c.email).where(user.c.id == owner_ref)).mappings().first()
+                    if owner_ref is not None
+                    else None
                 )
                 if owner_row is not None:
                     display_name = str(owner_row["display_name"] or "").strip() or None

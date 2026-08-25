@@ -1427,7 +1427,8 @@ async def test_session_read_validation_and_prefix_missing_ambiguous_found(daemon
                 },
             ],
         )
-        _seed_session(connection, session_id=first_id, device_id="cinder", now=now)
+        # Only the first session carries a durable owner binding.
+        _seed_session(connection, session_id=first_id, device_id="cinder", now=now, owner_id="1")
         _seed_session(connection, session_id=second_id, device_id="cinder", now=now)
     engine.dispose()
 
@@ -1451,6 +1452,10 @@ async def test_session_read_validation_and_prefix_missing_ambiguous_found(daemon
             "ended_at": None,
         }
         assert found["owner"] == {"display_name": "David Rose", "email_local": "david010"}
+        # An unbound session has no owner to preview: the first row in the users
+        # table is not an owner of anything.
+        unbound = await client.call("session.prefix.resolve.v2", {"prefix": "aaaaaaaa-2222"})
+        assert unbound["status"] == "unique" and unbound["owner"] is None
         assert set(found["session"]) == {"session_id", "provider", "device_name", "started_at", "ended_at"}
         resolved_alias = await client.call("session.alias.resolve.v2", {"provider_session_id": f"provider-{first_id}"})
         assert resolved_alias["found"] is True and resolved_alias["session_id"] == first_id

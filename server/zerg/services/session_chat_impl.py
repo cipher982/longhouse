@@ -292,10 +292,12 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
         raise RuntimeError("Managed local launch response is missing managed transport metadata")
     control_projection = kernel_projection.control
     permission_mode = str(getattr(session, "permission_mode", "") or "bypass").strip() or "bypass"
-    # Mint a session-scoped hook token ONLY for remote_approve launches, so the
-    # permission gate can authenticate as this exact session (the gate endpoints
-    # reject durable device tokens). Bypass and provider-local launches never
-    # get one.
+    # Mint a session-scoped hook token for EVERY managed launch. The engine
+    # exports it to the provider in place of the durable device token, which
+    # authorizes the whole owner account and is inherited by every grandchild
+    # the provider spawns. remote_approve additionally needs it so the
+    # permission gate can authenticate as this exact session (the gate
+    # endpoints reject durable device tokens).
     hook_token: str | None = None
     coordination_token: str | None = None
     if owner_id is not None:
@@ -311,14 +313,13 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
                 device_id=getattr(session, "device_id", None),
                 scope=MANAGED_SESSION_SCOPE_COORDINATION,
             )
-        if permission_mode == "remote_approve":
-            hook_token = issue_managed_session_token(
-                owner_id=owner_id,
-                session_id=str(session.id),
-                project=getattr(session, "project", None),
-                device_id=getattr(session, "device_id", None),
-                scope=MANAGED_SESSION_SCOPE_HOOK,
-            )
+        hook_token = issue_managed_session_token(
+            owner_id=owner_id,
+            session_id=str(session.id),
+            project=getattr(session, "project", None),
+            device_id=getattr(session, "device_id", None),
+            scope=MANAGED_SESSION_SCOPE_HOOK,
+        )
     response = ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
         run_id=str(managed_local_run_id_for_session(session.id)),
@@ -367,14 +368,13 @@ def _managed_local_launch_response_from_plan(
                 device_id=plan.source_name,
                 scope=MANAGED_SESSION_SCOPE_COORDINATION,
             )
-        if plan.permission_mode == "remote_approve":
-            hook_token = issue_managed_session_token(
-                owner_id=owner_id,
-                session_id=str(plan.session_id),
-                project=plan.project,
-                device_id=plan.source_name,
-                scope=MANAGED_SESSION_SCOPE_HOOK,
-            )
+        hook_token = issue_managed_session_token(
+            owner_id=owner_id,
+            session_id=str(plan.session_id),
+            project=plan.project,
+            device_id=plan.source_name,
+            scope=MANAGED_SESSION_SCOPE_HOOK,
+        )
     response = ManagedLocalSessionLaunchResponse(
         session_id=str(plan.session_id),
         run_id=run_id,

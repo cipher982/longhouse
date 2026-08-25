@@ -156,13 +156,13 @@ def _http_error(
     )
 
 
-def _raise_historical_storage_backpressure(decision, *, path: str) -> None:
+def _raise_historical_storage_backpressure(decision, *, path: str, lane: str) -> None:
     from zerg.metrics import historical_admission_rejections_total
 
     historical_admission_rejections_total.labels(path=path, reason=decision.reason).inc()
     headers = {
         "Retry-After": str(decision.retry_after_seconds),
-        "X-Longhouse-Storage-Lane": "repair",
+        "X-Longhouse-Storage-Lane": lane,
         "X-Longhouse-Storage-Backpressure": "historical_admission",
         "X-Longhouse-Storage-Admission-State": decision.reason,
     }
@@ -181,7 +181,7 @@ def _raise_historical_storage_backpressure(decision, *, path: str) -> None:
     )
 
 
-async def _admit_historical_storage(*, admitted_bytes: int, path: str) -> None:
+async def _admit_historical_storage(*, admitted_bytes: int, path: str, lane: str) -> None:
     from zerg.services.historical_admission import evaluate_historical_admission
     from zerg.services.historical_admission import tenant_stored_bytes_ceiling
     from zerg.services.storage_telemetry_snapshot import get_storage_telemetry_snapshot
@@ -196,7 +196,7 @@ async def _admit_historical_storage(*, admitted_bytes: int, path: str) -> None:
         ),
     )
     if not decision.admitted:
-        _raise_historical_storage_backpressure(decision, path=path)
+        _raise_historical_storage_backpressure(decision, path=path, lane=lane)
 
 
 def _canonical_text(value: object, field: str, maximum_bytes: int) -> str:
@@ -777,7 +777,7 @@ async def put_storage_v2_media(
                     "created": False,
                     "commit_seq": media_replay.get("commit_seq"),
                 }
-            await _admit_historical_storage(admitted_bytes=len(data), path="storage_v2_media")
+        await _admit_historical_storage(admitted_bytes=len(data), path="storage_v2_media", lane=lane)
         async with workers.admission(lane):
             sealed = await workers.seal_media(
                 MediaObjectSpec(media_hash=canonical_hash, mime_type=mime_type, data=data),
@@ -1035,11 +1035,14 @@ async def _commit_admitted_envelope(
                 manifest_cache={},
             )
 
-        if lane == "repair":
-            await _admit_historical_storage(
-                admitted_bytes=sum(len(record.data) for record in spec.records),
-                path="storage_v2",
-            )
+        # Admission guards the shared archive filesystem every tenant writes
+        # to, so it runs for both lanes: a client that labels its own traffic
+        # `live` must not be able to keep storing bytes past the disk floor.
+        await _admit_historical_storage(
+            admitted_bytes=sum(len(record.data) for record in spec.records),
+            path="storage_v2",
+            lane=lane,
+        )
 
         async with raw_workers.admission(lane):
             raw_task = asyncio.create_task(raw_workers.seal(spec, lane=parsed["lane"]))

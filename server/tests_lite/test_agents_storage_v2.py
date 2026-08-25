@@ -948,14 +948,18 @@ async def test_storage_v2_media_must_be_durable_before_complete_receipt(monkeypa
             assert repair_replay.status_code == 200, repair_replay.text
             assert repair_replay.json()["created"] is False
 
-            live_bytes = b"live-is-not-governed-by-historical-ceilings"
+            # Admission guards the shared archive filesystem, so a caller cannot
+            # buy itself past the ceiling by labelling its own traffic "live".
+            live_bytes = b"live-lane-is-still-governed-by-storage-admission"
             live_hash = hashlib.sha256(live_bytes).hexdigest()
             live_upload = await client.put(
                 f"/agents/storage/v2/media/{live_hash}",
                 content=live_bytes,
                 headers={"Content-Type": "application/octet-stream", "X-Longhouse-Storage-Lane": "live"},
             )
-            assert live_upload.status_code == 200, live_upload.text
+            assert live_upload.status_code == 503, live_upload.text
+            assert live_upload.json()["detail"]["code"] == "historical_admission_paused"
+            assert live_upload.headers["X-Longhouse-Storage-Lane"] == "live"
             monkeypatch.delenv("LONGHOUSE_TENANT_STORED_BYTES_CEILING")
 
             alias_claim = await client.post(

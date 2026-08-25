@@ -128,7 +128,12 @@ def test_catalog_legacy_input_id_cancels_matching_live_receipt(monkeypatch):
         return SimpleNamespace(id=receipt_id, archive_session_input_id=91)
 
     monkeypatch.setattr(session_chat.database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(session_chat, "_load_session_for_continuation", lambda db, sid: source_session)
+    def fake_load(db, sid, *, owner_id):
+        # Session lookup is owner-scoped now; the endpoint must pass the caller.
+        assert owner_id == 7
+        return source_session
+
+    monkeypatch.setattr(session_chat, "_load_session_for_continuation", fake_load)
     monkeypatch.setattr(session_chat, "_catalog_recent_input_summaries", fake_recent)
     monkeypatch.setattr(session_chat, "cancel_live_queued_receipt_catalog", fake_cancel)
 
@@ -137,7 +142,7 @@ def test_catalog_legacy_input_id_cancels_matching_live_receipt(monkeypatch):
             str(session_id),
             91,
             db=None,
-            _current_user=SimpleNamespace(id=7),
+            current_user=SimpleNamespace(id=7),
         )
     )
 

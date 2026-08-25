@@ -1747,6 +1747,10 @@ async def _live_catalog_workspace_stream(
     live-catalog commit sequence, so it cannot safely authorize skipping the
     first invalidation here. A reconnect with a Last-Event-ID can use replay;
     a fresh attachment takes the conservative initial-fetch path.
+
+    The pubsub topic is keyed on session id alone and the frames carry live
+    transcript previews, so the caller must verify session ownership before
+    entering this generator; ``owner_id`` here is only a commit-seq hint.
     """
 
     from zerg.services.session_pubsub import get_pubsub
@@ -1871,6 +1875,20 @@ async def stream_session_workspace(
             last_event_id = None
 
     if database_module.live_catalog_enabled():
+        # The pubsub topic is keyed on session id alone, so subscribing is not
+        # an authorization decision. Resolve the session through the canonical
+        # owner-scoped read first and fail closed: a session the caller cannot
+        # open on detail must not stream its live transcript preview here.
+        try:
+            owned_session, _provider_alias, _commit_seq = await asyncio.to_thread(
+                read_live_catalog_session,
+                session_id,
+                owner_id=current_user_id,
+            )
+        except CatalogReadError as exc:
+            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+        if owned_session is None:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         return EventSourceResponse(
             _live_catalog_workspace_stream(
                 request,
@@ -1879,62 +1897,6 @@ async def stream_session_workspace(
                 last_event_id=last_event_id,
                 known_workspace_fingerprint=known_workspace_fingerprint,
                 owner_id=current_user_id,
-            )
-        )
-    return EventSourceResponse(
-        _session_workspace_stream(
-            request,
-            session_factory=get_session_factory(),
-            session_id=session_id,
-            skip_initial=skip_initial,
-            last_event_id=last_event_id,
-            known_workspace_fingerprint=known_workspace_fingerprint,
-        ),
-    )
-
-
-# -----------------------------------------------------------------------------
-# Canary-only SSE: token-auth variant of workspace/stream for background probes.
-# Lives on a separate router so it doesn't inherit the browser cookie guard.
-# -----------------------------------------------------------------------------
-
-canary_stream_router = APIRouter(prefix="/canary", tags=["canary"])
-
-
-@canary_stream_router.get("/sessions/{session_id}/workspace/stream")
-async def stream_canary_workspace(
-    request: Request,
-    session_id: UUID,
-    skip_initial: bool = Query(False),
-    known_workspace_fingerprint: str | None = Query(None),
-) -> EventSourceResponse:
-    """Canary-only SSE: same generator as the browser endpoint, token-auth.
-
-    The always-on canary observer on the build host uses this; requires X-Canary-Token
-    matching LONGHOUSE_CANARY_TOKEN. Admin users can still use the browser
-    endpoint.
-    """
-    from zerg.routers.telemetry import canary_token_matches
-
-    if not canary_token_matches(request):
-        raise HTTPException(status_code=401, detail="canary token required")
-
-    last_event_id: int | None = None
-    raw = request.headers.get("Last-Event-ID")
-    if raw:
-        try:
-            last_event_id = max(0, int(raw))
-        except ValueError:
-            last_event_id = None
-
-    if database_module.live_catalog_enabled():
-        return EventSourceResponse(
-            _live_catalog_workspace_stream(
-                request,
-                session_id=session_id,
-                skip_initial=skip_initial,
-                last_event_id=last_event_id,
-                known_workspace_fingerprint=known_workspace_fingerprint,
             )
         )
     return EventSourceResponse(

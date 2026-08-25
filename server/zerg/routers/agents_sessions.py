@@ -89,6 +89,7 @@ from zerg.services.session_kernel_projection import resolve_session_id_by_provid
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
+from zerg.services.session_listing import validate_managed_hook_scope
 from zerg.services.session_pause_requests import load_hot_session_projection_map
 from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
@@ -620,6 +621,10 @@ async def list_sessions(
             mode=mode,
             context_mode=context_mode,
         )
+        # Before choosing a read backend: the live-catalog branch below returns
+        # without reaching list_agent_sessions, so the hook-scope bound has to
+        # be applied here or it does not apply in production at all.
+        validate_managed_hook_scope(_auth, params)
         if database_module.live_catalog_enabled():
             if query is not None:
                 if context_mode != "forensic":

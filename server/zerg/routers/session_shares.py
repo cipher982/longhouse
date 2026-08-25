@@ -15,8 +15,12 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionInput
+from zerg.models.device_token import DeviceToken
 from zerg.services.session_shares import DEFAULT_SHARE_TTL_DAYS
 from zerg.services.session_shares import SessionShareError
+from zerg.services.session_shares import SessionShareNotFound
 from zerg.services.session_shares import create_session_share
 from zerg.services.session_shares import resolve_session_share
 from zerg.services.session_shares import revoke_session_share
@@ -73,6 +77,26 @@ def _raise_share_error(exc: SessionShareError) -> None:
     raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
+def _require_session_owner(db: Session, *, session_id: UUID, user_id: int) -> None:
+    """Fail closed unless the caller demonstrably owns this session.
+
+    Ownership carries two independent signals: an input the caller authored on
+    the session, or the device token the session was ingested under (ingest
+    stamps ``device_id`` from the authenticated token). Shadow sessions never
+    have inputs, so the device signal is the only one they carry, and a session
+    with neither signal is not shareable by anyone.
+    """
+    authored = db.query(SessionInput.id).filter(SessionInput.session_id == session_id, SessionInput.owner_id == user_id).first()
+    if authored is not None:
+        return
+    device_id = (db.query(AgentSession.device_id).filter(AgentSession.id == session_id).scalar() or "").strip()
+    if device_id:
+        owns_device = db.query(DeviceToken.id).filter(DeviceToken.device_id == device_id, DeviceToken.owner_id == user_id).first()
+        if owns_device is not None:
+            return
+    _raise_share_error(SessionShareNotFound())
+
+
 @router.post("/timeline/sessions/{session_id}/shares", response_model=SessionShareResponse)
 def create_timeline_session_share(
     session_id: UUID,
@@ -81,6 +105,7 @@ def create_timeline_session_share(
     current_user=Depends(get_current_browser_user),
 ) -> SessionShareResponse:
     body = body or CreateSessionShareRequest()
+    _require_session_owner(db, session_id=session_id, user_id=int(current_user.id))
     try:
         share, token = create_session_share(
             db,

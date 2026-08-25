@@ -32,7 +32,7 @@ async def list_agent_sessions(
 ) -> SessionListResult:
     """List sessions for the machine-facing agents API."""
 
-    _validate_managed_hook_scope(auth, params)
+    validate_managed_hook_scope(auth, params)
     _validate_context_mode(params.context_mode)
     effective_sort = _resolve_effective_sort(params)
 
@@ -45,7 +45,15 @@ async def list_agent_sessions(
     )
 
 
-def _validate_managed_hook_scope(auth: object, params: SessionListParams) -> None:
+def validate_managed_hook_scope(auth: object, params: SessionListParams) -> None:
+    """Bound what a managed-session hook token may list.
+
+    Public because the `/agents/sessions` route must apply it before it picks a
+    read backend: the live-catalog branch returns without ever reaching
+    `list_agent_sessions`, so a guard that only ran here would be dead in
+    production.
+    """
+
     if not isinstance(auth, ManagedSessionToken):
         return
 
