@@ -40,6 +40,7 @@ from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.metrics import session_input_attachment_blob_fetches_total
 from zerg.metrics import session_input_attachment_bytes
 from zerg.metrics import session_input_attachments_total
+from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.routers.session_chat import QueuedInputSummary
@@ -49,6 +50,7 @@ from zerg.services.managed_provider_contracts import managed_transport_for_contr
 from zerg.services.session_chat_impl import _assert_live_session_send_available
 from zerg.services.session_chat_impl import _build_managed_local_chat_response
 from zerg.services.session_chat_impl import _load_session_for_continuation
+from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_input_attachments import ALLOWED_MIME_TYPES
 from zerg.services.session_input_attachments import MAX_ATTACHMENT_BYTES
@@ -257,7 +259,7 @@ async def create_session_input_with_attachments(
         upload_payloads.append((upload, data))
 
     try:
-        source_session = _load_session_for_continuation(db, session_id)
+        source_session = _load_session_for_continuation(db, session_id, owner_id=int(current_user.id))
     except HTTPException:
         _record_outcome("rejected_session")
         raise
@@ -498,17 +500,12 @@ async def fetch_attachment_blob(
         session_input_attachment_blob_fetches_total.labels(outcome="bad_uuid").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found") from exc
 
-    if device_token is None:
-        # auth_disabled mode: still require a valid path; the framework already
-        # enforces single-tenant.
-        pass
+    # The blob is transcript-adjacent user content, so it is read as the caller,
+    # never as a derived "probably the only user" identity. This fails closed
+    # when the token names an owner who no longer exists.
+    owner_id = _resolve_agents_owner_id(db, device_token)
 
     if database_module.live_catalog_enabled():
-        from zerg.services.catalog_read_gateway import active_owner_id
-
-        owner_id = getattr(device_token, "owner_id", None) or active_owner_id()
-        if owner_id is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
         try:
             stored = await get_catalog_attachment(
                 owner_id=int(owner_id),
@@ -528,6 +525,19 @@ async def fetch_attachment_blob(
         row = get_attachment(db, attach_uuid)
         if row is not None and int(row.session_input_id) != legacy_input_id:
             row = None
+        if row is not None:
+            # Archive mode carries the owner on the input the attachment hangs
+            # off, so scope the read there rather than trusting the id triple.
+            authored_by_caller = (
+                db.query(SessionInput.id)
+                .filter(
+                    SessionInput.id == legacy_input_id,
+                    SessionInput.owner_id == int(owner_id),
+                )
+                .first()
+            )
+            if authored_by_caller is None:
+                row = None
     if row is None or row.session_id != session_uuid:
         session_input_attachment_blob_fetches_total.labels(outcome="not_found").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")

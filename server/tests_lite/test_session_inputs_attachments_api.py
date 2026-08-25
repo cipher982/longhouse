@@ -98,7 +98,13 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
     calls: dict[str, object] = {}
 
     monkeypatch.setattr(route.database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid: source_session)
+    def load_scoped(db, sid, *, owner_id):
+        # The load is owner-scoped: the route must pass the authenticated
+        # caller, never an ambient "probably the only user" identity.
+        calls["load_owner_id"] = owner_id
+        return source_session
+
+    monkeypatch.setattr(route, "_load_session_for_continuation", load_scoped)
     monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
 
     async def record_receipt(**kwargs):
@@ -155,6 +161,7 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
     )
 
     assert response.input_id is None
+    assert calls["load_owner_id"] == 7
     assert response.live_input_id == receipt_id
     assert calls["store"]["input_receipt_id"] == receipt_id
     assert calls["dispatch"]["db"] is None

@@ -162,14 +162,23 @@ def _seed_live_runtime_state(db, session, *, phase: str = "idle") -> None:
     db.commit()
 
 
-def _seed_live_session(session_local):
+def _seed_live_session(session_local, *, owner_id: int | None = None):
+    """Seed one live session. Pass ``owner_id`` to put it under an existing user.
+
+    Session control is owner-scoped, so a second session seeded under a fresh
+    user is not reachable by the first user's client. Tests about a *different
+    session* (not a different owner) must share the owner.
+    """
     session_id = uuid4()
     provider_session_id = f"session-input-{uuid4().hex[:8]}"
     with session_local() as db:
-        user = User(email=f"input-{uuid4().hex[:6]}@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+        if owner_id is None:
+            user = User(email=f"input-{uuid4().hex[:6]}@test.local", role=UserRole.USER.value)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        else:
+            user = db.query(User).filter(User.id == int(owner_id)).one()
 
         store = AgentsStore(db)
         started_at = datetime.now(timezone.utc)
@@ -2808,7 +2817,7 @@ def test_queue_cap_rejects_over_limit(monkeypatch, tmp_path):
 def test_cancel_rejects_wrong_session(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id_a, user_id = _seed_live_session(session_local)
-    session_id_b, _ = _seed_live_session(session_local)
+    session_id_b, _ = _seed_live_session(session_local, owner_id=user_id)
     _stub_dispatch(monkeypatch)
 
     client, api_app_ref = _make_client(

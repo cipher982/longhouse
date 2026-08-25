@@ -1338,13 +1338,15 @@ async def send_to_live_session_agents(
     resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
 
     request_id = str(uuid.uuid4())[:8]
-    source_session = _load_session_for_continuation(db, session_id)
+    # Authorize and resolve the caller before any session read, so the load can
+    # be owner-scoped and an unauthorized caller never learns a session exists.
     _authorize_live_send(
         request=request,
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=owner_id)
     _assert_live_session_send_available(db, source_session, owner_id=owner_id)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
 
@@ -1383,13 +1385,13 @@ async def draft_reply_for_live_session_agents(
     resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
 
     request_id = str(uuid.uuid4())[:8]
-    source_session = _load_session_for_continuation(db, session_id)
     _authorize_live_send(
         request=request,
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=owner_id)
     _assert_live_session_send_available(db, source_session, owner_id=owner_id)
 
     try:
@@ -1462,13 +1464,13 @@ async def interrupt_live_session_agents(
     resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
 
     request_id = str(uuid.uuid4())[:8]
-    source_session = _load_session_for_continuation(db, session_id)
     _authorize_live_send(
         request=request,
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=owner_id)
     _assert_live_session_action_available(db, source_session, action="interrupt", owner_id=owner_id)
     return await _interrupt_live_session_response(
         db=db,
@@ -1536,13 +1538,13 @@ async def terminate_live_session_agents(
     resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
 
     request_id = str(uuid.uuid4())[:8]
-    source_session = _load_session_for_continuation(db, session_id)
     _authorize_live_send(
         request=request,
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=owner_id)
     _assert_live_session_action_available(db, source_session, action="terminate", owner_id=owner_id)
     return await _terminate_live_session_response(
         db=db,
@@ -1601,8 +1603,8 @@ async def list_pause_requests_agents(
         device_token=resolved_device_token,
         auth_disabled=settings.auth_disabled,
     )
-    _resolve_agents_owner_id(db, resolved_device_token)
-    source_session = _load_session_for_continuation(db, session_id)
+    owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=owner_id)
     return await _list_pause_requests_response(
         source_session=source_session,
         status_filter=status_filter,
@@ -1628,7 +1630,7 @@ async def respond_to_pause_request_agents(
         auth_disabled=settings.auth_disabled,
     )
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
-    source_session = _load_session_for_continuation(db, session_id)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=owner_id)
     return await _respond_to_pause_request(
         source_session=source_session,
         owner_id=owner_id,

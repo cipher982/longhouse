@@ -190,11 +190,44 @@ class SessionDraftReplyResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _get_settings():
+    # Imported lazily: settings must never be read at module import time.
+    from zerg.config import get_settings
+
+    return get_settings()
+
+
+def _stale_machine_token() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or revoked device token",
+    )
+
+
 def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> int:
+    """Resolve the caller's owner id, or fail closed.
+
+    A machine token (device or managed-session) carries its owner, and that is
+    the only identity a machine request has. When the token names an owner who
+    no longer exists the request has no identity at all: reject it. The old
+    behaviour — falling back to the lowest-numbered user — silently promoted a
+    stale token to whoever happened to be first in the table, so any read this
+    value scopes would have been scoped on a guessed identity.
+
+    The single-tenant derivation at the bottom is only reachable with auth
+    disabled, where requests carry no identity by design and the host belongs
+    to one local user. With auth on, no token means no identity.
+    """
     owner_id = getattr(device_token, "owner_id", None)
+    auth_disabled = _get_settings().auth_disabled
     if database_module.live_catalog_enabled() and db is None:
         if owner_id is not None:
+            # Owner-scoped catalog reads verify this id against an active user
+            # and return "not found" when it no longer resolves, so a stale id
+            # cannot widen a read here.
             return int(owner_id)
+        if not auth_disabled:
+            raise _stale_machine_token()
         from zerg.services.catalog_read_gateway import active_owner_id
 
         resolved = active_owner_id()
@@ -205,8 +238,11 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
         owner = db.query(User.id).filter(User.id == int(owner_id)).first()
         if owner is not None:
             return int(owner[0])
-        logger.warning("Device token owner_id=%s is stale; falling back to single-tenant owner", owner_id)
+        logger.warning("Machine token owner_id=%s no longer resolves to a user; rejecting the request", owner_id)
+        raise _stale_machine_token()
 
+    if not auth_disabled:
+        raise _stale_machine_token()
     owner = db.query(User.id).order_by(User.id.asc()).first()
     if owner is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="No Longhouse user is configured")
@@ -556,7 +592,84 @@ def _session_chat_streaming_response(stream: AsyncIterator[str]) -> StreamingRes
     )
 
 
-def _load_session_for_continuation(db: Session, session_id: str, *, owner_id: int | None = None):
+def _live_store_session_belongs_to_owner(db: Session, *, session_id: str, owner_id: int) -> bool:
+    """Owner binding for a session read straight off the live store.
+
+    Reuses catalogd's own resolution rather than restating it, so the direct-DB
+    path and the catalogd RPC path agree on what "owned" means, including that
+    an unbound session belongs to nobody.
+    """
+    from zerg.catalogd.store import CatalogStore
+
+    try:
+        return bool(
+            CatalogStore._session_explicitly_belongs_to_owner(
+                db.connection(),
+                session_id=session_id,
+                owner_id=int(owner_id),
+            )
+        )
+    except Exception:
+        logger.warning("Live-store owner check failed for session %s; refusing control", session_id, exc_info=True)
+        return False
+
+
+def _archive_session_belongs_to_owner(db: Session, *, session_id: UUID, owner_id: int) -> bool:
+    """Owner binding for an archive-only (no live store) deployment.
+
+    The archive schema has no owner column on ``sessions``, so ownership is
+    carried by two independent durable signals: an input this user authored on
+    the session, or a device token of this user's for the device the session
+    was ingested under. A session carrying neither is unbound and belongs to
+    nobody.
+
+    The exception above them is a proof rather than a fallback: when the host
+    has exactly one user, every session on it is that user's and there is no
+    boundary to cross. That is the shape of every self-hosted archive-only
+    deployment. With two or more users the signals decide, and unbound loses.
+    """
+    from zerg.models.agents import AgentSession
+    from zerg.models.agents import SessionInput
+
+    user_ids = [int(row[0]) for row in db.query(User.id).order_by(User.id.asc()).limit(2).all()]
+    if len(user_ids) == 1:
+        return user_ids[0] == int(owner_id)
+
+    authored = (
+        db.query(SessionInput.id)
+        .filter(
+            SessionInput.session_id == session_id,
+            SessionInput.owner_id == int(owner_id),
+        )
+        .first()
+    )
+    if authored is not None:
+        return True
+    device_id = (db.query(AgentSession.device_id).filter(AgentSession.id == session_id).scalar() or "").strip()
+    if not device_id:
+        return False
+    owns_device = (
+        db.query(DeviceToken.id)
+        .filter(
+            DeviceToken.device_id == device_id,
+            DeviceToken.owner_id == int(owner_id),
+        )
+        .first()
+    )
+    return owns_device is not None
+
+
+def _load_session_for_continuation(db: Session, session_id: str, *, owner_id: int):
+    """Load one session's control facts, scoped to the caller.
+
+    ``owner_id`` is mandatory. Every branch below has to prove the session is
+    bound to that owner before returning it, and a session the caller does not
+    own is reported exactly like one that does not exist (404) so these routes
+    cannot be used to enumerate session ids on a shared Runtime Host.
+
+    Callers must authorize before calling this — the 404 here is an ownership
+    boundary, not an authentication one.
+    """
     try:
         source_session_uuid = UUID(session_id)
     except ValueError as exc:
@@ -565,22 +678,62 @@ def _load_session_for_continuation(db: Session, session_id: str, *, owner_id: in
             detail=f"Invalid session id: {session_id}",
         ) from exc
 
+    if owner_id is None:
+        # No resolved caller identity means no scoped read is possible.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Session control requires a resolved owner",
+        )
+    owner_id = int(owner_id)
+
     if database_module.live_catalog_enabled() and db is None:
         from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
+        # catalogd fails closed unless a durable row binds this session to owner_id.
         source_session = load_live_control_session_snapshot(source_session_uuid, owner_id=owner_id)
     elif database_module.live_catalog_enabled():
         from zerg.services.live_control_catalog import load_live_control_session
 
         source_session = load_live_control_session(db, source_session_uuid)
+        if source_session is not None and not _live_store_session_belongs_to_owner(
+            db, session_id=str(source_session_uuid), owner_id=owner_id
+        ):
+            source_session = None
     else:
         source_session = AgentsStore(db).get_session(source_session_uuid)
+        if source_session is not None and not _archive_session_belongs_to_owner(db, session_id=source_session_uuid, owner_id=owner_id):
+            source_session = None
     if not source_session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found",
         )
     return source_session
+
+
+def _assert_catalog_facts_owner(source_session, *, owner_id: int | None) -> None:
+    """Reject a facts snapshot that is bound to somebody other than the caller.
+
+    The primary ownership gate is ``_load_session_for_continuation``, which
+    resolves the binding the same way catalogd does. This is the second check
+    on the pair actually being acted on, so a snapshot obtained elsewhere can
+    never be carried into a capability decision for the wrong owner.
+
+    ``facts["owner_id"]`` is assembled from the live/storage session rows and
+    the Console create outbox; a freshly launched Helm session is bound only by
+    its launch attempt and so legitimately reports ``None`` here for a moment.
+    That case is covered by the load-time check and is not treated as a
+    mismatch — an owner that is present and different always is.
+    """
+    facts = getattr(source_session, "catalog_facts", None) or {}
+    bound_owner = facts.get("owner_id")
+    if bound_owner is None:
+        return
+    if owner_id is None or int(bound_owner) != int(owner_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {getattr(source_session, 'id', 'unknown')} not found",
+        )
 
 
 def _assert_live_session_send_available(
@@ -603,6 +756,7 @@ def _assert_live_session_action_available(
         from zerg.services.live_control_catalog import live_control_session_capability_available
         from zerg.services.live_control_catalog import live_session_input_block_reason
 
+        _assert_catalog_facts_owner(source_session, owner_id=owner_id)
         block_reason = live_session_input_block_reason(db, source_session)
         if block_reason is not None:
             raise HTTPException(
