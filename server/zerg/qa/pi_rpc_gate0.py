@@ -26,7 +26,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 import traceback
@@ -94,7 +93,6 @@ def _artifact_secret_values() -> tuple[bytes, ...]:
 def _scrub_tree(root: Path) -> None:
     if not root.is_dir():
         return
-    secrets = _ARTIFACT_SECRET_RE.pattern.encode("utf-8") if not _ARTIFACT_SECRET_RE.pattern.startswith(b"") else b""
     static = {value for value in _artifact_secret_values() if value}
     for path in root.rglob("*"):
         if not path.is_file():
@@ -473,10 +471,7 @@ def run_gate0(args: argparse.Namespace) -> dict[str, Any]:
     if stderr_tail:
         report["stderr_tail"] = stderr_tail
     _ZSTD_BLOCKER = "createZstdDecompress"
-    if _ZSTD_BLOCKER in stderr_tail or any(
-        _ZSTD_BLOCKER in str(outcome.get("detail") or "")
-        for outcome in report["routines"].values()
-    ):
+    if _ZSTD_BLOCKER in stderr_tail or any(_ZSTD_BLOCKER in str(outcome.get("detail") or "") for outcome in report["routines"].values()):
         report["blocker"] = (
             "pi --mode rpc crashed mid-turn: bundled undici 8.9.0 advertises "
             "Accept-Encoding zstd and calls zlib.createZstdDecompress, which "

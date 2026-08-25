@@ -276,8 +276,16 @@ def rank_human_workspace_candidates(
         )
         for path, group in groups.items()
     ]
+    # Path is the last key, and the only one that cannot tie: two workspaces
+    # last used in the same second score identically, and without it the order
+    # came from dict insertion, i.e. from session-id ordering in the candidate
+    # query. The picker then reshuffled between reads for no reason a user could
+    # see. Score and recency stay descending; the tiebreak is ascending path.
     entries.sort(
-        key=lambda entry: (entry.score, entry.last_used_at or datetime.min.replace(tzinfo=timezone.utc)),
-        reverse=True,
+        key=lambda entry: (
+            -entry.score,
+            -(entry.last_used_at or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+            entry.path,
+        )
     )
     return entries[:limit]

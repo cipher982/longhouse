@@ -1,6 +1,11 @@
 # Backend-specific ruff configuration
 line-length = 140
 
+# Generated code is regenerated, never hand-edited. The canonical pre-commit
+# hook excludes it (see .pre-commit-config.yaml); without the same exclusion a
+# bare `ruff check zerg` failed on output nobody is allowed to fix.
+exclude = ["zerg/generated"]
+
 [lint]
 # Ignore module level imports not at top of file for test files
 # This is needed because some test files have docstrings before imports

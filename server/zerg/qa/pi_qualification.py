@@ -54,10 +54,10 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     # test_router_imports_without_optional_server_dependencies.
     from zerg.qa.provider_adapters.pi import PI_LIVE_ENV  # noqa: PLC0415
     from zerg.qa.provider_adapters.pi import PiHarnessAdapter  # noqa: PLC0415
-    from zerg.qa.universal_agent_harness import AdapterConfig  # noqa: PLC0415
-    from zerg.qa.universal_agent_harness import EvidencePackage  # noqa: PLC0415
     from zerg.qa.universal_agent_harness import STATUS_BLOCKED  # noqa: PLC0415
     from zerg.qa.universal_agent_harness import STATUS_PASS  # noqa: PLC0415
+    from zerg.qa.universal_agent_harness import AdapterConfig  # noqa: PLC0415
+    from zerg.qa.universal_agent_harness import EvidencePackage  # noqa: PLC0415
 
     request = identity.load_request(
         request_path,
@@ -81,11 +81,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     send = adapter.send_receive(package, "Reply with the single word OK.")
     live_enabled = _live_enabled()
     if live_enabled:
-        status = (
-            STATUS_PASS
-            if launch.get("status") == STATUS_PASS and send.get("status") == STATUS_PASS
-            else STATUS_BLOCKED
-        )
+        status = STATUS_PASS if launch.get("status") == STATUS_PASS and send.get("status") == STATUS_PASS else STATUS_BLOCKED
     else:
         status = STATUS_BLOCKED
     observation: dict[str, Any] = {
