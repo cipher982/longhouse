@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 
+import pytest
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -100,11 +101,90 @@ def test_the_factory_product_argv_parses_without_a_provider():
     # whether Longhouse failed or the harness did.
     args = producer._parser().parse_args(["--evidence-root", "/tmp/evidence"])
     assert args.provider is None
-    assert producer.default_vehicle_provider() in console_providers()
 
 
-def test_the_vehicle_is_chosen_from_the_schema_declared_adapters():
-    assert producer.default_vehicle_provider() == console_providers()[0]
+class _FakeClient:
+    """Stands in for the core Client, returning one machine directory payload."""
+
+    def __init__(self, machines):
+        self._machines = machines
+        self.calls = []
+
+    def request(self, method, path, *a, **k):
+        self.calls.append((method, path))
+        return {"machines": self._machines}
+
+
+def test_the_vehicle_is_the_adapter_the_machine_actually_advertises():
+    # The schema declares several console adapters; this machine announces only
+    # the second one. Picking by declaration order chose an adapter the agent
+    # could not start and died on a 409.
+    providers = console_providers()
+    assert len(providers) >= 2, providers
+    wanted = providers[1]
+    client = _FakeClient([{"device_id": "factory-machine", "online": True, "supports": [f"{wanted}.turn_start"]}])
+    assert producer.default_vehicle_provider(client, "factory-machine") == wanted
+    assert client.calls == [("GET", "/api/agents/machines")]
+
+
+def test_the_adapter_is_waited_for_rather_than_read_once(monkeypatch):
+    """The Machine Agent announces turn_start after its channel connects.
+
+    provider_console_lifecycle retries POST /api/agents/sessions for 45s on
+    adapter_unavailable for exactly this reason. Reading the directory once
+    right after launch saw an agent advertising nothing and gave up.
+    """
+    wanted = console_providers()[0]
+    frames = [
+        {"device_id": "factory-machine", "online": False, "supports": []},
+        {"device_id": "factory-machine", "online": True, "supports": []},
+        {"device_id": "factory-machine", "online": True, "supports": [f"{wanted}.turn_start"]},
+    ]
+
+    class _Waking:
+        def __init__(self):
+            self.reads = 0
+
+        def request(self, method, path, *a, **k):
+            frame = frames[min(self.reads, len(frames) - 1)]
+            self.reads += 1
+            return {"machines": [frame]}
+
+    monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
+    client = _Waking()
+    assert producer.default_vehicle_provider(client, "factory-machine") == wanted
+    assert client.reads == 3
+
+
+def test_a_machine_advertising_no_console_adapter_says_what_it_did_advertise(monkeypatch):
+    monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
+    client = _FakeClient([{"device_id": "factory-machine", "online": True, "supports": ["codex.archive_backlog"]}])
+    with pytest.raises(RuntimeError) as excinfo:
+        producer.default_vehicle_provider(client, "factory-machine", timeout=0)
+    assert "codex.archive_backlog" in str(excinfo.value)
+
+
+def test_an_offline_machine_is_named_as_such(monkeypatch):
+    monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
+    client = _FakeClient([{"device_id": "factory-machine", "online": False, "supports": []}])
+    with pytest.raises(RuntimeError) as excinfo:
+        producer.default_vehicle_provider(client, "factory-machine", timeout=0)
+    assert "control channel" in str(excinfo.value)
+
+
+def test_an_unenrolled_device_lists_the_machines_that_are_present(monkeypatch):
+    monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
+    client = _FakeClient([{"device_id": "some-other-box", "online": True, "supports": []}])
+    with pytest.raises(RuntimeError) as excinfo:
+        producer.default_vehicle_provider(client, "factory-machine", timeout=0)
+    assert "some-other-box" in str(excinfo.value)
+
+
+def test_advertised_console_providers_ignores_non_turn_start_capabilities():
+    providers = console_providers()
+    supports = [f"{providers[0]}.archive_backlog", f"{providers[0]}.turn_start"]
+    assert producer.advertised_console_providers(supports) == [providers[0]]
+    assert producer.advertised_console_providers(None) == []
 
 
 def test_the_result_identity_carries_no_provider_but_still_names_the_vehicle(monkeypatch, tmp_path):

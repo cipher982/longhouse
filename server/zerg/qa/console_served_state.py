@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import time
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -121,20 +122,59 @@ def assertions_from_report(report: dict) -> dict[str, bool]:
     return {ASSERTION_LIVE: live, ASSERTION_SETTLED: settled}
 
 
-def default_vehicle_provider() -> str:
+def advertised_console_providers(supports: object) -> list[str]:
+    """Console providers this machine announced it can actually start a turn on.
+
+    `supports` is the Machine Agent's last hello frame, and `<provider>.turn_start`
+    is the exact capability POST /api/agents/sessions checks before it will create
+    a Console thread.
+    """
+    announced = {str(item) for item in supports} if isinstance(supports, (list, tuple, set)) else set()
+    return [provider for provider in PROVIDERS if f"{provider}.turn_start" in announced]
+
+
+def default_vehicle_provider(client: object, device_id: str, *, timeout: float = 45.0) -> str:
     """Pick the provider that drives the turn when the caller names none.
 
     The factory dispatches a longhouse_product cell as `<oracle> --evidence-root
     <dir>` and has no provider to pass: the contract pins `provider: null`
     because the subject is Longhouse. A vehicle is still needed to produce a
     turn, so choose one here rather than requiring an argument that the only
-    real caller cannot supply. Derived from the console adapters in
-    `schemas/managed_providers.yml` in declared order, so a provider enters or
-    leaves this check by existing there.
+    real caller cannot supply.
+
+    Chosen from what the machine offers, and waited for. The Machine Agent
+    announces `<provider>.turn_start` asynchronously after its control channel
+    connects, so a single directory read right after launch sees an agent that
+    advertises nothing yet -- which is why provider_console_lifecycle retries
+    POST /api/agents/sessions for 45s on adapter_unavailable rather than
+    trusting the first answer. Asking once and taking the first schema-declared
+    adapter instead produced a bare 409 naming codex, on a machine that would
+    have advertised it a moment later.
     """
     if not PROVIDERS:
         raise RuntimeError("no managed provider declares a console adapter")
-    return PROVIDERS[0]
+    deadline = time.monotonic() + timeout
+    entry: dict | None = None
+    while True:
+        machines = client.request("GET", "/api/agents/machines").get("machines") or []
+        entry = next((m for m in machines if str(m.get("device_id")) == device_id), None)
+        if entry is not None and entry.get("online"):
+            available = advertised_console_providers(entry.get("supports"))
+            if available:
+                return available[0]
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
+
+    if entry is None:
+        known = ", ".join(sorted(str(m.get("device_id")) for m in machines)) or "none"
+        raise RuntimeError(f"device {device_id!r} is not enrolled after {timeout:g}s; machines present: {known}")
+    if not entry.get("online"):
+        raise RuntimeError(f"device {device_id!r} control channel never connected within {timeout:g}s")
+    announced = ", ".join(sorted(str(item) for item in (entry.get("supports") or []))) or "nothing"
+    raise RuntimeError(
+        f"device {device_id!r} advertised no console adapter among {list(PROVIDERS)} within {timeout:g}s; it announced: {announced}"
+    )
 
 
 def run_console_served_state(root: Path, *, provider: str, device_id: str, cwd: str) -> dict[str, object]:
@@ -193,15 +233,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.evidence_root is None:
         print(json.dumps({"status": "fail", "failure_code": "evidence_root_missing"}))
         return 2
-    provider = args.provider or default_vehicle_provider()
-
     cleanup = {
         "schema_version": 1,
         "artifact_kind": "longhouse_console_served_state_cleanup_receipt",
         "status": "pass",
         "orphan_count": 0,
     }
+    # Chosen inside the try so a machine that offers no usable console adapter
+    # lands in the failure artifact below, saying which one it wanted and what
+    # the machine actually announced, rather than raising past the evidence.
+    provider = args.provider
     try:
+        if provider is None:
+            from zerg.qa.console_served_state_core import Client
+            from zerg.qa.console_served_state_core import _defaults
+
+            api_url, token = _defaults()
+            provider = default_vehicle_provider(Client(api_url, token), args.device_id)
         result = run_console_served_state(args.evidence_root, provider=provider, device_id=args.device_id, cwd=args.cwd)
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         cleanup["status"] = "fail"
