@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Prove repair cannot force critical archive-backed reads to return 503."""
 
+# Run by hand: needs a live Runtime Host under archive pressure; there is no
+# hermetic fixture for the 503 it is trying to disprove.
+
+
 from __future__ import annotations
 
 import argparse

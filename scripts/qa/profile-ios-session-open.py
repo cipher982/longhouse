@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Run by hand: a profiler. It needs a device and produces timings, not a verdict.
 from __future__ import annotations
 
 import argparse

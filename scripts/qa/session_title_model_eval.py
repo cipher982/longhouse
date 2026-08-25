@@ -5,6 +5,10 @@ Run from repo root with the server environment:
     cd server && uv run python ../scripts/qa/session_title_model_eval.py --rounds 2
 """
 
+# Run by hand: calls paid OpenRouter models to compare title quality. Running it
+# on every push would spend money to produce a judgement call.
+
+
 from __future__ import annotations
 
 import argparse

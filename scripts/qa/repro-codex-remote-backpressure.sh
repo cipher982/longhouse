@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Run by hand: drives the stock Codex binary over a real websocket with a real
+# TUI attached. It is a reproduction harness for a person chasing backpressure.
 set -euo pipefail
 
 usage() {

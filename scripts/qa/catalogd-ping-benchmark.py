@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Measure persistent catalogd Unix-RPC ping latency against the phase gate."""
 
+# Run by hand: a latency benchmark. Wiring it to CI would gate merges on the
+# speed of whatever machine happened to run them.
+
+
 from __future__ import annotations
 
 import argparse

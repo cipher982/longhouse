@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Run by hand: drives repro-codex-remote-backpressure.sh, so it inherits the same
+# need for a real provider binary and a real terminal.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

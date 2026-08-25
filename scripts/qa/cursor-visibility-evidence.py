@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Replay Cursor visibility evidence into an observation report."""
 
+# Run by hand: replays captured evidence into a report for a person to read.
+# It has no pass/fail to gate on.
+
+
 from __future__ import annotations
 
 import sys

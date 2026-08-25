@@ -10,6 +10,10 @@ Exit codes:
     1: Critical validation failure - deployment should be blocked
 """
 
+# Run by hand before a deploy: it validates the environment it is run in, so it
+# reports the runner's configuration rather than the deployment's when run in CI.
+
+
 import os
 import sys
 from pathlib import Path

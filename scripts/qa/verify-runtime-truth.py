@@ -14,6 +14,10 @@ reports. A disagreement is the interesting signal.
 Output is intentionally dense + plain-text so agents can diff two runs.
 """
 
+# Run by hand: compares three live runtime-truth systems on a real machine,
+# read-only. There is nothing to assert without one.
+
+
 from __future__ import annotations
 
 import argparse
