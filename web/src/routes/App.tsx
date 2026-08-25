@@ -16,6 +16,7 @@ import DocsConfigurationPage from "../pages/docs/ConfigurationPage";
 import ChangelogPage from "../pages/ChangelogPage";
 import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
+import TermsPage from "../pages/TermsPage";
 import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
 import DevicesPage from "../pages/DevicesPage";
@@ -148,6 +149,14 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
       element: (
         <ErrorBoundary>
           <SecurityPage />
+        </ErrorBoundary>
+      ),
+    },
+    {
+      path: "/terms",
+      element: (
+        <ErrorBoundary>
+          <TermsPage />
         </ErrorBoundary>
       ),
     },

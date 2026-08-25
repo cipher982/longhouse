@@ -1,0 +1,6 @@
+Contact: mailto:support@longhouse.ai
+Contact: https://github.com/cipher982/longhouse/security/advisories/new
+Expires: 2027-08-24T00:00:00.000Z
+Policy: https://github.com/cipher982/longhouse/blob/main/SECURITY.md
+Canonical: https://longhouse.ai/.well-known/security.txt
+Preferred-Languages: en

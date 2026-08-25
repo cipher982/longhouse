@@ -63,6 +63,24 @@ export default function DevicesPage() {
   // Ready signal for tests
   useReadinessFlag({ ready: !isLoading });
 
+  // Hand the token to the waiting CLI as a top-level navigation carrying query
+  // params. This transport is not a style choice: the callback listener in
+  // `browser_device_token` (engine/src/longhouse.rs) reads exactly one request
+  // line and parses the token out of its query string, so a POST body never
+  // reaches it. A top-level navigation is also the only shape that reliably
+  // crosses from https://longhouse.ai to http://127.0.0.1 — subresource
+  // requests to a loopback port are subject to private-network preflights the
+  // raw listener cannot answer. `replace` keeps the token-bearing URL out of
+  // the back stack; removing it from browser history entirely needs the engine
+  // listener to accept a POST body first.
+  const deliverToken = (token: string) => {
+    if (!connectRequest) return;
+    const callback = new URL(connectRequest.callback.toString());
+    callback.searchParams.set("state", connectRequest.state);
+    callback.searchParams.set("token", token);
+    window.location.replace(callback.toString());
+  };
+
   const handleCreate = (e: FormEvent) => {
     e.preventDefault();
     if (!deviceName.trim()) return;
@@ -72,9 +90,7 @@ export default function DevicesPage() {
       {
         onSuccess: (created) => {
           if (connectRequest) {
-            connectRequest.callback.searchParams.set("state", connectRequest.state);
-            connectRequest.callback.searchParams.set("token", created.token);
-            window.location.assign(connectRequest.callback.toString());
+            deliverToken(created.token);
             return;
           }
           setNewToken(created);
@@ -91,9 +107,7 @@ export default function DevicesPage() {
       { device_id: connectRequest.device },
       {
         onSuccess: (created) => {
-          connectRequest.callback.searchParams.set("state", connectRequest.state);
-          connectRequest.callback.searchParams.set("token", created.token);
-          window.location.assign(connectRequest.callback.toString());
+          deliverToken(created.token);
         },
       }
     );

@@ -69,6 +69,7 @@ export function FooterCTA() {
             <Link to="/changelog">Changelog</Link>
             <Link to="/security">Security</Link>
             <Link to="/privacy">Privacy</Link>
+            <Link to="/terms">Terms</Link>
             <a href="mailto:support@longhouse.ai">Contact</a>
           </nav>
         </div>

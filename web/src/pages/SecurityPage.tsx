@@ -12,7 +12,7 @@ export default function SecurityPage() {
   usePageMeta({
     title: "Security - Longhouse",
     description:
-      "How Longhouse protects your data. HTTPS-only connections, secure authentication, encrypted credentials, and responsible disclosure policy.",
+      "How Longhouse protects your data: TLS on the hosted service, secure authentication, encrypted credentials, revocable device tokens, and responsible disclosure.",
   });
 
   return (
@@ -43,8 +43,8 @@ export default function SecurityPage() {
             <div className="security-highlight-icon">
               <ShieldIcon width={24} height={24} />
             </div>
-            <h3>HTTPS Only</h3>
-            <p>All connections use HTTPS</p>
+            <h3>TLS on Hosted</h3>
+            <p>longhouse.ai is served over HTTPS</p>
           </div>
           <div className="security-highlight">
             <div className="security-highlight-icon">
@@ -64,12 +64,24 @@ export default function SecurityPage() {
             <div className="security-highlight-icon">
               <TrashIcon width={24} height={24} />
             </div>
-            <h3>Data Deletion</h3>
-            <p>Delete your data anytime</p>
+            <h3>Revocable Access</h3>
+            <p>Revoke a device token anytime</p>
           </div>
         </div>
 
         <div className="legal-content">
+          <h2>Transport</h2>
+          <p>
+            The hosted service is served over HTTPS. Everything your machines send it — device
+            tokens, transcripts, control commands — travels over that TLS connection.
+          </p>
+          <p>
+            Self-hosting is your call, and Longhouse will not add TLS for you. If you point a machine
+            at a plain http:// address that isn't loopback, its device token and its transcripts
+            cross your network in the clear. Put the instance behind TLS, or keep it on a private
+            overlay network you trust.
+          </p>
+
           <h2>Authentication</h2>
           <p>
             Self-hosted instances use password authentication by default. The hosted service
@@ -82,12 +94,19 @@ export default function SecurityPage() {
             encrypted and only used to connect to those services on your behalf.
           </p>
 
+          <h2>What Sessions Contain</h2>
+          <p>
+            Longhouse stores agent transcripts as they were produced. It does not scrub secrets out
+            of them, so anything your agent printed — keys, tokens, passwords — is in the archive.
+            Anyone who can read your Longhouse account can read those values.
+          </p>
+
           <h2>Your Controls</h2>
           <p>You have control over your data:</p>
           <ul>
             <li><strong>View</strong> - See your sessions and timeline data</li>
-            <li><strong>Delete</strong> - Remove your data from settings</li>
-            <li><strong>Revoke</strong> - Disconnect integrations and delete credentials</li>
+            <li><strong>Revoke</strong> - Revoke a device token, or disconnect an integration and delete its credentials</li>
+            <li><strong>Delete</strong> - Deletion is partly manual today; the exact path is in our <Link to="/privacy">Privacy Policy</Link></li>
           </ul>
 
           <h2>Responsible Disclosure</h2>
@@ -107,7 +126,8 @@ export default function SecurityPage() {
               email <a href="mailto:support@longhouse.ai">support@longhouse.ai</a>
             </p>
             <p>
-              For privacy questions, see our <Link to="/privacy">Privacy Policy</Link>.
+              For privacy questions, see our <Link to="/privacy">Privacy Policy</Link>. The hosted
+              service is covered by our <Link to="/terms">Terms of Service</Link>.
             </p>
           </div>
         </div>

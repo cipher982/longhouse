@@ -215,10 +215,13 @@ function loadConfig(): AppConfig {
 
     // Analytics
     umamiWebsiteId: runtimeUmamiWebsiteId ?? import.meta.env.VITE_UMAMI_WEBSITE_ID ?? "",
+    // No default host. A website id on its own must never point a self-hosted
+    // instance's analytics at someone else's server — the URL is explicit or
+    // analytics stays off.
     umamiScriptSrc:
       runtimeUmamiScriptSrc !== undefined
-        ? runtimeUmamiScriptSrc || "https://analytics.drose.io/script.js"
-        : import.meta.env.VITE_UMAMI_SCRIPT_SRC || "https://analytics.drose.io/script.js",
+        ? runtimeUmamiScriptSrc
+        : import.meta.env.VITE_UMAMI_SCRIPT_SRC || "",
     umamiDomains: runtimeUmamiDomains ?? import.meta.env.VITE_UMAMI_DOMAINS ?? "",
     umamiTag: runtimeUmamiTag ?? import.meta.env.VITE_UMAMI_TAG ?? "prod",
 

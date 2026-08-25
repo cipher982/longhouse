@@ -20,7 +20,9 @@ const umamiScriptSrc = config.umamiScriptSrc;
 const umamiDomains = config.umamiDomains;
 const umamiTag = config.umamiTag;
 
-if (!isLocalhost && umamiWebsiteId) {
+// Both halves are required: a website id with no script URL would inject
+// <script src="">, which re-requests the page itself instead of a tracker.
+if (!isLocalhost && umamiWebsiteId && umamiScriptSrc) {
   const script = document.createElement("script");
   script.defer = true;
   script.src = umamiScriptSrc;

@@ -74,8 +74,23 @@ describe("config analytics runtime overrides", () => {
     const { config } = await loadConfigModule();
 
     expect(config.umamiWebsiteId).toBe("");
-    expect(config.umamiScriptSrc).toBe("https://analytics.drose.io/script.js");
+    expect(config.umamiScriptSrc).toBe("");
     expect(config.umamiDomains).toBe("");
     expect(config.umamiTag).toBe("");
+  });
+
+  it("never invents an analytics host when none is configured", async () => {
+    setRequiredRuntimeConfig();
+    window.__UMAMI_WEBSITE_ID__ = "runtime-site";
+    // Stubbed explicitly: the repo's root .env carries a real VITE_UMAMI_SCRIPT_SRC,
+    // so an ambient-absence assertion here would pass in CI and fail on a dev box.
+    vi.stubEnv("VITE_UMAMI_SCRIPT_SRC", "");
+
+    const { config } = await loadConfigModule();
+
+    // A website id alone must not aim a self-hosted instance at someone else's
+    // analytics server. Without an explicit script URL, analytics stays off.
+    expect(config.umamiWebsiteId).toBe("runtime-site");
+    expect(config.umamiScriptSrc).toBe("");
   });
 });
