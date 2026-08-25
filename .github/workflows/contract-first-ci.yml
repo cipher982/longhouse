@@ -48,10 +48,10 @@ jobs:
       models:         ${{ steps.filter.outputs.models }}
       scripts:        ${{ steps.filter.outputs.scripts }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-      - uses: dorny/paths-filter@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: .github/path-filters.yml
@@ -70,12 +70,12 @@ jobs:
     timeout-minutes: 35
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Restore Bun download cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ~/.bun/install/cache
         key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
@@ -83,15 +83,15 @@ jobs:
           longhouse-bun-${{ runner.os }}-
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
       with:
         python-version: '3.12'
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: '1.2.20'
 
@@ -136,7 +136,7 @@ jobs:
           PROVIDER_EXECUTABLE_IDENTITY=sha256:hermetic-fixture
 
     - name: Upload provider capability proof bundle
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: provider-capability-proof-${{ github.run_id }}-${{ github.run_attempt }}
         path: .build/canaries/provider-capability-proof/**
@@ -145,7 +145,7 @@ jobs:
 
     - name: Upload provider release proof artifacts
       if: always()
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: provider-release-proof-validation-${{ github.run_id }}-${{ github.run_attempt }}
         path: .build/canaries/provider-release-proof-universal-smoke/**
@@ -161,20 +161,20 @@ jobs:
     name: "Backend tests"
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
       with:
         python-version: '3.12'
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: '1.2.20'
 
@@ -206,25 +206,25 @@ jobs:
       CARGO_PROFILE: ci
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
       with:
         python-version: '3.12'
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: '1.2.20'
 
     - name: Cache Rust build artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cargo/registry
@@ -260,12 +260,12 @@ jobs:
     name: "Frontend + runner tests"
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Restore Bun download cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ~/.bun/install/cache
         key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
@@ -273,12 +273,12 @@ jobs:
           longhouse-bun-${{ runner.os }}-
 
     - name: Setup Node
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
       with:
         node-version: '20'
 
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: '1.2.20'
 
@@ -302,12 +302,12 @@ jobs:
     name: "iOS tests"
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Restore Swift package cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/Library/Caches/org.swift.swiftpm
@@ -347,7 +347,7 @@ jobs:
 
     - name: Upload iOS test results
       if: failure()
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ios-xcresult
         if-no-files-found: ignore
@@ -361,22 +361,22 @@ jobs:
     name: "CLI wheel packaging"
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Setup Node
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
       with:
         node-version: '20'
 
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: '1.2.20'
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
     - name: Ensure make available
       run: ./scripts/ci/ensure-make.sh
@@ -398,12 +398,12 @@ jobs:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Restore Bun download cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ~/.bun/install/cache
         key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
@@ -411,7 +411,7 @@ jobs:
           longhouse-bun-${{ runner.os }}-
 
     - name: Restore Playwright browser cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
         key: longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
@@ -419,20 +419,20 @@ jobs:
           longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
       with:
         python-version: '3.12'
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
     - name: Setup Node
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
       with:
         node-version: '20'
 
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: '1.2.20'
 
@@ -453,7 +453,7 @@ jobs:
 
     - name: Upload E2E artifacts (on failure)
       if: failure()
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: core-e2e-artifacts
         path: |
@@ -474,12 +474,12 @@ jobs:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Restore Bun download cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ~/.bun/install/cache
         key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
@@ -487,7 +487,7 @@ jobs:
           longhouse-bun-${{ runner.os }}-
 
     - name: Restore Playwright browser cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
         key: longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
@@ -495,20 +495,20 @@ jobs:
           longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
       with:
         python-version: '3.12'
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
     - name: Setup Node
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
       with:
         node-version: '20'
 
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: '1.2.20'
 
@@ -529,7 +529,7 @@ jobs:
 
     - name: Upload E2E artifacts (on failure)
       if: failure()
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: accessibility-e2e-artifacts
         path: |
@@ -550,12 +550,12 @@ jobs:
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
     - name: Smoke test all models
       run: uv run --with openai --with anthropic python scripts/qa/smoke_models.py --ci
@@ -570,12 +570,12 @@ jobs:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       with:
         fetch-depth: 1
 
     - name: Restore Bun download cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ~/.bun/install/cache
         key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
@@ -583,7 +583,7 @@ jobs:
           longhouse-bun-${{ runner.os }}-
 
     - name: Restore Playwright browser cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
         key: longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
@@ -591,15 +591,15 @@ jobs:
           longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
       with:
         python-version: '3.12'
 
     - name: Setup uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v2
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
         bun-version: '1.2.20'
 

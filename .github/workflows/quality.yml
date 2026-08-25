@@ -22,19 +22,19 @@ on:
 jobs:
   build-frontend:
     timeout-minutes: 20
-    runs-on: cube
+    runs-on: ubuntu-latest
     name: "🏗️ Build frontend once"
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "20"
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.2.20"
 
@@ -45,7 +45,7 @@ jobs:
         run: cd web && bun run build
 
       - name: Upload built frontend
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: web-dist-${{ github.run_id }}
           path: web/dist
@@ -58,15 +58,15 @@ jobs:
     needs: build-frontend
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "20"
 
       - name: Download built frontend
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: web-dist-${{ github.run_id }}
           path: web/dist
@@ -80,20 +80,20 @@ jobs:
 
   bundle-size:
     timeout-minutes: 20
-    runs-on: cube
+    runs-on: ubuntu-latest
     name: "📦 Bundle Size"
     needs: build-frontend
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "20"
 
       - name: Download built frontend
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: web-dist-${{ github.run_id }}
           path: web/dist
@@ -103,11 +103,11 @@ jobs:
 
   image-size:
     timeout-minutes: 20
-    runs-on: cube
+    runs-on: ubuntu-latest
     name: "🖼️ Image Size Check"
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Check for oversized images (>2MB)
         run: |
