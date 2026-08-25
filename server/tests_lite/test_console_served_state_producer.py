@@ -104,14 +104,17 @@ def test_the_factory_product_argv_parses_without_a_provider():
 
 
 class _FakeClient:
-    """Stands in for the core Client, returning one machine directory payload."""
+    """Stands in for the core Client: identity route plus machine directory."""
 
-    def __init__(self, machines):
+    def __init__(self, machines, machine_id="provider-factory-resume"):
         self._machines = machines
+        self._machine_id = machine_id
         self.calls = []
 
     def request(self, method, path, *a, **k):
         self.calls.append((method, path))
+        if path.endswith("storage/v2/capabilities"):
+            return {"machine_id": self._machine_id}
         return {"machines": self._machines}
 
 
@@ -171,7 +174,7 @@ def test_an_offline_machine_is_named_as_such(monkeypatch):
         producer.select_vehicle(client, "factory-machine", timeout=0)
     # The whole directory is reported, so "which machine and what was wrong
     # with it" is answerable from the failure artifact alone.
-    assert "factory-machine: offline" in str(excinfo.value)
+    assert "control channel never connected" in str(excinfo.value)
 
 
 def test_an_unenrolled_device_lists_the_machines_that_are_present(monkeypatch):
@@ -182,31 +185,59 @@ def test_an_unenrolled_device_lists_the_machines_that_are_present(monkeypatch):
     assert "some-other-box" in str(excinfo.value)
 
 
-def test_the_machine_is_chosen_when_none_is_named(monkeypatch):
-    """The factory names no device, because the subject is Longhouse.
+def test_the_machine_is_the_one_the_token_authenticates_as(monkeypatch):
+    """Never borrow a machine.
 
-    The old default was the literal "factory-machine", which exists only as a
-    product_console_lifecycle fixture. The live directory had seven real
-    enrollments and none of them was that, so the lookup could never match and
-    the cell failed 45s later against a device that does not exist.
+    Scanning the directory for any online machine advertising a console adapter
+    picked cinder and started a real agent turn on it. Every sibling that runs a
+    live turn uses the device it owns; the agents token authenticates as exactly
+    one machine identity and that is the only correct answer.
     """
     monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
     wanted = console_providers()[0]
     client = _FakeClient(
         [
-            {"device_id": "cube", "online": False, "supports": [f"{wanted}.turn_start"]},
-            {"device_id": "cinder", "online": True, "supports": ["something.else"]},
+            {"device_id": "cinder", "online": True, "supports": [f"{wanted}.turn_start"]},
             {"device_id": "provider-factory-resume", "online": True, "supports": [f"{wanted}.turn_start"]},
-        ]
+        ],
+        machine_id="provider-factory-resume",
     )
     assert producer.select_vehicle(client) == ("provider-factory-resume", wanted)
+
+
+def test_another_machines_adapter_is_never_borrowed(monkeypatch):
+    # cinder can start a turn; this producer's own machine cannot. That is a
+    # failure, not an invitation to run the turn somewhere else.
+    monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
+    wanted = console_providers()[0]
+    client = _FakeClient(
+        [
+            {"device_id": "cinder", "online": True, "supports": [f"{wanted}.turn_start"]},
+            {"device_id": "provider-factory-resume", "online": True, "supports": []},
+        ],
+        machine_id="provider-factory-resume",
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        producer.select_vehicle(client, timeout=0)
+    assert "provider-factory-resume" in str(excinfo.value)
+    assert "cinder" not in str(excinfo.value)
+
+
+def test_a_runtime_host_with_no_machine_identity_is_an_error():
+    class _NoIdentity:
+        def request(self, method, path, *a, **k):
+            return {"machine_id": ""} if path.endswith("capabilities") else {"machines": []}
+
+    with pytest.raises(RuntimeError) as excinfo:
+        producer.select_vehicle(_NoIdentity(), timeout=0)
+    assert "authenticated machine identity" in str(excinfo.value)
 
 
 def test_an_empty_directory_says_so(monkeypatch):
     monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
     with pytest.raises(RuntimeError) as excinfo:
         producer.select_vehicle(_FakeClient([]), timeout=0)
-    assert "no machines enrolled" in str(excinfo.value)
+    assert "is not enrolled" in str(excinfo.value)
 
 
 def test_advertised_console_providers_ignores_non_turn_start_capabilities():

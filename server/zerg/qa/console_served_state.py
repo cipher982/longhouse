@@ -133,58 +133,66 @@ def advertised_console_providers(supports: object) -> list[str]:
     return [provider for provider in PROVIDERS if f"{provider}.turn_start" in announced]
 
 
+def authenticated_machine_id(client: object) -> str:
+    """The machine this producer's Runtime Host token *is*.
+
+    Not a choice. `provider_native_resume` reads the same field to name the
+    device its shipper enrolls, because the agents token authenticates as one
+    machine identity and the Runtime Host will only accept work for that one.
+    """
+    capabilities = client.request("GET", "/api/agents/storage/v2/capabilities")
+    machine_id = str(capabilities.get("machine_id") or "").strip()
+    if not machine_id:
+        raise RuntimeError("Runtime Host storage capabilities did not return the authenticated machine identity")
+    return machine_id
+
+
 def select_vehicle(client: object, device_id: str | None = None, *, timeout: float = 45.0) -> tuple[str, str]:
-    """Choose the machine and provider that will drive the turn.
+    """Resolve the machine and the provider that will drive the turn.
 
     The factory dispatches a longhouse_product cell as `<oracle> --evidence-root
     <dir>`: no provider, because the contract pins `provider: null`, and no
-    device, because the subject is Longhouse rather than any one machine. A real
-    turn still has to run somewhere, so both are chosen here from the machine
-    directory rather than guessed.
+    device, because the subject is Longhouse rather than any one machine.
 
-    Both halves were previously guesses and both were wrong. The provider was
-    the first console adapter declared in `managed_providers.yml`, which is
-    schema order and says nothing about the machine that has to run the turn.
-    The device was the literal string "factory-machine", which exists only
-    inside `product_console_lifecycle`, where the control-channel registry is
-    stubbed and no machine is ever contacted -- the real directory has no such
-    enrollment, so the lookup could never match.
+    The device is the identity this producer's own token authenticates as, which
+    is how every sibling that runs a live turn does it -- provider_console_lifecycle
+    and codex_helm_launch_visibility both take `shipper.receipt["machine_name"]`,
+    the device they enrolled themselves, and never borrow one. Scanning the
+    machine directory for "any online machine advertising a console adapter"
+    reached past this producer entirely and started a real agent turn on cinder,
+    a machine that has nothing to do with the factory.
 
-    Waited for, too: the Machine Agent announces `<provider>.turn_start`
-    asynchronously after its control channel connects, which is why
-    provider_console_lifecycle retries the session create for 45s on
-    adapter_unavailable instead of trusting the first answer.
+    Only the provider is chosen, and only from what that one machine announces.
+    The Machine Agent advertises `<provider>.turn_start` asynchronously after its
+    control channel connects -- which is why provider_console_lifecycle retries
+    the session create for 45s on adapter_unavailable -- so this waits rather
+    than trusting the first read.
     """
     if not PROVIDERS:
         raise RuntimeError("no managed provider declares a console adapter")
+    target = device_id or authenticated_machine_id(client)
     deadline = time.monotonic() + timeout
-    machines: list = []
+    entry: dict | None = None
     while True:
         machines = client.request("GET", "/api/agents/machines").get("machines") or []
-        for entry in machines:
-            if device_id is not None and str(entry.get("device_id")) != device_id:
-                continue
-            if not entry.get("online"):
-                continue
+        entry = next((m for m in machines if str(m.get("device_id")) == target), None)
+        if entry is not None and entry.get("online"):
             available = advertised_console_providers(entry.get("supports"))
             if available:
-                return str(entry.get("device_id")), available[0]
+                return target, available[0]
         if time.monotonic() >= deadline:
             break
         time.sleep(1.0)
 
-    known = ", ".join(sorted(str(m.get("device_id")) for m in machines)) or "none"
-    if device_id is not None and not any(str(m.get("device_id")) == device_id for m in machines):
-        raise RuntimeError(f"device {device_id!r} is not enrolled after {timeout:g}s; machines present: {known}")
-    detail = (
-        "; ".join(
-            f"{m.get('device_id')}: "
-            + ("offline" if not m.get("online") else (", ".join(sorted(str(x) for x in (m.get("supports") or []))) or "nothing"))
-            for m in machines
-        )
-        or "no machines enrolled"
+    if entry is None:
+        known = ", ".join(sorted(str(m.get("device_id")) for m in machines)) or "none"
+        raise RuntimeError(f"device {target!r} is not enrolled after {timeout:g}s; machines present: {known}")
+    if not entry.get("online"):
+        raise RuntimeError(f"device {target!r} control channel never connected within {timeout:g}s")
+    announced = ", ".join(sorted(str(item) for item in (entry.get("supports") or []))) or "nothing"
+    raise RuntimeError(
+        f"device {target!r} advertised no console adapter among {list(PROVIDERS)} within {timeout:g}s; it announced: {announced}"
     )
-    raise RuntimeError(f"no enrolled machine advertised a console adapter among {list(PROVIDERS)} within {timeout:g}s; directory: {detail}")
 
 
 def run_console_served_state(root: Path, *, provider: str, device_id: str, cwd: str) -> dict[str, object]:
