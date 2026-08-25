@@ -248,6 +248,11 @@ class _RuntimeHost:
                 "LONGHOUSE_FACTORY_ASSURANCE_TITLE_BASE_URL": self.base_url,
                 "LONGHOUSE_FACTORY_ASSURANCE_TITLE_TOKEN_FILE": str(self.token_file),
                 "LLM_DISABLED": "0",
+                # Title generation sends transcript text to a model provider
+                # and is off unless the operator opts in. This oracle's whole
+                # subject is the title dependency, and its "provider" is the
+                # loopback stub below, so the child Runtime Host opts in.
+                "AI_TITLES_AND_SUMMARIES_ENABLED": "1",
                 "E2E_LOG_SUPPRESS": "0",
                 "LOG_LEVEL": "INFO",
             }

@@ -20,6 +20,19 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import TimelineCard
+from zerg.services.session_processing.summarize import AI_TITLES_AND_SUMMARIES_ENV
+
+
+@pytest.fixture(autouse=True)
+def _ai_titles_and_summaries_opted_in(monkeypatch):
+    """Titles and summaries send transcript text to a third-party provider.
+
+    That is off unless the operator opts in, so the guards in this file -- which
+    are about revision bookkeeping *around* a provider call -- have to opt in to
+    reach the code they test. The two tests at the bottom of this file pin the
+    default, where no provider is called at all.
+    """
+    monkeypatch.setenv(AI_TITLES_AND_SUMMARIES_ENV, "1")
 
 
 def _make_db(tmp_path, name: str) -> make_sessionmaker:
@@ -1185,3 +1198,124 @@ async def test_summary_lock_stale_lock_is_broken(tmp_path, monkeypatch):
     assert session_after.summary_lock_instance is None  # lock released
     assert session_after.summary_lock_at is None
     assert session_after.summary_revision == 5  # progress made
+
+
+# ---------------------------------------------------------------------------
+# The default: transcript text does not leave the machine
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_title_impl_does_nothing_without_the_opt_in(tmp_path, monkeypatch):
+    """Off by default is a capability state, not a failed attempt.
+
+    No provider is fetched, no title is written, and -- because a refused
+    attempt must not schedule a retry -- no title debt is recorded either. The
+    timeline still has a headline: resolve_timeline_title falls back to the
+    first user message.
+    """
+    from zerg.services.session_summaries import generate_initial_title_impl
+
+    monkeypatch.delenv(AI_TITLES_AND_SUMMARIES_ENV, raising=False)
+    factory = _make_db(tmp_path, "initial_title_opt_out.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="codex",
+        environment="cinder",
+        project="zerg",
+        git_branch="main",
+        started_at=datetime.now(timezone.utc),
+        summary_title="zerg",
+        first_user_message_preview="Can we make menu bar rows clearly clickable?",
+        user_messages=1,
+        assistant_messages=0,
+        transcript_revision=1,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.close()
+
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            side_effect=AssertionError("no provider may be fetched while AI titles are off"),
+        ),
+    ):
+        updated = await generate_initial_title_impl(session_id)
+
+    assert updated is False
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.summary_title == "zerg"
+        assert refreshed.anchor_title is None
+        assert refreshed.summary_revision == 0
+    finally:
+        verify.close()
+
+
+@pytest.mark.asyncio
+async def test_generate_summary_impl_marks_current_without_the_opt_in(tmp_path, monkeypatch):
+    """Same shape as LLM_DISABLED: no provider call, and no permanent backlog.
+
+    The summary revision advances to the transcript revision so the
+    revision-lag reconciler stops re-enqueuing a session that can never be
+    summarized while transcript egress is off.
+    """
+    from zerg.services.session_summaries import generate_summary_impl
+
+    monkeypatch.delenv(AI_TITLES_AND_SUMMARIES_ENV, raising=False)
+    factory = _make_db(tmp_path, "summary_opt_out.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="claude",
+        environment="cinder",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=4,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.add(
+        AgentEvent(
+            session_id=session_id,
+            role="user",
+            content_text="a transcript line that must not leave the machine",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    db.close()
+
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            side_effect=AssertionError("no provider may be fetched while AI summaries are off"),
+        ),
+    ):
+        await generate_summary_impl(session_id)
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.summary is None
+        assert refreshed.summary_revision == refreshed.transcript_revision
+    finally:
+        verify.close()

@@ -36,7 +36,7 @@ export default function PrivacyPage() {
         <p className="info-page-subtitle">
           How we handle your data.
         </p>
-        <p className="info-page-updated">Last updated: August 24, 2026</p>
+        <p className="info-page-updated">Last updated: August 25, 2026</p>
 
         <div className="legal-content">
           <p>
@@ -75,8 +75,12 @@ export default function PrivacyPage() {
             <li><strong>We don't sell your data.</strong></li>
           </ul>
           <p>
-            We do send excerpts of your transcripts to a model provider to generate session titles
-            and summaries. That provider has its own policies, which we don't control. See below.
+            <strong>We don't send your transcripts to a model provider unless you turn it on.</strong>{" "}
+            Longhouse can use one to generate session titles and summaries, and that is off by
+            default. While it is off, no transcript content leaves your instance: titles come from
+            the first message of the session, or from the project and branch it ran in. We default
+            it off because transcripts contain API keys, SSH keys, and database URLs, and we would
+            rather not hand those to another company on your behalf.
           </p>
 
           <h2>Where Your Data Goes</h2>
@@ -87,9 +91,9 @@ export default function PrivacyPage() {
           <ul>
             <li>
               <strong>OpenRouter</strong>, routing to <strong>DeepSeek</strong> — excerpts of your
-              session transcripts, sent automatically when a session is ingested so we can generate
-              its title and summary. There is no per-account opt-out for this today on the hosted
-              service.
+              session transcripts, for generating titles and summaries, and only if you turn that
+              on. It is off by default, and while it is off we send them nothing. There is no
+              self-serve switch yet: email us to turn it on, and email us to turn it back off.
             </li>
             <li>
               <strong>Google</strong> — your email address and profile name, if you sign in with

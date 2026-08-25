@@ -22,6 +22,7 @@ import pytest
 from zerg.services.session_processing import SessionSummary
 from zerg.services.session_processing import SessionTranscript
 from zerg.services.session_processing import quick_summary
+from zerg.services.session_processing.summarize import AI_TITLES_AND_SUMMARIES_ENV
 from zerg.services.session_processing.transcript import SessionMessage
 from zerg.services.session_processing.transcript import Turn
 
@@ -127,6 +128,32 @@ class TestSessionSummary:
 
 
 class TestQuickSummary:
+    """quick_summary's behavior once the operator has opted into egress.
+
+    quick_summary hands transcript text to a third-party model provider, so it
+    is gated on AI_TITLES_AND_SUMMARIES_ENABLED and does nothing by default.
+    Every test in this class opts in; test_quick_summary_is_off_by_default
+    below pins what happens when nobody did.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _ai_summaries_opted_in(self, monkeypatch):
+        monkeypatch.setenv(AI_TITLES_AND_SUMMARIES_ENV, "1")
+
+    @pytest.mark.asyncio
+    async def test_quick_summary_is_off_by_default(self, monkeypatch):
+        """No opt-in means no provider call, and a placeholder callers discard."""
+        monkeypatch.delenv(AI_TITLES_AND_SUMMARIES_ENV, raising=False)
+        client = _mock_client('{"title": "Fix Login Bug", "summary": "Fixed it."}')
+        transcript = _make_transcript()
+
+        result = await quick_summary(transcript, client, model="test-model")
+
+        client.chat.completions.create.assert_not_called()
+        assert result.session_id == "sess-test"
+        assert result.title == "Untitled Session"
+        assert result.summary == "No summary generated."
+
     @pytest.mark.asyncio
     async def test_quick_summary_parses_json(self):
         """quick_summary should parse valid JSON from LLM response."""

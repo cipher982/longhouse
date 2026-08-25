@@ -22,7 +22,10 @@ def test_initial_title_prompt_keeps_context_and_cleans_message():
 
 
 @pytest.mark.asyncio
-async def test_generate_initial_session_title_parses_json_response():
+async def test_generate_initial_session_title_parses_json_response(monkeypatch):
+    # Title generation sends the first user message to a model provider, which
+    # is opt-in. This test is about parsing the opted-in response.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
     captured: dict[str, object] = {}
 
     async def _create(**kwargs):
@@ -48,3 +51,28 @@ async def test_generate_initial_session_title_parses_json_response():
     assert captured["model"] == "deepseek/deepseek-v4-flash"
     assert captured["messages"][0]["role"] == "system"
     assert captured["messages"][1]["role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_session_title_is_off_by_default(monkeypatch):
+    """The chokepoint every title path funnels through refuses to call out.
+
+    Both the legacy trigger and the storage-v2 worker land here, so this is the
+    single place that decides whether a first user message leaves the machine.
+    """
+
+    monkeypatch.delenv("AI_TITLES_AND_SUMMARIES_ENABLED", raising=False)
+
+    async def _create(**_kwargs):
+        raise AssertionError("provider called while transcript egress is off")
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
+
+    title = await generate_initial_session_title(
+        first_user_message="make menu bar rows obviously clickable",
+        client=client,
+        model="deepseek/deepseek-v4-flash",
+        metadata={"project": "longhouse"},
+    )
+
+    assert title is None

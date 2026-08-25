@@ -291,7 +291,12 @@ async def summarize_and_persist(
     from sqlalchemy import update as sa_update
 
     from zerg.services.session_processing import summarize_events
+    from zerg.services.session_processing.summarize import ai_titles_and_summaries_enabled
     from zerg.services.write_serializer import get_write_serializer
+
+    if not ai_titles_and_summaries_enabled():
+        logger.info("AI summaries are off; not summarizing session %s", session.id)
+        return None
 
     event_dicts = events_to_dicts(events, provider=session.provider)
 
@@ -377,15 +382,18 @@ async def generate_initial_title_impl(session_id: str) -> bool:
     """Generate and persist a fast stable title from the first user message."""
     from zerg.database import get_session_factory
     from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+    from zerg.services.session_processing.summarize import ai_titles_and_summaries_enabled
     from zerg.services.title_generator import generate_initial_session_title
 
     settings = get_settings()
     if settings.testing:
         return False
-    if settings.llm_disabled:
+    if settings.llm_disabled or not ai_titles_and_summaries_enabled():
         # Disabled is an intentional capability state, not a failed attempt.
         # Recording retry evidence here schedules a monolith write for every
-        # newly ingested session even though no retry can succeed.
+        # newly ingested session even though no retry can succeed. The timeline
+        # still gets a headline: resolve_timeline_title falls back to the first
+        # user message, then to project/branch, with no title debt recorded.
         return False
 
     factory = get_session_factory()
@@ -556,6 +564,7 @@ async def generate_summary_impl(session_id: str) -> None:
 
     from zerg.database import get_session_factory
     from zerg.services.session_processing import incremental_summary
+    from zerg.services.session_processing.summarize import ai_titles_and_summaries_enabled
     from zerg.services.write_serializer import get_write_serializer
 
     settings = get_settings()
@@ -595,8 +604,11 @@ async def generate_summary_impl(session_id: str) -> None:
             )
             return
 
-        if settings.llm_disabled:
-            logger.debug("LLM disabled, marking summary current for %s", session_id)
+        if settings.llm_disabled or not ai_titles_and_summaries_enabled():
+            # Same shape as LLM_DISABLED: mark the summary current so the
+            # revision-lag reconciler stops re-enqueuing a session that can
+            # never be summarized while transcript egress is off.
+            logger.debug("Summary generation is off, marking summary current for %s", session_id)
             await _advance_session_revision(
                 db=db,
                 session_id=session_id,

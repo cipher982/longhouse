@@ -9,6 +9,10 @@ Primary entry point for downstream consumers:
 Lower-level (used by summarize_events internally):
 
 - :func:`quick_summary` — 2-4 sentence summary for startup continuity and digests
+
+Every function here sends transcript text to a third-party model provider, so
+they are all gated on :func:`ai_titles_and_summaries_enabled`, which is off
+unless the operator sets ``AI_TITLES_AND_SUMMARIES_ENABLED``.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 
@@ -28,6 +33,30 @@ from .transcript import SessionTranscript
 from .transcript import build_transcript
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Egress policy
+# ---------------------------------------------------------------------------
+
+# A transcript is the user's raw agent history: SSH keys, database URLs with
+# embedded passwords, and tokens routinely appear in it, and redact_secrets
+# only knows a fixed list of vendor key shapes. Handing that to a third-party
+# model provider is therefore opt-in and off by default. The gate lives here,
+# next to the calls it guards, so every provider call in this module is behind
+# it no matter which caller arrives.
+AI_TITLES_AND_SUMMARIES_ENV = "AI_TITLES_AND_SUMMARIES_ENABLED"
+_TRUTHY_VALUES = {"1", "true", "yes", "on"}
+
+
+def ai_titles_and_summaries_enabled() -> bool:
+    """True when the operator opted in to sending transcript text off-machine.
+
+    Gates every external model-provider call that carries transcript content:
+    session titles and session summaries. Local ONNX embeddings are unaffected
+    -- they run in-process and nothing leaves the machine. Read at call time so
+    import order never decides the value.
+    """
+    return str(os.getenv(AI_TITLES_AND_SUMMARIES_ENV) or "").strip().lower() in _TRUTHY_VALUES
 
 
 @dataclass
@@ -191,8 +220,18 @@ async def quick_summary(
         model: Model identifier.
 
     Returns:
-        A :class:`SessionSummary` with title and summary populated.
+        A :class:`SessionSummary` with title and summary populated, or the
+        placeholder summary when AI titles/summaries are off (callers already
+        discard placeholders rather than persisting them).
     """
+    if not ai_titles_and_summaries_enabled():
+        logger.debug("AI summaries are off; skipping provider call for session %s", transcript.session_id)
+        return SessionSummary(
+            session_id=transcript.session_id,
+            title="Untitled Session",
+            summary="No summary generated.",
+        )
+
     user_prompt = _build_user_prompt(transcript)
 
     response = await client.chat.completions.create(
@@ -250,8 +289,13 @@ async def summarize_events(
         timeout_seconds: Max time for the LLM call.
 
     Returns:
-        SessionSummary on success, None if transcript is empty.
+        SessionSummary on success, None if the transcript is empty or AI
+        titles/summaries are off.
     """
+    if not ai_titles_and_summaries_enabled():
+        logger.debug("AI summaries are off; not summarizing %d events", len(events))
+        return None
+
     transcript = build_transcript(
         events,
         provider=str((metadata or {}).get("provider")) if (metadata or {}).get("provider") else None,
@@ -315,8 +359,13 @@ async def incremental_summary(
         timeout_seconds: Max time for the LLM call.
 
     Returns:
-        SessionSummary on success, None if no meaningful new messages.
+        SessionSummary on success, None if there are no meaningful new messages
+        or AI titles/summaries are off.
     """
+    if not ai_titles_and_summaries_enabled():
+        logger.debug("AI summaries are off; skipping incremental summary for session %s", session_id)
+        return None
+
     # Filter to user + assistant messages only (no tool calls/results)
     messages = []
     for ev in new_events:

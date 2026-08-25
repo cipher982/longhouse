@@ -31,8 +31,56 @@ def _authorized_candidate(**values):
 
 
 @pytest.mark.asyncio
+async def test_title_worker_is_silent_when_transcript_egress_is_off(monkeypatch):
+    """Default: no provider call, no catalog RPC, and no retry debt.
+
+    This is the path hosted production takes. The first version of the egress
+    gate sat in the legacy trigger and missed this worker entirely, so the
+    default-off claim is pinned here rather than only at the chokepoint.
+    """
+
+    import zerg.services.storage_session_titles as storage_titles
+
+    monkeypatch.delenv("AI_TITLES_AND_SUMMARIES_ENABLED", raising=False)
+    monkeypatch.setattr(storage_titles, "get_settings", lambda: SimpleNamespace(llm_disabled=False))
+
+    calls: list[str] = []
+
+    async def _fake_catalog_call(method, _params):
+        calls.append(method)
+        return {}
+
+    def _no_client(_use_case):
+        raise AssertionError("acquired a model client while transcript egress is off")
+
+    monkeypatch.setattr(storage_titles, "_catalog_call", _fake_catalog_call)
+    monkeypatch.setattr("zerg.models_config.get_llm_client_for_use_case", _no_client)
+
+    generated = await storage_titles.generate_storage_session_title(
+        _authorized_candidate(
+            session_id=str(uuid4()),
+            first_user_message="a transcript line that must not leave the machine",
+            provider="claude",
+        )
+    )
+
+    assert generated is False
+    # Not even a failure is recorded: an unavailable capability is not a failed
+    # attempt, and charging the row would re-enqueue it forever.
+    assert calls == []
+
+    # The reconciler returns instead of entering its 0.5s loop.
+    await asyncio.wait_for(storage_titles.run_storage_title_reconciler(interval_seconds=0.01), timeout=5)
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_title_worker_requires_canonical_catalog_eligibility(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles
+
+    # Sending transcript text to a model provider is opt-in; these tests are
+    # about what the worker does once the operator has opted in.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
 
     monkeypatch.setattr(storage_titles, "get_settings", lambda: SimpleNamespace(llm_disabled=False))
     generated = await storage_titles.generate_storage_session_title(
@@ -45,6 +93,10 @@ async def test_title_worker_requires_canonical_catalog_eligibility(monkeypatch):
 @pytest.mark.asyncio
 async def test_storage_title_allows_path_prompt_to_reach_model(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles
+
+    # Sending transcript text to a model provider is opt-in; these tests are
+    # about what the worker does once the operator has opted in.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
 
     calls: list[tuple[str, dict]] = []
     client = SimpleNamespace(close=AsyncMock())
@@ -88,6 +140,10 @@ async def test_storage_title_allows_path_prompt_to_reach_model(monkeypatch):
 async def test_missing_title_credential_opens_dependency_incident_without_spending_row_attempt(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles
 
+    # Sending transcript text to a model provider is opt-in; these tests are
+    # about what the worker does once the operator has opted in.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
+
     calls: list[tuple[str, dict]] = []
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(storage_titles, "get_settings", lambda: SimpleNamespace(llm_disabled=False))
@@ -128,6 +184,10 @@ async def test_missing_title_credential_opens_dependency_incident_without_spendi
 async def test_provider_timeout_opens_availability_incident_without_row_failure(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles
 
+    # Sending transcript text to a model provider is opt-in; these tests are
+    # about what the worker does once the operator has opted in.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
+
     calls: list[tuple[str, dict]] = []
     client = SimpleNamespace(close=AsyncMock())
 
@@ -160,6 +220,10 @@ async def test_provider_timeout_opens_availability_incident_without_row_failure(
 async def test_catalog_timeout_does_not_poison_provider_or_spend_row_attempt(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles
 
+    # Sending transcript text to a model provider is opt-in; these tests are
+    # about what the worker does once the operator has opted in.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
+
     calls: list[str] = []
 
     async def _catalog_timeout(method, _params):
@@ -181,6 +245,10 @@ async def test_catalog_timeout_does_not_poison_provider_or_spend_row_attempt(mon
 @pytest.mark.asyncio
 async def test_empty_model_response_remains_row_scoped(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles
+
+    # Sending transcript text to a model provider is opt-in; these tests are
+    # about what the worker does once the operator has opted in.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
 
     calls: list[tuple[str, dict]] = []
     client = SimpleNamespace(close=AsyncMock())
@@ -214,6 +282,10 @@ async def test_empty_model_response_remains_row_scoped(monkeypatch):
 @pytest.mark.asyncio
 async def test_scheduler_reserves_four_slots_before_creating_tasks_and_drains_backlog(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles
+
+    # Sending transcript text to a model provider is opt-in; these tests are
+    # about what the worker does once the operator has opted in.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
 
     await storage_titles.stop_storage_title_workers()
     monkeypatch.setattr(storage_titles, "_model_slots", asyncio.Semaphore(storage_titles.STORAGE_TITLE_MAX_CONCURRENCY))
@@ -276,6 +348,10 @@ async def test_scheduler_reserves_four_slots_before_creating_tasks_and_drains_ba
 @pytest.mark.asyncio
 async def test_worker_shutdown_releases_capacity_even_when_client_close_fails(monkeypatch):
     import zerg.services.storage_session_titles as storage_titles
+
+    # Sending transcript text to a model provider is opt-in; these tests are
+    # about what the worker does once the operator has opted in.
+    monkeypatch.setenv("AI_TITLES_AND_SUMMARIES_ENABLED", "1")
 
     await storage_titles.stop_storage_title_workers()
     slots = asyncio.Semaphore(storage_titles.STORAGE_TITLE_MAX_CONCURRENCY)

@@ -52,7 +52,7 @@
   },
 
   "useCases": {
-    "$comment": "Maps active text use cases to the two standard Longhouse lanes.",
+    "$comment": "Maps active text use cases to the two standard Longhouse lanes. session_title, summarization and summary_update send transcript text to a third-party provider, so they only run when AI_TITLES_AND_SUMMARIES_ENABLED=1; the default is off and titles fall back to the first user message.",
     "text": {
       "session_title": "deepseek/deepseek-v4-flash-0731",
       "summarization": "TIER_2",

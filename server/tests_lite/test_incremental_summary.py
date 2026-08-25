@@ -16,9 +16,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from zerg.services.session_processing.summarize import (
+    AI_TITLES_AND_SUMMARIES_ENV,
     SessionSummary,
     incremental_summary,
 )
+
+
+@pytest.fixture(autouse=True)
+def _ai_summaries_opted_in(monkeypatch):
+    """Every test below exercises the opted-in path.
+
+    Sending transcript text to a third-party model provider is off unless the
+    operator sets AI_TITLES_AND_SUMMARIES_ENABLED, so these tests -- which are
+    about what the summarizer *does* with a provider response -- have to say so
+    themselves. test_summaries_are_off_by_default pins the default.
+    """
+    monkeypatch.setenv(AI_TITLES_AND_SUMMARIES_ENV, "1")
 
 
 def _make_event(role: str, content: str, tool_name: str | None = None) -> dict:
@@ -260,3 +273,50 @@ async def test_message_cap_at_500_chars():
     # The message in the prompt should be capped at 500 chars
     # Find the [user] line and check it
     assert "x" * 501 not in user_msg
+
+
+@pytest.mark.asyncio
+async def test_summaries_are_off_by_default(monkeypatch):
+    """With no opt-in, no transcript text reaches the provider at all."""
+    monkeypatch.delenv(AI_TITLES_AND_SUMMARIES_ENV, raising=False)
+    client = _mock_client()
+    events = [
+        _make_event("user", "Add JWT auth to the login endpoint"),
+        _make_event("assistant", "I'll implement JWT authentication for the login endpoint."),
+    ]
+
+    result = await incremental_summary(
+        session_id="s1",
+        current_summary=None,
+        current_title=None,
+        new_events=events,
+        client=client,
+        model="test-model",
+    )
+
+    assert result is None
+    client.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "", "  "])
+async def test_only_an_explicit_opt_in_enables_egress(monkeypatch, value):
+    """A set-but-not-truthy value is still off; only an opt-in opens egress."""
+    monkeypatch.setenv(AI_TITLES_AND_SUMMARIES_ENV, value)
+    client = _mock_client()
+    events = [
+        _make_event("user", "Add JWT auth to the login endpoint"),
+        _make_event("assistant", "I'll implement JWT authentication for the login endpoint."),
+    ]
+
+    result = await incremental_summary(
+        session_id="s1",
+        current_summary=None,
+        current_title=None,
+        new_events=events,
+        client=client,
+        model="test-model",
+    )
+
+    assert result is None
+    client.chat.completions.create.assert_not_called()

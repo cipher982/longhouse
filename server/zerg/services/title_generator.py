@@ -15,6 +15,7 @@ from openai import AsyncOpenAI
 from zerg.config import get_settings
 from zerg.models_config import get_llm_client_for_use_case
 from zerg.services.session_processing import safe_parse_json
+from zerg.services.session_processing.summarize import ai_titles_and_summaries_enabled
 from zerg.services.transcript_content import redact_secrets
 from zerg.services.transcript_content import strip_noise
 
@@ -93,6 +94,11 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
     settings = get_settings()
     if settings.testing or settings.llm_disabled:
         return None
+    if not ai_titles_and_summaries_enabled():
+        # This function has no callers today, but it builds a full transcript
+        # and posts it to the provider. Gating it here means a future caller
+        # cannot reopen egress by wiring it up.
+        return None
 
     # Normalize messages
     normalized = _normalize_title_messages(messages)
@@ -164,7 +170,18 @@ async def generate_initial_session_title(
     metadata: dict | None = None,
     timeout_seconds: float = 8,
 ) -> str | None:
-    """Generate a stable, glanceable title from the first user message."""
+    """Generate a stable, glanceable title from the first user message.
+
+    Returns ``None`` when the operator has not opted in to sending transcript
+    text to a model provider. The gate is here rather than at the call sites
+    because this is the chokepoint every title path funnels through -- the
+    legacy ingest trigger and the storage-v2 worker both arrive at this
+    function, and gating callers one at a time is how the hosted path stayed
+    live after the first attempt.
+    """
+    if not ai_titles_and_summaries_enabled():
+        return None
+
     user_prompt = _build_initial_session_title_prompt(first_user_message, metadata=metadata)
     if not user_prompt:
         return None

@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from zerg.config import get_settings
+from zerg.services.session_processing.summarize import ai_titles_and_summaries_enabled
 from zerg.services.session_title import sanitize_timeline_title
 from zerg.services.session_title import sanitize_title
 
@@ -132,7 +133,13 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
     try:
         await _model_slots.acquire()
         slot_acquired = True
-        if get_settings().llm_disabled:
+        if get_settings().llm_disabled or not ai_titles_and_summaries_enabled():
+            # Off is a capability state, not a failed attempt. Without this the
+            # chokepoint gate in generate_initial_session_title returns None,
+            # sanitize_timeline_title returns None, and the row below is charged
+            # an "empty_model_response" failure -- so every ingested session
+            # would burn three catalogd RPCs and record durable retry state for
+            # a call that can never happen.
             return False
         if candidate.get("canonical_title_eligible") is not True:
             logger.warning("Skipping storage-v2 title without canonical catalog eligibility session=%s", session_id)
@@ -331,7 +338,9 @@ async def run_storage_title_reconciler(
     interval_seconds: float = 0.5,
     batch_size: int = STORAGE_TITLE_CANDIDATE_LOOKAHEAD,
 ) -> None:
-    if get_settings().llm_disabled:
+    if get_settings().llm_disabled or not ai_titles_and_summaries_enabled():
+        # Nothing to reconcile: no candidate can produce a title while
+        # transcript egress is off, so do not run the 0.5s loop at all.
         return
     while True:
         try:
