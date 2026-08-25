@@ -123,7 +123,7 @@ def test_the_vehicle_is_the_adapter_the_machine_actually_advertises():
     assert len(providers) >= 2, providers
     wanted = providers[1]
     client = _FakeClient([{"device_id": "factory-machine", "online": True, "supports": [f"{wanted}.turn_start"]}])
-    assert producer.default_vehicle_provider(client, "factory-machine") == wanted
+    assert producer.select_vehicle(client, "factory-machine") == ("factory-machine", wanted)
     assert client.calls == [("GET", "/api/agents/machines")]
 
 
@@ -152,7 +152,7 @@ def test_the_adapter_is_waited_for_rather_than_read_once(monkeypatch):
 
     monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
     client = _Waking()
-    assert producer.default_vehicle_provider(client, "factory-machine") == wanted
+    assert producer.select_vehicle(client, "factory-machine") == ("factory-machine", wanted)
     assert client.reads == 3
 
 
@@ -160,7 +160,7 @@ def test_a_machine_advertising_no_console_adapter_says_what_it_did_advertise(mon
     monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
     client = _FakeClient([{"device_id": "factory-machine", "online": True, "supports": ["codex.archive_backlog"]}])
     with pytest.raises(RuntimeError) as excinfo:
-        producer.default_vehicle_provider(client, "factory-machine", timeout=0)
+        producer.select_vehicle(client, "factory-machine", timeout=0)
     assert "codex.archive_backlog" in str(excinfo.value)
 
 
@@ -168,16 +168,45 @@ def test_an_offline_machine_is_named_as_such(monkeypatch):
     monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
     client = _FakeClient([{"device_id": "factory-machine", "online": False, "supports": []}])
     with pytest.raises(RuntimeError) as excinfo:
-        producer.default_vehicle_provider(client, "factory-machine", timeout=0)
-    assert "control channel" in str(excinfo.value)
+        producer.select_vehicle(client, "factory-machine", timeout=0)
+    # The whole directory is reported, so "which machine and what was wrong
+    # with it" is answerable from the failure artifact alone.
+    assert "factory-machine: offline" in str(excinfo.value)
 
 
 def test_an_unenrolled_device_lists_the_machines_that_are_present(monkeypatch):
     monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
     client = _FakeClient([{"device_id": "some-other-box", "online": True, "supports": []}])
     with pytest.raises(RuntimeError) as excinfo:
-        producer.default_vehicle_provider(client, "factory-machine", timeout=0)
+        producer.select_vehicle(client, "factory-machine", timeout=0)
     assert "some-other-box" in str(excinfo.value)
+
+
+def test_the_machine_is_chosen_when_none_is_named(monkeypatch):
+    """The factory names no device, because the subject is Longhouse.
+
+    The old default was the literal "factory-machine", which exists only as a
+    product_console_lifecycle fixture. The live directory had seven real
+    enrollments and none of them was that, so the lookup could never match and
+    the cell failed 45s later against a device that does not exist.
+    """
+    monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
+    wanted = console_providers()[0]
+    client = _FakeClient(
+        [
+            {"device_id": "cube", "online": False, "supports": [f"{wanted}.turn_start"]},
+            {"device_id": "cinder", "online": True, "supports": ["something.else"]},
+            {"device_id": "provider-factory-resume", "online": True, "supports": [f"{wanted}.turn_start"]},
+        ]
+    )
+    assert producer.select_vehicle(client) == ("provider-factory-resume", wanted)
+
+
+def test_an_empty_directory_says_so(monkeypatch):
+    monkeypatch.setattr(producer.time, "sleep", lambda _s: None)
+    with pytest.raises(RuntimeError) as excinfo:
+        producer.select_vehicle(_FakeClient([]), timeout=0)
+    assert "no machines enrolled" in str(excinfo.value)
 
 
 def test_advertised_console_providers_ignores_non_turn_start_capabilities():
