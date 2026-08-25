@@ -46,10 +46,12 @@ jobs:
       # an unauthenticated client.
       LONGHOUSE_MACHINE_TOKEN: ${{ secrets.LONGHOUSE_DEVICE_TOKEN }}
       LONGHOUSE_API_URL: https://${{ vars.HOSTED_CANARY_SUBDOMAIN || 'david010' }}.longhouse.ai
-      # Console turns need a machine that has the provider CLIs installed. Today
-      # that is only the workstation, so a scheduled run genuinely cannot check
-      # anything while it is asleep -- reported as unqualified, never as red.
-      LONGHOUSE_DEVICE_ID: ${{ vars.CONSOLE_QA_DEVICE_ID || 'cinder' }}
+      # "all" enumerates every connected machine and asks each only about the
+      # providers it advertises. Pinning one device is how a second machine rots
+      # unnoticed: the always-on box sat with a dead Claude credential while this
+      # check stayed green, because the check only ever asked the laptop -- and
+      # an always-on box is precisely the one nobody is sitting in front of.
+      LONGHOUSE_DEVICE_ID: ${{ vars.CONSOLE_QA_DEVICE_ID || 'all' }}
       # The turn runs on the target machine, so the working directory must exist
       # THERE. The harness default is derived from the caller's home, which on a
       # CI runner is a path the machine has never heard of -- every turn came
@@ -58,10 +60,10 @@ jobs:
       QA_HOME: /tmp/console-served-state-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Set up Python
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
 
       - name: Ensure make available
         run: ./scripts/ci/ensure-make.sh
@@ -80,7 +82,7 @@ jobs:
           fi
           set +e
           make test-console-served-state-e2e \
-            ARGS="--provider ${{ github.event.inputs.provider || 'all' }} --cwd $CONSOLE_QA_CWD --json-out $GITHUB_WORKSPACE/console-served-state.json"
+            ARGS="--provider ${{ github.event.inputs.provider || 'all' }} --device-id $LONGHOUSE_DEVICE_ID --cwd $CONSOLE_QA_CWD --json-out $GITHUB_WORKSPACE/console-served-state.json"
           set -e
           # Red and unqualified are different facts and must not share an exit
           # code. Red means a Console turn broke on a machine that could run it.
@@ -106,7 +108,7 @@ jobs:
 
       - name: Upload evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: console-served-state-${{ github.run_id }}
           path: console-served-state.json
