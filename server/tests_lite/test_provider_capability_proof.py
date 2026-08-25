@@ -261,3 +261,32 @@ def test_untrusted_records_remain_visible_but_never_qualify() -> None:
     assert selection.qualifying_pass is None
     assert selection.latest_run == manual
     assert selection.rejected == ((manual.artifact_id, ("proof_untrusted_producer",)),)
+
+
+def test_subject_identity_round_trips_into_artifact_id() -> None:
+    """The factory bakes subject_kind/subject_key into its canonical payload.
+
+    If the host does not model them it recomputes a different artifact_id and
+    rejects every published provider proof with 422, which is what silently
+    broke publication for four days in 2026-08.
+    """
+    record = _record(subject_kind="provider_release", subject_key="provider_release:sha256:abc")
+    payload = record.serialize()
+
+    assert payload["subject_kind"] == "provider_release"
+    assert payload["subject_key"] == "provider_release:sha256:abc"
+
+    parsed = proof_record_from_mapping(payload)
+    assert parsed.artifact_id == payload["artifact_id"]
+    assert parsed.subject_kind == "provider_release"
+    assert parsed.subject_key == "provider_release:sha256:abc"
+
+
+def test_absent_subject_identity_leaves_historical_artifact_id_unchanged() -> None:
+    """Records written before the factory emitted subject identity keep their id."""
+    record = _record()
+    payload = record.serialize()
+
+    assert "subject_kind" not in payload
+    assert "subject_key" not in payload
+    assert proof_record_from_mapping(payload).artifact_id == payload["artifact_id"]

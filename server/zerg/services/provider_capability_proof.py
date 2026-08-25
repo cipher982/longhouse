@@ -66,6 +66,13 @@ class ProviderCapabilityProofRecord:
     longhouse_build_id: str | None = None
     longhouse_git_sha: str | None = None
     # v3 assurance subject and execution provenance.
+    # ``subject_kind``/``subject_key`` name what the assertion was made about.
+    # They are part of the factory's canonical payload, so the host must model
+    # them or it recomputes a different ``artifact_id`` and rejects every proof
+    # with 422. Absent on records written before the factory added them; popped
+    # when absent so those keep their original identity.
+    subject_kind: str | None = None
+    subject_key: str | None = None
     assertion_variant: str | None = None
     factory_source_sha: str | None = None
     accepted_epoch_id: str | None = None
@@ -97,6 +104,10 @@ class ProviderCapabilityProofRecord:
             payload.pop("provider_build_identity")
         if self.provider_build_granularity is None:
             payload.pop("provider_build_granularity")
+        if self.subject_kind is None:
+            payload.pop("subject_kind")
+        if self.subject_key is None:
+            payload.pop("subject_key")
         if self.schema_version == LEGACY_PROOF_SCHEMA_VERSION:
             for name in _V3_FIELDS:
                 payload.pop(name, None)
@@ -126,6 +137,8 @@ class ProviderCapabilityProofRecord:
 
 
 _V3_FIELDS = (
+    "subject_kind",
+    "subject_key",
     "assertion_variant",
     "factory_source_sha",
     "accepted_epoch_id",
@@ -272,6 +285,8 @@ def proof_record_from_mapping(payload: Mapping[str, Any]) -> ProviderCapabilityP
         raw_reference_digests=_string_tuple(payload, "raw_reference_digests"),
         longhouse_build_id=_optional_string(payload, "longhouse_build_id"),
         longhouse_git_sha=_optional_string(payload, "longhouse_git_sha"),
+        subject_kind=_optional_string(payload, "subject_kind"),
+        subject_key=_optional_string(payload, "subject_key"),
         assertion_variant=_optional_string(payload, "assertion_variant"),
         factory_source_sha=_optional_string(payload, "factory_source_sha"),
         accepted_epoch_id=_optional_string(payload, "accepted_epoch_id"),
