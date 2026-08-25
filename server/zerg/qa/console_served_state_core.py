@@ -282,6 +282,10 @@ def run(args: argparse.Namespace) -> dict:
         "schema_version": 1,
         "provider": args.provider,
         "device_id": args.device_id,
+        # Recorded so a failure artifact says which directory it ran in. With
+        # several machines in one run the cwd differs per machine, and "it
+        # failed" is not diagnosable without knowing where.
+        "cwd": str(Path(args.cwd).resolve()),
         "marker": marker,
     }
 

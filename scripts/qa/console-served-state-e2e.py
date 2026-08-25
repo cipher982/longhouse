@@ -20,8 +20,61 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "server"))
 
 from zerg.qa.console_served_state_core import ApiError  # noqa: E402
+from zerg.qa.console_served_state_core import Client  # noqa: E402
+from zerg.qa.console_served_state_core import _defaults  # noqa: E402
 from zerg.qa.console_served_state_core import console_providers  # noqa: E402
 from zerg.qa.console_served_state_core import run  # noqa: E402
+
+
+def connected_machine_targets() -> list[tuple[str, list[str]]]:
+    """Every connected machine and the Console providers it actually offers.
+
+    Checking one hardcoded machine is how a second one rots unnoticed. The
+    always-on box sat with a dead Claude credential while this check stayed
+    green, because the check only ever asked the laptop -- and an always-on box
+    is precisely the machine nobody is sitting in front of to notice.
+
+    Each machine is asked only about providers it advertises, so a box without
+    a given CLI installed is never treated as a failure for lacking it.
+    """
+
+    api_url, token = _defaults()
+    if not api_url or not token:
+        raise RuntimeError("Longhouse API URL and device token are required")
+    client = Client(api_url.rstrip("/"), token)
+    directory = client.request("GET", "/api/agents/machines")
+    targets: list[tuple[str, list[str]]] = []
+    for machine in directory.get("machines") or []:
+        if not machine.get("online"):
+            continue
+        offered = [
+            str(option.get("provider"))
+            for option in (machine.get("launch") or {}).get("providers") or []
+            if option.get("provider")
+        ]
+        if offered:
+            targets.append((str(machine.get("device_id")), sorted(offered)))
+    return targets
+
+
+def machine_workspace(client: Client, device_id: str) -> str | None:
+    """A directory that exists on *that* machine, from its own suggestions.
+
+    One `--cwd` cannot serve several machines: a laptop path handed to a Linux
+    box fails for a reason that has nothing to do with Console, and would make
+    the whole check red for the wrong cause. Each machine already reports the
+    workspaces it has actually been used in, so ask it.
+    """
+
+    try:
+        payload = client.request("GET", f"/api/agents/machines/{device_id}/workspaces?limit=1")
+    except Exception:
+        return None
+    for entry in payload.get("workspaces") or []:
+        path = str(entry.get("path") or "").strip()
+        if path.startswith("/"):
+            return path
+    return None
 
 
 def main() -> int:
@@ -31,7 +84,11 @@ def main() -> int:
         default="codex",
         help="a provider name, or 'all' to derive the set from schemas/managed_providers.yml",
     )
-    parser.add_argument("--device-id", default=os.environ.get("LONGHOUSE_DEVICE_ID") or "cinder")
+    parser.add_argument(
+        "--device-id",
+        default=os.environ.get("LONGHOUSE_DEVICE_ID") or "cinder",
+        help="a device id, or 'all' to prove every connected machine against the providers it offers",
+    )
     parser.add_argument("--cwd", default=str(Path.home() / "git" / "zerg"))
     parser.add_argument("--api-url", default=None)
     parser.add_argument("--turn-timeout", type=float, default=180.0)
@@ -55,11 +112,37 @@ def main() -> int:
     parser.add_argument("--json-out", default=None)
     args = parser.parse_args()
 
-    providers = console_providers() if args.provider == "all" else [args.provider]
+    if args.device_id == "all":
+        # Ask each machine only about what it offers, so a box missing a CLI is
+        # not reported as a failure for missing it.
+        targets = connected_machine_targets()
+        if args.provider != "all":
+            targets = [(device, [args.provider]) for device, offered in targets if args.provider in offered]
+    else:
+        providers = console_providers() if args.provider == "all" else [args.provider]
+        targets = [(args.device_id, providers)]
+
+    cwd_by_device: dict[str, str] = {}
+    if args.device_id == "all":
+        api_url, token = _defaults()
+        client = Client((args.api_url or api_url or "").rstrip("/"), token)
+        for device, _ in targets:
+            resolved = machine_workspace(client, device)
+            if resolved:
+                cwd_by_device[device] = resolved
+
+    attempts = [(device, provider) for device, providers in targets for provider in providers]
 
     reports: list[dict] = []
-    for provider in providers:
-        attempt = argparse.Namespace(**{**vars(args), "provider": provider})
+    for device_id, provider in attempts:
+        attempt = argparse.Namespace(
+            **{
+                **vars(args),
+                "provider": provider,
+                "device_id": device_id,
+                "cwd": cwd_by_device.get(device_id, args.cwd),
+            }
+        )
         try:
             reports.append(run(attempt))
         except ApiError as error:
@@ -72,6 +155,7 @@ def main() -> int:
                     "artifact_kind": "console_served_state_e2e",
                     "schema_version": 1,
                     "provider": provider,
+                    "device_id": device_id,
                     # The API failing is not a verdict about this provider. Say
                     # so separately, and still count it: a check that could not
                     # run is not a check that passed.
@@ -98,16 +182,20 @@ def main() -> int:
                     "artifact_kind": "console_served_state_e2e",
                     "schema_version": 1,
                     "provider": provider,
+                    "device_id": device_id,
                     "verdict": "error",
                     "failures": [str(error)],
                 }
             )
 
-    if len(reports) == 1:
+    if len(reports) == 1 and args.device_id != "all":
         payload = reports[0]
     else:
-        verified = [report["provider"] for report in reports if report["verdict"] == "green"]
-        failed = [report["provider"] for report in reports if report["verdict"] in {"red", "error"}]
+        def label(report: dict) -> str:
+            return f"{report.get('device_id')}/{report['provider']}"
+
+        verified = [label(report) for report in reports if report["verdict"] == "green"]
+        failed = [label(report) for report in reports if report["verdict"] in {"red", "error"}]
         if failed:
             verdict = "red"
         elif not verified:
@@ -120,11 +208,11 @@ def main() -> int:
         payload = {
             "artifact_kind": "console_served_state_e2e_matrix",
             "schema_version": 1,
-            "providers": {report["provider"]: report for report in reports},
+            "providers": {f"{report.get('device_id')}/{report['provider']}": report for report in reports},
             "verdict": verdict,
             "verified": verified,
-            "unavailable": [report["provider"] for report in reports if report["verdict"] == "unavailable"],
-            "errored": [report["provider"] for report in reports if report["verdict"] == "error"],
+            "unavailable": [label(report) for report in reports if report["verdict"] == "unavailable"],
+            "errored": [label(report) for report in reports if report["verdict"] == "error"],
         }
 
     rendered = json.dumps(payload, indent=2, sort_keys=True)
