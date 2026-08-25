@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 import WebKit
 import OSLog
 
@@ -141,7 +142,13 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ webView: TranscriptWebView, coordinator: Coordinator) {
+        let documentIsLoaded = coordinator.isLoaded
         coordinator.prepareForReuse()
+        // Only a WebView still showing a transcript document we loaded ourselves
+        // is worth keeping. Pooling anything else makes the next session adopt a
+        // document it never loaded and fire `window.renderTranscript` — the whole
+        // transcript — into it.
+        guard documentIsLoaded else { return }
         WebTranscriptWebViewPool.recycle(webView)
     }
 
@@ -754,9 +761,47 @@ struct WebTranscriptView: UIViewRepresentable {
         private var lastNearTopRequestAt = Date.distantPast
         private var documentServerURL: String?
         private var mediaAuthSignature: String?
+        /// Armed by `loadDocument(serverURL:on:)` and consumed by the policy gate
+        /// below: one navigation per load, and only the one this app started.
+        private var awaitingDocumentNavigation = false
+
+        /// The transcript pane has no URL bar, no back button, and no origin
+        /// indicator, and it receives every payload through
+        /// `window.renderTranscript` in the page's own content world. A link in
+        /// attacker-controlled transcript text that navigated it in place would
+        /// therefore be handed the transcript itself, and the hijacked document
+        /// would survive into the next session through the WebView pool. Only our
+        /// own document load happens here; a tapped link goes to the system
+        /// browser, which has all the chrome this pane does not.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            if awaitingDocumentNavigation, navigationAction.navigationType == .other {
+                awaitingDocumentNavigation = false
+                decisionHandler(.allow)
+                return
+            }
+            decisionHandler(.cancel)
+            // Web links only, and only ones that tried to replace this pane.
+            // Custom schemes stay inert rather than becoming a way for transcript
+            // text to reach another app, and the `target="_blank"` media links
+            // stay inert because Safari cannot authenticate them.
+            guard navigationAction.targetFrame?.isMainFrame == true,
+                  let url = navigationAction.request.url,
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https" else {
+                return
+            }
+            Task { @MainActor in
+                UIApplication.shared.open(url)
+            }
+        }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
+            awaitingDocumentNavigation = false
             Task { @MainActor in
                 self.onLifecycle?("webview_html_loaded")
             }
@@ -789,6 +834,7 @@ struct WebTranscriptView: UIViewRepresentable {
         func loadDocument(serverURL: String?, on webView: WKWebView) {
             documentServerURL = serverURL
             isLoaded = false
+            awaitingDocumentNavigation = true
             webView.loadHTMLString(
                 WebTranscriptView.documentHTML,
                 baseURL: serverURL.flatMap { URL(string: $0) }
@@ -798,6 +844,11 @@ struct WebTranscriptView: UIViewRepresentable {
         func adoptDocument(serverURL: String, loaded: Bool) {
             documentServerURL = serverURL
             isLoaded = loaded
+            // An unfinished spare's document load is the pool's, and this
+            // coordinator takes over as navigation delegate mid-flight — possibly
+            // before WebKit has asked anyone for a policy. Arm the gate so that
+            // decision still resolves to the document we are waiting on.
+            awaitingDocumentNavigation = !loaded
             // A recycled document keeps the previous session's stickiness;
             // `didFinish` will not fire again to reset it.
             guard loaded else { return }
@@ -1188,20 +1239,20 @@ enum WebTranscriptWebViewPool {
     private static let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
     private static var warmedWebView: TranscriptWebView?
     private static var warmedWebViewLoaded = false
-    private static var prewarmDelegate: WebTranscriptPrewarmDelegate?
+    private static var spareDelegate: WebTranscriptSpareDelegate?
 
     static func prewarm() {
         guard warmedWebView == nil else { return }
         let startedAt = Date()
         logger.info("webkit prewarm requested")
-        let delegate = WebTranscriptPrewarmDelegate {
+        let delegate = WebTranscriptSpareDelegate(allowsDocumentLoad: true) {
             Task { @MainActor in
                 warmedWebViewLoaded = true
                 logger.info("webkit prewarm loaded")
             }
         }
         let webView = configuredWebView()
-        prewarmDelegate = delegate
+        spareDelegate = delegate
         webView.navigationDelegate = delegate
         webView.loadHTMLString(WebTranscriptView.documentHTML, baseURL: nil)
         warmedWebView = webView
@@ -1212,7 +1263,7 @@ enum WebTranscriptWebViewPool {
     static func takeOrCreate() -> PooledWebView {
         if let webView = warmedWebView {
             warmedWebView = nil
-            prewarmDelegate = nil
+            spareDelegate = nil
             let loaded = warmedWebViewLoaded
             warmedWebViewLoaded = false
             logger.info("webkit prewarm reused loaded=\(loaded, privacy: .public)")
@@ -1225,8 +1276,14 @@ enum WebTranscriptWebViewPool {
     static func recycle(_ webView: TranscriptWebView) {
         // A just-popped transcript is a better warm spare than a new WebView
         // still starting its content process. Keep one globally bounded spare.
-        prewarmDelegate = nil
         webView.prepareForTranscriptReuse()
+        // An idle spare still runs a live content process, and the session
+        // coordinator that gated its navigation is gone. Keep a delegate on it
+        // that refuses everything, so nothing the previous document scheduled can
+        // replace the document the next session adopts.
+        let delegate = WebTranscriptSpareDelegate(allowsDocumentLoad: false)
+        spareDelegate = delegate
+        webView.navigationDelegate = delegate
         warmedWebView = webView
         warmedWebViewLoaded = true
         logger.info("webkit recycled")
@@ -1239,15 +1296,34 @@ enum WebTranscriptWebViewPool {
     }
 }
 
-private final class WebTranscriptPrewarmDelegate: NSObject, WKNavigationDelegate {
-    private let onLoaded: () -> Void
+/// Owns navigation for a WebView that no session is attached to: the prewarmed
+/// spare and the recycled spare. It allows the one document load the pool itself
+/// starts and cancels everything else, so a spare can never be navigated away
+/// from the transcript document while it waits to be adopted.
+private final class WebTranscriptSpareDelegate: NSObject, WKNavigationDelegate {
+    private let onLoaded: (() -> Void)?
+    private var allowsDocumentLoad: Bool
 
-    init(onLoaded: @escaping () -> Void) {
+    init(allowsDocumentLoad: Bool, onLoaded: (() -> Void)? = nil) {
+        self.allowsDocumentLoad = allowsDocumentLoad
         self.onLoaded = onLoaded
     }
 
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        guard allowsDocumentLoad, navigationAction.navigationType == .other else {
+            decisionHandler(.cancel)
+            return
+        }
+        allowsDocumentLoad = false
+        decisionHandler(.allow)
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        onLoaded()
+        onLoaded?()
     }
 }
 
@@ -1926,7 +2002,7 @@ private extension WebTranscriptView {
 
     function inlineMarkdown(value) {
       let html = escapeHtml(value);
-      html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+      html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" rel="noreferrer noopener">$1</a>');
       html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
       html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
       html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');

@@ -173,11 +173,7 @@ enum SharedAuthStore {
         guard let data = value.data(using: .utf8) else {
             return
         }
-        saveKeychainData(
-            data,
-            account: nativeRefreshTokenStorageKey(for: serverURL),
-            accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        )
+        saveKeychainData(data, account: nativeRefreshTokenStorageKey(for: serverURL))
         saveNativeRefreshTokenExpiry(expiresAt, for: serverURL)
     }
 
@@ -369,16 +365,15 @@ enum SharedAuthStore {
         ]
     }
 
-    private static func saveKeychainData(
-        _ data: Data,
-        account: String,
-        accessible: CFString = kSecAttrAccessibleAfterFirstUnlock
-    ) {
+    /// Always `ThisDeviceOnly`: everything stored here is a credential, and a
+    /// non-`ThisDeviceOnly` item rides an encrypted backup and restores onto a
+    /// different device.
+    private static func saveKeychainData(_ data: Data, account: String) {
         let query = keychainQuery(account: account)
         SecItemDelete(query as CFDictionary)
         var addQuery = query
         addQuery[kSecValueData as String] = data
-        addQuery[kSecAttrAccessible as String] = accessible
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(addQuery as CFDictionary, nil)
     }
 
