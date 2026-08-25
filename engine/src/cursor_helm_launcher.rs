@@ -379,6 +379,9 @@ pub(crate) fn create_cursor_chat(bin: &str, cwd: &Path) -> anyhow::Result<String
     // blocks Helm before its managed state can be published. Treat the first
     // valid UUID line as the command's completion boundary and reap the
     // provider helper immediately.
+    // no managed identity: this reserves a conversation id before the
+    // session exists, so there is no id to claim yet. The Helm launch that
+    // follows carries it, and this helper is reaped as soon as it prints.
     let mut command = std::process::Command::new(bin);
     command
         .arg("create-chat")

@@ -132,6 +132,17 @@ impl ManagedIdentity {
                 key.starts_with("LONGHOUSE_"),
                 "{key} is not a Longhouse key; set provider-private variables directly"
             );
+            // A launcher may carry extra identity, never contradict the required
+            // overlay. Allowing it to would produce a process whose session id
+            // disagrees with the one the launch registered, while every check
+            // here still passed.
+            debug_assert!(
+                !REQUIRED_IDENTITY_KEYS.contains(key),
+                "{key} is set by the overlay; a launcher cannot override it"
+            );
+            if REQUIRED_IDENTITY_KEYS.contains(key) {
+                continue;
+            }
             sink.set_var(key, value);
         }
     }
@@ -157,6 +168,9 @@ impl ManagedIdentity {
             pairs.push((key.as_bytes().to_vec(), value.into_bytes()));
         }
         for (key, value) in owned {
+            if REQUIRED_IDENTITY_KEYS.contains(key) {
+                continue;
+            }
             pairs.push((key.as_bytes().to_vec(), value.clone()));
         }
         pairs

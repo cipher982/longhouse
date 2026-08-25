@@ -2276,6 +2276,8 @@ fn resolve_provider_binary(
 
 fn ensure_claude_channel_prerequisite(binary: &str) -> anyhow::Result<()> {
     let output = Command::new(binary)
+        // no managed identity: asks the CLI whether it is logged in and
+        // exits. Nothing is launched, so nothing can be misattributed.
         .args(["auth", "status", "--json"])
         .output()
         .with_context(|| format!("run {binary} auth status"))?;
@@ -4225,6 +4227,7 @@ fn record_codex_contract(
 }
 
 fn codex_binary_version(codex_bin: &str) -> anyhow::Result<String> {
+    // no managed identity: reads the binary's version string and exits.
     let output = Command::new(codex_bin)
         .arg("--version")
         .output()

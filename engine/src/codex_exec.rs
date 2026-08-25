@@ -527,20 +527,28 @@ async fn spawn_initialized_codex_worker(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Actor and surface are in NEVER_INHERITED_KEYS, so they go through the
+    // overlay rather than after it. Setting them afterwards worked only because
+    // the scrub happens to run first, which is the ordering hazard the `owned`
+    // parameter exists to remove.
+    let mut owned: Vec<(&str, &str)> = Vec::new();
+    if let Some(actor) = launch_actor {
+        owned.push(("LONGHOUSE_LAUNCH_ACTOR", actor));
+    }
+    if let Some(surface) = launch_surface {
+        owned.push(("LONGHOUSE_LAUNCH_SURFACE", surface));
+    }
     if let Some(session_id) = session_id {
-        ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command, &[]);
+        ManagedIdentity::new(ManagedProvider::Codex, session_id).apply(&mut command, &owned);
     } else {
         // An anonymous worker is meant to carry no session. Scrubbing is what
         // makes that true: without it the worker carries whichever managed
         // session happened to spawn it.
         ManagedIdentity::scrub(&mut command);
+        for (key, value) in &owned {
+            command.env(key, value);
+        }
         command.env("LONGHOUSE_CONSOLE_WORKER", "1");
-    }
-    if let Some(actor) = launch_actor {
-        command.env("LONGHOUSE_LAUNCH_ACTOR", actor);
-    }
-    if let Some(surface) = launch_surface {
-        command.env("LONGHOUSE_LAUNCH_SURFACE", surface);
     }
     #[cfg(unix)]
     unsafe {

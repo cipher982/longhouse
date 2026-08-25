@@ -316,7 +316,13 @@ pub fn attach(
             "--session",
             &state.provider_session_id,
         ])
-        .current_dir(&state.cwd)
+        .current_dir(&state.cwd);
+    // An attached TUI is a real interactive provider process on a managed
+    // session, so it carries the same identity as the launch. Codex's attach
+    // always did; this one did not.
+    ManagedIdentity::new(ManagedProvider::Opencode, normalize_uuid(session_id, "session_id")?)
+        .apply(&mut command, &[]);
+    command
         .env("OPENCODE_SERVER_USERNAME", &state.username)
         .env("OPENCODE_SERVER_PASSWORD", &state.password);
     if let Some(model) = std::env::var("LONGHOUSE_OPENCODE_MODEL")

@@ -34,6 +34,23 @@ CONTRACT = "managed_identity_contract.rs"
 # how each site drifted from the others in the first place.
 GUARDED = ("LONGHOUSE_MANAGED_SESSION_ID", "LONGHOUSE_MANAGED_PROVIDER")
 
+# A provider binary is spawned through a variable naming it: `config.claude_bin`,
+# `codex_bin`, `binary`. Matching the spawn rather than the module means a new
+# launcher is covered the day it is written, with nothing to add to a list.
+# `<name>_bin`, or a bare `binary`/`bin` resolved from a provider. Deliberately
+# not `<anything>_binary`: `trampoline_binary` is not a provider, and matching it
+# produced a finding that had to be waved away rather than answered.
+PROVIDER_SPAWN = re.compile(
+    r"Command::new\(\s*&?(?:mut\s+)?(?:config\.|state\.)?(?:\w+_bin|binary|bin)\b"
+    # Cursor Helm never calls Command::new: it execve's after forkpty because the
+    # child may only call async-signal-safe functions. Matching only Command::new
+    # meant its entire overlay could be deleted and this check stayed green --
+    # which is exactly what a reviewer demonstrated.
+    r"|libc::execve"
+)
+SPAWN_WINDOW = 2500
+NO_IDENTITY_MARKER = "no managed identity:"
+
 
 def _variant(name: str) -> str:
     return "".join(part.capitalize() for part in name.split("_"))
@@ -50,6 +67,45 @@ def _sources() -> dict[Path, str]:
         for path in sorted(ENGINE_SRC.rglob("*.rs"))
         if path.name not in (OVERLAY, CONTRACT)
     }
+
+
+def _functions(body: str) -> dict[str, str]:
+    """Split a Rust file into function bodies by brace matching.
+
+    Window-based matching was wrong in both directions: it missed a launcher that
+    hands its command to a helper, and it could credit a spawn with an apply
+    belonging to the next function down.
+    """
+    functions: dict[str, str] = {}
+    for match in re.finditer(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)", body):
+        start = body.find("{", match.end())
+        if start == -1:
+            continue
+        depth, index = 0, start
+        while index < len(body):
+            if body[index] == "{":
+                depth += 1
+            elif body[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            index += 1
+        functions[match.group(1)] = body[match.start() : index + 1]
+    return functions
+
+
+def _applies(fn_body: str) -> bool:
+    return ".apply(" in fn_body or ".apply_to_pairs(" in fn_body
+
+
+def _enclosing(functions: dict[str, str], body: str, offset: int) -> tuple[str, str] | None:
+    best = None
+    for name, fn_body in functions.items():
+        start = body.find(fn_body)
+        if start <= offset < start + len(fn_body):
+            if best is None or len(fn_body) < len(best[1]):
+                best = (name, fn_body)
+    return best
 
 
 def _console_adapters() -> dict[str, str]:
@@ -99,6 +155,42 @@ def main() -> int:
                     f"{adapter}.rs does not claim identity for {provider}. Another "
                     f"launcher doing so does not cover this one."
                 )
+
+    # The obligation that actually matters, and the one two earlier versions of
+    # this check missed: every place that spawns a provider binary must claim an
+    # identity. Deriving the obligation from a list of lanes covered only the
+    # lane on the list -- Cursor Helm's entire overlay could be deleted and this
+    # check stayed green, because cursor_print.rs was still correct.
+    #
+    # Not every spawn is a session. `codex --version`, `claude auth status` and
+    # the managed-provider trampoline start a process and end; identity would be
+    # meaningless on them. That is a judgement, so the code records it: a spawn
+    # either applies identity or carries a NO_IDENTITY_MARKER line saying why.
+    for path, text in sources.items():
+        body = text.split("#[cfg(test)]")[0]
+        functions = _functions(body)
+        applying = {name for name, fn_body in functions.items() if _applies(fn_body)}
+        for match in PROVIDER_SPAWN.finditer(body):
+            line = body[: match.start()].count("\n") + 1
+            enclosing = _enclosing(functions, body, match.start())
+            if enclosing is None:
+                continue
+            name, fn_body = enclosing
+            if _applies(fn_body):
+                continue
+            # One level of indirection: a launcher may hand the command to a
+            # helper that configures the environment. Deeper than that and the
+            # site should say so itself.
+            if any(f"{helper}(" in fn_body for helper in applying if helper != name):
+                continue
+            if NO_IDENTITY_MARKER in fn_body:
+                continue
+            findings.append(
+                f"{path.relative_to(ROOT)}:{line}: fn {name} spawns a provider binary "
+                f"without claiming an identity. Apply the overlay, or write a "
+                f'"{NO_IDENTITY_MARKER}" comment in this function saying why this '
+                f"process carries none."
+            )
 
     # Constructing without applying claims nothing. Every construction must reach
     # an applier, or it is decoration that satisfies the check above and changes

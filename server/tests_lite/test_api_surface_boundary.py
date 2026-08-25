@@ -92,6 +92,11 @@ def routes() -> dict:
     return json.loads(line[len(marker) :])
 
 
+def _under_api(path: str) -> bool:
+    """`/apiary` is not under `/api`. A prefix test is not a path-boundary test."""
+    return path == API_MOUNT_PATH or path.startswith(f"{API_MOUNT_PATH}/")
+
+
 def test_api_is_served_by_exactly_one_mount_and_it_is_api_app(routes):
     api_mounts = [m for m in routes["mounts"] if m["path"] == API_MOUNT_PATH]
     assert len(api_mounts) == 1, (
@@ -112,7 +117,7 @@ def test_no_route_on_the_outer_app_serves_an_api_path(routes):
     offenders = [
         f"{r['kind']} {r['path']}"
         for r in routes["outer"]
-        if r["path"].startswith(API_MOUNT_PATH) and not r["is_api_app_mount"]
+        if _under_api(r["path"]) and not r["is_api_app_mount"]
     ]
     assert not offenders, (
         "these serve /api from the outer app instead of api_app, so they are "

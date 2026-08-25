@@ -259,6 +259,9 @@ pub async fn readiness_for_contract(
 
 async fn run_probe(binary: &OsStr, argv: &[&str]) -> Option<(bool, String)> {
     let mut command = tokio::process::Command::new(binary);
+    // no managed identity: a readiness probe runs a bounded argv and reads
+    // the result. It starts no session, so an identity would name one that
+    // does not exist.
     command.args(argv);
     command.stdin(std::process::Stdio::null());
     command.kill_on_drop(true);
