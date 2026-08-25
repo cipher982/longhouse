@@ -88,3 +88,39 @@ def test_settlement_needs_a_served_reply_not_just_a_latency():
     # latency must not be read as proof.
     report = {"first_live_frame_s": 0.9, "frame_count": 5, "marker_served": False, "settle_latency_s": 0.3}
     assert producer.assertions_from_report(report)[producer.ASSERTION_SETTLED] is False
+
+
+def test_the_factory_product_argv_parses_without_a_provider():
+    # The factory dispatches a longhouse_product cell as exactly this argv
+    # (provider_factory/assurance.py: `[python, oracle_source,
+    # "--evidence-root", dir]`) -- there is no provider to pass, because the
+    # contract pins `provider: null`. Requiring one here exited 2 before any
+    # evidence was written, which is unreadable from the outside: the factory
+    # reports "producer exited 2 without a result artifact" and cannot say
+    # whether Longhouse failed or the harness did.
+    args = producer._parser().parse_args(["--evidence-root", "/tmp/evidence"])
+    assert args.provider is None
+    assert producer.default_vehicle_provider() in console_providers()
+
+
+def test_the_vehicle_is_chosen_from_the_schema_declared_adapters():
+    assert producer.default_vehicle_provider() == console_providers()[0]
+
+
+def test_the_result_identity_carries_no_provider_but_still_names_the_vehicle(monkeypatch, tmp_path):
+    # A longhouse_product result that names a provider is compared against a
+    # contract pinning `provider: null` and rejected as an inadmissible result
+    # -- indistinguishable, from the outside, from a malformed producer. The
+    # vehicle still has to be recoverable, so it lives beside the identity and
+    # in the observation rather than inside what the result claims to be.
+    report = {"first_live_frame_s": 0.9, "frame_count": 24, "marker_served": True, "settle_latency_s": 0.3}
+    from zerg.qa import console_served_state_core as core
+
+    # core.run stamps the vehicle onto the report it returns, so the stub does
+    # too -- otherwise this asserts against the stub instead of the producer.
+    monkeypatch.setattr(core, "run", lambda args: {**report, "provider": args.provider})
+    result = producer.run_console_served_state(tmp_path, provider="codex", device_id="d", cwd="/tmp/x")
+    assert result["provider"] is None
+    assert result["vehicle_provider"] == "codex"
+    assert result["observation"]["provider"] == "codex"
+    assert result["status"] == "pass"

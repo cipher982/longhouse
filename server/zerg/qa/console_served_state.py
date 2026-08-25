@@ -121,6 +121,22 @@ def assertions_from_report(report: dict) -> dict[str, bool]:
     return {ASSERTION_LIVE: live, ASSERTION_SETTLED: settled}
 
 
+def default_vehicle_provider() -> str:
+    """Pick the provider that drives the turn when the caller names none.
+
+    The factory dispatches a longhouse_product cell as `<oracle> --evidence-root
+    <dir>` and has no provider to pass: the contract pins `provider: null`
+    because the subject is Longhouse. A vehicle is still needed to produce a
+    turn, so choose one here rather than requiring an argument that the only
+    real caller cannot supply. Derived from the console adapters in
+    `schemas/managed_providers.yml` in declared order, so a provider enters or
+    leaves this check by existing there.
+    """
+    if not PROVIDERS:
+        raise RuntimeError("no managed provider declares a console adapter")
+    return PROVIDERS[0]
+
+
 def run_console_served_state(root: Path, *, provider: str, device_id: str, cwd: str) -> dict[str, object]:
     from zerg.qa import console_served_state_core as core
 
@@ -141,7 +157,13 @@ def run_console_served_state(root: Path, *, provider: str, device_id: str, cwd: 
         "schema_version": 1,
         "artifact_kind": "longhouse_console_served_state_result",
         "producer": REGISTRATION.to_dict(),
-        "provider": provider,
+        # The subject is Longhouse, so the identity carries no provider -- the
+        # factory compares this against a contract that pins `provider: null`
+        # and rejects the result outright when it names one. The vehicle that
+        # actually drove the turn is in the observation below, which is where
+        # evidence belongs; it is not part of what this result claims to be.
+        "provider": None,
+        "vehicle_provider": provider,
         "variant": None,
         "scenario_id": SCENARIO_ID,
         "scenario_revision": 1,
@@ -171,9 +193,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.evidence_root is None:
         print(json.dumps({"status": "fail", "failure_code": "evidence_root_missing"}))
         return 2
-    if args.provider is None:
-        print(json.dumps({"status": "fail", "failure_code": "provider_missing"}))
-        return 2
+    provider = args.provider or default_vehicle_provider()
 
     cleanup = {
         "schema_version": 1,
@@ -182,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         "orphan_count": 0,
     }
     try:
-        result = run_console_served_state(args.evidence_root, provider=args.provider, device_id=args.device_id, cwd=args.cwd)
+        result = run_console_served_state(args.evidence_root, provider=provider, device_id=args.device_id, cwd=args.cwd)
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         cleanup["status"] = "fail"
         cleanup["error_type"] = type(exc).__name__
@@ -191,7 +211,8 @@ def main(argv: list[str] | None = None) -> int:
             "schema_version": 1,
             "artifact_kind": "longhouse_console_served_state_result",
             "producer": REGISTRATION.to_dict(),
-            "provider": args.provider,
+            "provider": None,
+            "vehicle_provider": provider,
             "variant": None,
             "scenario_id": SCENARIO_ID,
             "scenario_revision": 1,
