@@ -52,12 +52,21 @@ def validate_managed_hook_scope(auth: object, params: SessionListParams) -> None
     read backend: the live-catalog branch returns without ever reaching
     `list_agent_sessions`, so a guard that only ran here would be dead in
     production.
+
+    Absence is not a match. A token carrying no project compared equal to a
+    request carrying no project, which turned the one bound on a
+    prompt-injectable model into an owner-wide listing whose rows carry
+    ``summary`` and ``first_user_message``. Every hook and coordination token is
+    minted with the launching session's project, and that project is always a
+    non-empty derived string, so requiring one denies nothing legitimate.
     """
 
     if not isinstance(auth, ManagedSessionToken):
         return
 
-    if params.project != auth.project:
+    token_project = str(auth.project or "").strip()
+    requested_project = str(params.project or "").strip()
+    if not token_project or token_project != requested_project:
         raise SessionListingError(
             403,
             "Managed-session hook scope requires a matching project filter",

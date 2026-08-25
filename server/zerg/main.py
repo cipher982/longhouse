@@ -156,7 +156,14 @@ from zerg.services.public_downloads import download_macos_desktop_app_response
 # Docs and the raw schema describe the whole /api/agents/* machine surface and
 # load an unpinned CDN bundle on the origin that holds longhouse_session. Keep
 # them for local work; never expose them on a deployed instance.
-_docs_enabled = _settings.testing or _settings.auth_disabled or _settings.dev_admin
+#
+# Gate on an explicit development signal only. AUTH_DISABLED is not one: a
+# public no-auth deployment is supported (LONGHOUSE_ALLOW_PUBLIC_NO_AUTH, see
+# docker/runtime.dockerfile) and DEMO_MODE implies auth_disabled too, so
+# including it published the whole inventory in exactly the configuration that
+# has nothing else in front of it. DEV_ADMIN=1 ships in .env.example and
+# scripts/dev-docker.sh, so local dev keeps /docs.
+_docs_enabled = _settings.testing or _settings.dev_admin
 
 app = FastAPI(
     redirect_slashes=True,

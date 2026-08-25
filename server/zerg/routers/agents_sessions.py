@@ -842,7 +842,10 @@ def get_startup_context(
     """Return a small project-scoped continuity block for session-start hooks."""
 
     if isinstance(_auth, ManagedSessionToken):
-        if project != _auth.project:
+        # Absence is not a match: a token with no project must not satisfy the
+        # bound, the same way it must not on /agents/sessions.
+        token_project = str(_auth.project or "").strip()
+        if not token_project or token_project != str(project or "").strip():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Managed-session hook scope requires a matching project filter",

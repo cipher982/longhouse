@@ -19,6 +19,21 @@ enum TimelineCacheStore {
     private static let maxSessions = 40
     private static let defaultMaxAge: TimeInterval = 24 * 60 * 60
 
+    /// The `UserDefaults` key this cache used before it moved to disk. Purged
+    /// on write and on clear: the old blob carries transcript-derived text and
+    /// rides the encrypted backup until something deletes it.
+    static let legacyDefaultsKey = "longhouse.timeline.sessions.cache.v1"
+
+    /// How the cache file is written. An atomic write replaces the file, so the
+    /// data-protection class has to be requested on every write rather than
+    /// inherited once from the directory. Tests assert against this constant
+    /// because the simulator does not implement data protection and never
+    /// reports a protection class back.
+    static let fileWriteOptions: Data.WritingOptions = [
+        .atomic,
+        .completeFileProtectionUntilFirstUserAuthentication,
+    ]
+
     private struct Payload: Codable {
         let version: Int
         let serverURL: String
@@ -34,6 +49,7 @@ enum TimelineCacheStore {
         directory: URL? = nil,
         now: Date = Date()
     ) {
+        purgeLegacyDefaultsCache()
         let normalizedServer = normalize(serverURL)
         guard !normalizedServer.isEmpty else { return }
         let payload = Payload(
@@ -48,7 +64,7 @@ enum TimelineCacheStore {
         ensureDirectory(directoryURL)
         let url = directoryURL.appendingPathComponent(fileName, isDirectory: false)
         do {
-            try data.write(to: url, options: .atomic)
+            try data.write(to: url, options: fileWriteOptions)
         } catch {
             return
         }
@@ -72,8 +88,17 @@ enum TimelineCacheStore {
     }
 
     static func clear(directory: URL? = nil) {
+        purgeLegacyDefaultsCache()
         guard let url = cacheFileURL(directory) else { return }
         try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Delete the pre-disk cache blob. Not a migration: the old value is never
+    /// read back, only removed, so transcript-derived text stops riding the
+    /// device backup on installs that ran an earlier build.
+    static func purgeLegacyDefaultsCache(_ defaults: UserDefaults = .standard) {
+        guard defaults.object(forKey: legacyDefaultsKey) != nil else { return }
+        defaults.removeObject(forKey: legacyDefaultsKey)
     }
 
     static func clear(serverURL: String, directory: URL? = nil) {
@@ -113,10 +138,13 @@ enum TimelineCacheStore {
     }
 
     private static func ensureDirectory(_ url: URL) {
-        guard !FileManager.default.fileExists(atPath: url.path) else { return }
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [
-            .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication,
-        ])
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [
+                .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication,
+            ])
+        }
+        // Re-applied on every save: a directory that already existed (created by
+        // an older build, or restored) would otherwise never be marked.
         excludeFromBackup(url)
     }
 

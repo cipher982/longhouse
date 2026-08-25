@@ -12,6 +12,8 @@ from fastapi import HTTPException
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
+from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
@@ -77,15 +79,70 @@ def _raise_share_error(exc: SessionShareError) -> None:
     raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
-def _require_session_owner(db: Session, *, session_id: UUID, user_id: int) -> None:
+def _share_store_db():
+    """Yield the archive session that holds share rows, or None.
+
+    ``session_shares`` and ``session_share_events`` are declared on the archive
+    ``Base``; they exist in no other schema. Every file-backed deployment runs
+    with the live catalog enabled, and there ``get_db`` raises 503 from the
+    dependency, before any handler body runs -- which is exactly what kept the
+    ownership check below off the production path. Yielding None instead puts
+    the check first and lets the handler name what is actually unavailable.
+    """
+
+    if database_module.live_catalog_enabled():
+        yield None
+        return
+    with database_module.get_session_factory()() as db:
+        yield db
+
+
+# Same seam as the neighbouring routers: keep ``get_db`` as the exact callable
+# in legacy/test mode so dependency overrides still bind, and take the
+# catalog-aware generator everywhere a live catalog is configured.
+_share_store_db_dependency = get_db if catalog_db_dependency() is get_db else _share_store_db
+
+
+def _require_share_store(db: Session | None) -> Session:
+    """Fail loudly when share records have no store on this deployment."""
+
+    if db is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "session_shares_unavailable",
+                "message": (
+                    "Share links are unavailable: share records live only in the archive schema, which this instance does not serve."
+                ),
+            },
+        )
+    return db
+
+
+def _require_session_owner(db: Session | None, *, session_id: UUID, user_id: int) -> None:
     """Fail closed unless the caller demonstrably owns this session.
 
-    Ownership carries two independent signals: an input the caller authored on
-    the session, or the device token the session was ingested under (ingest
-    stamps ``device_id`` from the authenticated token). Shadow sessions never
-    have inputs, so the device signal is the only one they carry, and a session
-    with neither signal is not shareable by anyone.
+    Two read backends, one rule. Under the live catalog the archive tables this
+    used to query are not written at all, so ownership is resolved where the
+    canonical session facts live: catalogd's owner-scoped session read, which
+    returns nothing unless a durable row binds the session to this owner. An
+    unreachable catalogd also returns nothing, so the closed direction is the
+    failure direction.
+
+    On the archive backend, ownership carries two independent signals: an input
+    the caller authored on the session, or the device token the session was
+    ingested under (ingest stamps ``device_id`` from the authenticated token).
+    Shadow sessions never have inputs, so the device signal is the only one they
+    carry, and a session with neither signal is not shareable by anyone.
     """
+    if database_module.live_catalog_enabled():
+        from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+        if load_live_control_session_snapshot(session_id, owner_id=user_id) is None:
+            _raise_share_error(SessionShareNotFound())
+        return
+
+    assert db is not None
     authored = db.query(SessionInput.id).filter(SessionInput.session_id == session_id, SessionInput.owner_id == user_id).first()
     if authored is not None:
         return
@@ -101,11 +158,15 @@ def _require_session_owner(db: Session, *, session_id: UUID, user_id: int) -> No
 def create_timeline_session_share(
     session_id: UUID,
     body: CreateSessionShareRequest | None = None,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(_share_store_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> SessionShareResponse:
     body = body or CreateSessionShareRequest()
+    # Ownership first, on both backends, so no deployment can mint a link for a
+    # session the caller does not own -- and so an unavailable store cannot
+    # short-circuit the check.
     _require_session_owner(db, session_id=session_id, user_id=int(current_user.id))
+    db = _require_share_store(db)
     try:
         share, token = create_session_share(
             db,
@@ -132,9 +193,10 @@ def create_timeline_session_share(
 @router.delete("/timeline/session-shares/{share_id}", response_model=SessionShareResolveResponse)
 def revoke_timeline_session_share(
     share_id: int,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(_share_store_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> SessionShareResolveResponse:
+    db = _require_share_store(db)
     try:
         share = revoke_session_share(db, share_id=share_id, actor_user_id=int(current_user.id))
     except SessionShareError as exc:
@@ -151,9 +213,10 @@ def revoke_timeline_session_share(
 @router.get("/timeline/session-shares/{token}/resolve", response_model=SessionShareResolveResponse)
 def resolve_timeline_session_share(
     token: str,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(_share_store_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> SessionShareResolveResponse:
+    db = _require_share_store(db)
     try:
         resolved = resolve_session_share(db, token=token, actor_user_id=int(current_user.id), record_access=True)
     except SessionShareError as exc:
@@ -170,8 +233,9 @@ def resolve_timeline_session_share(
 @public_router.get("/{token}/preview", response_model=SessionSharePreviewResponse)
 def preview_public_session_share(
     token: str,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(_share_store_db_dependency),
 ) -> SessionSharePreviewResponse:
+    db = _require_share_store(db)
     try:
         resolved = resolve_session_share(db, token=token)
     except SessionShareError as exc:
