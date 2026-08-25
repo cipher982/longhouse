@@ -9432,6 +9432,193 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def read_session_purge_manifest(
+        self,
+        *,
+        session_id: UUID,
+        after_kind: str | None,
+        after_key: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Page every object a session owns, for deletion. No filters at all.
+
+        Deletion is the one reader that must see objects every other read hides:
+        retired raw and render rows, superseded render generations, and the
+        media a session referenced. A filter here would leave bytes on disk with
+        nothing left able to name them.
+
+        Ownership comes off the durable ``sessions`` row, which survives the
+        tombstone, so a repeated delete can still prove who is asking. The page
+        is ordered by ``(kind, key)`` and the cursor is that pair, so a walk
+        visits each object exactly once.
+        """
+
+        sessions = StorageSession.__table__
+        tombstones = LiveSessionTombstone.__table__
+        raw = LiveRawObject.__table__
+        render = RenderObject.__table__
+        media_refs = SessionMediaRef.__table__
+        media = MediaObject.__table__
+        session_key = str(session_id)
+        with _read_snapshot(self.engine) as connection:
+            session_row = (
+                connection.execute(select(sessions.c.tenant_id, sessions.c.owner_id).where(sessions.c.session_id == session_key))
+                .mappings()
+                .first()
+            )
+            deleted = connection.execute(
+                select(tombstones.c.deletion_revision).where(tombstones.c.session_id == session_key)
+            ).scalar_one_or_none()
+            rows: list[dict[str, Any]] = []
+            if session_row is not None:
+                # "media" < "raw" < "render" lexicographically, which is the
+                # order the cursor walks and the order these branches produce.
+                remaining = limit + 1
+                for kind in ("media", "raw", "render"):
+                    if remaining <= 0:
+                        break
+                    if after_kind is not None and kind < after_kind:
+                        continue
+                    cursor = after_key if (after_kind is not None and kind == after_kind) else None
+                    if kind == "media":
+                        statement = (
+                            select(
+                                media_refs.c.media_hash,
+                                media.c.object_path,
+                                media.c.byte_size,
+                                media.c.state,
+                            )
+                            .select_from(media_refs.outerjoin(media, media.c.media_hash == media_refs.c.media_hash))
+                            .where(media_refs.c.session_id == session_key)
+                            .group_by(media_refs.c.media_hash)
+                        )
+                        if cursor is not None:
+                            statement = statement.where(media_refs.c.media_hash > cursor)
+                        found = connection.execute(statement.order_by(media_refs.c.media_hash.asc()).limit(remaining)).mappings().all()
+                        for row in found:
+                            media_hash = str(row["media_hash"])
+                            # Another session still holding an active reference
+                            # owns these bytes as much as this one does. The
+                            # fence retired this session's refs, so anything
+                            # still active belongs to somebody else.
+                            shared = (
+                                connection.execute(
+                                    select(media_refs.c.id).where(
+                                        media_refs.c.media_hash == media_hash,
+                                        media_refs.c.session_id != session_key,
+                                        media_refs.c.state == "active",
+                                    )
+                                ).first()
+                                is not None
+                            )
+                            rows.append(
+                                {
+                                    "kind": "media",
+                                    "key": media_hash,
+                                    "object_path": str(row["object_path"]) if row["object_path"] else None,
+                                    "object_hash": media_hash,
+                                    "byte_size": int(row["byte_size"] or 0),
+                                    "shared": shared,
+                                    "state": str(row["state"]) if row["state"] else None,
+                                }
+                            )
+                    elif kind == "raw":
+                        statement = select(
+                            raw.c.envelope_id,
+                            raw.c.object_path,
+                            raw.c.object_hash,
+                            raw.c.compressed_size,
+                        ).where(raw.c.session_id == session_key)
+                        if cursor is not None:
+                            statement = statement.where(raw.c.envelope_id > cursor)
+                        found = connection.execute(statement.order_by(raw.c.envelope_id.asc()).limit(remaining)).mappings().all()
+                        rows.extend(
+                            {
+                                "kind": "raw",
+                                "key": str(row["envelope_id"]),
+                                "object_path": str(row["object_path"]),
+                                "object_hash": str(row["object_hash"]),
+                                "byte_size": int(row["compressed_size"] or 0),
+                                "shared": False,
+                                "state": None,
+                            }
+                            for row in found
+                        )
+                    else:
+                        statement = select(
+                            render.c.object_id,
+                            render.c.object_path,
+                            render.c.object_hash,
+                            render.c.compressed_size,
+                        ).where(render.c.session_id == session_key)
+                        if cursor is not None:
+                            statement = statement.where(render.c.object_id > cursor)
+                        found = connection.execute(statement.order_by(render.c.object_id.asc()).limit(remaining)).mappings().all()
+                        rows.extend(
+                            {
+                                "kind": "render",
+                                "key": str(row["object_id"]),
+                                "object_path": str(row["object_path"]),
+                                "object_hash": str(row["object_hash"]),
+                                "byte_size": int(row["compressed_size"] or 0),
+                                "shared": False,
+                                "state": None,
+                            }
+                            for row in found
+                        )
+                    remaining = limit + 1 - len(rows)
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            return {
+                "session_found": session_row is not None,
+                "owner_id": (str(session_row["owner_id"]) if session_row is not None and session_row["owner_id"] is not None else None),
+                "tenant_id": str(session_row["tenant_id"]) if session_row is not None else None,
+                "deleted": deleted is not None,
+                "objects": rows,
+                "has_more": has_more,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def list_owned_sessions(self, *, owner_id: str, after_session_id: str | None, limit: int) -> dict[str, Any]:
+        """Page every session bound to one owner, including deleted ones.
+
+        The timeline listing hides archived, snoozed, hidden, and tombstoned
+        sessions. A user deleting their history means those too, so this listing
+        applies no user_state filter and pages forward by session id: each row
+        is visited once even while rows change underneath the walk.
+        """
+
+        sessions = StorageSession.__table__
+        tombstones = LiveSessionTombstone.__table__
+        with _read_snapshot(self.engine) as connection:
+            statement = select(
+                sessions.c.session_id,
+                sessions.c.tenant_id,
+                sessions.c.owner_id,
+            ).where(sessions.c.owner_id == owner_id)
+            if after_session_id is not None:
+                statement = statement.where(sessions.c.session_id > after_session_id)
+            found = list(connection.execute(statement.order_by(sessions.c.session_id.asc()).limit(limit + 1)).mappings().all())
+            has_more = len(found) > limit
+            found = found[:limit]
+            rows = []
+            for row in found:
+                session_key = str(row["session_id"])
+                deleted = connection.execute(select(tombstones.c.session_id).where(tombstones.c.session_id == session_key)).first()
+                rows.append(
+                    {
+                        "session_id": session_key,
+                        "tenant_id": str(row["tenant_id"]),
+                        "owner_id": str(row["owner_id"]),
+                        "deleted": deleted is not None,
+                    }
+                )
+            return {
+                "sessions": rows,
+                "has_more": has_more,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
     def repair_storage_semantic_projection(
         self,
         *,

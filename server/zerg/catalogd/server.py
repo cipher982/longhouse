@@ -626,6 +626,10 @@ class CatalogDaemon:
             return await self._read_storage_session_render_manifest(request)
         if request.method == "storage.session.render_objects.list.v2":
             return await self._list_storage_session_render_objects(request)
+        if request.method == "storage.session.purge_manifest.v2":
+            return await self._read_session_purge_manifest(request)
+        if request.method == "storage.session.owned.list.v2":
+            return await self._list_owned_sessions(request)
         if request.method == "storage.session.semantic_projection.repair.v2":
             return await self._repair_storage_semantic_projection(request)
         if request.method == "storage.media.commit.v2":
@@ -2925,6 +2929,62 @@ class CatalogDaemon:
             generation_id=generation_id,
             snapshot_revision=snapshot_revision,
             after_object_id=after_object_id,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_session_purge_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "after_kind", "after_key", "limit"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "storage.session.purge_manifest.v2 has invalid parameters")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        after_kind = request.params["after_kind"]
+        after_key = request.params["after_key"]
+        if after_kind is not None and after_kind not in ("media", "raw", "render"):
+            return self._error(request, "invalid_cursor", "after_kind must be media, raw, render, or null")
+        if (after_kind is None) != (after_key is None):
+            return self._error(request, "invalid_cursor", "after_kind and after_key must be given together")
+        if after_key is not None and not _is_string(after_key, maximum=255):
+            return self._error(request, "invalid_cursor", "after_key must be a bounded non-empty string")
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        assert self._store is not None
+        # A whole-corpus deletion pages this in the background; keep it off the
+        # bounded interactive pool so timeline reads keep their admission.
+        result = await self._run_projector_read_store(
+            self._store.read_session_purge_manifest,
+            session_id=session_id,
+            after_kind=after_kind,
+            after_key=after_key,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_owned_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"owner_id", "after_session_id", "limit"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "storage.session.owned.list.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        if not _is_string(owner_id, maximum=64):
+            return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
+        after_session_id = request.params["after_session_id"]
+        if after_session_id is not None:
+            try:
+                after_session_id = str(_canonical_uuid(after_session_id, "after_session_id"))
+            except ValueError as exc:
+                return self._error(request, "invalid_cursor", str(exc))
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        assert self._store is not None
+        result = await self._run_projector_read_store(
+            self._store.list_owned_sessions,
+            owner_id=owner_id,
+            after_session_id=after_session_id,
             limit=limit,
         )
         return CatalogRpcResponse(id=request.id, result=result)
