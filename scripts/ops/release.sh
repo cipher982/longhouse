@@ -132,13 +132,18 @@ gh release create "$VERSION" \
 echo "Release $VERSION created. Waiting for publish.yml and local-runtime-release.yml to finish..."
 echo "(macOS notarization can take a while. Default Apple wait: 330 minutes.)"
 
-# Publishing a release does not always produce release-event runs. It did not on
-# 2026-08-26: the release was published, the tag resolved, both workflows were
-# active and valid, and no run ever appeared. This function used to poll for six
-# hours and then fail, which turns a recoverable hiccup into a lost afternoon.
-# Both workflows accept workflow_dispatch with a tag_name, so after a short
-# grace period we dispatch the workflow ourselves and wait on that run instead.
-DISPATCH_GRACE_SECONDS="${DISPATCH_GRACE_SECONDS:-180}"
+# Release-event runs can be badly delayed. On 2026-08-26 the release published
+# at 16:11 and the runs did not appear until 16:30 -- nineteen minutes, with the
+# tag resolved, the commit on main, and both workflows active the whole time.
+#
+# The fallback below exists for the case where they never arrive at all, and its
+# fuse is deliberately long. A short one is actively harmful: dispatching at
+# three minutes on that release produced a second publish run, which uploaded
+# the wheel first and left the real release-event run to die on "400 File
+# already exists", plus two concurrent macOS signing jobs racing to attach the
+# same assets. Waiting costs nothing; dispatching early costs a failed run and a
+# duplicate notarization.
+DISPATCH_GRACE_SECONDS="${DISPATCH_GRACE_SECONDS:-1800}"
 
 wait_run() {
   local workflow="$1"
