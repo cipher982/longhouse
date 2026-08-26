@@ -518,6 +518,11 @@ def _control_unavailable_sentence(session_state: SessionStateFacts) -> str:
     # to act on, and it is why Resume is unavailable. Everything below —
     # reattach, lease connection state — is about a run that is still going,
     # so an ended run answers before all of it.
+    # Closed dominates everything below: the primary label already says Closed,
+    # and the access label is dropped for the same reason. Saying "run ended"
+    # or naming a lease here describes a session that is simply over.
+    if session_state.disposition.state == "closed":
+        return "This session is closed."
     run_ended = session_state.mode == "helm" and session_state.run is not None and session_state.run.lifecycle == "ended"
     if run_ended and session_state.host.state not in {"offline", "stale"}:
         if actions.resume.state == "available":

@@ -69,6 +69,13 @@ export function getSessionInteractionCapabilities({
     facts.host.state !== "stale";
   const resumeAction = facts.control.actions.resume;
   const controlUnavailableDescription = (() => {
+    // A closed session's label already says Closed, and the server drops its
+    // access label for the same reason. Without this the description fell
+    // through to lease vocabulary and offered "Longhouse can't confirm the
+    // control link" for a session that is simply over.
+    if (facts.disposition.state === "closed") {
+      return `This ${providerLabel} session is closed.`;
+    }
     // An ended Helm run is not a control fault. Ending the run clears the
     // durable run id, which rejects every run-bound control head by design, so
     // control reads owned/unknown and this fell through to "Longhouse can't

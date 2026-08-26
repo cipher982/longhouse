@@ -621,6 +621,26 @@ describe("getSessionInteractionCapabilities", () => {
     expect(offline.composerDisabledReason).toMatch(/machine running this Codex session is offline/i);
   });
 
+  it("says a closed session is closed instead of naming a lease", () => {
+    const base = makeSessionStateFacts({ access: "reattach", closed: true });
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        session_state: {
+          ...base,
+          mode: "helm",
+          control: { ...base.control, connection: "unknown" },
+        },
+        capabilities: makeCapabilities({ host_reattach_available: true }),
+      }),
+    });
+
+    expect(capabilities.capabilityLabel).toBe("Closed");
+    expect(capabilities.composerDisabledReason).toMatch(/session is closed/i);
+    expect(capabilities.composerDisabledReason).not.toMatch(/confirm the control link/i);
+    expect(capabilities.composerDisabledReason).not.toMatch(/run has ended/i);
+  });
+
   it("names the offline machine rather than offering a reattach it cannot reach", () => {
     // Reattach eligibility is projected from a durable connection row that
     // never consults host state. Server, web and iOS all have to answer this

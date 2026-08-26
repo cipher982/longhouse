@@ -62,9 +62,16 @@ export function SessionContextPane({
   const turnCount = session.user_messages + session.assistant_messages;
   const homeLabel = normalizeExecutionVenueLabel(session.home_label);
   const sessionControl = session.control ?? null;
-  const attachCommand = interaction.hostReattachAvailable
-    ? sessionControl?.attach_command?.trim() || null
-    : null;
+  // Reattach eligibility is projected from a durable connection row that never
+  // consults host state, so it survives the machine going away. Offering the
+  // attach command beside "the machine running this session is offline" tells
+  // the user to run something on a machine Longhouse cannot reach.
+  const hostReachable =
+    session.session_state.host.state !== "offline" && session.session_state.host.state !== "stale";
+  const attachCommand =
+    interaction.hostReattachAvailable && hostReachable
+      ? sessionControl?.attach_command?.trim() || null
+      : null;
   const showAttachDebug = Boolean(attachCommand);
   const attachRunnerLabel =
     sessionControl?.source_runner_name?.trim() ||

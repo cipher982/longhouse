@@ -2718,7 +2718,7 @@ fn build_local_status_projection(
         unmanaged_snapshot_complete,
         now,
         None,
-        next_evidence_rotation(),
+        current_evidence_rotation(),
     ));
     payload.sessions = heartbeat::resolved_sessions_from_observations(
         &payload.managed_sessions,
@@ -2936,16 +2936,28 @@ fn record_flight_sample(
     }));
 }
 
-/// Per-heartbeat counter for the reducer identity window.
+/// Per-shipment counter for the reducer identity window.
 ///
 /// The heartbeat's identity budget is smaller than the fact set on a busy
 /// machine, so the window has to move. A counter sweeps it; wall time does not,
 /// because a periodic cadence can alias against a family's length and republish
 /// the same entries forever.
+///
+/// It advances on **shipment**, not on projection build. Not every build is
+/// POSTed — a change that arrives while a POST is in flight is dropped, and the
+/// periodic heartbeat re-POSTs the previous projection — so advancing per build
+/// would make the shipped windows an irregular subsample of the built ones, and
+/// that subsample can alias exactly as wall time did. Reading the value at build
+/// and advancing at ship means every window that is built is shipped before the
+/// next one is chosen.
 static EVIDENCE_ROTATION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-fn next_evidence_rotation() -> usize {
-    EVIDENCE_ROTATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+fn current_evidence_rotation() -> usize {
+    EVIDENCE_ROTATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn advance_evidence_rotation() {
+    EVIDENCE_ROTATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
@@ -3809,6 +3821,9 @@ fn spawn_heartbeat_post(
     signature: String,
     reason: &'static str,
 ) {
+    // This payload's identity window is now committed to the wire, so the next
+    // projection may choose the next one. See `EVIDENCE_ROTATION`.
+    advance_evidence_rotation();
     tasks.spawn_local(async move {
         let join_started = Instant::now();
         let heartbeat_task = tokio::spawn(async move {
