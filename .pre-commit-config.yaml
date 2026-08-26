@@ -145,7 +145,15 @@ repos:
         name: Managed provider contract digest
         entry: scripts/qa/check-provider-contract-digest.sh
         language: system
-        files: '^(engine/src/claude_print\.rs|engine/src/codex_bridge\.rs|engine/src/codex_bridge_ownership\.rs|engine/src/codex_exec\.rs|engine/src/codex_ws_relay\.rs|engine/src/cursor_helm_control\.rs|engine/src/cursor_helm_launcher\.rs|engine/src/cursor_hooks\.rs|engine/src/cursor_print\.rs|engine/src/managed_antigravity_scan\.rs|engine/src/opencode_control\.rs|engine/src/opencode_run\.rs|server/zerg/mcp_server/server\.py|server/zerg/services/managed_local_control\.py|server/zerg/services/shipper/hooks\.py|schemas/managed_providers\.yml)$'
+        # Deliberately unfiltered. The manifest digests every adapter_source
+        # AND every oracle_source, and the hand-maintained path list only ever
+        # listed the adapters -- so editing an oracle
+        # (provider_coordination_oracles.py, cfef3ee8c) left a stale digest that
+        # aborted `make validate` on main and stayed red for days. A list that
+        # must be updated whenever the schema gains a source is a list that goes
+        # stale. The check regenerates and compares in ~0.15s, so running it on
+        # every commit is cheaper than the one CI outage it prevents.
+        always_run: true
         pass_filenames: false
 
       # -----------------------------------------------------------------------
