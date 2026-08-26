@@ -16,6 +16,18 @@ fail() {
 # main(), so the first version of this trap stayed silent too.
 trap 'status=$?; echo "FAIL: aborted at line $LINENO (exit $status): $BASH_COMMAND" >&2' ERR
 
+# Ops output is noise on a passing run and the only diagnostic on a failing
+# one. Swallowing it into /dev/null is what turned a cleanup failure on CI
+# into an unexplained exit code.
+run_ops() {
+  local output status=0
+  output="$(bash "$OPS_SCRIPT" "$@" 2>&1)" || status=$?
+  if (( status != 0 )); then
+    echo "$output" >&2
+    fail "zerg-ops $1 exited $status"
+  fi
+}
+
 sha256_file() {
   local path="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -77,12 +89,12 @@ main() {
   for round in $(seq 1 16); do
     create_db "$live_root/alice/longhouse.db" "$((2 + round))" "$((5 + round))"
     create_db "$live_root/bob/longhouse.db" "$((1 + round))" "$((3 + round))"
-    bash "$OPS_SCRIPT" backup "${common_args[@]}" >/dev/null
+    run_ops backup "${common_args[@]}"
     sleep 1
   done
 
-  bash "$OPS_SCRIPT" verify "${common_args[@]}" >/dev/null
-  bash "$OPS_SCRIPT" monitor "${common_args[@]}" >/dev/null
+  run_ops verify "${common_args[@]}"
+  run_ops monitor "${common_args[@]}"
 
   local old_raw="$backup_root/alice/longhouse.pre-old.db"
   local fresh_raw="$backup_root/bob/longhouse.pre-fresh.db"
@@ -98,7 +110,7 @@ old = time.time() - (49 * 60 * 60)
 os.utime(path, (old, old))
 PY
 
-  bash "$OPS_SCRIPT" cleanup "${common_args[@]}" >/dev/null
+  run_ops cleanup "${common_args[@]}"
   [[ ! -f "$old_raw" ]] || fail "expected stale unmanaged raw backup to be deleted"
   [[ -f "$fresh_raw" ]] || fail "expected fresh unmanaged raw backup to be preserved"
   rm -f "$fresh_raw"
