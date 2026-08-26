@@ -671,7 +671,12 @@ struct SessionView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.isPreparingResume)
                 .accessibilityIdentifier("session-resume-button")
-            } else if detail.isClosed && detail.stateFacts.mode == "helm",
+            // Gate on the run, not the disposition. Exiting a terminal ends the
+            // run but never closes the session, so this line was suppressed for
+            // exactly the sessions that needed it: an ended Helm session showed
+            // no Resume button and no reason why.
+            } else if (detail.isClosed || detail.stateFacts.runLifecycle == "ended"),
+                      detail.stateFacts.mode == "helm",
                       let reason = detail.stateFacts.resume.reason {
                 Text("Resume unavailable: \(resumeReasonLabel(reason)).")
                     .font(.caption)

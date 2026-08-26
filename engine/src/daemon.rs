@@ -2718,6 +2718,7 @@ fn build_local_status_projection(
         unmanaged_snapshot_complete,
         now,
         None,
+        next_evidence_rotation(),
     ));
     payload.sessions = heartbeat::resolved_sessions_from_observations(
         &payload.managed_sessions,
@@ -2933,6 +2934,18 @@ fn record_flight_sample(
             "deferred_retry_count": deferred_retry_count,
         },
     }));
+}
+
+/// Per-heartbeat counter for the reducer identity window.
+///
+/// The heartbeat's identity budget is smaller than the fact set on a busy
+/// machine, so the window has to move. A counter sweeps it; wall time does not,
+/// because a periodic cadence can alias against a family's length and republish
+/// the same entries forever.
+static EVIDENCE_ROTATION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn next_evidence_rotation() -> usize {
+    EVIDENCE_ROTATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {

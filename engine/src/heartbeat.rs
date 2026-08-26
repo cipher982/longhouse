@@ -1197,6 +1197,9 @@ pub(crate) fn machine_evidence_from_observations(
     unmanaged_snapshot_complete: bool,
     now: DateTime<Utc>,
     continuation_observations: Option<&[crate::managed_resume_scan::ResumeContractObservation]>,
+    // Monotonic per-heartbeat counter. Advances the reducer identity window so
+    // every fact eventually ships; see `reducer_evidence_identities`.
+    evidence_rotation: usize,
 ) -> MachineEvidence {
     let envelope_observed_at = now.to_rfc3339();
     let boot_id = machine_boot_id();
@@ -1826,6 +1829,7 @@ pub(crate) fn machine_evidence_from_observations(
         &transcript,
         &readiness,
         &continuation,
+        evidence_rotation,
     );
 
     MachineEvidence {
@@ -1871,6 +1875,7 @@ fn reducer_evidence_identities(
     transcript: &[TranscriptEvidence],
     readiness: &[ReadinessEvidence],
     continuation: &[ContinuationEvidence],
+    rotation: usize,
 ) -> Vec<EvidenceIdentity> {
     let mut families = [
         Vec::new(),
@@ -2012,16 +2017,39 @@ fn reducer_evidence_identities(
     // Reserve capacity across independent families. A process-heavy machine
     // must not starve transcript or readiness evidence merely because process
     // facts sort first.
+    //
+    // Each family is also entered at a rotating offset. Every family is sorted
+    // identically before every heartbeat, so a fixed start index published the
+    // same prefix forever: on a laptop with 432 retained launch contracts the
+    // entries past the budget were never shipped once, and their served
+    // continuation heads stayed permanently absent or expired. The offset makes
+    // the budget a moving window instead of a permanent cut.
+    //
+    // `rotation` is a heartbeat counter, not wall time. A wall-clock offset
+    // steps by however many seconds elapsed, which can alias against a periodic
+    // cadence and starve the same entries forever — the bug this rotation
+    // exists to fix, in a subtler form.
+    //
+    // Each family advances by *its own* share, so consecutive heartbeats
+    // publish adjacent, non-overlapping windows and a family of any length is
+    // swept in `ceil(len / share)` heartbeats. Advancing every family by the
+    // whole budget instead would move a family further than its window is wide
+    // whenever it shares the budget with another, leaving gaps that a common
+    // factor can freeze in place permanently.
+    let shares = family_shares(&families);
     let mut identities = Vec::new();
     let mut index = 0;
     while identities.len() < MAX_REDUCER_EVIDENCE_FACTS {
         let before = identities.len();
-        for family in &families {
-            if let Some(identity) = family.get(index) {
-                identities.push(identity.clone());
-                if identities.len() == MAX_REDUCER_EVIDENCE_FACTS {
-                    break;
-                }
+        for (family, share) in families.iter().zip(shares.iter()) {
+            if index >= family.len() {
+                continue;
+            }
+            let offset = rotation.wrapping_mul(*share) % family.len();
+            let position = (offset + index) % family.len();
+            identities.push(family[position].clone());
+            if identities.len() == MAX_REDUCER_EVIDENCE_FACTS {
+                break;
             }
         }
         if identities.len() == before {
@@ -2030,6 +2058,34 @@ fn reducer_evidence_identities(
         index += 1;
     }
     identities
+}
+
+/// How many identities each family contributes to one heartbeat.
+///
+/// This is the interleave loop run as a count. Knowing it up front is what lets
+/// each family advance by exactly its own window width.
+fn family_shares<T>(families: &[Vec<T>]) -> Vec<usize> {
+    let mut shares = vec![0usize; families.len()];
+    let mut total = 0;
+    let mut index = 0;
+    while total < MAX_REDUCER_EVIDENCE_FACTS {
+        let before = total;
+        for (slot, family) in shares.iter_mut().zip(families.iter()) {
+            if index >= family.len() {
+                continue;
+            }
+            *slot += 1;
+            total += 1;
+            if total == MAX_REDUCER_EVIDENCE_FACTS {
+                break;
+            }
+        }
+        if total == before {
+            break;
+        }
+        index += 1;
+    }
+    shares
 }
 
 fn evidence_identity<T: Serialize>(
@@ -5080,6 +5136,7 @@ mod tests {
             true,
             now,
             Some(&[]),
+            0,
         );
 
         assert_eq!(evidence.schema_version, 3);
@@ -5263,6 +5320,7 @@ mod tests {
             false,
             now,
             Some(&[]),
+            0,
         );
         assert!(without_activity.activity.is_empty());
         assert_eq!(without_activity.process, evidence.process);
@@ -5427,6 +5485,7 @@ mod tests {
             true,
             now,
             Some(&[]),
+            0,
         )
         .control
         .into_iter()
@@ -5471,6 +5530,144 @@ mod tests {
     }
 
     #[test]
+    fn rotating_identity_budget_sweeps_every_family_even_when_they_share_it() {
+        // The budget is shared, so each family's per-heartbeat window is a
+        // fraction of it. Advancing a family by the whole budget would step it
+        // further than its window is wide and leave gaps that a common factor
+        // can freeze permanently — which is the original starvation bug in a
+        // subtler form. Every family must still be swept.
+        let contracts = (0..600)
+            .map(|index| ContinuationEvidence {
+                authority_class: "retained_launch_contract".to_string(),
+                provider: "codex".to_string(),
+                session_id: format!("session-{index:04}"),
+                provider_session_id: Some(format!("thread-{index:04}")),
+                cwd: Some("/repo".to_string()),
+                contract_state: "valid".to_string(),
+                unavailable_reason: None,
+                observed_at: "2026-05-08T12:00:00Z".to_string(),
+                valid_until: "2026-05-08T12:20:00Z".to_string(),
+                source: "managed_resume_contract_scan".to_string(),
+                raw_locator: format!("codex/session-{index:04}"),
+            })
+            .collect::<Vec<_>>();
+        // 512 is the adversarial length: it shares a large factor with the
+        // 256-row budget, so a budget-sized step would revisit two windows
+        // forever.
+        let readiness = (0..512)
+            .map(|index| ReadinessEvidence {
+                authority_class: "operation_proof".to_string(),
+                provider: "antigravity".to_string(),
+                session_id: format!("readiness-{index:04}"),
+                operation: "send".to_string(),
+                claim_message_id: Some(format!("claim-{index:04}")),
+                hook_installed: true,
+                recent_hook_observed: true,
+                claim_observed: true,
+                response_observed: false,
+                continuation_observed: false,
+                hook_event: None,
+                hook_observed_at: None,
+                claimed_at: None,
+                response_event: None,
+                response_at: None,
+                response_status: None,
+                observed_at: "2026-05-08T12:00:00Z".to_string(),
+                valid_until: "2026-05-08T12:20:00Z".to_string(),
+                source: "antigravity_hook_scan".to_string(),
+                raw_locator: None,
+                reason_codes: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let mut seen_contracts = std::collections::HashSet::new();
+        let mut seen_readiness = std::collections::HashSet::new();
+        let shares = family_shares(&[
+            Vec::<u8>::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            readiness.iter().map(|_| 0u8).collect(),
+            Vec::new(),
+            contracts.iter().map(|_| 0u8).collect(),
+        ]);
+        let heartbeats = contracts.len().div_ceil(shares[6]).max(readiness.len().div_ceil(shares[4])) + 1;
+
+        for rotation in 0..heartbeats {
+            let identities = reducer_evidence_identities(
+                "cinder",
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &readiness,
+                &contracts,
+                rotation,
+            );
+            assert!(identities.len() <= MAX_REDUCER_EVIDENCE_FACTS);
+            for identity in identities {
+                if identity.fact_family == "continuation" {
+                    seen_contracts.insert(identity.subject_key);
+                } else {
+                    seen_readiness.insert(identity.subject_key);
+                }
+            }
+        }
+
+        assert_eq!(seen_contracts.len(), contracts.len());
+        assert_eq!(seen_readiness.len(), readiness.len());
+    }
+
+    #[test]
+    fn rotating_identity_budget_eventually_ships_every_continuation_contract() {
+        // A laptop can retain far more launch contracts than one heartbeat's
+        // reducer budget. Every family is sorted identically before every
+        // heartbeat, so a fixed start index published the same prefix forever
+        // and the remainder never reached the Runtime Host at all.
+        let contracts = (0..(MAX_REDUCER_EVIDENCE_FACTS * 3))
+            .map(|index| ContinuationEvidence {
+                authority_class: "retained_launch_contract".to_string(),
+                provider: "codex".to_string(),
+                session_id: format!("session-{index:04}"),
+                provider_session_id: Some(format!("thread-{index:04}")),
+                cwd: Some("/repo".to_string()),
+                contract_state: "valid".to_string(),
+                unavailable_reason: None,
+                observed_at: "2026-05-08T12:00:00Z".to_string(),
+                valid_until: "2026-05-08T12:20:00Z".to_string(),
+                source: "managed_resume_contract_scan".to_string(),
+                raw_locator: format!("codex/session-{index:04}"),
+            })
+            .collect::<Vec<_>>();
+
+        // Consecutive heartbeats, i.e. consecutive counter values. A sweep of
+        // the whole family must complete in ceil(len / budget) of them; give it
+        // a little slack and require full coverage.
+        let mut seen = std::collections::HashSet::new();
+        let heartbeats = contracts.len().div_ceil(MAX_REDUCER_EVIDENCE_FACTS) + 1;
+        for rotation in 0..heartbeats {
+            let identities = reducer_evidence_identities(
+                "cinder",
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &contracts,
+                rotation,
+            );
+            assert!(identities.len() <= MAX_REDUCER_EVIDENCE_FACTS);
+            for identity in identities {
+                seen.insert(identity.subject_key);
+            }
+        }
+
+        assert_eq!(seen.len(), contracts.len());
+    }
+
+    #[test]
     fn antigravity_readiness_without_proofs_is_stable_across_heartbeats() {
         let now = DateTime::parse_from_rfc3339("2026-05-08T12:05:00Z")
             .unwrap()
@@ -5509,9 +5706,9 @@ mod tests {
         );
 
         let first_identity =
-            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[first], &[]);
+            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[first], &[], 0);
         let second_identity =
-            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[second], &[]);
+            reducer_evidence_identities("cinder", &[], &[], &[], &[], &[], &[second], &[], 0);
         assert_eq!(first_identity, second_identity);
         assert_eq!(first_identity.len(), 1);
         assert!(first_identity[0].source_epoch.is_some());
@@ -5553,6 +5750,7 @@ mod tests {
             true,
             first_now,
             Some(&[]),
+            0,
         );
         let second = machine_evidence_from_observations(
             "cinder",
@@ -5568,6 +5766,7 @@ mod tests {
             true,
             first_now + chrono::Duration::minutes(5),
             Some(&[]),
+            0,
         );
         assert_eq!(first.transcript, second.transcript);
         let first_identity = first
@@ -5602,6 +5801,7 @@ mod tests {
             true,
             first_now,
             Some(&[]),
+            0,
         );
         assert!(without_stable_position.transcript.is_empty());
     }
@@ -5637,6 +5837,7 @@ mod tests {
             true,
             now,
             Some(&[]),
+            0,
         );
 
         assert_eq!(evidence.schema_version, 3);
@@ -5677,6 +5878,7 @@ mod tests {
             true,
             now,
             Some(std::slice::from_ref(&continuation)),
+            0,
         );
         assert_eq!(evidence.continuation.len(), 1);
         assert_eq!(
@@ -5761,6 +5963,7 @@ mod tests {
             true,
             now,
             Some(&[]),
+            0,
         );
         assert_eq!(evidence.activity.len(), 1);
         assert_eq!(
@@ -5805,6 +6008,7 @@ mod tests {
             true,
             now,
             Some(&[]),
+            0,
         );
         assert!(
             stranded.activity.is_empty(),
@@ -5825,6 +6029,7 @@ mod tests {
             true,
             now,
             Some(&[]),
+            0,
         );
         assert_eq!(evidence.activity.len(), 1);
         assert_eq!(evidence.activity[0].kind, "idle");
@@ -5928,6 +6133,7 @@ mod tests {
                 true,
                 now,
                 Some(&[]),
+                0,
             );
             evidence.activity = activity;
             let mut payload = digest_test_payload();

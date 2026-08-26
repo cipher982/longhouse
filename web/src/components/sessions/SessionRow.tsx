@@ -219,6 +219,17 @@ export function SessionRow({
 
 export function getRowControlPresentation(facts: SessionStateFacts): RowControlPresentation {
   const access = facts.presentation.access;
+  // The server drops the access label for a Helm session whose run has ended,
+  // because access and continuation are separate axes. Falling through to
+  // "Imported transcript ... not steerable" would misdescribe a managed session
+  // that Longhouse owns and can resume.
+  if (!access && facts.mode === "helm" && facts.run?.lifecycle === "ended") {
+    return {
+      label: "Ended",
+      tone: "search",
+      title: "This managed session's run has ended",
+    };
+  }
   if (!access) return searchOnlyPresentation();
   // `machine_offline` is the one access state that is an outage rather than a
   // capability statement, so it must not share the muted tone that means

@@ -507,6 +507,22 @@ def _control_unavailable_sentence(session_state: SessionStateFacts) -> str:
     """
 
     actions = session_state.control.actions
+    # An ended Helm run is not a control fault. Ending the run clears the
+    # durable run id, which rejects every run-bound control head by design, so
+    # the served control facts read owned/unknown and this used to answer
+    # "Longhouse can't confirm the control link to this session right now" —
+    # a lease diagnostic, shown as a fault, for the ordinary act of exiting a
+    # terminal. Say what actually happened and let Resume carry the next step.
+    #
+    # An unreachable machine still outranks it: that is the fact the user has
+    # to act on, and it is why Resume is unavailable. Everything below —
+    # reattach, lease connection state — is about a run that is still going,
+    # so an ended run answers before all of it.
+    run_ended = session_state.mode == "helm" and session_state.run is not None and session_state.run.lifecycle == "ended"
+    if run_ended and session_state.host.state not in {"offline", "stale"}:
+        if actions.resume.state == "available":
+            return "This session's run has ended. Resume it to keep going."
+        return "This session's run has ended."
     if session_state.mode == "console":
         reason = actions.start_turn.reason
         if reason == "machine_offline":
@@ -516,10 +532,15 @@ def _control_unavailable_sentence(session_state: SessionStateFacts) -> str:
         if reason == "execution_target_missing":
             return "Longhouse has no machine and folder recorded to run this in."
         return "Longhouse cannot start a new turn on this session right now."
-    if actions.reattach.state == "available":
-        return "Longhouse isn't attached to this session. Reattach to steer it from here."
+    # Machine reachability before reattach. Reattach eligibility is projected
+    # from a durable connection row that never consults host state, so an
+    # offline machine could otherwise be told to reattach to something it cannot
+    # reach. iOS `controlBlock` orders it this way; the two must agree, or the
+    # dock and the composer describe the same session differently.
     if session_state.host.state in {"offline", "stale"}:
         return "The machine running this session is offline. Sending resumes when it reconnects."
+    if actions.reattach.state == "available":
+        return "Longhouse isn't attached to this session. Reattach to steer it from here."
     if session_state.control.connection == "degraded":
         return "Longhouse's control link to this session stopped answering."
     if session_state.control.connection == "disconnected":
@@ -586,7 +607,7 @@ def project_compat_capabilities_from_state(
     primary = session_state.presentation.primary
     if launch_blocked and primary is not None:
         compatibility_label = primary.label
-    elif access is None and primary is not None and primary.key in {"starting", "launch_failed"}:
+    elif access is None and primary is not None and primary.key in {"starting", "launch_failed", "ended"}:
         compatibility_label = primary.label
     if console and send_available:
         compatibility_label = "Send"

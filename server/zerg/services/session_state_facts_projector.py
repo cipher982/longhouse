@@ -396,6 +396,13 @@ def _durable_action_availability(
     return False, f"{operation}_unavailable"
 
 
+#: How long a retained-contract observation stays usable after it expires.
+#: Far longer than the engine needs to re-observe every contract, and far
+#: shorter than "forever", which is what would turn a deleted contract into a
+#: permanent false Resume.
+CONTINUATION_RETENTION = timedelta(hours=12)
+
+
 def _resume_action_availability(
     *,
     session_id: str,
@@ -419,15 +426,36 @@ def _resume_action_availability(
         return SessionActionAvailability(state="unavailable", reason="machine_offline")
     if host.state == "unknown":
         return SessionActionAvailability(state="unavailable", reason="machine_unknown")
+    # A retained launch contract is a statement about files that still exist on
+    # the machine, not a liveness signal. Its observation carries a 20-minute
+    # `valid_until`, and the machine re-observes it every heartbeat — but the
+    # heartbeat's reducer identity budget is shared across seven fact families,
+    # so a machine with hundreds of contracts cannot refresh them all in one
+    # payload. Dropping the expired head made Resume report `contract_missing`
+    # for sessions whose contract, workspace, provider binary and rollout were
+    # all still present, which is the opposite of what
+    # `managed-provider-crash-recovery.md` decided.
+    #
+    # Retain the last observation instead — but only for a bounded horizon.
+    # Deleting a contract is silent: the scanner emits observations for files
+    # that exist and nothing at all for one that is gone, so an unbounded
+    # retention would keep offering Resume forever on a contract the machine
+    # removed. The horizon is what makes absence meaningful. The machine is
+    # known to be online by this point (`host.state` is checked above) and the
+    # engine sweeps its whole identity budget in a bounded number of heartbeats,
+    # so an observation this old means the contract itself is gone.
     winner, _rejected = _effective_head(
         heads,
         session_id=session_id,
         family="continuation",
         now=now,
+        retain_expired=True,
     )
     if winner is None:
         return SessionActionAvailability(state="unavailable", reason="contract_missing")
-    _head, value, _observed_at, _valid_until = winner
+    _head, value, observed_at, _valid_until = winner
+    if now - observed_at > CONTINUATION_RETENTION:
+        return SessionActionAvailability(state="unavailable", reason="contract_missing")
     if provider is None or _text(value.get("provider")) != provider:
         return SessionActionAvailability(state="unavailable", reason="provider_incompatible")
     if _text(value.get("contract_state")) != "valid":

@@ -8,6 +8,12 @@ func makeSessionStateFacts(
     pendingInteractionKind: String? = nil,
     launchState: String? = nil,
     closed: Bool = false,
+    /// Overrides the run axis independently of `closed`. Exiting a terminal
+    /// ends the run without closing the session, and that combination is what
+    /// the ended-Helm presentation has to get right.
+    runLifecycle overrideRunLifecycle: String? = nil,
+    resumeAvailable: Bool = false,
+    reattachAvailable: Bool = false,
     tool: String? = nil,
     startTurnAvailable: Bool = false,
     sendInputAvailable: Bool? = nil,
@@ -41,7 +47,7 @@ func makeSessionStateFacts(
         dispositionState: closed ? "closed" : "open",
         dispositionCloseReason: closed ? "user_closed" : nil,
         launchState: launchState,
-        runLifecycle: closed ? "ended" : "running",
+        runLifecycle: overrideRunLifecycle ?? (closed ? "ended" : "running"),
         activityState: activity,
         activityRawKind: nil,
         activityTool: tool,
@@ -63,12 +69,14 @@ func makeSessionStateFacts(
         sendInput: (sendInputAvailable ?? owned) ? available : unavailable,
         interrupt: owned ? available : unavailable,
         terminate: owned ? available : unavailable,
-        reattach: unavailable,
-        resume: unavailable,
+        reattach: reattachAvailable ? available : unavailable,
+        resume: resumeAvailable ? available : unavailable,
         pendingInteractionKind: pendingInteractionKind,
         transcriptConvergence: "current",
         primary: primary,
-        access: SessionStateLabel(
+        // The server drops the access label entirely for an ended Helm run:
+        // access and continuation are separate axes.
+        access: overrideRunLifecycle == "ended" ? nil : SessionStateLabel(
             key: accessLabel == nil ? (owned ? "live_control" : "search_only") : "control_unknown",
             label: accessLabel ?? (owned ? "Live control" : "Search only"),
             tone: accessLabel == nil ? (owned ? "live" : "search") : "quiet",

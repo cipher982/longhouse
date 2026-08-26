@@ -1497,6 +1497,55 @@ struct SessionModelsTests {
     }
 
     @Test
+    func endedHelmRunReadsAsRestingNotAsAControlFault() throws {
+        // Exiting a terminal ends the run without closing the session. Ending
+        // the run clears the durable run id, which by design rejects every
+        // run-bound control head, so control reads owned/unknown — and this
+        // used to render `.controlUnknown`: an orange fault triangle and
+        // "Longhouse can't confirm the control link right now", for a session
+        // that simply finished and can be resumed.
+        let facts = makeSessionStateFacts(
+            activity: "unknown",
+            runLifecycle: "ended",
+            resumeAvailable: true,
+            sendInputAvailable: false
+        )
+        let detail = try makeDetail(facts: facts)
+
+        #expect(!detail.canSendLive)
+        #expect(detail.controlBlock == .runEnded)
+        #expect(!detail.isControlOffline)
+        #expect(detail.runtimeCapabilityLabel == nil)
+        #expect(detail.controlHealthMessage == "This session's run has ended. Resume it to keep going.")
+    }
+
+    @Test
+    func anEndedRunOutranksAStaleReattachButNotAnUnreachableMachine() throws {
+        // Reattach eligibility is projected from a durable connection row that
+        // never consults the run, so a stale row would offer "Reattach" for a
+        // run that is over. An unreachable machine still wins over both: it is
+        // the fact the user can act on, and it is why Resume is unavailable.
+        let staleReattach = makeSessionStateFacts(
+            activity: "unknown",
+            runLifecycle: "ended",
+            resumeAvailable: true,
+            reattachAvailable: true,
+            sendInputAvailable: false
+        )
+        #expect(try makeDetail(facts: staleReattach).controlBlock == .runEnded)
+
+        let offline = try makeDetail(
+            facts: makeSessionStateFacts(
+                activity: "unknown",
+                runLifecycle: "ended",
+                sendInputAvailable: false
+            ),
+            json: offlineHostDetailJSON
+        )
+        #expect(offline.controlBlock == .machineOffline)
+    }
+
+    @Test
     func sessionInputResponseDecodesSentOutcome() throws {
         let json = """
         {
@@ -1758,7 +1807,75 @@ struct SessionModelsTests {
             transcript: nil,
             commitSeq: nil
         )
-        let data = try addingSessionStateFacts(facts, to: json)
+        return try makeDetail(facts: facts, json: json)
+    }
+
+    /// Decode a SessionDetail around one set of state facts. The surrounding
+    /// JSON is inert here: every assertion in these tests reads the facts.
+    private func makeDetail(facts: SessionStateFacts, json: Data? = nil) throws -> SessionDetail {
+        let data = try addingSessionStateFacts(facts, to: json ?? minimalDetailJSON)
         return try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
+    }
+
+    private var offlineHostDetailJSON: Data {
+        let text = String(decoding: minimalDetailJSON, as: UTF8.self)
+            .replacingOccurrences(of: "\"host_state\": \"online\"", with: "\"host_state\": \"offline\"")
+        return text.data(using: .utf8)!
+    }
+
+    private var minimalDetailJSON: Data {
+        """
+        {
+          "id": "session-detail-fixture",
+          "provider": "codex",
+          "project": "p",
+          "cwd": "/w",
+          "git_branch": null,
+          "summary": null,
+          "summary_title": null,
+          "presence_state": "idle",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "idle",
+          "last_activity_at": null,
+          "display_phase": null,
+          "active_tool": null,
+          "home_label": null,
+          "origin_label": null,
+          "capabilities": {
+            "live_control_available": false,
+            "host_reattach_available": false,
+            "reply_to_live_session_available": false,
+            "input_mode": "read_only",
+            "default_input_intent": "none",
+            "composer_enabled": false,
+            "composer_disabled_reason": null,
+            "send_disabled_reason": "control_offline"
+          },
+          "runtime_display": {
+            "truth_tier": "fresh",
+            "signal_tier": "none",
+            "state": null,
+            "tone": "closed",
+            "headline": "Ended",
+            "detail": null,
+            "phase_label": "Inactive",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": false,
+            "has_signal": false,
+            "control_path": "managed",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": "run_completed"
+          },
+          "loop_mode": "assist"
+        }
+        """.data(using: .utf8)!
     }
 }

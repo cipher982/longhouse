@@ -75,10 +75,15 @@ export function SessionContextPane({
   const shouldShowNotice =
     continuationNotice && !interaction.managedLaunchSuggestion;
   const resumeAction = session.session_state.control.actions.resume;
+  // Gate on the run, not the disposition. Exiting a terminal ends the run but
+  // never closes the session — `closed_at` is only written by an explicit user
+  // close — so this callout was suppressed for exactly the sessions that needed
+  // it, leaving an ended Helm session with no Resume button and no reason why.
   const showResumeUnavailable =
     isViewingHead &&
     session.session_state.mode === "helm" &&
-    session.session_state.disposition.state === "closed" &&
+    (session.session_state.disposition.state === "closed" ||
+      session.session_state.run?.lifecycle === "ended") &&
     resumeAction.state !== "available";
   const showStateSection =
     shouldShowNotice || interaction.managedLaunchSuggestion || showResumeUnavailable;

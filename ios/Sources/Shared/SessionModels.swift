@@ -1025,6 +1025,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         case readOnly
         /// Not owned by Longhouse at all.
         case imported
+        /// Helm: the provider run finished. Not a fault — Resume is the step.
+        case runEnded
 
         /// Only an outage earns the loud treatment. Everything else is a
         /// capability statement, not an alarm.
@@ -1054,8 +1056,21 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             default: return .consoleUnavailable
             }
         }
-        if stateFacts.reattach.isAvailable { return .reattachable }
+        // An ended Helm run is not a control fault. Ending the run clears the
+        // durable run id, which by design rejects every run-bound control head,
+        // so control reads owned/unknown and this fell through to
+        // `.controlUnknown` — a fault, with the orange triangle — for the
+        // ordinary act of exiting a terminal.
+        //
+        // Machine reachability wins: it decides whether Resume can run at all.
+        // An ended run then outranks reattach, because reattach eligibility is
+        // projected from a durable connection row that does not consult the run
+        // — a stale row would otherwise offer "Reattach" for a run that is over.
+        // This is the same order the server uses in
+        // `_control_unavailable_sentence`.
         if ["offline", "stale"].contains(runtimeDisplay.hostState) { return .machineOffline }
+        if stateFacts.mode == "helm" && stateFacts.runLifecycle == "ended" { return .runEnded }
+        if stateFacts.reattach.isAvailable { return .reattachable }
         switch stateFacts.controlConnection {
         case "degraded": return .controlUnhealthy
         case "disconnected": return .controlClosed
@@ -1111,6 +1126,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return "This managed session is read-only."
         case .imported:
             return "Read-only imported session."
+        case .runEnded:
+            return stateFacts.resume.isAvailable
+                ? "This session's run has ended. Resume it to keep going."
+                : "This session's run has ended."
         }
     }
 
@@ -1122,6 +1141,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         case .launching: return "hourglass"
         case .noTurnPath, .noExecutionTarget, .consoleUnavailable: return "nosign"
         case .reattachable: return "arrow.triangle.2.circlepath"
+        case .runEnded: return "flag.checkered"
         case .controlClosed: return "bolt.slash"
         default: return "eye"
         }

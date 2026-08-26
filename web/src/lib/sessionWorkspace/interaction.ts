@@ -57,7 +57,28 @@ export function getSessionInteractionCapabilities({
   // "until the engine reconnects" was asserted for every unavailable state,
   // including Console sessions whose machine was connected the whole time and
   // simply advertised no turn adapter.
+  // Closed dominates: a closed session's label already says so, and the server
+  // drops its access label for the same reason. Without this a closed session
+  // whose last run ended showed a "Run ended" notice beside a "Closed" chip.
+  // An unreachable machine also outranks it — that is the fact the user acts on.
+  const runEnded =
+    facts.mode === "helm" &&
+    facts.run?.lifecycle === "ended" &&
+    facts.disposition.state !== "closed" &&
+    facts.host.state !== "offline" &&
+    facts.host.state !== "stale";
+  const resumeAction = facts.control.actions.resume;
   const controlUnavailableDescription = (() => {
+    // An ended Helm run is not a control fault. Ending the run clears the
+    // durable run id, which rejects every run-bound control head by design, so
+    // control reads owned/unknown and this fell through to "Longhouse can't
+    // confirm the control link" — a lease diagnostic shown as a warning for
+    // the ordinary act of exiting a terminal.
+    if (runEnded) {
+      return resumeAction.state === "available"
+        ? `This ${providerLabel} session's run has ended. Resume it to keep going.`
+        : `This ${providerLabel} session's run has ended.`;
+    }
     if (facts.mode === "console") {
       switch (facts.control.actions.start_turn?.reason) {
         case "machine_offline":
@@ -70,11 +91,14 @@ export function getSessionInteractionCapabilities({
           return `Longhouse cannot start a new ${providerLabel} turn on this session right now.`;
       }
     }
-    if (hostReattachAvailable) {
-      return `Longhouse isn't attached to this ${providerLabel} session. Reattach to steer it from here.`;
-    }
+    // Machine reachability before reattach, matching the server and iOS.
+    // Reattach eligibility never consults host state, so an offline machine
+    // could otherwise be told to reattach to something it cannot reach.
     if (facts.host.state === "offline" || facts.host.state === "stale") {
       return `The machine running this ${providerLabel} session is offline. Sending resumes when it reconnects.`;
+    }
+    if (hostReattachAvailable) {
+      return `Longhouse isn't attached to this ${providerLabel} session. Reattach to steer it from here.`;
     }
     switch (facts.control.connection) {
       case "degraded":
@@ -85,7 +109,9 @@ export function getSessionInteractionCapabilities({
         return `Longhouse can't confirm the control link to this ${providerLabel} session right now.`;
     }
   })();
-  const controlUnavailableTitle = facts.presentation.access?.label?.trim() || "Control is offline";
+  const controlUnavailableTitle = runEnded
+    ? "Run ended"
+    : facts.presentation.access?.label?.trim() || "Control is offline";
 
   const managedLaunchSuggestion =
     mode === "unsupported" && !isManagedLocalSession
@@ -109,7 +135,9 @@ export function getSessionInteractionCapabilities({
   const managementDescription = isManagedLocalSession
     ? liveControlAvailable
       ? "Longhouse owns the control path for this session."
-      : "Longhouse owns this session, but control is currently offline."
+      : runEnded
+        ? "Longhouse owns this session. Its run has ended."
+        : "Longhouse owns this session, but control is currently offline."
     : unsupportedManagementDescription;
 
   const submitLabel =
@@ -120,12 +148,16 @@ export function getSessionInteractionCapabilities({
   const rawAccessLabel = facts.presentation.access?.label?.trim();
   const capabilityLabel = facts.disposition.state === "closed"
     ? "Closed"
-    : rawAccessLabel || (mode === "managed_local_unavailable" ? "Control unavailable" : "Read only");
+    : runEnded
+      ? "Ended"
+      : rawAccessLabel || (mode === "managed_local_unavailable" ? "Control unavailable" : "Read only");
 
   const capabilityVariant =
     mode === "managed_local"
       ? "success"
-      : mode === "managed_local_unavailable"
+      // An ended run is an ordinary resting state, not a degraded one. Warning
+      // tone here is what made a finished session look broken.
+      : mode === "managed_local_unavailable" && !runEnded
         ? "warning"
         : "neutral";
 

@@ -14,6 +14,7 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import SessionTranscriptFacts
+from zerg.services.session_state_facts_projector import CONTINUATION_RETENTION
 from zerg.services.session_state_facts_projector import authorize_exact_control_fact
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
 from zerg.services.session_state_facts_projector import project_shadow_session_state_facts
@@ -648,6 +649,171 @@ def test_served_projector_offers_cold_resume_only_from_matching_machine_contract
     assert served.run is not None and served.run.lifecycle == "ended"
     assert served.control is not None
     assert served.control.actions.resume.state == "available"
+    # An ended Helm run has no access left to describe. Reading the lease ladder
+    # here reported "Control unknown" on every finished session.
+    assert served.presentation.access is None
+    assert served.presentation.primary is not None
+    assert served.presentation.primary.key == "ended"
+
+
+def test_served_projector_keeps_resume_when_the_contract_observation_expired():
+    """An expired contract observation is not a missing contract.
+
+    The observation carries a 20-minute `valid_until` and the machine cannot
+    refresh every contract in one heartbeat, so dropping the expired head made
+    Resume answer `contract_missing` for sessions whose contract, workspace and
+    rollout were all still on disk.
+    """
+
+    continuation = {
+        "authority_class": "retained_launch_contract",
+        "provider": "codex",
+        "session_id": "session-1",
+        "provider_session_id": "provider-thread-1",
+        "cwd": "/repo",
+        "contract_state": "valid",
+        "unavailable_reason": None,
+        "source": "managed_resume_contract_scan",
+        "raw_locator": "/state/contracts/codex/session-1.json",
+        "observed_at": (NOW - timedelta(hours=3)).isoformat(),
+        "valid_until": (NOW - timedelta(hours=3) + timedelta(minutes=20)).isoformat(),
+    }
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=84,
+        catalog_facts={
+            "catalog": {
+                "provider": "codex",
+                "cwd": "/repo",
+                "started_at": (NOW - timedelta(days=2)).isoformat(),
+                "origin_kind": None,
+                "launch_surface": "terminal",
+            },
+            "readiness": {"state": "adopted", "execution_lifetime": "live_control"},
+            "latest_run": {
+                "id": "run-1",
+                "started_at": (NOW - timedelta(days=2)).isoformat(),
+                "ended_at": (NOW - timedelta(days=1)).isoformat(),
+                "exit_status": "user_closed",
+            },
+            "connections": [],
+            "resume": {"provider_session_id": "provider-thread-1"},
+        },
+        heads=[_head(family="continuation", value=continuation, source="managed_resume_contract_scan")],
+        supported_operations={"resume"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW,
+    )
+
+    assert served.control is not None
+    assert served.control.actions.resume.state == "available"
+    assert served.presentation.access is None
+
+
+def test_served_projector_stops_offering_resume_once_the_contract_observation_is_ancient():
+    """Deleting a contract is silent, so absence has to become meaningful.
+
+    The scanner emits observations for files that exist and nothing at all for
+    one that is gone. Retaining the last observation forever would keep offering
+    Resume on a contract the machine removed, so retention is bounded.
+    """
+
+    observed_at = NOW - CONTINUATION_RETENTION - timedelta(minutes=1)
+    continuation = {
+        "authority_class": "retained_launch_contract",
+        "provider": "codex",
+        "session_id": "session-1",
+        "provider_session_id": "provider-thread-1",
+        "cwd": "/repo",
+        "contract_state": "valid",
+        "unavailable_reason": None,
+        "source": "managed_resume_contract_scan",
+        "raw_locator": "/state/contracts/codex/session-1.json",
+        "observed_at": observed_at.isoformat(),
+        "valid_until": (observed_at + timedelta(minutes=20)).isoformat(),
+    }
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=86,
+        catalog_facts={
+            "catalog": {
+                "provider": "codex",
+                "cwd": "/repo",
+                "started_at": (NOW - timedelta(days=3)).isoformat(),
+                "origin_kind": None,
+                "launch_surface": "terminal",
+            },
+            "readiness": {"state": "adopted", "execution_lifetime": "live_control"},
+            "latest_run": {
+                "id": "run-1",
+                "started_at": (NOW - timedelta(days=3)).isoformat(),
+                "ended_at": (NOW - timedelta(days=3)).isoformat(),
+                "exit_status": "user_closed",
+            },
+            "connections": [],
+            "resume": {"provider_session_id": "provider-thread-1"},
+        },
+        heads=[_head(family="continuation", value=continuation, source="managed_resume_contract_scan")],
+        supported_operations={"resume"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW,
+    )
+
+    assert served.control is not None
+    assert served.control.actions.resume.state == "unavailable"
+    assert served.control.actions.resume.reason == "contract_missing"
+
+
+def test_served_projector_still_refuses_resume_when_the_contract_is_invalid():
+    continuation = {
+        "authority_class": "retained_launch_contract",
+        "provider": "codex",
+        "session_id": "session-1",
+        "provider_session_id": None,
+        "cwd": None,
+        "contract_state": "invalid",
+        "unavailable_reason": "provider_state_missing",
+        "source": "managed_resume_contract_scan",
+        "raw_locator": "/state/contracts/codex/session-1.json",
+        "observed_at": (NOW - timedelta(hours=3)).isoformat(),
+        "valid_until": (NOW - timedelta(hours=3) + timedelta(minutes=20)).isoformat(),
+    }
+    served = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=85,
+        catalog_facts={
+            "catalog": {
+                "provider": "codex",
+                "cwd": "/repo",
+                "started_at": (NOW - timedelta(days=2)).isoformat(),
+                "origin_kind": None,
+                "launch_surface": "terminal",
+            },
+            "readiness": {"state": "adopted", "execution_lifetime": "live_control"},
+            "latest_run": {
+                "id": "run-1",
+                "started_at": (NOW - timedelta(days=2)).isoformat(),
+                "ended_at": (NOW - timedelta(days=1)).isoformat(),
+                "exit_status": "user_closed",
+            },
+            "connections": [],
+            "resume": {"provider_session_id": "provider-thread-1"},
+        },
+        heads=[_head(family="continuation", value=continuation, source="managed_resume_contract_scan")],
+        supported_operations={"resume"},
+        pending_interaction=None,
+        transcript=SessionTranscriptFacts(convergence="current", last_append_at=NOW),
+        host=SessionHostFacts(state="online", observed_at=NOW),
+        now=NOW,
+    )
+
+    assert served.control is not None
+    assert served.control.actions.resume.state == "unavailable"
+    assert served.control.actions.resume.reason == "provider_state_missing"
 
 
 def test_exact_control_authorization_rejects_expiry_divergence_and_tampering():

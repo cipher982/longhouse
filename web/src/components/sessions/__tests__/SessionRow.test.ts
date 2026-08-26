@@ -69,6 +69,23 @@ describe("getRowControlPresentation", () => {
     });
   });
 
+  it("names an ended Helm run instead of calling it an imported transcript", () => {
+    // The server drops the access label for an ended Helm run because access
+    // and continuation are separate axes. The bare missing-access fallback
+    // would describe a managed, resumable session as an unsteerable import.
+    const base = makeSessionStateFacts({ access: null });
+    expect(
+      getRowControlPresentation({
+        ...base,
+        mode: "helm",
+        run: { lifecycle: "ended" },
+      }),
+    ).toMatchObject({
+      label: "Ended",
+      tone: "search",
+    });
+  });
+
   it("treats the server state presentation as canonical", () => {
     expect(
       getRowControlPresentation(makeSessionStateFacts({ access: "reattach" })),

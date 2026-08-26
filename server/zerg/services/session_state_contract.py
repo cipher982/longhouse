@@ -756,7 +756,7 @@ def assemble_session_state_facts(
         control=control,
         interaction=pending_interaction,
     )
-    access = _access(mode=mode, disposition=disposition, control=control, transcript=transcript)
+    access = _access(mode=mode, disposition=disposition, run=run, control=control, transcript=transcript)
     transcript_label = (
         SessionPresentationLabel(
             key="transcript_lagging",
@@ -1006,6 +1006,7 @@ def _access(
     *,
     mode: SessionMode,
     disposition: SessionDispositionFacts,
+    run: SessionRunFacts | None,
     control: SessionControlFacts,
     transcript: SessionTranscriptFacts,
 ) -> SessionPresentationLabel | None:
@@ -1023,6 +1024,15 @@ def _access(
     # all, and the ladder below is what knows how to say "Search only".
     if mode == "console" and control.ownership == "owned":
         return _console_access(control)
+    # A Helm run that has ended has no access left to describe. Ending the run
+    # clears the durable run id, which by design rejects every run-bound control
+    # head (`session_state_facts_projector._active_run_id`), so the served
+    # control facts fall back to owned/unknown. Reading that ladder rung
+    # produced "Control unknown" — a lease diagnostic — on every ended Helm
+    # session, rendered as a fault. Access and continuation are separate axes:
+    # say nothing here and let the `resume` action carry the next step.
+    if mode == "helm" and run is not None and run.lifecycle == "ended":
+        return None
     live_actions = (
         control.actions.start_turn,
         control.actions.send_input,

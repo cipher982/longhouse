@@ -544,6 +544,101 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.notice?.title).toBe("Reattach");
   });
 
+  it("treats an ended Helm run as a resting state, not a control fault", () => {
+    // Ending the run clears the durable run id, which by design rejects every
+    // run-bound control head, so control reads owned/unknown. That used to
+    // reach "Longhouse can't confirm the control link" with a warning tone —
+    // a lease diagnostic shown as a fault for exiting a terminal.
+    const state = makeSessionStateFacts({ access: "reattach" });
+    const endedState = {
+      ...state,
+      mode: "helm" as const,
+      run: { lifecycle: "ended" as const },
+      presentation: { ...state.presentation, access: null },
+      control: {
+        ...state.control,
+        connection: "unknown" as const,
+        actions: {
+          ...state.control.actions,
+          reattach: { state: "unavailable" as const, reason: "not_granted" },
+          resume: { state: "available" as const },
+        },
+      },
+    };
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        session_state: endedState,
+        capabilities: makeCapabilities({ host_reattach_available: true }),
+      }),
+    });
+
+    expect(capabilities.capabilityLabel).toBe("Ended");
+    expect(capabilities.capabilityVariant).toBe("neutral");
+    expect(capabilities.notice?.title).toBe("Run ended");
+    expect(capabilities.composerDisabledReason).toMatch(/run has ended/i);
+    expect(capabilities.composerDisabledReason).toMatch(/Resume/i);
+    expect(capabilities.composerDisabledReason).not.toMatch(/confirm the control link/i);
+  });
+
+  it("lets Closed and an unreachable machine outrank an ended run", () => {
+    const base = makeSessionStateFacts({ access: "reattach" });
+    const ended = {
+      ...base,
+      mode: "helm" as const,
+      run: { lifecycle: "ended" as const },
+      presentation: { ...base.presentation, access: null },
+      control: {
+        ...base.control,
+        connection: "unknown" as const,
+        actions: {
+          ...base.control.actions,
+          reattach: { state: "unavailable" as const, reason: "not_granted" },
+          resume: { state: "unavailable" as const, reason: "machine_offline" },
+        },
+      },
+    };
+
+    const closed = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        session_state: { ...ended, disposition: { state: "closed", closed_at: "2026-03-21T12:00:00Z" } },
+        capabilities: makeCapabilities({ host_reattach_available: true }),
+      }),
+    });
+    expect(closed.capabilityLabel).toBe("Closed");
+    expect(closed.notice?.title).not.toBe("Run ended");
+
+    const offline = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        session_state: { ...ended, host: { state: "offline" } },
+        capabilities: makeCapabilities({ host_reattach_available: true }),
+      }),
+    });
+    // The machine being unreachable is the fact the user can act on, and it is
+    // why Resume is unavailable. "Run ended" would bury it.
+    expect(offline.composerDisabledReason).toMatch(/machine running this Codex session is offline/i);
+  });
+
+  it("names the offline machine rather than offering a reattach it cannot reach", () => {
+    // Reattach eligibility is projected from a durable connection row that
+    // never consults host state. Server, web and iOS all have to answer this
+    // combination the same way, or the dock and the composer describe one
+    // session differently.
+    const base = makeSessionStateFacts({ access: "reattach" });
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        session_state: { ...base, mode: "helm", host: { state: "offline" } },
+        capabilities: makeCapabilities({ host_reattach_available: true }),
+      }),
+    });
+
+    expect(capabilities.composerDisabledReason).toMatch(/machine running this Codex session is offline/i);
+    expect(capabilities.composerDisabledReason).not.toMatch(/isn't attached/i);
+  });
+
   it("prefers server-owned composer semantics when present", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
