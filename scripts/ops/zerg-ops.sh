@@ -890,7 +890,14 @@ main() {
   parse_args "$@"
 
   mkdir -p "$BACKUP_ROOT" "$TMP_BACKUP_DIR"
-  if [[ ! -d "$(dirname "$LOCK_FILE")" ]]; then
+  # /run exists on every Linux box but only root may write it. Testing for the
+  # directory therefore kept the default path on any unprivileged run -- a CI
+  # runner, a developer shell -- and `exec 9>` then died on "Permission denied"
+  # before the script did anything. Writability is the property that matters,
+  # for the directory and for an existing lock owned by someone else.
+  local lock_parent
+  lock_parent="$(dirname "$LOCK_FILE")"
+  if [[ ! -w "$lock_parent" ]] || { [[ -e "$LOCK_FILE" ]] && [[ ! -w "$LOCK_FILE" ]]; }; then
     LOCK_FILE="/tmp/zerg-ops.lock"
   fi
 
