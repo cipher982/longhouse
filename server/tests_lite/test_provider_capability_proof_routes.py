@@ -83,7 +83,40 @@ def _record(**changes) -> ProviderCapabilityProofRecord:
     return replace(record, **changes)
 
 
-def _bundle(*records: ProviderCapabilityProofRecord) -> dict:
+def _plan_projection_bytes(record: dict) -> bytes:
+    producer_id, separator, revision = str(record["producer_version"]).rpartition("@")
+    assert separator and revision.isdigit()
+    projection = {
+        "schema_version": 1,
+        "artifact_kind": "provider_assurance_plan_cell_projection",
+        "plan_digest": record["plan_digest"],
+        "epoch_digest": record["accepted_epoch_digest"],
+        "subject": {"longhouse_source_sha": record.get("longhouse_git_sha")},
+        "command": {
+            "subject_kind": record.get("subject_kind") or "provider_release",
+            "subject_key": record.get("subject_key"),
+            "provider": record.get("provider"),
+            "assertion_id": record["assertion_id"],
+            "variant": record.get("assertion_variant"),
+            "scenario_id": record["scenario_id"],
+            "scenario_revision": record["scenario_revision"],
+            "producer_id": producer_id,
+            "producer_revision": int(revision),
+            "provider_contract_digest": record["provider_contract_digest"],
+            "adapter_digest": record["adapter_digest"],
+            "oracle_digest": record["oracle_digest"],
+            "evidence_class": record["evidence_class"],
+            "mode": record.get("mode"),
+            "worker_platform": record.get("platform"),
+            "worker_architecture": record.get("architecture"),
+            "longhouse_source_sha": record.get("longhouse_git_sha"),
+        },
+    }
+    return json.dumps(projection, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+
+
+def _bundle(*records: ProviderCapabilityProofRecord, blob_contents: dict[str, bytes] | None = None) -> dict:
+    contents = {**_BLOB_CONTENT, **(blob_contents or {})}
     payload = {
         "schema_version": 3,
         "artifact_kind": "provider_capability_proof_bundle",
@@ -95,7 +128,7 @@ def _bundle(*records: ProviderCapabilityProofRecord) -> dict:
             "published_at": "2026-07-22T18:01:00Z",
         },
         "blobs": [
-            {"digest": digest, "content_base64": base64.b64encode(_BLOB_CONTENT[digest]).decode()}
+            {"digest": digest, "content_base64": base64.b64encode(contents[digest]).decode()}
             for digest in sorted(set().union(*(set(record.referenced_content_digests()) for record in records)))
         ],
         # Publisher claims are deliberately ignored. Trust is derived from the
@@ -106,7 +139,7 @@ def _bundle(*records: ProviderCapabilityProofRecord) -> dict:
     return payload
 
 
-def _product_bundle() -> tuple[dict, str]:
+def _product_bundle(*, projected_plan: bool = False) -> tuple[dict, str]:
     record = _record().serialize()
     record.pop("artifact_id")
     for name in (
@@ -126,6 +159,13 @@ def _product_bundle() -> tuple[dict, str]:
             "subject_key": "longhouse_product:sha256:" + "a" * 64,
         },
     )
+    contents = dict(_BLOB_CONTENT)
+    if projected_plan:
+        record["producer_version"] = "longhouse.test.v1@1"
+        projection = _plan_projection_bytes(record)
+        projection_digest = f"sha256:{hashlib.sha256(projection).hexdigest()}"
+        record["provenance_extension"]["plan_projection_digest"] = projection_digest
+        contents[projection_digest] = projection
     artifact_id = hashlib.sha256(
         json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
     ).hexdigest()
@@ -136,7 +176,7 @@ def _product_bundle() -> tuple[dict, str]:
         record["verifier_bundle_digest"],
         record["worker_census_digest"],
         record["compile_report_digest"],
-        record["plan_digest"],
+        record["provenance_extension"].get("plan_projection_digest", record["plan_digest"]),
         record["sandbox_receipt_digest"],
         record["cleanup_receipt_digest"],
     }
@@ -151,7 +191,7 @@ def _product_bundle() -> tuple[dict, str]:
             "published_at": "2026-07-22T18:01:00Z",
         },
         "blobs": [
-            {"digest": digest, "content_base64": base64.b64encode(_BLOB_CONTENT[digest]).decode()}
+            {"digest": digest, "content_base64": base64.b64encode(contents[digest]).decode()}
             for digest in sorted(referenced)
         ],
     }
@@ -222,6 +262,29 @@ def test_factory_publish_is_authenticated_idempotent_and_machine_read_is_server_
     assert fetched.json()["truncated"] is False
 
 
+def test_factory_publish_accepts_a_digest_bound_plan_cell_projection(monkeypatch, tmp_path: Path) -> None:
+    base = _record(
+        subject_kind="provider_release",
+        subject_key="provider_release:sha256:" + "b" * 64,
+        longhouse_git_sha="1" * 40,
+        producer_version="codex.native_resume.v1@1",
+    )
+    projection = _plan_projection_bytes(base.canonical_payload())
+    projection_digest = f"sha256:{hashlib.sha256(projection).hexdigest()}"
+    record = replace(base, provenance_extension={"plan_projection_digest": projection_digest})
+    bundle = _bundle(record, blob_contents={projection_digest: projection})
+    declared = {item["digest"] for item in bundle["blobs"]}
+    client = _client(monkeypatch, tmp_path)
+    try:
+        response = client.post("/api/internal/provider-capability-proofs", headers=_factory_headers(), json=bundle)
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 201, response.text
+    assert projection_digest in declared
+    assert record.plan_digest not in declared
+
+
 def test_product_assurance_publish_is_archived_but_never_projected_as_a_provider(monkeypatch, tmp_path: Path) -> None:
     client = _client(monkeypatch, tmp_path)
     bundle, artifact_id = _product_bundle()
@@ -260,6 +323,23 @@ def test_product_assurance_publish_is_archived_but_never_projected_as_a_provider
     rejected = client.post("/api/internal/provider-capability-proofs", headers=_factory_headers(), json=invalid)
     assert rejected.status_code == 422
     assert "provider identity" in rejected.json()["detail"]
+
+
+def test_product_assurance_accepts_a_digest_bound_plan_cell_projection(monkeypatch, tmp_path: Path) -> None:
+    bundle, artifact_id = _product_bundle(projected_plan=True)
+    record = bundle["records"][0]
+    declared = {item["digest"] for item in bundle["blobs"]}
+    projection_digest = record["provenance_extension"]["plan_projection_digest"]
+    client = _client(monkeypatch, tmp_path)
+    try:
+        response = client.post("/api/internal/provider-capability-proofs", headers=_factory_headers(), json=bundle)
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 201, response.text
+    assert response.json()["trusted_artifact_ids"] == [artifact_id]
+    assert projection_digest in declared
+    assert record["plan_digest"] not in declared
 
 
 def test_factory_rejects_new_v2_publication_but_keeps_old_history_non_admissible(monkeypatch, tmp_path: Path) -> None:

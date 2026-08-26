@@ -12,6 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zerg.services.provider_assurance_plan_projection import plan_content_digest
+from zerg.services.provider_assurance_plan_projection import validate_plan_projection
+
 
 class ProductAssuranceProofArchive:
     """Validate and append product proofs without entering provider projections."""
@@ -146,6 +149,7 @@ def _validate_bundle(bundle: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
     if not isinstance(blobs, list) or not blobs:
         raise ValueError("product assurance bundle has no evidence blobs")
     declared: set[str] = set()
+    content_by_digest: dict[str, bytes] = {}
     for blob in blobs:
         if not isinstance(blob, dict) or not isinstance(blob.get("digest"), str) or not isinstance(blob.get("content_base64"), str):
             raise ValueError("product assurance evidence blob is invalid")
@@ -157,18 +161,23 @@ def _validate_bundle(bundle: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
         if blob["digest"] != digest or digest in declared:
             raise ValueError("product assurance evidence blob identity is invalid")
         declared.add(digest)
+        content_by_digest[digest] = content
+    plan_reference = plan_content_digest(record)
+    if not isinstance(plan_reference, str) or not plan_reference:
+        raise ValueError("product assurance plan evidence identity is invalid")
     referenced = {
         *raw_digests,
         record["accepted_epoch_digest"],
         record["verifier_bundle_digest"],
         record["worker_census_digest"],
         record["compile_report_digest"],
-        record["plan_digest"],
+        plan_reference,
         record["sandbox_receipt_digest"],
         record["cleanup_receipt_digest"],
     }
     if declared != referenced:
         raise ValueError("product assurance evidence blobs do not match referenced content")
+    validate_plan_projection(record, content_by_digest)
     return record, publication
 
 

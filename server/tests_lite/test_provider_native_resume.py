@@ -1969,6 +1969,18 @@ def test_codex_process_evidence_redacts_bridge_tokens() -> None:
     assert _redact_process_command(command) == "env LONGHOUSE_COORDINATION_TOKEN=<redacted> codex app-server"
 
 
+def test_codex_failure_manifest_includes_cleanup_written_during_finalization(tmp_path: Path) -> None:
+    root = tmp_path / "evidence"
+    root.mkdir()
+    result = {"status": "fail", "artifact_manifest": []}
+    write_codex_json(root / "cleanup-receipt.json", {"verification": {"verified": True}})
+
+    codex_native_resume._finalize_result_manifest(root, result)
+
+    retained = json.loads((root / "result.json").read_text())
+    assert [item["path"] for item in retained["artifact_manifest"]] == ["cleanup-receipt.json"]
+
+
 def test_codex_main_serializes_path_values_in_result_output(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

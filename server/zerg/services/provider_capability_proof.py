@@ -19,6 +19,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from zerg.services.provider_assurance_plan_projection import plan_content_digest
+
 PROOF_SCHEMA_VERSION = 3
 LEGACY_PROOF_SCHEMA_VERSION = 2
 PROOF_ARTIFACT_KIND = "provider_capability_assertion"
@@ -129,7 +131,7 @@ class ProviderCapabilityProofRecord:
             self.worker_census_digest,
             self.provider_build_identity,
             self.compile_report_digest,
-            self.plan_digest,
+            plan_content_digest(self.canonical_payload()),
             self.sandbox_receipt_digest,
             self.cleanup_receipt_digest,
         ]

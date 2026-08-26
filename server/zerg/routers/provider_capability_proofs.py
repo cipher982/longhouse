@@ -21,6 +21,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.product_assurance_proof_archive import ProductAssuranceProofArchive
+from zerg.services.provider_assurance_plan_projection import validate_plan_projection
 from zerg.services.provider_capability_projection import PROJECTION_VERSION
 from zerg.services.provider_capability_projection import project_capabilities
 from zerg.services.provider_capability_proof import PROOF_SCHEMA_VERSION
@@ -173,6 +174,9 @@ def _validated_records(
     missing = set().union(*(set(record.referenced_content_digests()) for record in records)) - declared
     if missing:
         raise ValueError(f"proof bundle omits referenced content: {sorted(missing)}")
+    content_by_digest = dict(blobs)
+    for record in records:
+        validate_plan_projection(record.canonical_payload(), content_by_digest)
     publication = ProofPublication(
         worker_id=str(worker_id),
         worker_census_digest=str(worker_census_digest),

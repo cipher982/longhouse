@@ -198,6 +198,11 @@ def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
     ]
 
 
+def _finalize_result_manifest(root: Path, result: dict[str, Any]) -> None:
+    result["artifact_manifest"] = _artifact_manifest(root)
+    _write_json(root / "result.json", result)
+
+
 class _RuntimeHostHTTPError(RuntimeError):
     def __init__(self, status: int, detail: str) -> None:
         self.status = status
@@ -578,6 +583,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     final_cleanup: dict[str, Any] = {"verified": False}
     resume_contract_paths: tuple[Path, Path] | None = None
     shipper: TranscriptShipper | None = None
+    retained_result: dict[str, Any] | None = None
     try:
         # Start the real Machine Agent before the detached bridge.  Engine
         # startup performs its own provider-state reconciliation; if it comes
@@ -820,6 +826,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "post_resume_marker": post_marker,
             "artifact_manifest": _artifact_manifest(root),
         }
+        retained_result = result
         _write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
@@ -843,9 +850,15 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "direct_native_resume_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            "observation": {
+                "failure_code": "direct_native_resume_failed",
+                "error_type": type(exc).__name__,
+            },
+            "assertions": {"native_provider_resume_proven": False},
             "redacted_secret_files": redacted_secret_files,
             "artifact_manifest": _artifact_manifest(root),
         }
+        retained_result = failure
         _write_json(root / "result.json", failure)
         return failure
     finally:
@@ -856,6 +869,11 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (root / "cleanup-receipt.json").exists():
                 _write_json(root / "cleanup-receipt.json", cleanup)
+        if retained_result is not None:
+            # Failure cleanup happens in this finally block. Refresh the
+            # exhaustive manifest after it, otherwise a real provider finding
+            # is discarded as an unbound cleanup-receipt harness error.
+            _finalize_result_manifest(root, retained_result)
 
 
 def _parser() -> argparse.ArgumentParser:
