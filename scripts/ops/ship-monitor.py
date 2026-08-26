@@ -85,10 +85,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", default="cipher982/longhouse", help="GitHub repo in OWNER/REPO form.")
     parser.add_argument("--timeout", type=int, default=3600, help="Overall timeout in seconds. Default: 3600.")
     parser.add_argument(
+        # GitHub queues the push event; it does not always deliver it promptly.
+        # On 2026-08-26 a push at 16:40 produced its first run at 16:48, and a
+        # release the same morning fired nineteen minutes late. Three minutes
+        # declared those pushes dead and sent the operator off to dispatch the
+        # workflows by hand -- which is how that release ended up with two
+        # publish runs racing each other. Waiting costs nothing here: once a run
+        # appears, --timeout governs. Only a genuinely undelivered event should
+        # reach this deadline.
         "--initial-timeout",
         type=int,
-        default=180,
-        help="How long to wait for the first push workflow run to appear. Default: 180.",
+        default=1800,
+        help="How long to wait for the first push workflow run to appear. Default: 1800.",
     )
     parser.add_argument("--poll", type=int, default=10, help="Polling interval in seconds. Default: 10.")
     parser.add_argument(
