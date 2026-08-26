@@ -121,6 +121,9 @@ if [[ -n "$PREV_TAG" ]]; then
   NOTES="**Full Changelog**: https://github.com/cipher982/longhouse/compare/$PREV_TAG...$VERSION"
 fi
 
+# Anything we accept as "this release's run" must have started after this.
+RELEASE_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 gh release create "$VERSION" \
   --target "$BUMP_SHA" \
   --title "$VERSION" \
@@ -129,17 +132,36 @@ gh release create "$VERSION" \
 echo "Release $VERSION created. Waiting for publish.yml and local-runtime-release.yml to finish..."
 echo "(macOS notarization can take a while. Default Apple wait: 330 minutes.)"
 
+# Publishing a release does not always produce release-event runs. It did not on
+# 2026-08-26: the release was published, the tag resolved, both workflows were
+# active and valid, and no run ever appeared. This function used to poll for six
+# hours and then fail, which turns a recoverable hiccup into a lost afternoon.
+# Both workflows accept workflow_dispatch with a tag_name, so after a short
+# grace period we dispatch the workflow ourselves and wait on that run instead.
+DISPATCH_GRACE_SECONDS="${DISPATCH_GRACE_SECONDS:-180}"
+
 wait_run() {
   local workflow="$1"
   local deadline=$(( $(date +%s) + 60*60*6 ))
+  local dispatch_after=$(( $(date +%s) + DISPATCH_GRACE_SECONDS ))
+  local dispatched=false
   while true; do
     local run_info
+    # Accept a run from either event: the release event when it fires, or our
+    # own dispatch when it does not.
     run_info="$(gh run list \
       --workflow "$workflow" \
-      --event release \
-      --json databaseId,status,conclusion,headBranch,displayTitle,createdAt \
-      --limit 5 \
-      --jq "[.[] | select(.displayTitle | contains(\"$VERSION\"))][0]" || true)"
+      --json databaseId,status,conclusion,headBranch,displayTitle,createdAt,event \
+      --limit 10 \
+      --jq "[.[] | select(.createdAt >= \"$RELEASE_STARTED_AT\") | select((.displayTitle | contains(\"$VERSION\")) or (.event == \"workflow_dispatch\"))][0]" || true)"
+
+    if [[ -z "$run_info" || "$run_info" == "null" ]] && [[ "$dispatched" == "false" ]] && (( $(date +%s) > dispatch_after )); then
+      echo "  $workflow: no run appeared from the release event; dispatching it directly"
+      gh workflow run "$workflow" -f tag_name="$VERSION" >/dev/null 2>&1 || true
+      dispatched=true
+      sleep 15
+      continue
+    fi
 
     if [[ -n "$run_info" && "$run_info" != "null" ]]; then
       local status conclusion id
