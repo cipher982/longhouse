@@ -68,6 +68,7 @@ def _bridge_transcript_event(
     live_text: str,
     delta: str | None = None,
     turn_completed: bool = False,
+    turn_id: str = "turn-1",
 ) -> RuntimeEventIngest:
     return RuntimeEventIngest(
         runtime_key=f"codex:{session_id}",
@@ -77,12 +78,12 @@ def _bridge_transcript_event(
         source="codex_bridge_live",
         kind="progress_signal",
         occurred_at=occurred_at,
-        dedupe_key=f"bridge:live:{session_id}:thread-1:turn-1:{seq}",
+        dedupe_key=f"bridge:live:{session_id}:thread-1:{turn_id}:{seq}",
         payload={
             "progress_kind": "bridge_live_transcript_delta",
             "managed_transport": "codex_app_server",
             "thread_id": "thread-1",
-            "turn_id": "turn-1",
+            "turn_id": turn_id,
             "seq": seq,
             "method": "item/agentMessage/delta",
             "delta": delta if delta is not None else live_text[-1:],
@@ -553,6 +554,44 @@ def test_bridge_preview_does_not_reopen_same_turn_after_durable_activity(tmp_pat
         previews = load_active_provisional_preview_map(db, [session.id])
 
     assert previews == {}
+
+
+def test_bridge_preview_shows_a_new_turn_after_durable_activity(tmp_path):
+    """The other half of monotonic supersession: a new turn still streams.
+
+    Closing a turn with durable content must not close the session. Without
+    this, the only coverage says a post-durable delta produces no preview --
+    which is also what a completely broken live lane looks like.
+    """
+
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_new_turn.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [_bridge_transcript_event(session_id=session.id, occurred_at=now, seq=1, live_text="old preview")],
+        )
+        _ingest_durable_session(db, session=session, now=now)
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_transcript_event(
+                    session_id=session.id,
+                    occurred_at=now + timedelta(seconds=5),
+                    seq=2,
+                    live_text="new preview",
+                    turn_id="turn-2",
+                )
+            ],
+        )
+        db.commit()
+
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+
+    assert preview.text == "new preview"
+    assert preview.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-2:2"
 
 
 def test_cross_session_search_ignores_live_preview_text(tmp_path):
