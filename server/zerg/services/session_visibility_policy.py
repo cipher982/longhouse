@@ -23,6 +23,13 @@ from zerg.services.internal_sessions import is_hatch_execution_contract
 
 HIDDEN_ORIGIN_KINDS = frozenset({"hatch_automation", "test_or_canary"})
 HIDDEN_ENVIRONMENTS = frozenset({"test", "e2e"})
+# A harness that declares its own launch surface has already told us it is not
+# product traffic. Recognizing that declaration is what keeps QA and factory
+# runs out of the timeline without every new harness inventing a project name
+# that some listing has to learn about later.
+HIDDEN_LAUNCH_SURFACES = frozenset({"product-e2e", "e2e", "test", "qa", "ci", "canary", "factory_assurance"})
+# Reasons that mean "test scope", so an explicit test-scope read reveals them.
+TEST_SCOPE_REASON_KEYS = frozenset({"test_environment", "test_launch_surface"})
 HUMAN_LAUNCH_ACTORS = frozenset({"user", "human_ui", "human_shell"})
 ACTIVE_USER_STATES = frozenset({"active", "parked"})
 
@@ -63,6 +70,8 @@ def evaluate_origin_visibility(facts: SessionVisibilityFacts) -> OriginVisibilit
         reasons.append("hidden_origin")
     if environment in HIDDEN_ENVIRONMENTS:
         reasons.append("test_environment")
+    if _normalized(facts.launch_surface) in HIDDEN_LAUNCH_SURFACES:
+        reasons.append("test_launch_surface")
     if launch_actor == "automation":
         reasons.append("automation_actor")
     if (
@@ -91,9 +100,9 @@ def evaluate_origin_visibility(facts: SessionVisibilityFacts) -> OriginVisibilit
 
 
 def visible_in_test_scope(decision: OriginVisibilityDecision) -> bool:
-    """Return true only when test environment is the sole hidden reason."""
+    """Return true only when test-scope declarations are the sole hidden reasons."""
 
-    return decision.reason_keys == ("test_environment",)
+    return bool(decision.reason_keys) and set(decision.reason_keys) <= TEST_SCOPE_REASON_KEYS
 
 
 def known_hidden_evidence_clause(model, *, include_test: bool = False):
@@ -106,6 +115,7 @@ def known_hidden_evidence_clause(model, *, include_test: bool = False):
     origin_kind = _column(columns, "origin_kind")
     environment = _column(columns, "environment")
     launch_actor = _column(columns, "launch_actor")
+    launch_surface = _column(columns, "launch_surface")
     provider = _column(columns, "provider")
     project = _column(columns, "project")
     machine = _column(columns, "machine_id", "device_id")
@@ -117,6 +127,8 @@ def known_hidden_evidence_clause(model, *, include_test: bool = False):
         clauses.append(func.lower(func.coalesce(environment, "")).in_(HIDDEN_ENVIRONMENTS))
     if launch_actor is not None:
         clauses.append(func.lower(func.coalesce(launch_actor, "")) == "automation")
+    if launch_surface is not None and not include_test:
+        clauses.append(func.lower(func.coalesce(launch_surface, "")).in_(HIDDEN_LAUNCH_SURFACES))
     if provider is not None:
         provider_value = func.lower(func.coalesce(provider, ""))
         clauses.append(provider_value.in_(INTERNAL_CANARY_PROVIDER_ALIASES))
@@ -172,16 +184,20 @@ def effective_system_hidden_clause(model, *, include_test: bool = False, worker_
     if not include_test:
         return or_(func.coalesce(persisted, 0) != 0, evidence)
     environment = _column(columns, "environment")
-    if environment is None:
+    launch_surface = _column(columns, "launch_surface")
+    if environment is None and launch_surface is None:
         return or_(func.coalesce(persisted, 0) != 0, evidence)
     # The projection does not retain a reason bitset. In explicit test scope,
-    # discount a persisted bit on a test/e2e row, then re-apply every stronger
-    # automation/proof marker. This reveals ordinary test sessions without
-    # leaking Hatch, provider proof, canaries, or automation actors.
-    persisted_non_test = and_(
-        func.coalesce(persisted, 0) != 0,
-        ~func.lower(func.coalesce(environment, "")).in_(HIDDEN_ENVIRONMENTS),
-    )
+    # discount a persisted bit on a row that declared test scope, then re-apply
+    # every stronger automation/proof marker. This reveals ordinary test
+    # sessions without leaking Hatch, provider proof, canaries, or automation
+    # actors.
+    persisted_terms = [func.coalesce(persisted, 0) != 0]
+    if environment is not None:
+        persisted_terms.append(~func.lower(func.coalesce(environment, "")).in_(HIDDEN_ENVIRONMENTS))
+    if launch_surface is not None:
+        persisted_terms.append(~func.lower(func.coalesce(launch_surface, "")).in_(HIDDEN_LAUNCH_SURFACES))
+    persisted_non_test = and_(*persisted_terms)
     return or_(persisted_non_test, evidence)
 
 
@@ -269,10 +285,12 @@ def _value(row, name: str):
 __all__ = [
     "ACTIVE_USER_STATES",
     "HIDDEN_ENVIRONMENTS",
+    "HIDDEN_LAUNCH_SURFACES",
     "HIDDEN_ORIGIN_KINDS",
     "HUMAN_LAUNCH_ACTORS",
     "OriginVisibilityDecision",
     "SessionVisibilityFacts",
+    "TEST_SCOPE_REASON_KEYS",
     "default_visible_clause",
     "effective_system_hidden_clause",
     "evaluate_origin_visibility",

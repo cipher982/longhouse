@@ -15,6 +15,7 @@ from zerg.services.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.session_visibility_policy import known_hidden_evidence_clause
 from zerg.services.session_visibility_policy import primary_worker_only_clause
 from zerg.services.session_visibility_policy import title_origin_eligible_clause
+from zerg.services.session_visibility_policy import visible_in_test_scope
 
 CASES = (
     SessionVisibilityFacts(provider="codex", project="longhouse", environment="local", machine_id="cinder"),
@@ -236,3 +237,91 @@ def test_include_test_discounts_only_the_test_environment_projection():
     assert bool(results["ordinary-test"]) is False
     assert bool(results["automated-test"]) is True
     assert bool(results["worker-test"]) is True
+
+
+def test_declared_harness_launch_surface_is_test_scope_evidence():
+    """A QA harness that declares its launch surface stays out of the timeline.
+
+    `console-served-state-e2e` created real Console sessions with
+    `launch_surface="product-e2e"` and an ordinary `development` environment,
+    so every run surfaced in the user's iOS "New results" section. The
+    declaration was recorded and then ignored by the policy; this pins that it
+    is evidence, and that an explicit test-scope read still reveals it.
+    """
+
+    facts = SessionVisibilityFacts(
+        provider="claude",
+        project="console-served-state-e2e",
+        environment="development",
+        origin_kind="console",
+        launch_actor="user",
+        launch_surface="product-e2e",
+        machine_id="cinder",
+    )
+    decision = evaluate_origin_visibility(facts)
+
+    assert decision.system_hidden is True
+    assert decision.reason_keys == ("test_launch_surface",)
+    assert visible_in_test_scope(decision) is True
+
+    metadata = MetaData()
+    sessions = Table(
+        "sessions",
+        metadata,
+        Column("session_id", String, primary_key=True),
+        Column("provider", String),
+        Column("project", String),
+        Column("environment", String),
+        Column("origin_kind", String),
+        Column("launch_actor", String),
+        Column("launch_surface", String),
+        Column("cwd", String),
+        Column("machine_id", String),
+        Column("first_user_message_preview", String),
+        Column("hidden_from_default_timeline", Integer),
+    )
+    engine = create_engine("sqlite://")
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(sessions),
+            [
+                {
+                    "session_id": "harness",
+                    "provider": "claude",
+                    "project": "console-served-state-e2e",
+                    "environment": "development",
+                    "origin_kind": "console",
+                    "launch_actor": "user",
+                    "launch_surface": "product-e2e",
+                    "machine_id": "cinder",
+                    # Rows created before this policy carry a stale 0; the
+                    # evidence clause must hide them without a backfill.
+                    "hidden_from_default_timeline": 0,
+                },
+                {
+                    "session_id": "human-console",
+                    "provider": "claude",
+                    "project": "longhouse",
+                    "environment": "development",
+                    "origin_kind": "console",
+                    "launch_actor": "user",
+                    "launch_surface": "ios",
+                    "machine_id": "cinder",
+                    "hidden_from_default_timeline": 0,
+                },
+            ],
+        )
+        default_scope = dict(
+            connection.execute(select(sessions.c.session_id, effective_system_hidden_clause(sessions))).all()
+        )
+        test_scope = dict(
+            connection.execute(
+                select(sessions.c.session_id, effective_system_hidden_clause(sessions, include_test=True))
+            ).all()
+        )
+
+    assert bool(default_scope["harness"]) is True
+    assert bool(default_scope["human-console"]) is False
+    # `include_test=true` is how the QA harnesses find their own sessions.
+    assert bool(test_scope["harness"]) is False

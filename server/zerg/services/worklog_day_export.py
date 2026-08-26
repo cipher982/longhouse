@@ -27,6 +27,7 @@ from zerg.services.provider_interaction_semantics import semantic_projection_fac
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import decompress_raw_json
 from zerg.services.session_kernel_projection import project_session_lineage_fields
+from zerg.services.session_visibility_policy import TEST_SCOPE_REASON_KEYS
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.session_visibility_policy import facts_from_row
 from zerg.utils.time import UTCBaseModel
@@ -254,7 +255,7 @@ def _worklog_visible_session_ids(db: Session, session_ids: set[str], *, include_
         )
         reasons = set(decision.reason_keys)
         if include_test:
-            reasons.discard("test_environment")
+            reasons -= TEST_SCOPE_REASON_KEYS
         if not reasons and not bool(session.user_hidden_from_timeline) and (session.user_state or "active") in {"active", "parked"}:
             visible.add(str(session.id))
     return visible
