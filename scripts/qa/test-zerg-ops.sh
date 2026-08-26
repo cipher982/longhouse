@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OPS_SCRIPT="$ROOT_DIR/scripts/ops/zerg-ops.sh"
@@ -10,8 +10,11 @@ fail() {
 }
 
 # `set -e` can kill this script at a command that printed nothing, which reads
-# on CI as a bare non-zero exit with no cause. Always name the line.
-trap 'status=$?; [[ $status -eq 0 ]] || echo "FAIL: aborted at line $LINENO (exit $status)" >&2' ERR
+# on CI as a bare non-zero exit with no cause. Always name the line and the
+# command. `set -E` is what makes this fire at all: without errtrace an ERR
+# trap is not inherited by shell functions, and everything here runs inside
+# main(), so the first version of this trap stayed silent too.
+trap 'status=$?; echo "FAIL: aborted at line $LINENO (exit $status): $BASH_COMMAND" >&2' ERR
 
 sha256_file() {
   local path="$1"
