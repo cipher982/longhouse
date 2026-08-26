@@ -526,7 +526,7 @@ def test_cumulative_live_snapshot_does_not_merge_durable_tool_sequence(tmp_path)
     assert previews == {}
 
 
-def test_bridge_preview_uses_only_live_deltas_after_latest_durable_activity(tmp_path):
+def test_bridge_preview_does_not_reopen_same_turn_after_durable_activity(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_after_durable.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
@@ -550,10 +550,9 @@ def test_bridge_preview_uses_only_live_deltas_after_latest_durable_activity(tmp_
         )
         db.commit()
 
-        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+        previews = load_active_provisional_preview_map(db, [session.id])
 
-    assert preview.text == "new preview"
-    assert preview.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
+    assert previews == {}
 
 
 def test_cross_session_search_ignores_live_preview_text(tmp_path):
