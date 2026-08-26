@@ -1909,6 +1909,13 @@ async def list_session_subagents(
     """
 
     if owner_id is None:
+        # `_no_viewer_owner_id` is a viewer-scope guard, not a resolver: it
+        # always returns None for a machine token. The single-tenant owner is
+        # the same one the catalog read gateway uses everywhere else.
+        from zerg.services.catalog_read_gateway import active_owner_id
+
+        owner_id = active_owner_id()
+    if owner_id is None:
         raise HTTPException(status_code=400, detail="owner-scoped request required")
     catalog = get_catalogd_client()
     if catalog is None:
