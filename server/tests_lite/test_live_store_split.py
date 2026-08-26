@@ -19,8 +19,8 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import zerg.database as database_module
-import zerg.services.session_views as session_views_module
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import provision_live_catalog
 from zerg.catalogd.models import CatalogBase
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
@@ -32,8 +32,6 @@ from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionInput
-from zerg.models.agents import SessionLaunchAttempt
-from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
@@ -48,9 +46,7 @@ from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionInputReceipt
-from zerg.models.live_store import LiveSessionLivePreview
 from zerg.models.live_store import LiveTimelineCard
-from zerg.services.agents import AgentsStore
 from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
 from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
 from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
@@ -73,7 +69,6 @@ from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.live_session_state import mark_missing_live_sessions
 from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
 from zerg.services.managed_control_state import load_managed_control_state_map
-from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
@@ -82,16 +77,124 @@ from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_live_runtime_events
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime import runtime_key_for_session
+from zerg.services.session_runtime import session_input_block_reason
 from zerg.services.session_runtime import session_is_closed_for_input
-from zerg.services.session_views import build_session_response
 from zerg.services.session_views import latest_live_launch_readiness
 from zerg.services.session_workspace import build_session_workspace
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import normalize_utc
+
+
+@pytest.fixture()
+def live():
+    """A Runtime Host's live catalog: catalogd up, ``live_catalog_enabled()`` true.
+
+    The hot-lane tests below used to reach the Live Store by patching
+    ``live_store_configured`` to true, which put them on the SQLAlchemy branch
+    a Runtime Host never takes -- that same flag now also makes
+    ``live_catalog_enabled()`` true, and the read goes to catalogd. So they run
+    against a real daemon instead.
+    """
+
+    with provision_live_catalog() as catalog:
+        yield catalog
+
+
+def _runtime_event(
+    *,
+    session_id,
+    kind: str,
+    source: str,
+    occurred_at: datetime,
+    dedupe_key: str,
+    provider: str = "codex",
+    device_id: str = "cinder",
+    phase: str | None = None,
+    tool_name: str | None = None,
+    freshness_ms: int | None = None,
+    payload: dict | None = None,
+) -> dict:
+    """One wire runtime event, shaped the way the Machine Agent ships it."""
+
+    return {
+        "runtime_key": runtime_key_for_session(provider, str(session_id)),
+        "session_id": str(session_id),
+        "provider": provider,
+        "device_id": device_id,
+        "source": source,
+        "kind": kind,
+        "phase": phase,
+        "tool_name": tool_name,
+        "occurred_at": occurred_at.isoformat(),
+        "freshness_ms": freshness_ms,
+        "dedupe_key": dedupe_key,
+        "payload": payload or {},
+    }
+
+
+def _machine_heartbeat(*, managed_sessions: list[dict]) -> dict:
+    """One wire heartbeat. Sending ``managed_sessions`` makes the snapshot authoritative."""
+
+    return {
+        "version": "0.5.0",
+        "daemon_pid": 12345,
+        "spool_pending_count": 0,
+        "parse_error_count_1h": 0,
+        "consecutive_ship_failures": 0,
+        "disk_free_bytes": 50_000_000_000,
+        "is_offline": False,
+        "managed_sessions": managed_sessions,
+    }
+
+
+def _managed_lease(*, session_id, sequence: int, provider: str = "codex", state: str = "attached") -> dict:
+    return {
+        "session_id": str(session_id),
+        "provider": provider,
+        "machine_id": "cinder",
+        "state": state,
+        "phase": "idle",
+        "bridge_status": "ready",
+        "thread_subscription_status": "active",
+        "lease_ttl_ms": 60_000,
+        "sequence": sequence,
+    }
+
+
+def _local_launch_rpc(plan, *, owner_id: int, started_at: datetime, expires_at: datetime) -> dict:
+    """The ``session.launch.local.create.v2`` body the managed-launch route sends."""
+
+    return {
+        "owner_id": int(owner_id),
+        "git_repo": None,
+        "git_branch": None,
+        "started_at": started_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "plan": {
+            "session_id": str(plan.session_id),
+            "provider": plan.provider,
+            "provider_session_id": plan.provider_session_id,
+            "source_name": plan.source_name,
+            "source_runner_id": plan.source_runner_id,
+            "cwd": plan.cwd,
+            "project": plan.project,
+            "display_name": plan.display_name,
+            "managed_session_name": plan.managed_session_name,
+            "loop_mode": plan.loop_mode,
+            "permission_mode": plan.permission_mode,
+            "launch_actor": plan.launch_actor,
+            "launch_surface": plan.launch_surface,
+            "environment": plan.environment,
+            "origin_kind": plan.origin_kind,
+            "hidden_from_default_timeline": plan.hidden_from_default_timeline,
+            "managed_transport": plan.managed_transport,
+            "attach_command": plan.attach_command,
+            "provider_config": plan.provider_config,
+        },
+    }
 
 
 def test_live_write_serializer_is_distinct_from_archive_serializer():
@@ -1034,74 +1137,48 @@ def test_live_archive_outbox_failure_stays_retryable(tmp_path):
         live_engine.dispose()
 
 
-def test_live_runtime_state_feeds_existing_runtime_overlay(tmp_path, monkeypatch):
+def test_live_runtime_state_is_served_from_the_live_catalog(live: LiveCatalog):
+    """The runtime batch is the only writer of phase/tool truth, and catalogd holds it.
+
+    A Runtime Host binds every catalog route's db dependency to nothing, so the
+    read below passes the ``None`` production passes: whatever the served
+    runtime state is, it did not come from an archive session.
+    """
+
+    owner = live.create_user("runtime@live-store-split.test")
+    token = live.create_device_token(owner_id=owner, device_id="cinder")
+    seeded = live.commit_session(owner_id=owner, device_id="cinder", project="live-runtime")
     now = datetime.now(timezone.utc)
-    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
-    Base.metadata.create_all(bind=archive_engine)
-    ArchiveSession = sessionmaker(bind=archive_engine)
 
-    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
-    initialize_live_database(live_engine)
-    LiveSession = sessionmaker(bind=live_engine)
-
-    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
-
-    try:
-        with ArchiveSession() as archive_db:
-            session = AgentSession(
-                provider="codex",
-                environment="test",
-                project="live-runtime",
-                device_id="cinder",
-                started_at=now,
-                last_activity_at=now,
-            )
-            archive_db.add(session)
-            archive_db.commit()
-            session_id = session.id
-
-        event = RuntimeEventIngest(
-            runtime_key=runtime_key_for_session("codex", str(session_id)),
-            session_id=session_id,
-            provider="codex",
-            device_id="cinder",
-            source="codex_bridge",
-            kind="phase_signal",
-            phase="running",
-            tool_name="Shell",
-            occurred_at=now,
-            freshness_ms=60_000,
-            dedupe_key="live-runtime-1",
-            payload={},
+    with live.http_client() as client:
+        response = client.post(
+            "/agents/runtime/events/batch",
+            json={
+                "events": [
+                    _runtime_event(
+                        session_id=seeded.session_id,
+                        kind="phase_signal",
+                        source="codex_bridge",
+                        occurred_at=now,
+                        dedupe_key="live-runtime-1",
+                        phase="running",
+                        tool_name="Shell",
+                        freshness_ms=60_000,
+                    )
+                ]
+            },
+            headers={"X-Agents-Token": token},
         )
-        with LiveSession() as live_db:
-            result = ingest_live_runtime_events(live_db, [event])
-            live_db.commit()
 
-        assert result.accepted == 1
-        assert result.updated_runtime_keys == [event.runtime_key]
+    assert response.status_code == 200, response.text
+    assert response.json()["accepted"] == 1
 
-        with ArchiveSession() as archive_db:
-            assert archive_db.query(SessionRuntimeState).count() == 0
-            session = archive_db.query(AgentSession).filter(AgentSession.id == session_id).one()
-            runtime_state_map = load_runtime_state_map(archive_db, [session_id])
-            runtime_state = runtime_state_map[str(session_id)]
-            assert isinstance(runtime_state, LiveRuntimeState)
-            overlay = resolve_runtime_overlay(
-                session,
-                last_activity_at=session.last_activity_at,
-                runtime_state_map=runtime_state_map,
-                now=now,
-            )
-
-        assert overlay.presence_state == "running"
-        assert overlay.presence_tool == "Shell"
-        assert overlay.runtime_phase == "running"
-        assert overlay.runtime_source == "codex_bridge"
-    finally:
-        archive_engine.dispose()
-        live_engine.dispose()
+    runtime_state_map = load_runtime_state_map(None, [seeded.session_id])
+    runtime_state = runtime_state_map[str(seeded.session_id)]
+    assert isinstance(runtime_state, LiveRuntimeState)
+    assert runtime_state.phase == "running"
+    assert runtime_state.active_tool == "Shell"
+    assert runtime_state.phase_source == "codex_bridge"
 
 
 def test_live_pause_resolution_watermark_rejects_late_request_replay(tmp_path):
@@ -1144,83 +1221,52 @@ def test_live_pause_resolution_watermark_rejects_late_request_replay(tmp_path):
         live_engine.dispose()
 
 
-def test_live_runtime_events_materialize_hot_transcript_preview(tmp_path, monkeypatch):
+def test_live_runtime_events_materialize_hot_transcript_preview(live: LiveCatalog):
+    """A bridge transcript delta becomes the served provisional preview.
+
+    This used to also seed a stale archive ``SessionLivePreview`` and assert the
+    hot row beat it. Under a live catalog ``load_active_provisional_preview_map``
+    never opens an archive session at all, so that half pinned a merge
+    production cannot perform; what remains is the claim that matters -- the
+    delta the bridge just shipped is what the preview read returns.
+    """
+
+    owner = live.create_user("preview@live-store-split.test")
+    token = live.create_device_token(owner_id=owner, device_id="cinder")
+    seeded = live.commit_session(owner_id=owner, device_id="cinder", project="live-preview")
     now = datetime.now(timezone.utc)
-    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
-    Base.metadata.create_all(bind=archive_engine)
-    ArchiveSession = sessionmaker(bind=archive_engine)
 
-    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
-    initialize_live_database(live_engine)
-    LiveSession = sessionmaker(bind=live_engine)
-
-    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
-
-    try:
-        with ArchiveSession() as archive_db:
-            session = AgentSession(
-                provider="codex",
-                environment="test",
-                project="live-preview",
-                device_id="cinder",
-                started_at=now,
-                last_activity_at=now,
-            )
-            archive_db.add(session)
-            archive_db.commit()
-            session_id = session.id
-            archive_db.add(
-                SessionLivePreview(
-                    session_id=session_id,
-                    thread_id="thread-1",
-                    turn_key=f"codex_bridge_live:{session_id}:thread-1:turn-1",
-                    seq=1,
-                    preview_text="archive stale preview",
-                    provisional_cursor=f"codex_bridge_live:{session_id}:thread-1:turn-1:1",
-                    provisional_complete=0,
-                    event_origin="live_provisional",
-                    preview_observed_at=now - timedelta(seconds=5),
-                    source="codex_bridge_live",
-                    last_observation_id="archive:preview:1",
-                )
-            )
-            archive_db.commit()
-
-        event = RuntimeEventIngest(
-            runtime_key=runtime_key_for_session("codex", str(session_id)),
-            session_id=session_id,
-            provider="codex",
-            device_id="cinder",
-            source="codex_bridge_live",
-            kind="progress_signal",
-            occurred_at=now,
-            dedupe_key="live-preview-1",
-            payload={
-                "progress_kind": "bridge_live_transcript_delta",
-                "thread_id": "thread-1",
-                "turn_id": "turn-1",
-                "seq": 2,
-                "live_text": "hot live preview",
+    with live.http_client() as client:
+        response = client.post(
+            "/agents/runtime/events/batch",
+            json={
+                "events": [
+                    _runtime_event(
+                        session_id=seeded.session_id,
+                        kind="progress_signal",
+                        source="codex_bridge_live",
+                        occurred_at=now,
+                        dedupe_key="live-preview-1",
+                        payload={
+                            "progress_kind": "bridge_live_transcript_delta",
+                            "thread_id": "thread-1",
+                            "turn_id": "turn-1",
+                            "seq": 2,
+                            "live_text": "hot live preview",
+                        },
+                    )
+                ]
             },
+            headers={"X-Agents-Token": token},
         )
-        with LiveSession() as live_db:
-            ingest_live_runtime_events(live_db, [event])
-            live_db.commit()
 
-        with LiveSession() as live_db:
-            row = live_db.get(LiveSessionLivePreview, str(session_id))
-            assert row is not None
-            assert row.preview_text == "hot live preview"
-            assert row.seq == 2
+    assert response.status_code == 200, response.text
 
-        with ArchiveSession() as archive_db:
-            preview = load_active_provisional_preview_map(archive_db, [session_id])[str(session_id)]
-            assert preview.text == "hot live preview"
-            assert preview.provisional_cursor == f"codex_bridge_live:{session_id}:thread-1:turn-1:2"
-    finally:
-        archive_engine.dispose()
-        live_engine.dispose()
+    preview = load_active_provisional_preview_map(None, [seeded.session_id])[str(seeded.session_id)]
+    assert preview.text == "hot live preview"
+    assert preview.event_id == 2
+    assert preview.provisional_complete is False
+    assert preview.provisional_cursor == f"codex_bridge_live:{seeded.session_id}:thread-1:turn-1:2"
 
 
 def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
@@ -1604,159 +1650,101 @@ def test_live_launch_readiness_session_map_ignores_expired_rows(tmp_path):
         live_engine.dispose()
 
 
-def test_fresh_live_launch_readiness_feeds_session_response_before_archive(tmp_path, monkeypatch):
-    now = datetime.now(timezone.utc)
-    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
-    Base.metadata.create_all(bind=archive_engine)
-    ArchiveSession = sessionmaker(bind=archive_engine)
+def test_live_launch_readiness_is_served_from_the_catalog_until_it_expires(live: LiveCatalog):
+    """Hot readiness is what paints a managed launch before any transcript exists.
 
-    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
-    initialize_live_database(live_engine)
-    LiveSession = sessionmaker(bind=live_engine)
+    The archive half of this test -- a stale ``SessionLaunchAttempt`` taking
+    over once the hot row expired -- ran ``build_session_response`` over an
+    archive store, which a Runtime Host never reaches under a live catalog. The
+    production claim is narrower and real: the launch RPC publishes readiness
+    catalogd serves as ``launching``, and an expired row stops being served
+    rather than lingering as a stuck first paint.
+    """
 
-    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
-
-    try:
-        with ArchiveSession() as archive_db:
-            session = AgentSession(
-                provider="codex",
-                environment="test",
-                project="launch-readiness",
-                device_id="cinder",
-                started_at=now,
-                last_activity_at=now,
-            )
-            archive_db.add(session)
-            archive_db.flush()
-            cold_attempt = SessionLaunchAttempt(
-                session_id=session.id,
-                provider="codex",
-                host_id="cinder",
-                owner_id=77,
-                execution_lifetime="one_shot",
-                client_request_id="launch-hot-wins",
-                command_id=f"launch-{session.id}",
-                state="failed",
-                error_code="provider_launch_failed",
-                error_message="archive saw a stale failure",
-                expires_at=None,
-            )
-            archive_db.add(cold_attempt)
-            archive_db.commit()
-            session_id = session.id
-
-        with LiveSession() as live_db:
-            upsert_live_launch_readiness(
-                live_db,
-                session_id=session_id,
-                owner_id=77,
-                device_id="cinder",
-                provider="codex",
-                execution_lifetime="one_shot",
-                state="pending",
-                command_id=f"launch-{session_id}",
-                client_request_id="launch-hot-wins",
-                machine_id="cinder",
-                project="repo",
-                expires_at=now + timedelta(minutes=2),
-                now=now,
-            )
-            live_db.commit()
-
-        with ArchiveSession() as archive_db:
-            session = archive_db.get(AgentSession, session_id)
-            cold_attempt = archive_db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.session_id == session_id).one()
-            live_map = latest_live_launch_readiness([session_id], now=now)
-            monkeypatch.setattr(
-                session_views_module,
-                "_latest_launch_attempt",
-                lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("hot launch readiness hit archive")),
-            )
-            response = build_session_response(
-                AgentsStore(archive_db),
-                session,
-                last_activity_at=session.started_at,
-                launch_readiness=live_map[session_id],
-            )
-
-            assert response.launch_state == "launching"
-            assert response.execution_lifetime == "one_shot"
-            assert response.launch_error_code is None
-            assert response.launch_error_message is None
-
-            expired_live_map = latest_live_launch_readiness([session_id], now=now + timedelta(minutes=5))
-            fallback = build_session_response(
-                AgentsStore(archive_db),
-                session,
-                last_activity_at=session.started_at,
-                launch_attempt=cold_attempt,
-                launch_readiness=expired_live_map.get(session_id),
-            )
-
-            assert fallback.launch_state == "launch_failed"
-            assert fallback.launch_error_code == "provider_launch_failed"
-            assert "archive saw a stale failure" in (fallback.launch_error_message or "")
-    finally:
-        archive_engine.dispose()
-        live_engine.dispose()
-
-
-def test_live_control_lease_feeds_managed_control_overlay(tmp_path, monkeypatch):
-    now = datetime.now(timezone.utc)
-    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
-    Base.metadata.create_all(bind=archive_engine)
-    ArchiveSession = sessionmaker(bind=archive_engine)
-
-    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
-    initialize_live_database(live_engine)
-    LiveSession = sessionmaker(bind=live_engine)
-
-    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
-
-    try:
-        with ArchiveSession() as archive_db:
-            session = AgentSession(
-                provider="codex",
-                environment="test",
-                project="live-control",
-                device_id="cinder",
-                started_at=now,
-                last_activity_at=now,
-            )
-            archive_db.add(session)
-            archive_db.commit()
-            session_id = session.id
-
-        lease = SimpleNamespace(
-            session_id=session_id,
+    owner = live.create_user("launch@live-store-split.test")
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    plan = build_managed_local_launch_plan(
+        ManagedLocalLaunchParams(
+            owner_id=owner,
+            runner_target="cinder",
+            cwd="/tmp/demo",
             provider="codex",
-            machine_id="cinder",
-            state="attached",
-            sequence=42,
-            bridge_status="ready",
-            thread_subscription_status="active",
-            observed_at=now,
-            lease_ttl_ms=60_000,
+            project="repo",
+            machine_name="cinder",
         )
-        with LiveSession() as live_db:
-            touched = upsert_live_control_leases(live_db, [lease], device_id="cinder", received_at=now)
-            live_db.commit()
+    )
 
-        assert touched == {session_id}
+    created = live.rpc(
+        "session.launch.local.create.v2",
+        {"launch": _local_launch_rpc(plan, owner_id=owner, started_at=now, expires_at=now + timedelta(minutes=2))},
+    )
+    assert created["created"] is True
+
+    readiness = latest_live_launch_readiness([plan.session_id], now=now)[plan.session_id]
+    assert readiness.launch_state == "launching"
+    assert readiness.execution_lifetime == "live_control"
+    assert readiness.launch_error_code is None
+    assert readiness.launch_error_message is None
+    assert readiness.provider == "codex"
+    assert readiness.machine_id == "cinder"
+    assert readiness.project == "repo"
+
+    assert latest_live_launch_readiness([plan.session_id], now=now + timedelta(minutes=5)) == {}
+
+
+def test_live_control_lease_feeds_managed_control_overlay(live: LiveCatalog, tmp_path):
+    """A managed lease shipped in a heartbeat is what makes control state online.
+
+    ``load_managed_control_state_map`` still takes an archive session for its
+    connection lane, but under a live catalog nothing supplies one: its only
+    caller, ``build_session_workspace``, is switched off by
+    ``get_legacy_workspace_session_factory``. An empty archive session is the
+    faithful stand-in, and it makes the point -- the overlay below can only
+    have come from catalogd's lease facts.
+    """
+
+    owner = live.create_user("control@live-store-split.test")
+    token = live.create_device_token(owner_id=owner, device_id="cinder")
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    plan = build_managed_local_launch_plan(
+        ManagedLocalLaunchParams(
+            owner_id=owner,
+            runner_target="cinder",
+            cwd="/tmp/demo",
+            provider="codex",
+            project="live-control",
+            machine_name="cinder",
+        )
+    )
+    live.rpc(
+        "session.launch.local.create.v2",
+        {"launch": _local_launch_rpc(plan, owner_id=owner, started_at=now, expires_at=now + timedelta(minutes=2))},
+    )
+
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    try:
+        with live.http_client() as client:
+            response = client.post(
+                "/agents/heartbeat",
+                json=_machine_heartbeat(managed_sessions=[_managed_lease(session_id=plan.session_id, sequence=42)]),
+                headers={"X-Agents-Token": token},
+            )
+        assert response.status_code == 204, response.text
 
         with ArchiveSession() as archive_db:
-            overlay = load_managed_control_state_map(archive_db, [session_id])[session_id]
+            overlay = load_managed_control_state_map(archive_db, [plan.session_id])[plan.session_id]
 
         assert overlay.control_state == "online"
         assert overlay.lease_state == "attached"
         assert overlay.device_id == "cinder"
         assert overlay.machine_id == "cinder"
         assert overlay.sequence == 42
+        assert overlay.source == "machine_heartbeat"
     finally:
         archive_engine.dispose()
-        live_engine.dispose()
 
 
 @pytest.mark.parametrize(
@@ -1849,124 +1837,113 @@ def test_live_control_lease_only_adopts_nonterminal_launch_readiness(tmp_path, i
         live_engine.dispose()
 
 
-def test_fresh_live_control_missing_beats_stale_archive_online(tmp_path, monkeypatch):
-    now = datetime.now(timezone.utc)
-    old = now - timedelta(minutes=5)
+def test_live_control_lease_missing_from_a_later_snapshot_projects_offline(live: LiveCatalog, tmp_path):
+    """An authoritative snapshot that omits a lease detaches it at the new snapshot's clock.
+
+    The archive half -- a stale attached ``SessionConnection`` the fresher live
+    row had to beat -- pinned the connection/lease merge inside
+    ``load_managed_control_state_map``, and no archive session reaches that
+    merge under a live catalog. What production still owes the user survives
+    intact: the second heartbeat enumerates no managed sessions, so control
+    goes offline stamped at that heartbeat rather than at the stale lease.
+    """
+
+    owner = live.create_user("control-missing@live-store-split.test")
+    token = live.create_device_token(owner_id=owner, device_id="cinder")
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    plan = build_managed_local_launch_plan(
+        ManagedLocalLaunchParams(
+            owner_id=owner,
+            runner_target="cinder",
+            cwd="/tmp/demo",
+            provider="codex",
+            project="live-control-missing",
+            machine_name="cinder",
+        )
+    )
+    live.rpc(
+        "session.launch.local.create.v2",
+        {"launch": _local_launch_rpc(plan, owner_id=owner, started_at=now, expires_at=now + timedelta(minutes=2))},
+    )
+
     archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
     Base.metadata.create_all(bind=archive_engine)
     ArchiveSession = sessionmaker(bind=archive_engine)
 
-    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
-    initialize_live_database(live_engine)
-    LiveSession = sessionmaker(bind=live_engine)
-
-    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
-
     try:
-        with ArchiveSession() as archive_db:
-            session = AgentSession(
-                provider="codex",
-                environment="test",
-                project="live-control-missing",
-                device_id="cinder",
-                started_at=old,
-                last_activity_at=old,
+        with live.http_client() as client:
+            attached = client.post(
+                "/agents/heartbeat",
+                json=_machine_heartbeat(managed_sessions=[_managed_lease(session_id=plan.session_id, sequence=1)]),
+                headers={"X-Agents-Token": token},
             )
-            archive_db.add(session)
-            archive_db.flush()
-            _thread, _run, conn = seed_managed_kernel_rows(
-                archive_db,
-                session,
-                control_plane="codex_bridge",
-                state="attached",
-            )
-            conn.device_id = "cinder"
-            conn.last_health_at = old
-            archive_db.commit()
-            session_id = session.id
+            assert attached.status_code == 204, attached.text
+            with ArchiveSession() as archive_db:
+                attached_overlay = load_managed_control_state_map(archive_db, [plan.session_id])[plan.session_id]
+            assert attached_overlay.control_state == "online"
 
-        lease = SimpleNamespace(
-            session_id=session_id,
-            provider="codex",
-            machine_id="cinder",
-            state="attached",
-            sequence=1,
-            bridge_status="ready",
-            thread_subscription_status="active",
-            observed_at=old,
-            lease_ttl_ms=60_000,
-        )
-        with LiveSession() as live_db:
-            upsert_live_control_leases(live_db, [lease], device_id="cinder", received_at=old)
-            mark_missing_live_control_leases(live_db, [], device_id="cinder", received_at=now)
-            live_db.commit()
+            # The Machine Agent enumerated its complete managed scope and this
+            # session was not in it.
+            detached = client.post(
+                "/agents/heartbeat",
+                json=_machine_heartbeat(managed_sessions=[]),
+                headers={"X-Agents-Token": token},
+            )
+            assert detached.status_code == 204, detached.text
 
         with ArchiveSession() as archive_db:
-            overlay = load_managed_control_state_map(archive_db, [session_id])[session_id]
+            overlay = load_managed_control_state_map(archive_db, [plan.session_id])[plan.session_id]
 
         assert overlay.control_state == "offline"
         assert overlay.lease_state == "missing"
         assert overlay.reason == "missing_from_snapshot"
-        assert overlay.last_control_seen_at == now
+        assert overlay.last_control_seen_at > attached_overlay.last_control_seen_at
     finally:
         archive_engine.dispose()
-        live_engine.dispose()
 
 
-def test_live_terminal_runtime_state_closes_session_for_input(tmp_path, monkeypatch):
+def test_live_terminal_runtime_state_closes_session_for_input(live: LiveCatalog):
+    """A terminal runtime signal is what closes the current run to new input.
+
+    ``session_input_block_reason`` reads runtime truth through the catalog, so
+    the ``None`` handed to it is the db a Runtime Host binds: the answer is the
+    terminal signal the bridge just shipped, not archive bookkeeping.
+    """
+
+    owner = live.create_user("terminal@live-store-split.test")
+    token = live.create_device_token(owner_id=owner, device_id="cinder")
+    seeded = live.commit_session(owner_id=owner, device_id="cinder", project="live-terminal")
     now = datetime.now(timezone.utc)
-    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
-    Base.metadata.create_all(bind=archive_engine)
-    ArchiveSession = sessionmaker(bind=archive_engine)
 
-    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
-    initialize_live_database(live_engine)
-    LiveSession = sessionmaker(bind=live_engine)
+    assert session_input_block_reason(None, seeded.session_id) is None
+    assert session_is_closed_for_input(None, seeded.session_id) is False
 
-    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
-
-    try:
-        with ArchiveSession() as archive_db:
-            session = AgentSession(
-                provider="codex",
-                environment="test",
-                project="live-terminal",
-                device_id="cinder",
-                started_at=now,
-                last_activity_at=now,
-            )
-            archive_db.add(session)
-            archive_db.commit()
-            session_id = session.id
-
-        event = RuntimeEventIngest(
-            runtime_key=runtime_key_for_session("codex", str(session_id)),
-            session_id=session_id,
-            provider="codex",
-            device_id="cinder",
-            source="codex_bridge",
-            kind="terminal_signal",
-            occurred_at=now,
-            freshness_ms=0,
-            dedupe_key="live-terminal-1",
-            payload={
-                "terminal_state": "process_gone",
-                "terminal_reason": "process_gone",
-                "terminal_source": "codex_bridge",
+    with live.http_client() as client:
+        response = client.post(
+            "/agents/runtime/events/batch",
+            json={
+                "events": [
+                    _runtime_event(
+                        session_id=seeded.session_id,
+                        kind="terminal_signal",
+                        source="codex_bridge",
+                        occurred_at=now,
+                        dedupe_key="live-terminal-1",
+                        freshness_ms=0,
+                        payload={
+                            "terminal_state": "process_gone",
+                            "terminal_reason": "process_gone",
+                            "terminal_source": "codex_bridge",
+                        },
+                    )
+                ]
             },
+            headers={"X-Agents-Token": token},
         )
-        with LiveSession() as live_db:
-            ingest_live_runtime_events(live_db, [event])
-            live_db.commit()
 
-        with ArchiveSession() as archive_db:
-            assert archive_db.query(SessionRuntimeState).count() == 0
-            assert session_is_closed_for_input(archive_db, session_id) is True
-    finally:
-        archive_engine.dispose()
-        live_engine.dispose()
+    assert response.status_code == 200, response.text
+    assert session_input_block_reason(None, seeded.session_id) == "run_ended"
+    assert session_is_closed_for_input(None, seeded.session_id) is True
 
 
 @pytest.mark.asyncio
@@ -2246,41 +2223,61 @@ def test_runtime_events_touch_live_session_candidates(tmp_path):
         live_engine.dispose()
 
 
-def test_live_running_phase_beats_archive_progress_idle_written_same_instant(tmp_path):
-    """Cross-lane merge must compare signal clocks, not write clocks.
+def test_served_runtime_state_comes_from_the_catalog_not_the_archive_row(live: LiveCatalog, tmp_path):
+    """``session_runtime_state`` is legacy evidence, not served authority.
 
-    Transcript ingest stamps archive rows (progress-derived idle) at write
-    time; a fresher live phase_signal written in the same instant must still
-    win the merged runtime view.
+    This used to pin the cross-lane merge: an archive progress-derived idle row
+    stamped at write time had to lose to a fresher live phase_signal on signal
+    clock. Under a live catalog there is no merge to get wrong --
+    ``load_runtime_state_map`` returns catalogd's runtime fact and never reads
+    the session it was handed -- and ``_runtime_state_newer_than`` is reachable
+    only from the branch a Runtime Host does not take. The stronger claim
+    replaces it: the archive row below is written last, for the same runtime
+    key, with a different phase, and still cannot reach the served view.
     """
+
+    owner = live.create_user("merge@live-store-split.test")
+    token = live.create_device_token(owner_id=owner, device_id="cinder")
+    seeded = live.commit_session(owner_id=owner, device_id="cinder", project="live-merge")
     now = datetime.now(timezone.utc)
+    runtime_key = runtime_key_for_session("codex", str(seeded.session_id))
+
     archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
     Base.metadata.create_all(bind=archive_engine)
     ArchiveSession = sessionmaker(bind=archive_engine)
 
-    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
-    initialize_live_database(live_engine)
-    LiveSession = sessionmaker(bind=live_engine)
-
-    monkeypatch_target = database_module
-    original_configured = monkeypatch_target.live_store_configured
-    original_factory = monkeypatch_target.get_live_session_factory
-    monkeypatch_target.live_store_configured = lambda: True
-    monkeypatch_target.get_live_session_factory = lambda: LiveSession
-
-    session_id = uuid4()
-    runtime_key = runtime_key_for_session("claude", str(session_id))
     try:
-        # Archive lane: transcript-ingest progress signal anchored at an old
-        # message timestamp (occurred 60s ago, written now).
+        with live.http_client() as client:
+            response = client.post(
+                "/agents/runtime/events/batch",
+                json={
+                    "events": [
+                        _runtime_event(
+                            session_id=seeded.session_id,
+                            kind="phase_signal",
+                            source="codex_bridge",
+                            occurred_at=now - timedelta(seconds=5),
+                            dedupe_key="merge-running-1",
+                            phase="running",
+                            tool_name="bash",
+                            freshness_ms=600_000,
+                        )
+                    ]
+                },
+                headers={"X-Agents-Token": token},
+            )
+        assert response.status_code == 200, response.text
+
+        # Transcript ingest, writing its progress-derived phase into the cold
+        # lane after the live one landed.
         with ArchiveSession() as archive_db:
             ingest_runtime_events(
                 archive_db,
                 [
                     RuntimeEventIngest(
                         runtime_key=runtime_key,
-                        session_id=session_id,
-                        provider="claude",
+                        session_id=seeded.session_id,
+                        provider="codex",
                         device_id="cinder",
                         source="agents_ingest",
                         kind="progress_signal",
@@ -2292,36 +2289,14 @@ def test_live_running_phase_beats_archive_progress_idle_written_same_instant(tmp
             )
             archive_db.commit()
 
-        # Live lane: fresh running phase_signal (occurred 5s ago).
-        with LiveSession() as live_db:
-            ingest_live_runtime_events(
-                live_db,
-                [
-                    RuntimeEventIngest(
-                        runtime_key=runtime_key,
-                        session_id=session_id,
-                        provider="claude",
-                        device_id="cinder",
-                        source="e2e",
-                        kind="phase_signal",
-                        phase="running",
-                        tool_name="bash",
-                        occurred_at=now - timedelta(seconds=5),
-                        freshness_ms=600_000,
-                        dedupe_key="merge-running-1",
-                        payload={},
-                    )
-                ],
-            )
-            live_db.commit()
-
         with ArchiveSession() as archive_db:
-            merged = load_runtime_state_map(archive_db, [session_id])
-            state = merged[str(session_id)]
-            assert isinstance(state, LiveRuntimeState)
-            assert state.phase == "running"
+            archive_row = archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+            assert archive_row.phase != "running"
+
+            served = load_runtime_state_map(archive_db, [seeded.session_id])[str(seeded.session_id)]
+
+        assert isinstance(served, LiveRuntimeState)
+        assert served.phase == "running"
+        assert served.active_tool == "bash"
     finally:
-        monkeypatch_target.live_store_configured = original_configured
-        monkeypatch_target.get_live_session_factory = original_factory
         archive_engine.dispose()
-        live_engine.dispose()

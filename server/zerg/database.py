@@ -635,11 +635,6 @@ def live_catalog_enabled() -> bool:
     children explicitly execute their one request against the cold database.
     """
 
-    if _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}:
-        from zerg.services.factory_assurance_title_binding import factory_assurance_title_enabled
-
-        if not factory_assurance_title_enabled():
-            return False
     return bool(live_store_configured() and not (_archive_route_process or archive_database_is_read_only()))
 
 

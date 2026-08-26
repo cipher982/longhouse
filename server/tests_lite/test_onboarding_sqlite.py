@@ -1,161 +1,132 @@
-"""SQLite-only onboarding smoke tests.
+"""SQLite-only onboarding, walked against a real live catalog.
 
-These tests validate that Zerg boots and operates correctly with SQLite as the
-sole database backend. No Docker or Postgres required.
+Longhouse's OSS promise is that a SQLite path is the whole dependency list: a
+self-hoster points ``DATABASE_URL`` at a file, boots, logs in with the password
+they configured, mints a device token, and the sessions their machine ships
+come back. This test walks that flow end to end.
 
-Run with: make onboarding-sqlite
+It used to walk it in a subprocess under ``TESTING=1 AUTH_DISABLED=1``, which
+is a shape no Runtime Host runs. ``TESTING`` bound every router to its legacy
+SQLAlchemy dependency, so the device-token route wrote rows into the cold
+database while production mints them over an ``auth.device.create.v2`` RPC, and
+``AUTH_DISABLED`` skipped the login the flow actually starts with -- the
+onboarding it proved was not the onboarding a self-hoster performs. The
+subprocess bought a clean interpreter and a shaped environment;
+``live_catalog_harness`` gives both per test with a real ``CatalogDaemon``
+behind them, so the subprocess is gone, and with it the ``initialize_database``
+call it opened with: a Runtime Host in catalog mode deliberately never
+initializes the retired cold database, because catalogd owns the schema.
 
-NOTE: These tests use subprocess isolation to avoid module state pollution
-between tests. Each test runs in a fresh Python process with env vars passed
-safely via subprocess.run(env=...) to avoid path injection issues.
+Every step below now runs the branch production takes. The health probes grade
+a real catalogd ping, login resolves a real owner over RPC, the token is a real
+catalog row, and the sessions listing reads a real committed transcript.
 """
 
+from __future__ import annotations
+
 import os
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
 
 import pytest
-from cryptography.fernet import Fernet
+
+from tests_lite.live_catalog_harness import DEFAULT_INTERNAL_SECRET
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import provision_live_catalog
+from zerg.config import get_settings_unchecked
+from zerg.config import sqlite_file_path
+from zerg.services.catalogd_supervisor import catalogd_paths
+
+DEVICE_ID = "onboarding-smoke"
 
 
-def test_sqlite_onboarding_complete():
-    """Complete SQLite onboarding smoke test.
+@pytest.fixture()
+def live():
+    """A self-hosted Runtime Host: SQLite on disk, catalogd in front of it."""
 
-    This single test validates the full OSS onboarding flow:
-    1. Create a temp SQLite database
-    2. Boot the FastAPI server (in-process via TestClient)
-    3. Verify /api/health endpoint returns 200 with valid JSON status
-    4. Verify /api/agents/sessions endpoint works
-    5. Verify database file was created
+    with provision_live_catalog() as catalog:
+        yield catalog
 
-    Uses subprocess to ensure clean Python state (no module pollution).
-    Environment variables are passed safely via subprocess.run(env=...).
+
+@pytest.fixture()
+def client(live: LiveCatalog):
+    """``api_app`` with its import-time db dependencies forced to production's."""
+
+    with live.http_client() as test_client:
+        yield test_client
+
+
+def test_sqlite_onboarding_complete(live: LiveCatalog, client):
+    """The whole self-hosted onboarding flow, on the production code path.
+
+    1. The health probes answer 200 and report the live catalog behind them.
+    2. The install advertises password login.
+    3. Logging in mints the owner and sets the browser session cookie.
+    4. The owner mints a device token for their machine.
+    5. That token lists the transcript the machine shipped.
+    6. It all rests on one SQLite file, created where the configuration pointed.
     """
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        db_path = Path(tmp_dir) / "zerg_smoke.db"
 
-        # Script reads DATABASE_URL from environment (set below)
-        script = """
-import os
-import json
+    # 1. Health. In catalog mode both probes ping catalogd over its socket and
+    #    grade the schema, so passing is evidence the daemon is really there --
+    #    the legacy branch only proved SQLAlchemy could answer SELECT 1.
+    #    Per-check detail is operator information, so reading it takes the
+    #    internal token the deploy verifier presents.
+    ready = client.get("/readyz")
+    assert ready.status_code == 200, ready.text
+    # This 200 is reachable only through a compatible catalogd ping; without
+    # one the same route answers 503 catalog_unavailable.
+    assert ready.json()["status"] == "ok", ready.text
 
-# Import after env is set (env passed via subprocess)
-from zerg.database import initialize_database
-initialize_database()
+    health = client.get("/health", headers={"X-Internal-Token": DEFAULT_INTERNAL_SECRET})
+    assert health.status_code == 200, health.text
+    health_body = health.json()
+    assert health_body["checks"]["catalogd"]["status"] == "pass", health_body
+    assert health_body["checks"]["catalogd"]["ready"] is True, health_body
+    assert health_body["checks"]["database"]["connection"] == "catalogd", health_body
 
-from fastapi.testclient import TestClient
-from zerg.main import app
+    # 2. The login surface a fresh install advertises to its own web UI.
+    methods = client.get("/auth/methods")
+    assert methods.status_code == 200, methods.text
+    assert methods.json()["password"] is True, methods.text
 
-client = TestClient(app)
+    # 3. Password login. There is no user yet: this call is what creates the
+    #    owner, through the same catalog RPC every other login path uses.
+    login = client.post("/auth/password", json={"password": os.environ["LONGHOUSE_PASSWORD"]})
+    assert login.status_code == 200, login.text
+    assert client.cookies.get("longhouse_session"), "password login did not set the browser session cookie"
 
-# Test 1: Health endpoint returns 200
-# Use /api/health which is the canonical API health endpoint
-print("Test 1: Health endpoint...")
-response = client.get("/api/health")
-print(f"  Status: {response.status_code}")
-print(f"  Content-Type: {response.headers.get('content-type', 'N/A')}")
-print(f"  Body length: {len(response.content)} bytes")
+    me = client.get("/users/me")
+    assert me.status_code == 200, me.text
+    owner_id = me.json()["id"]
 
-if response.status_code != 200:
-    raise AssertionError(f"Health check failed with status {response.status_code}")
+    # 4. Minting a device token is how a machine gets to join. The plain token
+    #    comes back once; the catalog keeps only its hash.
+    minted = client.post("/devices/tokens", json={"device_id": DEVICE_ID})
+    assert minted.status_code == 201, minted.text
+    device_token = minted.json()["token"]
+    assert device_token.startswith("zdt_"), minted.text
 
-# Test 2: Health returns valid JSON with status (REQUIRED)
-print("Test 2: Health JSON parsing...")
-if not response.content:
-    raise AssertionError("Health endpoint returned empty response")
+    listed = client.get("/devices/tokens")
+    assert listed.status_code == 200, listed.text
+    assert [token["device_id"] for token in listed.json()["tokens"]] == [DEVICE_ID], listed.text
 
-data = response.json()  # Let JSONDecodeError propagate
-status = data.get("status")
-print(f"  Health status: {status}")
+    # 5. The machine ships a transcript and reads it back with that token. An
+    #    empty 200 would pass against an empty catalog, so seed one first.
+    seeded = live.commit_session(owner_id=owner_id, device_id=DEVICE_ID, project="longhouse")
+    sessions = client.get(
+        "/agents/sessions",
+        params={"limit": 5, "days_back": 7},
+        headers={"X-Agents-Token": device_token},
+    )
+    assert sessions.status_code == 200, sessions.text
+    assert [session["id"] for session in sessions.json()["sessions"]] == [str(seeded.session_id)], sessions.text
 
-if status not in ("healthy", "ok"):  # /api/health uses "ok"
-    raise AssertionError(f"Unexpected health status: {status}")
+    # 6. The onboarding claim itself, and which file it is about. Everything
+    #    above landed in the live catalog's database; the cold archive beside
+    #    it is retired and is never even created.
+    live_database_path, _socket_path = catalogd_paths()
+    assert live_database_path.exists(), f"the live catalog database was not created at {live_database_path}"
+    assert live_database_path.is_relative_to(live.root.resolve())
 
-# Test 3: Mint a real device token for machine routes
-print("Test 3: Device token bootstrap...")
-token_response = client.post("/api/devices/tokens", json={"device_id": "onboarding-smoke"})
-print(f"  Status: {token_response.status_code}")
-if token_response.status_code != 201:
-    raise AssertionError(f"Device token creation failed: {token_response.status_code} {token_response.text}")
-
-device_token = token_response.json()["token"]
-
-# Test 4: Sessions endpoint works with device token
-print("Test 4: Sessions endpoint...")
-response2 = client.get("/api/agents/sessions", headers={"X-Agents-Token": device_token})
-print(f"  Status: {response2.status_code}")
-if response2.status_code != 200:
-    raise AssertionError(f"Sessions endpoint failed: {response2.status_code}")
-
-# Test 5: Database file created (use env var, not hardcoded path)
-print("Test 5: Database file...")
-db_url = os.environ.get("DATABASE_URL", "")
-if db_url.startswith("sqlite:///"):
-    db_file = db_url.replace("sqlite:///", "")
-    from pathlib import Path
-    if not Path(db_file).exists():
-        raise AssertionError(f"SQLite database file was not created at {db_file}")
-    print(f"  Database exists at {db_file}")
-
-print("")
-print("SUCCESS: All SQLite onboarding tests passed")
-"""
-
-        # Build environment with safe path handling
-        env = os.environ.copy()
-        env["DATABASE_URL"] = f"sqlite:///{db_path}"
-        env["TESTING"] = "1"
-        env["AUTH_DISABLED"] = "1"
-        env["SINGLE_TENANT"] = "1"
-        env["FERNET_SECRET"] = Fernet.generate_key().decode()
-
-        # Ensure a build-identity resource exists for the subprocess. The
-        # loader reads `importlib.resources.files("zerg") / "build_identity.json"`,
-        # so we stage a placeholder inside the live `zerg/` package directory if
-        # the dev/CI generator has not run yet. The subprocess honors whichever
-        # file is present at subprocess launch.
-        import json as _json
-        staged = Path(__file__).resolve().parent.parent / "zerg" / "build_identity.json"
-        staged_existed = staged.exists()
-        if not staged_existed:
-            staged.write_text(
-                _json.dumps(
-                    {
-                        "version": "0.0.0",
-                        "commit": "0" * 40,
-                        "commit_short": "00000000",
-                        "dirty": False,
-                        "built_at": "2026-04-21T00:00:00Z",
-                        "channel": "dev",
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-        try:
-            result = subprocess.run(
-                [sys.executable, "-c", script],
-                capture_output=True,
-                text=True,
-                cwd=Path(__file__).parent.parent,  # Run from backend dir
-                env=env,
-            )
-        finally:
-            # Only clean up a placeholder we wrote ourselves — never delete a
-            # real generator-staged identity that the rest of the suite relies on.
-            if not staged_existed and staged.exists():
-                staged.unlink()
-
-        # Print output for debugging
-        if result.stdout:
-            print("STDOUT:", result.stdout)
-        if result.stderr and "INFO" not in result.stderr:  # Filter noise
-            print("STDERR:", result.stderr)
-
-        if result.returncode != 0:
-            pytest.fail(f"Smoke test failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}")
-
-        assert "SUCCESS" in result.stdout, f"Test did not complete successfully: {result.stdout}"
+    archive_database_path = sqlite_file_path(get_settings_unchecked().database_url)
+    assert archive_database_path is not None
+    assert not archive_database_path.exists(), f"catalog mode initialized the retired database at {archive_database_path}"

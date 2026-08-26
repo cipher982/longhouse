@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import time
 from datetime import datetime
@@ -11,7 +13,6 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -24,11 +25,11 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 import pytest
 
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import provision_live_catalog
 from zerg.database import get_db
 from zerg.database import initialize_database
-from zerg.database import initialize_live_database
 from zerg.database import make_engine
-from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import AgentEvent
@@ -38,8 +39,6 @@ from zerg.models.agents import SessionInputAttachment
 from zerg.models.agents import SessionInputDeliveryAttempt
 from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
-from zerg.models.live_store import LiveArchiveOutbox
-from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers.session_chat import SessionInputRequest
@@ -49,7 +48,6 @@ from zerg.routers.session_chat import _project_live_input_to_archive
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
-from zerg.services.live_archive_outbox import SESSION_INPUT_RECEIPT_KIND
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
@@ -72,27 +70,257 @@ def _make_db(tmp_path):
     return make_sessionmaker(engine)
 
 
-def _enable_live_input_store(monkeypatch, tmp_path):
-    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-inputs.db")
-    initialize_live_database(live_engine)
-    LiveSession = sessionmaker(bind=live_engine)
+# ---------------------------------------------------------------------------
+# The live catalog: the input path a Runtime Host actually takes
+# ---------------------------------------------------------------------------
+#
+# Input receipts have two implementations. A Runtime Host has a live catalog,
+# so ``live_catalog_enabled()`` is true and every receipt is a catalogd row
+# written and read over RPC; the SQLAlchemy live-store lane underneath it is
+# reachable only inside an archive-route helper. The receipt tests below used
+# to fake the first by pointing ``live_store_configured`` at a hand-built
+# SQLite live store while still handing the route an archive session -- a
+# combination production never assembles, and one that answered through code
+# no Runtime Host runs. They run against a real catalogd now.
 
-    class LiveSerializer:
-        is_configured = True
+LIVE_CATALOG_DEVICE_ID = "cinder"
+LIVE_CATALOG_PROVIDER = "claude"
 
-        async def execute(self, fn, *, auto_commit=True, **_kwargs):
-            with LiveSession() as live_db:
-                result = fn(live_db)
-                if auto_commit:
-                    live_db.commit()
-                return result
 
-    serializer = LiveSerializer()
-    monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
-    monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
-    monkeypatch.setattr("zerg.services.live_session_inputs.get_live_write_serializer", lambda: serializer)
-    monkeypatch.setattr("zerg.routers.session_chat.get_live_write_serializer", lambda: serializer)
-    return LiveSession, live_engine
+@pytest.fixture()
+def live_catalog():
+    """A live catalog for one test: catalogd up, ``live_catalog_enabled()`` true."""
+
+    with provision_live_catalog() as catalog:
+        yield catalog
+
+
+@pytest.fixture()
+def live_catalog_client(live_catalog: LiveCatalog):
+    """``api_app`` against ``live_catalog``, shaped the way production shapes it."""
+
+    with live_catalog.http_client() as client:
+        yield client
+
+
+def _machine_heartbeat(*, device_id: str, now: datetime, raw_json: str | None = None) -> dict:
+    """The heartbeat stamp the Machine Agent ships on every tick."""
+
+    return {
+        "device_id": device_id,
+        "received_at": now.isoformat(),
+        "version": "test-engine",
+        "last_ship_at": now.isoformat(),
+        "last_ship_attempt_at": now.isoformat(),
+        "last_ship_result": "ok",
+        "last_ship_latency_ms": 5,
+        "last_ship_http_status": 200,
+        "spool_pending": 0,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "ship_latency_p50_ms_1h": 5,
+        "ship_latency_p95_ms_1h": 5,
+        "disk_free_bytes": 1_000_000,
+        "is_offline": 0,
+        "raw_json": raw_json,
+        "sessions_digest": None,
+        "sessions_sequence": None,
+    }
+
+
+def _machine_evidence_json(*, provider: str, session_id: str, run_id: str, now: datetime) -> str:
+    """The typed facts the provider adapter reports through the heartbeat.
+
+    The control fact binds an adapter connection identity to the catalog
+    connection; without it ``control.command.prepare.v2`` refuses every command
+    with ``identity_unbound``, so a session can be attached and still
+    uncontrollable. The activity fact is what makes the session quiescent, and
+    a queue drain will not claim a receipt for a session that is mid-turn.
+    """
+
+    from zerg.machine_evidence import canonical_evidence_hash
+
+    connection_id = str(uuid4())
+    lease_generation = str(uuid4())
+    activity = {
+        "authority_class": "provider_runtime",
+        "provider": provider,
+        "session_id": session_id,
+        "run_id": run_id,
+        "kind": "idle",
+        "raw_kind": "idle",
+        "tool_name": None,
+        "source": "provider_runtime",
+        "observed_at": now.isoformat(),
+        "valid_until": (now + timedelta(minutes=5)).isoformat(),
+    }
+    control = {
+        "authority_class": "provider_control",
+        "provider": provider,
+        "session_id": session_id,
+        "run_id": run_id,
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "granted_operations": ["interrupt", "send_input"],
+        "ownership": "managed",
+        "state": "attached",
+        "lease_ttl_ms": 300_000,
+        "source": "provider_control",
+        "observed_at": now.isoformat(),
+    }
+    return json.dumps(
+        {
+            "machine_evidence": {
+                "schema_version": 3,
+                "activity": [activity],
+                "control": [control],
+                "identities": [
+                    {
+                        "fact_family": "activity",
+                        "fact_index": 0,
+                        "subject_key": f"run:{run_id}",
+                        "source": "provider_runtime",
+                        "source_epoch": run_id,
+                        "source_seq": 1,
+                        "sequenced": True,
+                        "dedupe_key": hashlib.sha256(f"{run_id}:activity:1".encode()).hexdigest(),
+                        "evidence_hash": canonical_evidence_hash(activity),
+                    },
+                    {
+                        "fact_family": "control",
+                        "fact_index": 0,
+                        "subject_key": f"connection:{connection_id}:{lease_generation}",
+                        "source": "provider_control",
+                        "source_epoch": lease_generation,
+                        "source_seq": None,
+                        "sequenced": False,
+                        "dedupe_key": hashlib.sha256(f"{connection_id}:{lease_generation}".encode()).hexdigest(),
+                        "evidence_hash": canonical_evidence_hash(control),
+                    },
+                ],
+            }
+        }
+    )
+
+
+def _seed_live_catalog_session(
+    live: LiveCatalog,
+    *,
+    owner_id: int,
+    provider: str = LIVE_CATALOG_PROVIDER,
+    device_id: str = LIVE_CATALOG_DEVICE_ID,
+) -> str:
+    """Launch one Helm session in the live catalog and bring its control online.
+
+    The production sequence, unabridged: the launch RPC creates the session,
+    thread, run and control connection; the launch outcome adopts it; and one
+    Machine Agent heartbeat carries the control lease that attaches the
+    connection plus the typed facts that bind its adapter identity and report
+    the session idle. Every capability the input routes check is derived from
+    those rows, not seeded directly.
+    """
+
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    contract = contract_for_provider(provider)
+    assert contract is not None
+    session_id = str(uuid4())
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    created = live.rpc(
+        "session.launch.local.create.v2",
+        {
+            "launch": {
+                "owner_id": owner_id,
+                "git_repo": "cipher982/longhouse",
+                "git_branch": "main",
+                "started_at": now.isoformat(),
+                "expires_at": (now + timedelta(minutes=5)).isoformat(),
+                "plan": {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "provider_session_id": str(uuid4()),
+                    "source_name": device_id,
+                    "source_runner_id": None,
+                    "cwd": "/workspace/longhouse",
+                    "project": "session-input-api",
+                    "display_name": "Session input api",
+                    "managed_session_name": f"{provider}-session-input-api",
+                    "loop_mode": "assist",
+                    "permission_mode": "bypass",
+                    "launch_actor": "user",
+                    "launch_surface": "cli",
+                    "environment": "test",
+                    "origin_kind": None,
+                    "hidden_from_default_timeline": 0,
+                    "managed_transport": contract.managed_transport.value,
+                    "attach_command": "",
+                    "provider_config": {},
+                },
+            }
+        },
+    )
+    run_id = str(created["run_id"])
+    live.rpc(
+        "session.launch.local.finish.v2",
+        {
+            "outcome": {
+                "session_id": session_id,
+                "run_id": run_id,
+                "owner_id": owner_id,
+                "device_id": device_id,
+                "state": "adopted",
+                "error_code": None,
+                "error_message": None,
+                "observed_at": now.isoformat(),
+            }
+        },
+    )
+    live.rpc(
+        "machine.heartbeat.apply.v2",
+        {
+            "heartbeat": _machine_heartbeat(
+                device_id=device_id,
+                now=now,
+                raw_json=_machine_evidence_json(provider=provider, session_id=session_id, run_id=run_id, now=now),
+            ),
+            "managed_leases": [
+                {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "machine_id": device_id,
+                    "sequence": 1,
+                    "state": "attached",
+                    "bridge_status": "ready",
+                    "thread_subscription_status": "subscribed",
+                    "observed_at": now.isoformat(),
+                    "lease_ttl_ms": 300_000,
+                }
+            ],
+            "managed_leases_present": True,
+            "owner_id": owner_id,
+        },
+    )
+    return session_id
+
+
+def _live_catalog_receipt(live: LiveCatalog, *, owner_id: int, session_id: str, client_request_id: str) -> dict:
+    """Read one input receipt back through catalogd, the way production reads it."""
+
+    result = live.rpc(
+        "session.input.receipt.read.v2",
+        {"owner_id": owner_id, "session_id": session_id, "client_request_id": client_request_id},
+    )
+    assert result["found"] is True, result
+    return result["receipt"]
 
 
 def _make_client(session_local, current_user):
@@ -966,20 +1194,20 @@ def test_intent_queue_always_persists_queued(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
-def test_queue_input_acks_from_live_receipt_without_archive_row(monkeypatch, tmp_path):
-    LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    calls = _stub_dispatch(monkeypatch)
+def test_queue_input_acks_from_live_receipt_without_archive_row(live_catalog, live_catalog_client):
+    email = "live-queue@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    # A control channel that would happily accept a send, so "nothing was
+    # dispatched" below is a fact about queue intent, not about the machine.
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
             json={"text": "queued hot", "intent": "queue", "client_request_id": "live-queue-1"},
+            cookies=cookies,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -997,50 +1225,53 @@ def test_queue_input_acks_from_live_receipt_without_archive_row(monkeypatch, tmp
                 "created_at": body["queued"][0]["created_at"],
             }
         ]
-        assert calls == []
+        assert websocket.sent == []
 
-        with session_local() as db:
-            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
-        with LiveSession() as live_db:
-            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=body["live_input_id"]).one()
-            assert receipt.status == INPUT_STATUS_QUEUED
-            assert receipt.client_request_id == "live-queue-1"
-    finally:
-        api_app_ref.dependency_overrides = {}
-        live_engine.dispose()
-
-
-def test_cancel_live_queued_input_uses_live_receipt(monkeypatch, tmp_path):
-    LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        queued = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "cancel hot", "intent": "queue", "client_request_id": "live-cancel-1"},
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="live-queue-1",
         )
-        assert queued.status_code == 200, queued.text
-        live_input_id = queued.json()["live_input_id"]
-
-        resp = client.delete(f"/api/sessions/{session_id}/inputs/live/{live_input_id}")
-        assert resp.status_code == 200, resp.text
-        assert resp.json() == {"cancelled": True, "live_input_id": live_input_id, "input_id": None}
-
-        listed = client.get(f"/api/sessions/{session_id}/inputs")
-        assert listed.status_code == 200, listed.text
-        assert listed.json() == []
-        with LiveSession() as live_db:
-            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=live_input_id).one()
-            assert receipt.status == INPUT_STATUS_CANCELLED
+        assert receipt["id"] == body["live_input_id"]
+        assert receipt["status"] == INPUT_STATUS_QUEUED
+        assert receipt["client_request_id"] == "live-queue-1"
+        # The catalog receipt is the whole record. Queuing projects nothing into
+        # an archive session_inputs row, so nothing binds it to one.
+        assert receipt["archive_session_input_id"] is None
     finally:
-        api_app_ref.dependency_overrides = {}
-        live_engine.dispose()
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_cancel_live_queued_input_uses_live_receipt(live_catalog, live_catalog_client):
+    email = "live-cancel@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+
+    queued = live_catalog_client.post(
+        f"/sessions/{session_id}/input",
+        json={"text": "cancel hot", "intent": "queue", "client_request_id": "live-cancel-1"},
+        cookies=cookies,
+    )
+    assert queued.status_code == 200, queued.text
+    live_input_id = queued.json()["live_input_id"]
+
+    resp = live_catalog_client.delete(f"/sessions/{session_id}/inputs/live/{live_input_id}", cookies=cookies)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"cancelled": True, "live_input_id": live_input_id, "input_id": None}
+
+    listed = live_catalog_client.get(f"/sessions/{session_id}/inputs", cookies=cookies)
+    assert listed.status_code == 200, listed.text
+    assert listed.json() == []
+    receipt = _live_catalog_receipt(
+        live_catalog,
+        owner_id=owner_id,
+        session_id=session_id,
+        client_request_id="live-cancel-1",
+    )
+    assert receipt["id"] == live_input_id
+    assert receipt["status"] == INPUT_STATUS_CANCELLED
 
 
 def test_client_request_id_dedupes_queued_input(monkeypatch, tmp_path):
@@ -1266,52 +1497,56 @@ def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
         asyncio.run(session_lock_manager.release(str(session_id)))
 
 
-def test_live_queue_drain_dispatches_catalog_receipt_without_archive_projection(monkeypatch, tmp_path):
-    from zerg.services.session_input_queue import wake_session_input_queue
+def test_live_queue_drain_dispatches_catalog_receipt_without_archive_projection(live_catalog, live_catalog_client):
+    """A queued catalog receipt drains through the catalog drainer, not the archive one.
 
-    LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+    ``wake_session_input_queue`` is the archive-lane drainer and reads
+    ``session_inputs``. A Runtime Host has no archive row to read: after a
+    terminal turn it calls ``wake_next_live_catalog_input``, which claims the
+    receipt through catalogd, dispatches it over the machine control channel
+    and finishes it back in the catalog.
+    """
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
+    from zerg.services.live_control_catalog import wake_next_live_catalog_input
+
+    email = "live-drain@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
+
     try:
-        queued = client.post(
-            f"/api/sessions/{session_id}/input",
+        queued = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
             json={"text": "drain hot receipt", "intent": "queue", "client_request_id": "live-drain-1"},
+            cookies=cookies,
         )
         assert queued.status_code == 200, queued.text
         live_input_id = queued.json()["live_input_id"]
-        with session_local() as db:
-            db_bind = db.get_bind()
 
-        result = asyncio.run(
-            wake_session_input_queue(
-                db_bind=db_bind,
-                session_id=session_id,
-                reason="test_live_queue",
-                lock_scope_id=str(session_id),
-            )
+        assert asyncio.run(wake_next_live_catalog_input(session_id)) is True
+
+        assert len(websocket.sent) == 1, "the drained receipt must reach the machine control channel"
+        frame = websocket.sent[0]
+        assert frame["command_type"] == "session.send_text"
+        assert frame["session_id"] == session_id
+        assert frame["payload"]["text"] == "drain hot receipt"
+
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="live-drain-1",
         )
-
-        assert result.dispatched is True
-        assert result.input_id is None
-        assert result.live_input_id == live_input_id
-        with session_local() as db:
-            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
-        with LiveSession() as live_db:
-            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=live_input_id).one()
-            assert receipt.status == INPUT_STATUS_DELIVERED
-            assert receipt.delivery_request_id
-            assert live_db.query(LiveArchiveOutbox).count() == 0
-            assert receipt.archive_session_input_id is None
+        assert receipt["id"] == live_input_id
+        assert receipt["status"] == INPUT_STATUS_DELIVERED
+        assert receipt["delivery_request_id"]
+        # Delivered from the catalog alone: no archive row was created for it,
+        # so nothing was projected and nothing links back.
+        assert receipt["archive_session_input_id"] is None
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
-        live_engine.dispose()
+        asyncio.run(_clear_machine_control_registry())
 
 
 def test_queue_wake_defers_behind_active_turn(monkeypatch, tmp_path):
@@ -2472,34 +2707,20 @@ def test_intent_steer_success_returns_sent_for_claude_channel(monkeypatch, tmp_p
         api_app_ref.dependency_overrides = {}
 
 
-def test_intent_steer_acks_from_live_receipt_without_archive_row(monkeypatch, tmp_path):
-    LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    with session_local() as db:
-        session = db.query(AgentSession).filter_by(id=session_id).one()
-        _seed_live_runtime_state(db, session, phase="running")
+def test_intent_steer_acks_from_live_receipt_without_archive_row(live_catalog, live_catalog_client):
+    email = "live-steer@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    # Steer routes on the steer capability alone; the send capability is not
+    # advertised here so a steer that silently fell back to send would fail.
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.steer"], device_id=LIVE_CATALOG_DEVICE_ID))
 
-    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
-        from zerg.services.managed_local_control import ManagedLocalSendResult
-
-        assert request_id
-        assert text == "redirect hot"
-        return ManagedLocalSendResult(ok=True, exit_code=0)
-
-    monkeypatch.setattr(
-        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
-        fake_steer,
-    )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
             json={"text": "redirect hot", "intent": "steer", "client_request_id": "live-steer-1"},
+            cookies=cookies,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -2508,17 +2729,27 @@ def test_intent_steer_acks_from_live_receipt_without_archive_row(monkeypatch, tm
         assert body["input_id"] is None
         assert body["live_input_id"]
 
-        with session_local() as db:
-            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
-        with LiveSession() as live_db:
-            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=body["live_input_id"]).one()
-            assert receipt.status == INPUT_STATUS_DELIVERED
-            assert receipt.intent == "steer"
-            assert receipt.client_request_id == "live-steer-1"
-            assert live_db.query(LiveArchiveOutbox).filter_by(kind=SESSION_INPUT_RECEIPT_KIND).count() == 0
+        assert len(websocket.sent) == 1
+        frame = websocket.sent[0]
+        assert frame["command_type"] == "session.steer_text"
+        assert frame["payload"]["text"] == "redirect hot"
+        assert frame["payload"]["intent"] == "steer"
+
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="live-steer-1",
+        )
+        assert receipt["id"] == body["live_input_id"]
+        assert receipt["status"] == INPUT_STATUS_DELIVERED
+        assert receipt["intent"] == "steer"
+        assert receipt["client_request_id"] == "live-steer-1"
+        # A steer is delivered straight from the catalog receipt; no archive
+        # projection is enqueued for it.
+        assert receipt["archive_session_input_id"] is None
     finally:
-        api_app_ref.dependency_overrides = {}
-        live_engine.dispose()
+        asyncio.run(_clear_machine_control_registry())
 
 
 def test_intent_steer_requires_active_turn_for_claude_channel(monkeypatch, tmp_path):

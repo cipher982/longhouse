@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
-from types import SimpleNamespace
+from uuid import uuid4
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -21,22 +21,15 @@ from cryptography.fernet import Fernet  # noqa: E402
 
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
+from tests_lite.live_catalog_harness import provision_live_catalog  # noqa: E402
 from zerg.database import Base  # noqa: E402
-from zerg.database import get_db  # noqa: E402
-from zerg.database import initialize_live_database  # noqa: E402
 from zerg.database import make_engine  # noqa: E402
-from zerg.database import make_live_engine  # noqa: E402
-from zerg.dependencies.agents_auth import require_single_tenant  # noqa: E402
-from zerg.dependencies.agents_auth import verify_agents_token  # noqa: E402
-from zerg.dependencies.browser_auth import get_current_browser_user  # noqa: E402
 from zerg.models import User  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
+from zerg.services import machine_control_operations  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
-from zerg.services.machine_control_operations import create_provider_live_proof_operation  # noqa: E402
-from zerg.services.machine_control_operations import reconcile_machine_control_operation_from_command_result  # noqa: E402
 from zerg.services.machines_directory import build_machines_directory  # noqa: E402
 
 OWNER_ID = 42
@@ -48,27 +41,6 @@ def _make_db(tmp_path):
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
-
-
-def _make_live_db(tmp_path):
-    db_path = tmp_path / "test_machines_live.db"
-    engine = make_live_engine(f"sqlite:///{db_path}")
-    initialize_live_database(engine)
-    return engine, sessionmaker(bind=engine)
-
-
-class _InlineLiveSerializer:
-    is_configured = True
-
-    def __init__(self, session_factory):
-        self.session_factory = session_factory
-
-    async def execute(self, fn, *, auto_commit=True, label="", **_kwargs):
-        with self.session_factory() as db:
-            result = fn(db)
-            if auto_commit:
-                db.commit()
-            return result
 
 
 def _seed_user(SessionLocal, *, user_id: int = OWNER_ID, email: str | None = None):
@@ -384,40 +356,14 @@ def test_directory_sort_online_first_then_alpha(tmp_path):
 
 
 # ---------- HTTP route parity ----------------------------------------------
-
-
-def _make_agents_client(SessionLocal, *, owner_id: int = OWNER_ID):
-    from zerg.main import api_app
-    from zerg.main import app
-
-    def override_get_db():
-        with SessionLocal() as db:
-            yield db
-
-    def override_verify_agents_token():
-        return SimpleNamespace(device_id="testclient", id="token-1", owner_id=owner_id)
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
-    api_app.dependency_overrides[require_single_tenant] = lambda: None
-    return TestClient(app, backend="asyncio"), api_app
-
-
-def _make_browser_client(SessionLocal, *, owner_id: int = OWNER_ID):
-    from zerg.main import api_app
-    from zerg.main import app
-
-    def override_get_db():
-        with SessionLocal() as db:
-            yield db
-
-    def override_browser_user():
-        return SimpleNamespace(id=owner_id, email="owner@example.com", role="ADMIN")
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[get_current_browser_user] = override_browser_user
-    api_app.dependency_overrides[require_single_tenant] = lambda: None
-    return TestClient(app, backend="asyncio"), api_app
+#
+# A Runtime Host answers these routes out of the live catalog: enrollments come
+# from ``machine.enrollment.list.v2``, renames from
+# ``machine.enrollment.rename.v2``, and every control operation is prepared,
+# reconciled and reaped inside catalogd. So the tests below run against a real
+# one and authenticate with a real device token or session cookie, rather than
+# stubbing auth and pointing the routes at an archive database they never read
+# in production.
 
 
 def _swap_registry(registry: MachineControlChannelRegistry):
@@ -436,34 +382,30 @@ def _swap_agents_machines_registry(registry: MachineControlChannelRegistry):
     return original, module
 
 
-def test_agents_machines_route_matches_timeline_route(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    _seed_device_token(SessionLocal, "homelab")
-    registry = MachineControlChannelRegistry()
-    _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.turn_start",))
+def test_agents_machines_route_matches_timeline_route():
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        token = live.create_device_token(owner_id=owner_id, device_id="cinder")
+        live.create_device_token(owner_id=owner_id, device_id="homelab")
+        cookie = live.browser_cookie(owner_id=owner_id, email="owner@machines.test")
+        registry = MachineControlChannelRegistry()
+        _register(registry, owner_id=owner_id, device_id="cinder", supports=("codex.turn_start",))
 
-    original, module = _swap_registry(registry)
-    try:
-        agents_client, api_app = _make_agents_client(SessionLocal)
+        original, module = _swap_registry(registry)
         try:
-            agents_resp = agents_client.get("/api/agents/machines")
+            with live.http_client() as client:
+                agents_resp = client.get("/agents/machines", headers={"X-Agents-Token": token})
+                browser_resp = client.get("/timeline/machines", cookies={"longhouse_session": cookie})
         finally:
-            api_app.dependency_overrides.clear()
-
-        browser_client, api_app = _make_browser_client(SessionLocal)
-        try:
-            browser_resp = browser_client.get("/api/timeline/machines")
-        finally:
-            api_app.dependency_overrides.clear()
-    finally:
-        module.get_machine_control_channel_registry = original
+            module.get_machine_control_channel_registry = original
 
     assert agents_resp.status_code == 200, agents_resp.text
     assert browser_resp.status_code == 200, browser_resp.text
 
-    # Normalize last_seen_at since the online entry carries an assigned-at-register
-    # timestamp that is identical across calls because the registry is shared.
+    # The machine surface and the browser surface read the same enrollments out
+    # of the same catalog, so the bodies have to be byte-identical. last_seen_at
+    # needs no normalizing: it is assigned once at register and the two calls
+    # share the registry.
     assert agents_resp.json() == browser_resp.json()
 
     body = agents_resp.json()
@@ -487,16 +429,15 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
     }
 
 
-def test_machine_rename_updates_display_name_without_changing_routing_id(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    _seed_device_token(SessionLocal, "cube-canary")
-    client, api_app = _make_agents_client(SessionLocal)
-    try:
-        response = client.patch("/api/agents/machines/cube-canary", json={"machine_name": "cube"})
-        directory = client.get("/api/agents/machines")
-    finally:
-        api_app.dependency_overrides.clear()
+def test_machine_rename_updates_display_name_without_changing_routing_id():
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        token = live.create_device_token(owner_id=owner_id, device_id="cube-canary")
+
+        with live.http_client() as client:
+            headers = {"X-Agents-Token": token}
+            response = client.patch("/agents/machines/cube-canary", json={"machine_name": "cube"}, headers=headers)
+            directory = client.get("/agents/machines", headers=headers)
 
     assert response.status_code == 200, response.text
     assert response.json() == {"device_id": "cube-canary", "machine_name": "cube", "changed": True}
@@ -505,41 +446,66 @@ def test_machine_rename_updates_display_name_without_changing_routing_id(tmp_pat
     assert directory.json()["machines"][0]["machine_name"] == "cube"
 
 
-def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    registry = MachineControlChannelRegistry()
-    websocket = _CompletingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
-    _register(
-        registry,
-        owner_id=OWNER_ID,
-        device_id="cinder",
-        supports=("claude.live_proof",),
-        websocket=websocket,
-    )
+def test_provider_live_proof_route_dispatches_typed_machine_command():
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        token = live.create_device_token(owner_id=owner_id, device_id="cinder")
+        registry = MachineControlChannelRegistry()
+        websocket = _CompletingWebSocket(registry, owner_id=owner_id, device_id="cinder")
+        _register(
+            registry,
+            owner_id=owner_id,
+            device_id="cinder",
+            supports=("claude.live_proof",),
+            websocket=websocket,
+        )
 
-    original, module = _swap_agents_machines_registry(registry)
-    try:
-        client, api_app = _make_agents_client(SessionLocal)
+        original, module = _swap_agents_machines_registry(registry)
         try:
-            resp = client.post(
-                "/api/agents/machines/cinder/provider-live-proof",
-                json={
-                    "provider": "claude",
-                    "expected_provider_version": "2.1.153",
-                    "run_live_token_contract": True,
-                    "live_token_timeout_secs": 45,
-                },
-            )
-            status_url = resp.json().get("status_url")
-            running_resp = client.get(status_url)
+            with live.http_client() as client:
+                headers = {"X-Agents-Token": token}
+                resp = client.post(
+                    "/agents/machines/cinder/provider-live-proof",
+                    json={
+                        "provider": "claude",
+                        "expected_provider_version": "2.1.153",
+                        "run_live_token_contract": True,
+                        "live_token_timeout_secs": 45,
+                    },
+                    headers=headers,
+                )
+                body = resp.json()
+                status_path = str(body.get("status_url", "")).removeprefix("/api")
+                running_resp = client.get(status_path, headers=headers)
+
+                # The engine reports back over the control websocket, which
+                # reconciles through catalogd rather than through any archive
+                # session the API process holds.
+                applied = live.rpc(
+                    "control.command_result.apply.v2",
+                    {
+                        "owner_id": owner_id,
+                        "device_id": "cinder",
+                        "message": {
+                            "type": "command_result",
+                            "command_id": f"machine-op:{body['operation_id']}",
+                            "ok": True,
+                            "result": {
+                                "provider": "claude",
+                                "artifact": {
+                                    "artifact_kind": "provider_live_canary",
+                                    "provider": "claude",
+                                    "verdict": "green",
+                                },
+                            },
+                        },
+                    },
+                )
+                done_resp = client.get(status_path, headers=headers)
         finally:
-            api_app.dependency_overrides.clear()
-    finally:
-        module.get_machine_control_channel_registry = original
+            module.get_machine_control_channel_registry = original
 
     assert resp.status_code == 202, resp.text
-    body = resp.json()
     assert body["device_id"] == "cinder"
     assert body["provider"] == "claude"
     assert body["status"] == "running"
@@ -558,199 +524,189 @@ def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
     assert sent["payload"]["live_token_timeout_secs"] == 45
     assert "timeout_secs" not in sent["payload"]
 
-    with SessionLocal() as db:
-        reconciled = reconcile_machine_control_operation_from_command_result(
-            db,
-            {
-                "type": "command_result",
-                "command_id": sent["command_id"],
-                "ok": True,
-                "result": {
-                    "provider": "claude",
-                    "artifact": {
-                        "artifact_kind": "provider_live_canary",
-                        "provider": "claude",
-                        "verdict": "green",
-                    },
-                },
-            },
-            owner_id=OWNER_ID,
-            device_id="cinder",
-        )
-    assert reconciled is True
-
-    original, module = _swap_agents_machines_registry(registry)
-    try:
-        client, api_app = _make_agents_client(SessionLocal)
-        try:
-            done_resp = client.get(body["status_url"])
-        finally:
-            api_app.dependency_overrides.clear()
-    finally:
-        module.get_machine_control_channel_registry = original
-
+    assert applied["matched"] is True
     assert done_resp.status_code == 200, done_resp.text
     done_body = done_resp.json()
     assert done_body["status"] == "succeeded"
     assert done_body["result"]["artifact"]["verdict"] == "green"
 
 
-def test_provider_live_proof_route_uses_live_store_operation_when_configured(tmp_path, monkeypatch):
-    SessionLocal = _make_db(tmp_path)
-    live_engine, LiveSession = _make_live_db(tmp_path)
-    _seed_user(SessionLocal)
-    registry = MachineControlChannelRegistry()
-    websocket = _CompletingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
-    _register(
-        registry,
-        owner_id=OWNER_ID,
-        device_id="cinder",
-        supports=("claude.live_proof",),
-        websocket=websocket,
-    )
+def test_provider_live_proof_operation_is_prepared_in_the_live_catalog(monkeypatch):
+    """A proof operation becomes durable in catalogd before the command ships.
 
-    def archive_operation_must_not_be_required(*_args, **_kwargs):
-        raise AssertionError("provider-live operation should be created in live store")
+    This asserted the middle branch of ``_create_provider_live_proof_operation``
+    until 2026-08-24: with ``live_store_configured()`` forced true it checked
+    that the operation was written to a live *SQLAlchemy* store rather than the
+    archive. A Runtime Host never reaches that branch, because
+    ``live_catalog_enabled()`` is true whenever a live store is configured, so
+    the route prepares the operation over ``machine.operation.prepare.v2``
+    before either SQLAlchemy path is considered. The claim worth keeping is the
+    one it was making badly: the record a status poll later reads is created in
+    the catalog the Runtime Host owns, and no archive row stands in for it.
+    """
 
-    original, module = _swap_agents_machines_registry(registry)
-    monkeypatch.setattr(module.database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(module.database_module, "get_live_session_factory", lambda: LiveSession)
-    monkeypatch.setattr(module, "get_live_write_serializer", lambda: _InlineLiveSerializer(LiveSession))
-    monkeypatch.setattr(module, "create_provider_live_proof_operation", archive_operation_must_not_be_required)
-    try:
-        client, api_app = _make_agents_client(SessionLocal)
+    def sqlalchemy_stores_must_not_be_used(*_args, **_kwargs):
+        raise AssertionError("a provider live proof must be prepared in the live catalog")
+
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        token = live.create_device_token(owner_id=owner_id, device_id="cinder")
+        registry = MachineControlChannelRegistry()
+        websocket = _CompletingWebSocket(registry, owner_id=owner_id, device_id="cinder")
+        _register(
+            registry,
+            owner_id=owner_id,
+            device_id="cinder",
+            supports=("claude.live_proof",),
+            websocket=websocket,
+        )
+
+        original, module = _swap_agents_machines_registry(registry)
+        monkeypatch.setattr(module, "create_provider_live_proof_operation", sqlalchemy_stores_must_not_be_used)
+        monkeypatch.setattr(module, "create_live_provider_live_proof_operation", sqlalchemy_stores_must_not_be_used)
         try:
-            resp = client.post(
-                "/api/agents/machines/cinder/provider-live-proof",
-                json={
-                    "provider": "claude",
-                    "expected_provider_version": "2.1.153",
-                },
-            )
-            body = resp.json()
-            running_resp = client.get(body["status_url"])
+            with live.http_client() as client:
+                headers = {"X-Agents-Token": token}
+                resp = client.post(
+                    "/agents/machines/cinder/provider-live-proof",
+                    json={
+                        "provider": "claude",
+                        "expected_provider_version": "2.1.153",
+                    },
+                    headers=headers,
+                )
+                body = resp.json()
+                running_resp = client.get(body["status_url"].removeprefix("/api"), headers=headers)
         finally:
-            api_app.dependency_overrides.clear()
-    finally:
-        module.get_machine_control_channel_registry = original
-        live_engine.dispose()
+            module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 202, resp.text
-    assert running_resp.status_code == 200, running_resp.text
-    assert running_resp.json()["status"] == "running"
-    assert websocket.sent[0]["command_id"] == f"machine-op:{body['operation_id']}"
+        assert resp.status_code == 202, resp.text
+        assert running_resp.status_code == 200, running_resp.text
+        assert running_resp.json()["status"] == "running"
+        assert websocket.sent[0]["command_id"] == f"machine-op:{body['operation_id']}"
+
+        # The status route is served from catalogd, so read the row directly to
+        # show the operation is durable there rather than only in the response.
+        stored = live.rpc(
+            "machine.operation.read.v2",
+            {"owner_id": owner_id, "operation_id": body["operation_id"]},
+        )
+        assert stored["found"] is True
+        assert stored["operation"]["command_id"] == f"machine-op:{body['operation_id']}"
+        assert stored["operation"]["status"] == "running"
+        assert stored["operation"]["request"]["expected_provider_version"] == "2.1.153"
 
 
-def test_provider_live_proof_route_rejects_machine_without_provider_support(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    registry = MachineControlChannelRegistry()
-    _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.send",))
+def test_provider_live_proof_route_rejects_machine_without_provider_support():
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        token = live.create_device_token(owner_id=owner_id, device_id="cinder")
+        registry = MachineControlChannelRegistry()
+        _register(registry, owner_id=owner_id, device_id="cinder", supports=("claude.send",))
 
-    original, module = _swap_agents_machines_registry(registry)
-    try:
-        client, api_app = _make_agents_client(SessionLocal)
+        original, module = _swap_agents_machines_registry(registry)
         try:
-            resp = client.post(
-                "/api/agents/machines/cinder/provider-live-proof",
-                json={"provider": "claude"},
-            )
+            with live.http_client() as client:
+                resp = client.post(
+                    "/agents/machines/cinder/provider-live-proof",
+                    json={"provider": "claude"},
+                    headers={"X-Agents-Token": token},
+                )
         finally:
-            api_app.dependency_overrides.clear()
-    finally:
-        module.get_machine_control_channel_registry = original
+            module.get_machine_control_channel_registry = original
 
     assert resp.status_code == 409
     assert "claude.live_proof" in resp.text
 
 
-def test_provider_live_proof_route_rejects_duplicate_in_flight_request(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    registry = MachineControlChannelRegistry()
-    websocket = _CompletingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
-    _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.live_proof",), websocket=websocket)
+def test_provider_live_proof_route_rejects_duplicate_in_flight_request():
+    """Guard: the in-flight check is catalogd's, not an archive uniqueness rule.
 
-    original, module = _swap_agents_machines_registry(registry)
-    try:
-        client, api_app = _make_agents_client(SessionLocal)
+    Two browsers, or one impatient one, can ask for the same proof at once. On
+    a Runtime Host the only thing standing between that and two engines running
+    the same canary is the ``conflict`` ``machine.operation.prepare.v2`` returns
+    for an active operation on the same owner, device and provider.
+    """
+
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        token = live.create_device_token(owner_id=owner_id, device_id="cinder")
+        registry = MachineControlChannelRegistry()
+        websocket = _CompletingWebSocket(registry, owner_id=owner_id, device_id="cinder")
+        _register(registry, owner_id=owner_id, device_id="cinder", supports=("claude.live_proof",), websocket=websocket)
+
+        original, module = _swap_agents_machines_registry(registry)
         try:
-            first_resp = client.post(
-                "/api/agents/machines/cinder/provider-live-proof",
-                json={"provider": "claude"},
-            )
-            resp = client.post(
-                "/api/agents/machines/cinder/provider-live-proof",
-                json={"provider": "claude"},
-            )
+            with live.http_client() as client:
+                headers = {"X-Agents-Token": token}
+                first_resp = client.post(
+                    "/agents/machines/cinder/provider-live-proof",
+                    json={"provider": "claude"},
+                    headers=headers,
+                )
+                resp = client.post(
+                    "/agents/machines/cinder/provider-live-proof",
+                    json={"provider": "claude"},
+                    headers=headers,
+                )
         finally:
-            api_app.dependency_overrides.clear()
-    finally:
-        module.get_machine_control_channel_registry = original
+            module.get_machine_control_channel_registry = original
 
     assert first_resp.status_code == 202, first_resp.text
     assert resp.status_code == 409
     assert "already in flight" in resp.text
+    # The rejected request never reached the machine.
+    assert len(websocket.sent) == 1
 
 
-def test_provider_live_proof_operation_preserves_machine_error_code(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    registry = MachineControlChannelRegistry()
-    websocket = _CompletingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
-    _register(
-        registry,
-        owner_id=OWNER_ID,
-        device_id="cinder",
-        supports=("claude.live_proof",),
-        websocket=websocket,
-    )
+def test_provider_live_proof_operation_preserves_machine_error_code():
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        token = live.create_device_token(owner_id=owner_id, device_id="cinder")
+        registry = MachineControlChannelRegistry()
+        websocket = _CompletingWebSocket(registry, owner_id=owner_id, device_id="cinder")
+        _register(
+            registry,
+            owner_id=owner_id,
+            device_id="cinder",
+            supports=("claude.live_proof",),
+            websocket=websocket,
+        )
 
-    original, module = _swap_agents_machines_registry(registry)
-    try:
-        client, api_app = _make_agents_client(SessionLocal)
+        original, module = _swap_agents_machines_registry(registry)
         try:
-            resp = client.post(
-                "/api/agents/machines/cinder/provider-live-proof",
-                json={
-                    "provider": "claude",
-                    "expected_provider_version": "2.1.153",
-                },
-            )
+            with live.http_client() as client:
+                headers = {"X-Agents-Token": token}
+                resp = client.post(
+                    "/agents/machines/cinder/provider-live-proof",
+                    json={
+                        "provider": "claude",
+                        "expected_provider_version": "2.1.153",
+                    },
+                    headers=headers,
+                )
+                applied = live.rpc(
+                    "control.command_result.apply.v2",
+                    {
+                        "owner_id": owner_id,
+                        "device_id": "cinder",
+                        "message": {
+                            "type": "command_result",
+                            "command_id": websocket.sent[0]["command_id"],
+                            "ok": False,
+                            "error": {
+                                "code": "provider_version_mismatch",
+                                "message": "provider live proof version mismatch",
+                            },
+                        },
+                    },
+                )
+                status_resp = client.get(resp.json()["status_url"].removeprefix("/api"), headers=headers)
         finally:
-            api_app.dependency_overrides.clear()
-    finally:
-        module.get_machine_control_channel_registry = original
+            module.get_machine_control_channel_registry = original
 
     assert resp.status_code == 202, resp.text
-    command_id = websocket.sent[0]["command_id"]
-    with SessionLocal() as db:
-        reconciled = reconcile_machine_control_operation_from_command_result(
-            db,
-            {
-                "type": "command_result",
-                "command_id": command_id,
-                "ok": False,
-                "error": {
-                    "code": "provider_version_mismatch",
-                    "message": "provider live proof version mismatch",
-                },
-            },
-            owner_id=OWNER_ID,
-            device_id="cinder",
-        )
-    assert reconciled is True
-
-    original, module = _swap_agents_machines_registry(registry)
-    try:
-        client, api_app = _make_agents_client(SessionLocal)
-        try:
-            status_resp = client.get(resp.json()["status_url"])
-        finally:
-            api_app.dependency_overrides.clear()
-    finally:
-        module.get_machine_control_channel_registry = original
-
+    assert applied["matched"] is True
     assert status_resp.status_code == 200, status_resp.text
     assert status_resp.json()["status"] == "failed"
     assert status_resp.json()["error"] == {
@@ -759,73 +715,99 @@ def test_provider_live_proof_operation_preserves_machine_error_code(tmp_path):
     }
 
 
-def test_machine_control_operation_route_returns_404_for_missing_operation(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
+def test_machine_control_operation_route_returns_404_for_missing_operation():
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        token = live.create_device_token(owner_id=owner_id, device_id="cinder")
 
-    client, api_app = _make_agents_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/machines/operations/missing-operation")
-    finally:
-        api_app.dependency_overrides.clear()
+        with live.http_client() as client:
+            resp = client.get(f"/agents/machines/operations/{uuid4()}", headers={"X-Agents-Token": token})
 
     assert resp.status_code == 404
 
 
-def test_machine_control_operation_route_is_owner_scoped(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    _seed_user(SessionLocal, user_id=OWNER_ID + 1)
-    with SessionLocal() as db:
-        operation = create_provider_live_proof_operation(
-            db,
-            owner_id=OWNER_ID + 1,
-            device_id="cinder",
-            provider="claude",
-            request_payload={"provider": "claude"},
-            timeout_secs=120,
+def test_machine_control_operation_route_is_owner_scoped():
+    """Guard: the operation read is scoped by the token's owner, inside catalogd.
+
+    Operation ids travel in URLs and logs. The route hands the id straight to
+    ``machine.operation.read.v2``; the only thing keeping one owner from
+    reading another owner's proof -- its provider, its machine, its result --
+    is that the read is filtered by the owner the device token resolved to.
+    """
+
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        stranger_id = live.create_user("stranger@machines.test")
+        owner_token = live.create_device_token(owner_id=owner_id, device_id="cinder")
+        stranger_token = live.create_device_token(owner_id=stranger_id, device_id="stranger-laptop")
+
+        operation_id = str(uuid4())
+        prepared = live.rpc(
+            "machine.operation.prepare.v2",
+            {
+                "operation_id": operation_id,
+                "owner_id": owner_id,
+                "device_id": "cinder",
+                "provider": "claude",
+                "command_type": "provider.live_proof",
+                "command_id": f"machine-op:{operation_id}",
+                "request_payload": {"provider": "claude"},
+                "timeout_secs": 120,
+            },
         )
-        operation_id = operation.id
 
-    client, api_app = _make_agents_client(SessionLocal, owner_id=OWNER_ID)
-    try:
-        foreign_resp = client.get(f"/api/agents/machines/operations/{operation_id}")
-    finally:
-        api_app.dependency_overrides.clear()
+        with live.http_client() as client:
+            foreign_resp = client.get(
+                f"/agents/machines/operations/{operation_id}",
+                headers={"X-Agents-Token": stranger_token},
+            )
+            owner_resp = client.get(
+                f"/agents/machines/operations/{operation_id}",
+                headers={"X-Agents-Token": owner_token},
+            )
 
-    client, api_app = _make_agents_client(SessionLocal, owner_id=OWNER_ID + 1)
-    try:
-        owner_resp = client.get(f"/api/agents/machines/operations/{operation_id}")
-    finally:
-        api_app.dependency_overrides.clear()
-
+    assert prepared["operation"]["operation_id"] == operation_id
     assert foreign_resp.status_code == 404
     assert owner_resp.status_code == 200, owner_resp.text
     assert owner_resp.json()["operation_id"] == operation_id
 
 
-def test_machine_control_operation_route_reaps_stale_operation(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    with SessionLocal() as db:
-        operation = create_provider_live_proof_operation(
-            db,
-            owner_id=OWNER_ID,
-            device_id="cinder",
-            provider="claude",
-            request_payload={"provider": "claude"},
-            timeout_secs=1,
-        )
-        operation_id = operation.id
-        operation.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-        db.add(operation)
-        db.commit()
+def test_machine_control_operation_route_reaps_stale_operation(monkeypatch):
+    """A machine that never reports back leaves an operation the read must reap.
 
-    client, api_app = _make_agents_client(SessionLocal)
-    try:
-        resp = client.get(f"/api/agents/machines/operations/{operation_id}")
-    finally:
-        api_app.dependency_overrides.clear()
+    Nothing sweeps operations in the background, so an engine that dies
+    mid-proof would leave the status route answering "running" forever. The
+    lease is materialized by the catalogd read itself.
+
+    Only the grace period is shortened, so the lease expires in about a second
+    instead of thirty-one; the expiry the route reads is still the one catalogd
+    wrote, and the reaping under test is untouched.
+    """
+
+    monkeypatch.setattr(machine_control_operations, "MACHINE_OPERATION_TIMEOUT_GRACE_SECS", 0)
+
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        token = live.create_device_token(owner_id=owner_id, device_id="cinder")
+
+        operation_id = str(uuid4())
+        live.rpc(
+            "machine.operation.prepare.v2",
+            {
+                "operation_id": operation_id,
+                "owner_id": owner_id,
+                "device_id": "cinder",
+                "provider": "claude",
+                "command_type": "provider.live_proof",
+                "command_id": f"machine-op:{operation_id}",
+                "request_payload": {"provider": "claude"},
+                "timeout_secs": 1,
+            },
+        )
+        time.sleep(1.05)
+
+        with live.http_client() as client:
+            resp = client.get(f"/agents/machines/operations/{operation_id}", headers={"X-Agents-Token": token})
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -833,22 +815,26 @@ def test_machine_control_operation_route_reaps_stale_operation(tmp_path):
     assert body["error"]["code"] == "machine_control_operation_timeout"
 
 
-def test_machines_route_returns_empty_for_unknown_user(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    registry = MachineControlChannelRegistry()
+def test_machines_route_lists_nothing_for_an_owner_with_no_enrollments():
+    # The browser directory is owner-scoped in the catalog, so a second account
+    # on the same Runtime Host sees an empty list rather than the first
+    # account's machines.
+    with provision_live_catalog() as live:
+        owner_id = live.create_user("owner@machines.test")
+        live.create_device_token(owner_id=owner_id, device_id="cinder")
+        stranger_id = live.create_user("stranger@machines.test")
+        stranger_cookie = live.browser_cookie(owner_id=stranger_id, email="stranger@machines.test")
+        registry = MachineControlChannelRegistry()
+        _register(registry, owner_id=owner_id, device_id="cinder", supports=("codex.turn_start",))
 
-    original, module = _swap_registry(registry)
-    try:
-        browser_client, api_app = _make_browser_client(SessionLocal, owner_id=9999)
+        original, module = _swap_registry(registry)
         try:
-            resp = browser_client.get("/api/timeline/machines")
+            with live.http_client() as client:
+                resp = client.get("/timeline/machines", cookies={"longhouse_session": stranger_cookie})
         finally:
-            api_app.dependency_overrides.clear()
-    finally:
-        module.get_machine_control_channel_registry = original
+            module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     assert resp.json() == {"machines": []}
 
 

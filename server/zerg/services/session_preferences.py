@@ -41,7 +41,7 @@ def load_session_preferences(session_id: UUID | str, *, standalone_session=None)
                 user_state=str(catalog.get("user_state") or "active"),
                 loop_mode=str(catalog.get("loop_mode") or "assist"),
                 notification_muted=catalog.get("notification_muted") is True,
-                user_hidden_from_timeline=catalog.get("user_hidden_from_timeline") is True,
+                user_hidden_from_timeline=bool(catalog.get("user_hidden_from_timeline")),
             )
         from zerg.services.catalog_read_gateway import session_snapshot
 
@@ -54,7 +54,7 @@ def load_session_preferences(session_id: UUID | str, *, standalone_session=None)
             user_state=str(catalog.get("user_state") or "active"),
             loop_mode=str(catalog.get("loop_mode") or "assist"),
             notification_muted=catalog.get("notification_muted") is True,
-            user_hidden_from_timeline=catalog.get("user_hidden_from_timeline") is True,
+            user_hidden_from_timeline=bool(catalog.get("user_hidden_from_timeline")),
         )
 
     factory = database_module.get_live_session_factory()

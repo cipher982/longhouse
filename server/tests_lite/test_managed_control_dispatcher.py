@@ -1,22 +1,36 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import zerg.services.managed_control_dispatcher as dispatcher_module
-from zerg.database import initialize_live_database
-from zerg.database import make_live_engine
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from zerg.catalogd.fact_reducer import ReducerFact
+from zerg.catalogd.fact_reducer import canonical_evidence_hash
+from zerg.catalogd.fact_reducer import reduce_fact_batch
+from zerg.catalogd.schema import create_catalog_engine
 from zerg.models.live_store import LiveMachineControlOperation
+from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
+from zerg.services import catalogd_supervisor
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
@@ -45,24 +59,150 @@ def _session(**overrides):
     return SimpleNamespace(**values)
 
 
-def _make_live_db(tmp_path):
-    engine = make_live_engine(f"sqlite:///{tmp_path / 'managed-control-live.db'}")
-    initialize_live_database(engine)
-    return engine, sessionmaker(bind=engine)
+@dataclass(frozen=True)
+class _SeededControlLease:
+    """The lease catalogd resolves a command against."""
+
+    run_id: UUID
+    catalog_connection_id: int
+    adapter_connection_id: str
+    lease_generation: str
 
 
-class _InlineLiveSerializer:
-    is_configured = True
+def _seed_live_control_lease(
+    database_path: Path,
+    *,
+    session_id: UUID,
+    device_id: str = "cinder",
+    provider: str = "codex",
+) -> _SeededControlLease:
+    """Leave in the live catalog what a Helm launch leaves there.
 
-    def __init__(self, session_factory):
-        self.session_factory = session_factory
+    ``control.command.prepare.v2`` refuses a command unless all three pieces are
+    present: an open run on the primary thread, an attached connection carrying
+    the adapter's own identity, and the control fact that identity published.
+    Seeding is direct rather than driven through a heartbeat because the
+    dispatcher is what is under test here, not evidence ingest.
+    """
 
-    async def execute(self, fn, *, auto_commit=True, label="", **_kwargs):
-        with self.session_factory() as db:
-            result = fn(db)
-            if auto_commit:
-                db.commit()
-            return result
+    now = datetime.now(UTC).replace(microsecond=0)
+    thread_id = uuid4()
+    run_id = uuid4()
+    adapter_connection_id = str(uuid4())
+    lease_generation = str(uuid4())
+    engine = create_catalog_engine(database_path)
+    try:
+        with Session(engine) as db:
+            db.add(
+                LiveSessionCatalog(
+                    session_id=str(session_id),
+                    provider=provider,
+                    environment="production",
+                    device_id=device_id,
+                    started_at=now,
+                    primary_thread_id=str(thread_id),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.add(
+                LiveSessionThread(
+                    id=str(thread_id),
+                    session_id=str(session_id),
+                    provider=provider,
+                    branch_kind="root",
+                    is_primary=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.add(
+                LiveSessionRun(
+                    id=str(run_id),
+                    thread_id=str(thread_id),
+                    provider=provider,
+                    host_id=device_id,
+                    launch_origin="longhouse_spawned",
+                    started_at=now,
+                )
+            )
+            lease = LiveSessionConnection(
+                run_id=str(run_id),
+                adapter_connection_id=adapter_connection_id,
+                lease_generation=lease_generation,
+                control_plane=f"{provider}_bridge",
+                acquisition_kind="spawned_control",
+                state="attached",
+                device_id=device_id,
+                can_send_input=1,
+                can_interrupt=1,
+                can_terminate=1,
+                acquired_at=now,
+                last_health_at=now,
+            )
+            db.add(lease)
+            db.commit()
+            catalog_connection_id = int(lease.id)
+
+        value = {
+            "authority_class": "provider_control",
+            "provider": provider,
+            "session_id": str(session_id),
+            "run_id": str(run_id),
+            "connection_id": adapter_connection_id,
+            "lease_generation": lease_generation,
+            "granted_operations": ["interrupt", "send_input", "terminate"],
+            "state": "attached",
+            "lease_ttl_ms": 900_000,
+            "source": f"{provider}_control_scan",
+            "observed_at": now.isoformat(),
+        }
+        fact = ReducerFact(
+            family="control",
+            subject_key=f"connection:{adapter_connection_id}:{lease_generation}",
+            source=f"{provider}_control_scan",
+            source_epoch=lease_generation,
+            source_seq=None,
+            dedupe_key=canonical_evidence_hash({**value, "dedupe": now.isoformat()}),
+            evidence_hash=canonical_evidence_hash(value),
+            value=value,
+            observed_at=now,
+            session_id=str(session_id),
+        )
+        with engine.begin() as connection:
+            reduce_fact_batch(connection, [fact], received_at=now)
+    finally:
+        engine.dispose()
+
+    return _SeededControlLease(
+        run_id=run_id,
+        catalog_connection_id=catalog_connection_id,
+        adapter_connection_id=adapter_connection_id,
+        lease_generation=lease_generation,
+    )
+
+
+def _read_control_operation(database_path: Path, *, command_id: str) -> dict[str, object]:
+    """Read the operation catalogd durably recorded for one command."""
+
+    engine = create_catalog_engine(database_path)
+    try:
+        with Session(engine) as db:
+            operation = db.query(LiveMachineControlOperation).filter(LiveMachineControlOperation.command_id == command_id).one()
+            return {
+                "operation_id": str(operation.id),
+                "owner_id": operation.owner_id,
+                "session_id": str(operation.session_id),
+                "device_id": operation.device_id,
+                "provider": operation.provider,
+                "command_type": operation.command_type,
+                "status": operation.status,
+                "request": json.loads(operation.request_json),
+                "result": json.loads(operation.result_json) if operation.result_json else None,
+                "error": json.loads(operation.error_json) if operation.error_json else None,
+            }
+    finally:
+        engine.dispose()
 
 
 class _FakeMachineWebSocket:
@@ -97,20 +237,24 @@ async def _connect_fake_engine(*, owner_id: int = 42, supports: list[str] | None
     return websocket
 
 
-async def _complete_first_machine_command(websocket: _FakeMachineWebSocket, result):
-    for _ in range(20):
-        if websocket.sent:
-            command_id = str(websocket.sent[0]["command_id"])
-            await get_machine_control_channel_registry().complete_command(
-                {
-                    "type": "command_result",
-                    "command_id": command_id,
-                    **result,
-                }
-            )
-            return
-        await asyncio.sleep(0)
-    raise AssertionError("expected a machine control command frame")
+async def _complete_first_machine_command(websocket: _FakeMachineWebSocket, result, *, timeout_secs: float = 10.0):
+    # Bounded by time rather than by a fixed number of yields: a dispatch that
+    # first reserves the operation in a real catalogd does socket I/O before it
+    # writes the frame, and twenty `sleep(0)` yields elapse long before that.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    while not websocket.sent:
+        if loop.time() >= deadline:
+            raise AssertionError("expected a machine control command frame")
+        await asyncio.sleep(0.005)
+    command_id = str(websocket.sent[0]["command_id"])
+    await get_machine_control_channel_registry().complete_command(
+        {
+            "type": "command_result",
+            "command_id": command_id,
+            **result,
+        }
+    )
 
 
 def test_select_managed_control_transport_requires_engine_channel_even_with_runner_metadata():
@@ -407,16 +551,30 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_records_live_store_operation(tmp_path, monkeypatch):
-    live_engine, LiveSession = _make_live_db(tmp_path)
-    monkeypatch.setattr(dispatcher_module.database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(dispatcher_module, "get_live_write_serializer", lambda: _InlineLiveSerializer(LiveSession))
+def test_dispatch_managed_control_command_records_the_operation_in_the_live_catalog(live_catalog):  # noqa: F811
+    """A dispatch leaves one durable operation behind, written by catalogd.
+
+    This used to stand up a private live-store database and an inline write
+    serializer, and assert the API process wrote the operation row itself. That
+    write only happens when ``live_catalog_enabled()`` is false, which on a
+    Runtime Host it never is, so the assertion described a branch production
+    does not take. On the live catalog the operation is reserved by
+    ``control.command.prepare.v2`` before the frame goes out and finished by
+    ``control.operation.finish.v2`` when the engine answers -- a write the API
+    process never performs itself. Same claim, real path: one daemon, one lease,
+    and the row read back out of the live catalog.
+    """
+
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+    session_id = uuid4()
+    lease = _seed_live_control_lease(database_path, session_id=session_id)
+    session = _session(id=session_id, source_runner_id=None)
+    command_id = f"managed-control:{session_id}:session.send_text:req-live-catalog"
 
     async def _run():
         await _clear_machine_registry()
         try:
             websocket = await _connect_fake_engine(owner_id=42, supports=["codex.send"])
-            session = _session(source_runner_id=None)
             completer = asyncio.create_task(
                 _complete_first_machine_command(
                     websocket,
@@ -430,30 +588,49 @@ def test_dispatch_managed_control_command_records_live_store_operation(tmp_path,
                 db=object(),
                 owner_id=42,
                 session=session,
-                timeout_secs=1,
+                timeout_secs=15,
                 command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 payload={"text": "continue"},
-                request_id="req-live-store",
+                request_id="req-live-catalog",
             )
             await completer
 
             assert result.ok is True
-            command_id = f"managed-control:{session.id}:session.send_text:req-live-store"
-            with LiveSession() as live_db:
-                operation = live_db.query(LiveMachineControlOperation).filter(LiveMachineControlOperation.command_id == command_id).one()
-                assert operation.owner_id == 42
-                assert operation.session_id == str(session.id)
-                assert operation.device_id == "cinder"
-                assert operation.provider == "codex"
-                assert operation.command_type == MANAGED_CONTROL_COMMAND_SEND_TEXT
-                assert operation.status == "succeeded"
-                assert '"stdout": "accepted"' in str(operation.result_json)
-                assert operation.error_json is None
+            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            assert websocket.sent[0]["command_id"] == command_id
+            # catalogd resolved this grant from the seeded lease; the test never
+            # tells the dispatcher what identity to carry.
+            assert websocket.sent[0]["payload"]["longhouse_control_grant"] == {
+                "connection_id": lease.adapter_connection_id,
+                "catalog_connection_id": lease.catalog_connection_id,
+                "run_id": str(lease.run_id),
+                "lease_generation": lease.lease_generation,
+                "identity_source": "adapter_bound",
+            }
         finally:
             await _clear_machine_registry()
-            live_engine.dispose()
 
     asyncio.run(_run())
+
+    operation = _read_control_operation(database_path, command_id=command_id)
+    assert operation["owner_id"] == 42
+    assert operation["session_id"] == str(session_id)
+    assert operation["device_id"] == "cinder"
+    assert operation["provider"] == "codex"
+    assert operation["command_type"] == MANAGED_CONTROL_COMMAND_SEND_TEXT
+    assert operation["status"] == "succeeded"
+    assert operation["result"] == {"exit_code": 0, "stdout": "accepted", "stderr": ""}
+    assert operation["error"] is None
+    assert operation["request"]["payload"] == {"provider": "codex", "text": "continue"}
+
+    # The route that serves this operation reads it back through catalogd, so
+    # the record has to be owner-scoped there and not merely present on disk.
+    served = live_catalog.rpc("machine.operation.read.v2", {"owner_id": 42, "operation_id": operation["operation_id"]})
+    assert served["found"] is True
+    assert served["operation"]["status"] == "succeeded"
+    assert served["operation"]["result"] == {"exit_code": 0, "stdout": "accepted", "stderr": ""}
+    other_owner = live_catalog.rpc("machine.operation.read.v2", {"owner_id": 43, "operation_id": operation["operation_id"]})
+    assert other_owner["found"] is False
 
 
 def test_catalog_managed_control_uses_catalogd_for_grant_and_operation(monkeypatch):

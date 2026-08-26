@@ -1,449 +1,339 @@
+"""Hot routes under a saturated writer, on the path a Runtime Host takes.
+
+This file used to describe an architecture the Runtime Host no longer runs. It
+configured two SQLAlchemy ``WriteSerializer`` instances, wrote ``LiveHeartbeatStamp``
+and ``LiveRuntimeState`` through the live one, and finished by draining
+``LiveArchiveOutbox`` into the archive database. ``lifespan`` configures neither
+serializer once ``live_catalog_enabled()`` is true, and ``drain_live_archive_outbox``
+has no caller left in ``zerg`` at all. Those rows are still real; catalogd owns
+them now, and the API process reaches them over a Unix socket.
+
+The subject survives the move, because the writer it was about survives it. A
+catalog has exactly one writer thread and a bounded pool of interactive read
+workers, and the failure that split exists to prevent is the one
+``CatalogWriterStats`` records: a request that waits behind bulk ingest is
+indistinguishable from an unreachable host. So the saturated writer here is the
+one production actually has -- a real ``storage.raw_object.commit.v2`` holding
+the single catalogd writer thread -- and the hot routes are asked the same two
+questions as before: do reads answer while it is held, and does the archive
+database stay shut.
+"""
+
 from __future__ import annotations
 
-import asyncio
-import json
-import os
+import functools
+import threading
+import time
+from contextlib import contextmanager
+from datetime import UTC
 from datetime import datetime
-from datetime import timezone
-from threading import Event
-from types import SimpleNamespace
+from typing import Any
+from typing import Iterator
+from uuid import uuid4
 
 import pytest
-from cryptography.fernet import Fernet
-from fastapi import Response
-from sqlalchemy import text
+from sqlalchemy import event
 
-os.environ.setdefault("DATABASE_URL", "sqlite://")
-os.environ.setdefault("TESTING", "1")
-os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
-os.environ.setdefault("JWT_SECRET", Fernet.generate_key().decode())
-os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
-os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
-os.environ.setdefault("GOOGLE_CLIENT_SECRET", Fernet.generate_key().decode())
+import zerg.data_plane as data_plane_module
+import zerg.database as database_module
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import provision_live_catalog
+from zerg.catalogd.store import CatalogStore
 
-import zerg.services.managed_control_dispatcher as managed_control_dispatcher_module
-import zerg.services.session_chat_impl as session_chat_impl_module
-import zerg.services.session_turns as session_turns_module
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-from zerg.config import get_settings as config_get_settings
-from zerg.database import Base
-from zerg.database import get_pool_status
-from zerg.database import initialize_live_database
-from zerg.database import make_engine
-from zerg.database import make_live_engine
-from zerg.database import make_live_write_engine
-from zerg.database import make_sessionmaker
-from zerg.models import User
-from zerg.models.agents import AgentSession
-from zerg.models.device_token import DeviceToken
-from zerg.models.live_store import LiveArchiveOutbox
-from zerg.models.live_store import LiveHeartbeatStamp
-from zerg.models.live_store import LiveLaunchReadiness
-from zerg.models.live_store import LiveMachineControlOperation
-from zerg.models.live_store import LiveRuntimeState
-from zerg.models.live_store import LiveSessionInputReceipt
-from zerg.routers import agents_sessions as agents_sessions_router
-from zerg.routers import health as health_router
-from zerg.routers import heartbeat as heartbeat_router
-from zerg.routers import runtime as runtime_router
-from zerg.routers import session_chat as session_chat_router
-from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
-from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
-from zerg.services.live_archive_outbox import SESSION_INPUT_RECEIPT_KIND
-from zerg.services.live_archive_outbox import drain_live_archive_outbox
-from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
-from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
-from zerg.services.session_locks import session_lock_manager
-from zerg.services.write_serializer import WriteSerializer
-
-OWNER_ID = 77
+OWNER_EMAIL = "owner@hot-path.test"
+DEVICE_ID = "cinder"
+PROJECT = "longhouse"
 ROUTE_TIMEOUT_SECONDS = 5.0
-BLOCKED_WRITER_TIMEOUT_SECONDS = ROUTE_TIMEOUT_SECONDS + 3.0
+# Only a backstop: a writer nobody releases fails the test instead of hanging
+# the suite behind it.
+WRITER_HOLD_TIMEOUT_SECONDS = 30.0
+HEARTBEAT_BODY: dict[str, Any] = {
+    "version": "0.5.0",
+    "daemon_pid": 12345,
+    "disk_free_bytes": 50_000_000_000,
+}
 
 
-class _FakeRequest:
-    def __init__(self, body: bytes = b"{}", headers: dict[str, str] | None = None) -> None:
-        self.client = SimpleNamespace(host="testclient")
-        self.headers = headers or {}
-        self._body = body
+@pytest.fixture()
+def live() -> Iterator[LiveCatalog]:
+    """A Runtime Host shaped the way production shapes one."""
 
-    async def body(self) -> bytes:
-        return self._body
+    with provision_live_catalog() as catalog:
+        yield catalog
 
 
-class _AutoCompletingMachineWebSocket:
-    def __init__(self) -> None:
-        self.sent: list[dict[str, object]] = []
+@pytest.fixture()
+def client(live: LiveCatalog):
+    """``api_app`` with its import-time db dependencies forced to production's."""
 
-    async def send_json(self, message):
-        self.sent.append(message)
-        await get_machine_control_channel_registry().complete_command(
-            {
-                "type": "command_result",
-                "command_id": message["command_id"],
-                "ok": True,
-                "result": {
-                    "exit_code": 0,
-                    "stdout": "",
-                    "stderr": "",
-                    "turn_id": "hot-path-machine-control-turn-1",
-                },
-            }
-        )
+    with live.http_client() as test_client:
+        yield test_client
 
 
-async def _wait_until(predicate, *, timeout: float = 1.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
+class _Call:
+    """One HTTP call made from another thread, with its outcome kept."""
+
+    def __init__(self, run) -> None:
+        self._run = run
+        self.response: Any = None
+        self.error: BaseException | None = None
+        self._thread = threading.Thread(target=self._body, name="hot-route-call", daemon=True)
+
+    def _body(self) -> None:
+        try:
+            self.response = self._run()
+        except BaseException as exc:  # surfaced by result()
+            self.error = exc
+
+    def start(self) -> "_Call":
+        self._thread.start()
+        return self
+
+    @property
+    def returned(self) -> bool:
+        return self.response is not None or self.error is not None
+
+    def result(self, *, timeout: float = ROUTE_TIMEOUT_SECONDS):
+        self._thread.join(timeout=timeout)
+        assert not self._thread.is_alive(), "the hot route never returned"
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+def _wait_until(predicate, *, otherwise: str, timeout: float = ROUTE_TIMEOUT_SECONDS) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         if predicate():
             return
-        await asyncio.sleep(0.01)
-    raise AssertionError("condition was not reached before timeout")
+        time.sleep(0.01)
+    raise AssertionError(f"{otherwise} within {timeout}s")
 
 
-async def _register_managed_control_channel() -> _AutoCompletingMachineWebSocket:
-    websocket = _AutoCompletingMachineWebSocket()
-    await get_machine_control_channel_registry().register(
-        owner_id=OWNER_ID,
-        device_id="cinder",
-        machine_name="cinder",
-        engine_build="test-engine",
-        supports=["codex.send"],
-        websocket=websocket,
-    )
-    return websocket
+def _writer_admission(live: LiveCatalog) -> dict[str, Any]:
+    """What catalogd says about its own writer, from the real ping."""
+
+    return live.rpc("ping.v2")["writer_admission"]
 
 
-def _seed_hot_path_rows(session_factory):
-    now = datetime.now(timezone.utc)
-    with session_factory() as db:
-        db.add(User(id=OWNER_ID, email="owner@example.test", role="ADMIN"))
-        db.commit()
-        db.add(
-            DeviceToken(
-                owner_id=OWNER_ID,
-                device_id="cinder",
-                token_hash="hash-cinder",
-            )
-        )
-        db.commit()
-        session = AgentSession(
-            provider="codex",
-            environment="development",
-            project="repo",
-            device_id="cinder",
-            device_name="cinder",
-            cwd="/Users/me/repo",
-            git_branch="main",
-            started_at=now,
-            last_activity_at=now,
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-            first_user_message_preview="Seeded hot-path question",
-            last_visible_text_preview="Seeded hot-path answer",
-        )
-        db.add(session)
-        db.flush()
-        seed_managed_kernel_rows(db, session, control_plane="codex_bridge", host_id="cinder")
-        upsert_timeline_card_from_session(db, session)
-        session_id = session.id
-        db.commit()
-        return session_id
+@contextmanager
+def _archive_database_use() -> Iterator[list[str]]:
+    """Every use of the archive database inside the block, recorded.
 
+    There are two ways a route can reach it and both are covered: taking a
+    connection out of the engine ``zerg.database`` built at import, and, when
+    this process has no such engine yet, building one from the environment on
+    demand. Whichever it is, no hot route may do it.
+    """
 
-@pytest.mark.asyncio
-async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(tmp_path, monkeypatch):
-    db_url = f"sqlite:///{tmp_path / 'hot_path_saturation.db'}"
-    request_engine = make_engine(db_url, pool_size=1, max_overflow=0)
-    write_engine = make_engine(db_url, pool_size=1, max_overflow=0)
-    request_factory = make_sessionmaker(request_engine)
-    write_factory = make_sessionmaker(write_engine)
-    live_url = f"sqlite:///{tmp_path / 'hot_path_live.db'}"
-    live_engine = make_live_engine(live_url, pool_size=1, max_overflow=0)
-    live_write_engine = make_live_write_engine(live_url)
-    live_factory = make_sessionmaker(live_engine)
-    live_write_factory = make_sessionmaker(live_write_engine)
-    Base.metadata.create_all(bind=request_engine)
-    initialize_live_database(live_engine)
-    with request_engine.begin() as conn:
-        conn.execute(text("CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(content_text)"))
-    seeded_session_id = _seed_hot_path_rows(request_factory)
+    engine = database_module.default_engine
+    used: list[str] = []
 
-    serializer = WriteSerializer()
-    serializer.configure(write_factory)
-    live_serializer = WriteSerializer()
-    live_serializer.configure(live_write_factory)
+    def _record(*_args) -> None:
+        used.append(f"a connection was checked out of {engine.url}")
 
-    import zerg.data_plane as data_plane_module
-    import zerg.database as database_module
-    import zerg.services.live_session_inputs as live_session_inputs_module
-    import zerg.services.write_serializer as write_serializer_module
-
-    def _cold_store_unavailable(*_args, **_kwargs):
-        raise AssertionError("hot health/list/launch paths must not open derived/archive stores")
-
-    monkeypatch.delenv("TESTING", raising=False)
-    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STALE_ACTIVE_MS", "1")
-    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STALE_QUEUE_DEPTH", "1")
-    monkeypatch.setattr(
-        "zerg.build_info.load",
-        lambda: SimpleNamespace(
-            as_dict=lambda: {"commit": "test"},
-            version="0.0.0-test",
-            channel="test",
-            commit_short="test",
-            dirty=False,
-            qualified_version="0.0.0-test+test",
-        ),
-    )
-    monkeypatch.setattr(database_module, "default_engine", request_engine)
-    monkeypatch.setattr(database_module, "default_session_factory", request_factory)
-    monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
-    monkeypatch.setattr(data_plane_module, "create_archive_store", _cold_store_unavailable)
-    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_factory)
-    monkeypatch.setattr(heartbeat_router, "live_store_configured", lambda: True)
-    monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: serializer)
-    monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", lambda: live_serializer)
-    monkeypatch.setattr(runtime_router, "live_store_configured", lambda: True)
-    monkeypatch.setattr(runtime_router, "get_write_serializer", lambda: serializer)
-    monkeypatch.setattr(runtime_router, "get_live_write_serializer", lambda: live_serializer)
-    monkeypatch.setattr(session_chat_router, "get_live_write_serializer", lambda: live_serializer)
-    monkeypatch.setattr(managed_control_dispatcher_module, "get_live_write_serializer", lambda: live_serializer)
-    monkeypatch.setattr(session_turns_module, "get_write_serializer", lambda: serializer)
-    monkeypatch.setattr(live_session_inputs_module, "get_live_write_serializer", lambda: live_serializer)
-    monkeypatch.setattr(write_serializer_module, "get_write_serializer", lambda: serializer)
-    monkeypatch.setattr(write_serializer_module, "get_live_write_serializer", lambda: live_serializer)
-    monkeypatch.setattr(session_chat_impl_module, "_schedule_managed_local_lock_release", lambda **_kwargs: None)
-    monkeypatch.setattr(session_chat_impl_module, "_schedule_managed_local_active_phase_observation", lambda **_kwargs: None)
-
-    await get_machine_control_channel_registry().clear_for_tests()
-
-    writer_entered = Event()
-    release_writer = Event()
-    heartbeat_task = None
-
-    def _block_writer(db):
-        db.execute(text("SELECT 1"))
-        writer_entered.set()
-        assert release_writer.wait(BLOCKED_WRITER_TIMEOUT_SECONDS), "blocked writer was not released"
-
-    blocker = asyncio.create_task(serializer.execute(_block_writer, label="ingest-replay"))
+    if engine is not None:
+        event.listen(engine, "checkout", _record)
     try:
-        assert await asyncio.to_thread(writer_entered.wait, 1)
-        assert serializer.writer_active is True
-
-        heartbeat_payload = heartbeat_router.HeartbeatIn(
-            version="0.5.0",
-            daemon_pid=12345,
-            disk_free_bytes=50_000_000_000,
-        )
-        request_db = request_factory()
-        request_db.execute(text("SELECT 1"))
-        assert get_pool_status(request_engine)["checked_out"] == 1
-
-        heartbeat_task = asyncio.create_task(
-            heartbeat_router.ingest_heartbeat(
-                heartbeat_payload,
-                _FakeRequest(heartbeat_payload.model_dump_json().encode()),
-                request_db,
-                SimpleNamespace(device_id="cinder", id="token-1", owner_id=OWNER_ID),
-            )
-        )
-        heartbeat_response = await asyncio.wait_for(heartbeat_task, timeout=ROUTE_TIMEOUT_SECONDS)
-        assert heartbeat_response.status_code == 204
-        assert get_pool_status(request_engine)["checked_out"] == 0
-        assert get_pool_status(write_engine)["checked_out"] == 1
-        with live_factory() as live_db:
-            assert live_db.query(LiveHeartbeatStamp).filter(LiveHeartbeatStamp.device_id == "cinder").count() == 1
-
-        health = await asyncio.wait_for(
-            asyncio.to_thread(
-                health_router.health_check,
-                # Verbose /health checks require an operator signal; the test
-                # client host is not trusted on its own.
-                _FakeRequest(headers={"X-Internal-Token": config_get_settings().internal_api_secret}),
-            ),
-            timeout=1.0,
-        )
-        assert health["status"] == "degraded"
-        assert health["checks"]["write_serializer"]["writer_active"] is True
-        assert health["checks"]["write_serializer"]["status"] == "warn"
-        assert health["checks"]["write_serializer"]["archive_degraded"] is True
-        assert health["checks"]["write_serializer"]["queue_depth"] == 1
-        assert health["checks"]["write_serializer"]["queued_labels"] == ["heartbeat-bookkeeping"]
-        assert health["checks"]["live_write_serializer"]["status"] == "pass"
-        assert health["checks"]["db_pool"]["checked_out"] == 0
-
-        monkeypatch.setattr(health_router, "get_settings", lambda: SimpleNamespace(testing=True))
-        readyz = await asyncio.wait_for(asyncio.to_thread(health_router.readyz_check), timeout=1.0)
-        assert readyz["status"] == "ready_with_archive_degraded"
-        assert readyz["reason"] == "archive_write_serializer_stalled"
-
-        with request_factory() as list_db:
-            sessions = await asyncio.wait_for(
-                agents_sessions_router.list_sessions(
-                    project=None,
-                    provider=None,
-                    environment=None,
-                    include_test=False,
-                    hide_autonomous=True,
-                    device_id=None,
-                    days_back=14,
-                    query=None,
-                    limit=20,
-                    offset=0,
-                    sort=None,
-                    mode="lexical",
-                    context_mode="forensic",
-                    db=list_db,
-                    _auth=SimpleNamespace(),
-                    _single=None,
-                ),
-                timeout=ROUTE_TIMEOUT_SECONDS,
-        )
-        assert sessions.sessions
-
-        managed_control_websocket = await _register_managed_control_channel()
-        with request_factory() as input_db:
-            source_session = input_db.get(AgentSession, seeded_session_id)
-            assert source_session is not None
-            input_response = await asyncio.wait_for(
-                session_chat_router._create_session_input_response(
-                    source_session=source_session,
-                    owner_id=OWNER_ID,
-                    body=session_chat_router.SessionInputRequest(
-                        text="hot input while archive is stalled",
-                        intent="auto",
-                        client_request_id="hot-input-stall-1",
-                    ),
-                    db=input_db,
-                ),
-                timeout=ROUTE_TIMEOUT_SECONDS,
-            )
-        assert input_response.outcome == "sent"
-        assert input_response.input_id is None
-        assert input_response.live_input_id is not None
-        assert len(managed_control_websocket.sent) == 1
-        control_frame = managed_control_websocket.sent[0]
-        assert control_frame["command_type"] == "session.send_text"
-        assert control_frame["session_id"] == str(seeded_session_id)
-        assert str(control_frame["command_id"]).startswith(f"managed-control:{seeded_session_id}:session.send_text:")
-        assert control_frame["payload"] == {
-            "provider": "codex",
-            "text": "hot input while archive is stalled",
-        }
-        delivery_request_id = None
-        with live_factory() as live_db:
-            receipt = live_db.get(LiveSessionInputReceipt, input_response.live_input_id)
-            assert receipt is not None
-            assert receipt.status == INPUT_STATUS_DELIVERED
-            assert receipt.client_request_id == "hot-input-stall-1"
-            delivery_request_id = receipt.delivery_request_id
-            assert live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == SESSION_INPUT_RECEIPT_KIND).count() == 0
-            control_operation = (
-                live_db.query(LiveMachineControlOperation)
-                .filter(LiveMachineControlOperation.command_id == control_frame["command_id"])
-                .one()
-            )
-            assert control_operation.status == "succeeded"
-            assert control_operation.command_type == "session.send_text"
-            assert control_operation.device_id == "cinder"
-            assert control_operation.provider == "codex"
-            assert json.loads(control_operation.result_json or "{}")["turn_id"] == "hot-path-machine-control-turn-1"
-        assert delivery_request_id
-        await session_lock_manager.release(str(seeded_session_id), delivery_request_id)
-
-        runtime_payload = runtime_router.RuntimeEventBatchIngest(
-            events=[
-                {
-                    "runtime_key": f"codex:{seeded_session_id}",
-                    "session_id": seeded_session_id,
-                    "provider": "codex",
-                    "device_id": "cinder",
-                    "source": "codex_bridge",
-                    "kind": "phase_signal",
-                    "phase": "running",
-                    "tool_name": "Shell",
-                    "occurred_at": datetime.now(timezone.utc),
-                    "freshness_ms": 60_000,
-                    "dedupe_key": "hot-runtime-stall-1",
-                    "payload": {},
-                }
-            ]
-        )
-        with request_factory() as runtime_db:
-            runtime_db.execute(text("SELECT 1"))
-            runtime_result = await asyncio.wait_for(
-                runtime_router.ingest_runtime_observation_batch(
-                    runtime_payload,
-                    Response(),
-                    runtime_db,
-                    SimpleNamespace(device_id="cinder", id="token-1", owner_id=OWNER_ID),
-                    None,
-                ),
-                timeout=ROUTE_TIMEOUT_SECONDS,
-            )
-        assert runtime_result.accepted == 1
-        assert runtime_result.updated_runtime_keys == [f"codex:{seeded_session_id}"]
-        with live_factory() as live_db:
-            live_runtime = live_db.get(LiveRuntimeState, f"codex:{seeded_session_id}")
-            assert live_runtime is not None
-            assert live_runtime.phase == "running"
-            assert live_runtime.active_tool == "Shell"
-            assert live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == RUNTIME_EVENT_KIND).count() == 0
-
-        await asyncio.sleep(0.01)
-        with request_factory() as managed_launch_db:
-            managed_result, managed_response = await asyncio.wait_for(
-                session_chat_router._launch_managed_local_session_serialized(
-                    managed_launch_db,
-                    ManagedLocalLaunchParams(
-                        owner_id=OWNER_ID,
-                        runner_target="cinder",
-                        cwd="/Users/me/repo",
-                        provider="codex",
-                        project="repo",
-                        git_branch="main",
-                        machine_name="cinder",
-                    ),
-                ),
-                timeout=ROUTE_TIMEOUT_SECONDS,
-            )
-        assert managed_result is None
-        assert managed_response.provider == "codex"
-        assert "codex-bridge attach --session-id" in managed_response.attach_command
-        with live_factory() as live_db:
-            managed_readiness = live_db.get(LiveLaunchReadiness, managed_response.session_id)
-            assert managed_readiness is not None
-            assert managed_readiness.state == "pending"
-            managed_outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == MANAGED_LOCAL_LAUNCH_KIND).one()
-            assert managed_outbox.drained_at is None
-
-        release_writer.set()
-        await asyncio.wait_for(blocker, timeout=ROUTE_TIMEOUT_SECONDS)
-        await _wait_until(lambda: serializer.queue_depth == 0 and not serializer.writer_active)
-        with live_factory() as live_db, request_factory() as archive_db:
-            drain_result = drain_live_archive_outbox(live_db, archive_db, limit=10)
-        assert drain_result.drained >= 1
-        with request_factory() as archive_db:
-            managed_session = archive_db.get(AgentSession, managed_response.session_id)
-            assert managed_session is not None
-            assert managed_session.provider == "codex"
-            assert managed_session.device_id == "cinder"
-            assert managed_session.git_branch == "main"
-        with live_factory() as live_db:
-            managed_readiness = live_db.get(LiveLaunchReadiness, managed_response.session_id)
-            assert managed_readiness is not None
-            assert managed_readiness.state == "adopted"
+        yield used
+        if database_module.default_engine is not engine:
+            used.append("an archive engine was built on demand")
     finally:
-        release_writer.set()
-        await get_machine_control_channel_registry().clear_for_tests()
-        if heartbeat_task is not None and not heartbeat_task.done():
-            await asyncio.gather(heartbeat_task, return_exceptions=True)
-        if not blocker.done():
-            blocker.cancel()
-            await asyncio.gather(blocker, return_exceptions=True)
+        if engine is not None:
+            event.remove(engine, "checkout", _record)
+
+
+@contextmanager
+def _writer_held_by_bulk_ingest(live: LiveCatalog, *, owner_id: int) -> Iterator[None]:
+    """Hold the single catalogd writer with a real transcript commit.
+
+    Nothing is faked away: the commit is the one the Machine Agent ships, it
+    runs on catalogd's writer thread, and it finishes for real once released.
+    The only instrumentation is where inside that commit the thread waits.
+    """
+
+    entered = threading.Event()
+    release = threading.Event()
+    original = CatalogStore.commit_raw_object
+
+    @functools.wraps(original)
+    def _blocking_commit(self, **params):
+        entered.set()
+        assert release.wait(WRITER_HOLD_TIMEOUT_SECONDS), "the held catalog writer was never released"
+        return original(self, **params)
+
+    committed: list[Any] = []
+    failed: list[BaseException] = []
+
+    def _commit() -> None:
+        try:
+            committed.append(live.commit_session(owner_id=owner_id, project=PROJECT, texts=("bulk ingest",)))
+        except BaseException as exc:
+            failed.append(exc)
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(CatalogStore, "commit_raw_object", _blocking_commit)
+        worker = threading.Thread(target=_commit, name="bulk-ingest", daemon=True)
+        worker.start()
+        try:
+            assert entered.wait(ROUTE_TIMEOUT_SECONDS), "the bulk commit never reached the catalog writer"
+            yield
+        finally:
+            release.set()
+            worker.join(timeout=WRITER_HOLD_TIMEOUT_SECONDS)
+    assert not failed, failed[0]
+    assert committed, "the held bulk commit never finished"
+
+
+def test_hot_reads_answer_while_the_catalog_writer_is_held_by_bulk_ingest(live: LiveCatalog, client):
+    """Reads keep their admission while one bulk write owns the writer.
+
+    catalogd runs its interactive reads on a pool that is deliberately separate
+    from the single writer thread. If a read ever crossed onto the writer, a
+    transcript commit would take the timeline down with it -- the outage that
+    was once misread as an unreachable host.
+    """
+
+    owner = live.create_user(OWNER_EMAIL)
+    token = live.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    seeded = live.commit_session(owner_id=owner, project=PROJECT)
+    headers = {"X-Agents-Token": token}
+
+    with _writer_held_by_bulk_ingest(live, owner_id=owner):
+        held = _writer_admission(live)
+        assert held["active_label"] == "commit_raw_object"
+        assert held["depth"] >= 1
+
+        sessions = client.get("/agents/sessions", params={"limit": 20, "days_back": 7}, headers=headers)
+        machines = client.get("/agents/machines", headers=headers)
+
+        # Logical rather than wall-clock: the writer that was held before the
+        # reads is still the same held writer afterwards, so neither read can
+        # have waited for it.
+        assert _writer_admission(live)["active_label"] == "commit_raw_object"
+
+        assert sessions.status_code == 200, sessions.text
+        assert str(seeded.session_id) in {row["id"] for row in sessions.json()["sessions"]}
+        assert machines.status_code == 200, machines.text
+        assert [row["device_id"] for row in machines.json()["machines"]] == [DEVICE_ID]
+
+        # The hot write does share that writer, and the contract is that it
+        # queues for it rather than being turned away.
+        heartbeat = _Call(lambda: client.post("/agents/heartbeat", json=HEARTBEAT_BODY, headers=headers)).start()
+        _wait_until(
+            lambda: _writer_admission(live)["depth"] >= 2,
+            otherwise="the hot heartbeat never queued behind the held writer",
+        )
+        queued = _writer_admission(live)
+        assert queued["active_label"] == "commit_raw_object"
+        assert queued["rejected_busy"] == 0
+        assert not heartbeat.returned, "the hot write answered without reaching the writer it shares"
+
+    assert heartbeat.result().status_code == 204
+
+    health = client.get("/agents/machines/health", headers=headers)
+    assert health.status_code == 200, health.text
+    reported = health.json()["machines"]
+    assert [row["device_id"] for row in reported] == [DEVICE_ID]
+    assert reported[0]["version"] == HEARTBEAT_BODY["version"]
+
+
+def test_hot_writes_reach_the_catalog_without_opening_the_archive_database(
+    live: LiveCatalog,
+    client,
+    monkeypatch,
+):
+    """Heartbeat, runtime observation and managed launch are catalogd's, whole.
+
+    Each of these used to be written here through a SQLAlchemy serializer and
+    read back out of a live-store table. On a Runtime Host every one of them is
+    an RPC, and the archive database is not opened at all -- so the guard is no
+    longer "the request pool went back to zero" but "there was never a pool".
+    """
+
+    def _archive_store_unavailable(*_args, **_kwargs):
+        raise AssertionError("hot heartbeat/runtime/launch paths must not open derived/archive stores")
+
+    monkeypatch.setattr(data_plane_module, "create_archive_store", _archive_store_unavailable)
+
+    owner = live.create_user(OWNER_EMAIL)
+    token = live.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    seeded = live.commit_session(owner_id=owner, project=PROJECT)
+    headers = {"X-Agents-Token": token}
+
+    with _archive_database_use() as archive_use:
+        heartbeat = client.post("/agents/heartbeat", json=HEARTBEAT_BODY, headers=headers)
+        assert heartbeat.status_code == 204, heartbeat.text
+
+        # The stamp comes back through the route an operator reads, out of the
+        # catalog's copy of it -- not a table this process can open.
+        health = client.get("/agents/machines/health", headers=headers)
+        assert health.status_code == 200, health.text
+        reported = health.json()["machines"]
+        assert [row["device_id"] for row in reported] == [DEVICE_ID]
+        assert reported[0]["version"] == HEARTBEAT_BODY["version"]
+
+        runtime_key = f"codex:{seeded.session_id}"
+        observation = {
+            "runtime_key": runtime_key,
+            "session_id": str(seeded.session_id),
+            "provider": "codex",
+            "device_id": DEVICE_ID,
+            "source": "codex_bridge",
+            "kind": "phase_signal",
+            "phase": "running",
+            "tool_name": "Shell",
+            "occurred_at": datetime.now(UTC).isoformat(),
+            "freshness_ms": 60_000,
+            "dedupe_key": "hot-runtime-1",
+            "payload": {},
+        }
+        runtime = client.post("/agents/runtime/events/batch", json={"events": [observation]}, headers=headers)
+        assert runtime.status_code == 200, runtime.text
+        assert runtime.json()["updated_runtime_keys"] == [runtime_key]
+
+        # The live lane always answers accepted=len(batch), so the evidence that
+        # anything persisted is which keys moved. Reshipping the same observation --
+        # the engine's ordinary retry -- moves nothing, because the reducer compares
+        # it against runtime state catalogd is already holding.
+        replayed = client.post("/agents/runtime/events/batch", json={"events": [observation]}, headers=headers)
+        assert replayed.status_code == 200, replayed.text
+        assert replayed.json()["updated_runtime_keys"] == []
+
+        # And a later observation does move it, so the empty answer above is a
+        # comparison against stored state rather than a route that stopped working.
+        advanced = {
+            **observation,
+            "phase": "idle",
+            "tool_name": None,
+            "occurred_at": datetime.now(UTC).isoformat(),
+            "dedupe_key": "hot-runtime-2",
+        }
+        progressed = client.post("/agents/runtime/events/batch", json={"events": [advanced]}, headers=headers)
+        assert progressed.status_code == 200, progressed.text
+        assert progressed.json()["updated_runtime_keys"] == [runtime_key]
+
+        launch_body = {
+            "session_id": str(uuid4()),
+            "cwd": "/Users/me/repo",
+            "provider": "codex",
+            "project": PROJECT,
+            "git_branch": "main",
+            "machine_name": DEVICE_ID,
+        }
+        launch = client.post("/sessions/managed-local/this-device", json=launch_body, headers=headers)
+        assert launch.status_code == 200, launch.text
+        launched = launch.json()
+        assert launched["session_id"] == launch_body["session_id"]
+        assert launched["provider"] == "codex"
+        assert "codex-bridge attach --session-id" in launched["attach_command"]
+        assert launched["run_id"]
+
+        # Same shape of readback for the launch: a client-minted identity that
+        # reaches catalogd twice is one launch, and the second answer is the row the
+        # first one wrote.
+        relaunch = client.post("/sessions/managed-local/this-device", json=launch_body, headers=headers)
+        assert relaunch.status_code == 200, relaunch.text
+        assert relaunch.json()["run_id"] == launched["run_id"]
+
+    assert archive_use == [], "a hot route reached the archive database"

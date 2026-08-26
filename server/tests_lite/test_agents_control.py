@@ -1,15 +1,82 @@
+import json
 import os
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from tests_lite.live_catalog_harness import provision_live_catalog
+from zerg.catalogd.schema import create_catalog_engine
+from zerg.models.live_store import LiveMachineControlOperation
 from zerg.routers.agents_control import CONTROL_HEARTBEAT_TIMEOUT_SECS
 from zerg.routers.agents_control import _control_identity
 from zerg.routers.agents_control import _reconcile_console_turns_after_register
 from zerg.routers.agents_control import _reconcile_machine_control_operation_result
+from zerg.services.catalogd_supervisor import catalogd_paths
+
+
+def _seed_running_control_operation(*, owner_id: int, device_id: str, command_id: str) -> str:
+    """Leave the row a prepared control command leaves behind in the live catalog.
+
+    ``control.command.prepare.v2`` writes exactly this row once it has resolved
+    a grant; the grant resolution itself is pinned in
+    ``tests_lite/test_catalogd_control_commands.py``. What the control channel
+    needs is the pending operation a Machine Agent result arrives for.
+    """
+
+    database_path, _socket_path = catalogd_paths()
+    engine = create_catalog_engine(database_path)
+    now = datetime.now(UTC).replace(microsecond=0)
+    operation_id = str(uuid4())
+    try:
+        with Session(engine) as db:
+            db.add(
+                LiveMachineControlOperation(
+                    id=operation_id,
+                    owner_id=owner_id,
+                    session_id=str(uuid4()),
+                    device_id=device_id,
+                    provider="codex",
+                    command_type="session.send_text",
+                    command_id=command_id,
+                    status="running",
+                    request_json=json.dumps({"payload": {"text": "continue"}}, sort_keys=True),
+                    timeout_secs=15,
+                    started_at=now,
+                    created_at=now,
+                    updated_at=now,
+                    expires_at=now + timedelta(seconds=45),
+                )
+            )
+            db.commit()
+    finally:
+        engine.dispose()
+    return operation_id
+
+
+def _read_control_operation(operation_id: str) -> dict:
+    database_path, _socket_path = catalogd_paths()
+    engine = create_catalog_engine(database_path)
+    try:
+        with Session(engine) as db:
+            operation = db.get(LiveMachineControlOperation, operation_id)
+            assert operation is not None
+            return {
+                "status": str(operation.status),
+                "result_json": operation.result_json,
+                "error_json": operation.error_json,
+                "finished_at": operation.finished_at,
+                "expires_at": operation.expires_at,
+            }
+    finally:
+        engine.dispose()
 
 
 def test_control_heartbeat_timeout_is_a_watchdog_not_a_stale_socket_lease():
@@ -83,46 +150,65 @@ async def test_machine_control_result_reconcile_uses_write_serializer(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_machine_control_result_reconcile_prefers_live_serializer(monkeypatch):
-    calls = []
+async def test_machine_control_result_finishes_the_operation_in_the_live_catalog(monkeypatch):
+    """A Runtime Host finishes the operation over RPC, never over SQLite.
 
-    class FakeLiveSerializer:
-        is_configured = True
+    This replaces a test that pinned the live-write-serializer branch. A live
+    store is configured exactly when ``live_catalog_enabled()`` is true -- the
+    live URL is the file-backed archive's sibling -- so the only process that
+    reaches that branch is an archive-route child, which never serves a control
+    websocket. Production reaches catalogd or it reaches nothing, and pinning
+    the SQLite fallback let ``control.command_result.apply.v2`` regressions
+    through. Here the daemon is real: the method has to exist, accept these
+    parameters, and durably finish the operation.
+    """
 
-        async def execute(self, fn, *, auto_commit, label):
-            calls.append(("live_execute", label, auto_commit))
-            return fn("live-db")
+    def serializer_must_not_run():  # pragma: no cover - assertion is the behavior
+        raise AssertionError("the live catalog reconciles control results over RPC, not over SQLite")
 
-    def fake_live_reconcile(db, message, *, owner_id, device_id):
-        calls.append(("live_reconcile", db, message["command_id"], owner_id, device_id))
-        return True
+    monkeypatch.setattr("zerg.routers.agents_control.get_live_write_serializer", serializer_must_not_run)
+    monkeypatch.setattr("zerg.routers.agents_control.get_write_serializer", serializer_must_not_run)
 
-    def archive_reconcile_must_not_run(*_args, **_kwargs):
-        raise AssertionError("live machine-control operations should reconcile before archive")
+    with provision_live_catalog():
+        command_id = f"managed-control:{uuid4()}:session.send_text"
+        operation_id = _seed_running_control_operation(owner_id=7, device_id="cinder", command_id=command_id)
+        other_command_id = f"managed-control:{uuid4()}:session.send_text"
+        other_operation_id = _seed_running_control_operation(owner_id=8, device_id="cinder", command_id=other_command_id)
 
-    monkeypatch.setattr("zerg.routers.agents_control.database_module.live_store_configured", lambda: True)
-    monkeypatch.setattr("zerg.routers.agents_control.get_live_write_serializer", lambda: FakeLiveSerializer())
-    monkeypatch.setattr(
-        "zerg.routers.agents_control.reconcile_live_machine_control_operation_from_command_result",
-        fake_live_reconcile,
-    )
-    monkeypatch.setattr(
-        "zerg.routers.agents_control.reconcile_machine_control_operation_from_command_result",
-        archive_reconcile_must_not_run,
-    )
-
-    matched = await _reconcile_machine_control_operation_result(
-        "fallback-db",
-        {"command_id": "machine-op:test"},
-        owner_id=7,
-        device_id="cinder",
-    )
+        matched = await _reconcile_machine_control_operation_result(
+            None,
+            {"type": "command_result", "command_id": command_id, "ok": True, "result": {"stdout": "accepted"}},
+            owner_id=7,
+            device_id="cinder",
+        )
+        stray = await _reconcile_machine_control_operation_result(
+            None,
+            {"type": "command_result", "command_id": f"managed-control:{uuid4()}:session.send_text", "ok": True, "result": {}},
+            owner_id=7,
+            device_id="cinder",
+        )
+        # A control channel authenticates as exactly one owner, so a result
+        # naming another owner's command must not finish that owner's operation.
+        cross_owner = await _reconcile_machine_control_operation_result(
+            None,
+            {"type": "command_result", "command_id": other_command_id, "ok": True, "result": {"stdout": "stolen"}},
+            owner_id=7,
+            device_id="cinder",
+        )
+        operation = _read_control_operation(operation_id)
+        other_operation = _read_control_operation(other_operation_id)
 
     assert matched is True
-    assert calls == [
-        ("live_execute", "live-machine-control-result", False),
-        ("live_reconcile", "live-db", "machine-op:test", 7, "cinder"),
-    ]
+    assert operation["status"] == "succeeded"
+    assert json.loads(operation["result_json"]) == {"stdout": "accepted"}
+    assert operation["error_json"] is None
+    assert operation["finished_at"] is not None
+    assert operation["expires_at"] is None
+
+    assert stray is False
+    assert cross_owner is False
+    assert other_operation["status"] == "running"
+    assert other_operation["result_json"] is None
 
 
 @pytest.mark.asyncio
