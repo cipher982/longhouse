@@ -2208,6 +2208,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/subagents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Timeline Session Subagents
+         * @description Workers this session spawned (browser-auth mirror of the machine route).
+         *
+         *     Hidden from the timeline by design; this is how they stay reachable from the
+         *     tool call that spawned them.
+         */
+        get: operations["get_timeline_session_subagents_timeline_sessions__session_id__subagents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}/graph": {
         parameters: {
             query?: never;
@@ -3233,6 +3256,30 @@ export interface paths {
          * @description Get a single session by ID, projected for the machine surface.
          */
         get: operations["get_session_agents_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/subagents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Session Subagents
+         * @description List the worker transcripts this session spawned.
+         *
+         *     These rows are hidden from the timeline on purpose — a subagent is a turn
+         *     artifact, not a session someone started. This is the route that makes them
+         *     reachable from the work they belong to.
+         */
+        get: operations["list_session_subagents_agents_sessions__session_id__subagents_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10267,6 +10314,57 @@ export interface components {
             parity_delta_count: number;
         };
         /**
+         * SessionSubagentResponse
+         * @description One worker transcript a session's tool call spawned.
+         */
+        SessionSubagentResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Provider */
+            provider: string;
+            /** Parent Tool Call Id */
+            parent_tool_call_id?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Last Activity At */
+            last_activity_at?: string | null;
+            /** Ended At */
+            ended_at?: string | null;
+            /**
+             * User Messages
+             * @default 0
+             */
+            user_messages: number;
+            /**
+             * Assistant Messages
+             * @default 0
+             */
+            assistant_messages: number;
+            /**
+             * Tool Calls
+             * @default 0
+             */
+            tool_calls: number;
+            /** Title */
+            title?: string | null;
+            /** First User Message Preview */
+            first_user_message_preview?: string | null;
+            /** Last Visible Text Preview */
+            last_visible_text_preview?: string | null;
+        };
+        /**
+         * SessionSubagentsResponse
+         * @description Children of one session, ordered by start time.
+         */
+        SessionSubagentsResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Children */
+            children: components["schemas"]["SessionSubagentResponse"][];
+        };
+        /**
          * SessionSummaryResponse
          * @description Response for session summaries (picker UI).
          */
@@ -15612,6 +15710,39 @@ export interface operations {
             };
         };
     };
+    get_timeline_session_subagents_timeline_sessions__session_id__subagents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_session_graph_timeline_sessions__session_id__graph_get: {
         parameters: {
             query?: never;
@@ -17525,6 +17656,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachineSessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_session_subagents_agents_sessions__session_id__subagents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSubagentsResponse"];
                 };
             };
             /** @description Validation Error */

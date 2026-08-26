@@ -30,6 +30,9 @@ vi.mock("../../services/api/agents", () => streamMocks);
 vi.mock("../../lib/renderBeacon", () => renderBeaconMocks);
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => queryClientMocks,
+  // The hook also fetches this session's worker transcripts. They are optional
+  // context, so the mock reports none rather than modelling a second fetch.
+  useQuery: () => ({ data: undefined, isLoading: false, error: null }),
 }));
 
 const baseSession = {
