@@ -367,7 +367,7 @@ private func consoleBlockedFactsJSON(
     ZStack {
         Color(.systemBackground).ignoresSafeArea()
         TranscriptStateOverlay(
-            state: .contentWithRefreshError("Couldn't refresh. Showing saved messages."),
+            state: .contentWithRefreshError("Live update temporarily unavailable. Showing saved messages."),
             onRetry: {}
         )
     }

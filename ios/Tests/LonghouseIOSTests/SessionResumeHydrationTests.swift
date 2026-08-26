@@ -94,7 +94,7 @@ struct SessionResumeHydrationTests {
         // Full-screen blocking error must NOT be set (that's the lone triangle).
         #expect(model.errorMessage == nil)
         // The failure degrades to the non-destructive banner.
-        #expect(model.refreshErrorMessage != nil)
+        #expect(model.refreshErrorMessage == "Live update temporarily unavailable. Showing saved messages.")
     }
 
     @Test

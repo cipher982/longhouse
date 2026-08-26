@@ -2027,7 +2027,7 @@ final class SessionViewModel: ObservableObject {
             }
         } catch {
             if hasContent {
-                refreshErrorMessage = "Couldn't refresh. Showing saved messages."
+                refreshErrorMessage = "Live update temporarily unavailable. Showing saved messages."
             } else {
                 errorMessage = "Couldn't load session. Pull to refresh."
             }
@@ -2964,7 +2964,7 @@ final class SessionViewModel: ObservableObject {
             refreshErrorMessage = "Session expired. Pull to refresh."
         } catch {
             guard activeSessionId == sessionId else { return }
-            refreshErrorMessage = "Couldn't refresh. Showing saved messages."
+            refreshErrorMessage = "Live update temporarily unavailable. Showing saved messages."
         }
         if activeSessionId == sessionId, let api = apiFactory(activeServerURL ?? "") {
             scheduleOlderPrefetch(api: api, sessionId: sessionId)

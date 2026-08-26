@@ -596,11 +596,11 @@ def _transcript(
         or has_pending_response_turn
         or has_visible_transcript_preview
     )
-    revision_lag = bool(
-        (source_revision is not None and durable_revision is not None and source_revision > durable_revision)
-        or (source_revision is not None and render_revision is not None and source_revision > render_revision)
-        or (durable_revision is not None and render_revision is not None and durable_revision > render_revision)
-    )
+    # `source_revision` and `render_revision` are content watermarks. The
+    # durable revision is the last mutation of the session row on the global
+    # catalog sequence, so ordinary metadata/read-state writes can advance it
+    # after a render is current. It is not a transcript coverage coordinate.
+    revision_lag = bool(source_revision is not None and render_revision is not None and source_revision > render_revision)
     lagging = bool(
         revision_lag
         or (normalized_archive == "pending" and has_expected_content)

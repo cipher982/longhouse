@@ -234,7 +234,7 @@ def test_transcript_coordinates_advance_independently():
         last_activity_at=NOW,
         user_messages=3,
         assistant_messages=2,
-        archive_state="pending",
+        archive_state="current",
         source_revision=11,
         durable_revision=17,
         render_revision=13,
@@ -245,6 +245,38 @@ def test_transcript_coordinates_advance_independently():
     assert facts.durable_revision == 17
     assert facts.render_revision == 13
     assert facts.last_append_at == NOW - timedelta(seconds=3)
+
+
+def test_current_archive_ignores_later_session_row_revision():
+    facts = project_transcript_facts(
+        session=_session(),
+        last_activity_at=NOW,
+        has_visible_transcript_preview=True,
+        user_messages=1,
+        assistant_messages=1,
+        archive_state="current",
+        source_revision=100,
+        durable_revision=190,
+        render_revision=181,
+    )
+
+    assert facts.convergence == "current"
+
+
+def test_current_archive_lags_when_source_is_newer_than_render():
+    facts = project_transcript_facts(
+        session=_session(),
+        last_activity_at=NOW,
+        has_visible_transcript_preview=True,
+        user_messages=1,
+        assistant_messages=1,
+        archive_state="current",
+        source_revision=200,
+        durable_revision=200,
+        render_revision=181,
+    )
+
+    assert facts.convergence == "lagging"
 
 
 def test_empty_pending_console_shell_is_current_not_syncing():
