@@ -13,6 +13,8 @@ final class SharedProjectionFixtureTests: XCTestCase {
         let toolCount: Int
         let activityGroupCount: Int
         let orphanToolIds: [Int]
+        /// Present only for fixtures whose last row is a projected final answer.
+        let finalAnswerMarkdown: String?
     }
 
     private struct ExpectedRow: Decodable, Equatable {
@@ -62,6 +64,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
             "parallel-tool-id-pairing.json",
             "codex-wrapper-presentation.json",
             "live-claude-session.json",
+            "structured-output-final-answer.json",
         ] {
             let fixture = try loadFixture(fixtureName)
             let items = TimelineBuilder.build(items: fixture.projection.items)
@@ -70,6 +73,13 @@ final class SharedProjectionFixtureTests: XCTestCase {
             XCTAssertEqual(toolInteractionCount(items), fixture.expectations.toolCount, fixtureName)
             XCTAssertEqual(activityGroupCount(items), fixture.expectations.activityGroupCount, fixtureName)
             XCTAssertEqual(orphanToolIds(items), fixture.expectations.orphanToolIds, fixtureName)
+
+            if let expectedAnswer = fixture.expectations.finalAnswerMarkdown {
+                guard case .assistant(let last)? = items.last else {
+                    return XCTFail("\(fixtureName): expected the final answer to close the transcript")
+                }
+                XCTAssertEqual(last.contentText, expectedAnswer, fixtureName)
+            }
         }
     }
 

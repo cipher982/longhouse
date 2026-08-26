@@ -55,6 +55,8 @@ export {
   timelineItemContainsSelection,
 } from "./timelineModel";
 
+export { formatFinalAnswer } from "./finalAnswer";
+
 export { getSessionInteractionCapabilities } from "./interaction";
 
 export type { TranscriptCounts } from "./transcriptSummary";

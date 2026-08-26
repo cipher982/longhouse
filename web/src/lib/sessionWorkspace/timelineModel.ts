@@ -16,12 +16,14 @@ import {
   resolveToolInfo,
   toolAggregate,
   toolTier,
+  isFinalAnswerTool,
   type ResolvedToolInfo,
   type ToolAggregate,
   type ToolColorToken,
   type ToolTier,
 } from "./toolTiers.generated";
 import { classifyShellCommand, isShellTool, type ShellSalience } from "./shellSalience";
+import { formatFinalAnswer } from "./finalAnswer";
 
 /** Latest completed activity calls shown when a run is expanded. */
 export const EXPLORATION_OVERFLOW_VISIBLE = 8;
@@ -611,6 +613,17 @@ export function getToolExitCode(interaction: ToolInteraction): number | null {
   return parseLonghouseOutput(interaction.resultEvent.tool_output_text)?.exitCode ?? null;
 }
 
+/**
+ * Markdown for a final-answer tool call, or null when this is an ordinary tool
+ * call (or a final-answer call carrying no payload yet, which still deserves a
+ * visible in-flight row).
+ */
+function finalAnswerText(interaction: ToolInteraction): string | null {
+  const toolName = interaction.presentation?.tool_name ?? interaction.toolName;
+  if (!isFinalAnswerTool(toolName)) return null;
+  return formatFinalAnswer(interactionInput(interaction));
+}
+
 export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]): TimelineModel {
   const byCallId = new Map<string, ToolInteraction>();
   const byCallEventId = new Map<AgentEventId, ToolInteraction>();
@@ -697,8 +710,32 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     if (event.role === "assistant" && event.tool_name) {
       const interaction = byCallEventId.get(event.id);
       if (!interaction) continue;
+      const prose = (event.content_text || "").trim();
+      // A schema-constrained agent returns by calling a final-answer tool: the
+      // input is the answer and the result is a bare ack. Render the payload as
+      // the closing message so a finished session does not read as truncated.
+      const finalAnswer = finalAnswerText(interaction);
+      if (finalAnswer !== null) {
+        // One row, not two: the synthesized message reuses the call event's id,
+        // so co-located prose has to join it rather than claim the same id.
+        items.push({
+          kind: "message",
+          event: {
+            ...event,
+            content_text: prose ? `${prose}\n\n${finalAnswer}` : finalAnswer,
+            tool_name: null,
+            tool_input_json: null,
+            tool_call_id: null,
+          },
+        });
+        eventIdToSelectionKey.set(event.id, `message:${event.id}`);
+        if (interaction.resultEvent) {
+          eventIdToSelectionKey.set(interaction.resultEvent.id, `message:${event.id}`);
+        }
+        continue;
+      }
       // Prose co-located on a tool-call event is a visible boundary (matches iOS).
-      if ((event.content_text || "").trim()) {
+      if (prose) {
         items.push({
           kind: "message",
           event: { ...event, tool_name: null, tool_input_json: null, tool_call_id: null },

@@ -31,6 +31,7 @@ def _aggregate_literal(value: object) -> str:
 
 def render_ts(data: dict) -> str:
     tools = data["tools"]
+    final_answer_tools_json = json.dumps(data.get("final_answer_tools", []))
     shell = data["shell_classifier"]
     mcp_ns = data["mcp_namespaces"]
     default_tier = data["default_tier"]
@@ -177,6 +178,21 @@ export function toolAggregate(toolName: string): ToolAggregate | null {{
   return resolveToolInfo(toolName).aggregate;
 }}
 
+/**
+ * Tools whose call input IS the agent's final answer (schema-constrained
+ * returns). Timeline builders render the payload as the closing assistant
+ * message instead of an opaque tool row.
+ */
+export const FINAL_ANSWER_TOOLS: ReadonlySet<string> = new Set({final_answer_tools_json});
+
+export function isFinalAnswerTool(toolName: string): boolean {{
+  const lower = toolName.toLowerCase();
+  for (const name of FINAL_ANSWER_TOOLS) {{
+    if (name.toLowerCase() === lower) return true;
+  }}
+  return false;
+}}
+
 // --- Shell classifier constants (grammar is handwritten in shellSalience.ts;
 // parity with Swift is enforced by config/shell-salience-fixtures.json). ---
 
@@ -190,6 +206,7 @@ export const SHELL_DEFAULT_READ_AGGREGATE: ToolAggregate = {json.dumps(shell["de
 
 def render_swift(data: dict) -> str:
     tools = data["tools"]
+    final_answer_tools_swift = ", ".join(f'"{t}"' for t in data.get("final_answer_tools", []))
     shell = data["shell_classifier"]
     mcp_ns = data["mcp_namespaces"]
     default_aggregate = data.get("default_aggregate", None)
@@ -309,6 +326,16 @@ public enum ToolTiers {{
 
     public static func aggregate(_ name: String) -> ToolAggregate? {{
         resolve(name).aggregate
+    }}
+
+    /// Tools whose call input IS the agent's final answer (schema-constrained
+    /// returns). Timeline builders render the payload as the closing assistant
+    /// message instead of an opaque tool row.
+    public static let finalAnswerTools: Set<String> = [{final_answer_tools_swift}]
+
+    public static func isFinalAnswerTool(_ name: String) -> Bool {{
+        let lower = name.lowercased()
+        return finalAnswerTools.contains {{ $0.lowercased() == lower }}
     }}
 
     private static func parseMcp(_ name: String) -> (namespace: String, method: String)? {{

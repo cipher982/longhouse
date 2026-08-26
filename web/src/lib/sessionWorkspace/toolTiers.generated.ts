@@ -42,6 +42,7 @@ export const TOOL_TIERS: Record<string, ToolTierMeta> = {
   "TodoWrite": { tier: "action", aggregate: null, icon: "+", label: "TodoWrite", color: "accent" },
   "WebFetch": { tier: "context", aggregate: null, icon: "W", label: "Fetch", color: "cyan" },
   "WebSearch": { tier: "context", aggregate: null, icon: "S", label: "Search", color: "secondary" },
+  "StructuredOutput": { tier: "action", aggregate: null, icon: "\u2713", label: "Result", color: "success" },
   "read_file": { tier: "context", aggregate: "read", icon: "R", label: "read_file", color: "cyan" },
   "grep": { tier: "noise", aggregate: "search", icon: "~", label: "grep", color: "muted" },
   "list_files": { tier: "noise", aggregate: "list", icon: "/", label: "list", color: "muted" },
@@ -168,6 +169,21 @@ export function toolTier(toolName: string): ToolTier {
 
 export function toolAggregate(toolName: string): ToolAggregate | null {
   return resolveToolInfo(toolName).aggregate;
+}
+
+/**
+ * Tools whose call input IS the agent's final answer (schema-constrained
+ * returns). Timeline builders render the payload as the closing assistant
+ * message instead of an opaque tool row.
+ */
+export const FINAL_ANSWER_TOOLS: ReadonlySet<string> = new Set(["StructuredOutput"]);
+
+export function isFinalAnswerTool(toolName: string): boolean {
+  const lower = toolName.toLowerCase();
+  for (const name of FINAL_ANSWER_TOOLS) {
+    if (name.toLowerCase() === lower) return true;
+  }
+  return false;
 }
 
 // --- Shell classifier constants (grammar is handwritten in shellSalience.ts;

@@ -339,6 +339,9 @@ enum TimelineBuilder {
         var raw: [TimelineItem] = []
         var callIdToIndex: [String: Int] = [:]
         var fifoToolCallIndexes: [Int] = []
+        /// Indexes of rows that absorbed a final-answer tool call. Their tool
+        /// result is a bare ack with nothing left to render.
+        var answerIndexes: Set<Int> = []
 
         for event in events {
             if event.role == "system" { continue }
@@ -350,6 +353,22 @@ enum TimelineBuilder {
             case "assistant":
                 let hasText = !(event.contentText ?? "").isEmpty
                 let hasTool = (event.toolName ?? "").isEmpty == false
+
+                // A schema-constrained agent returns by calling a final-answer
+                // tool: the input is the answer, the result is a bare ack.
+                // Project the payload into the closing assistant message so a
+                // finished session does not read as truncated mid-tool-call.
+                if hasTool, let answer = Self.finalAnswerText(for: event) {
+                    let prose = (event.contentText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    raw.append(.assistant(event.withContentText(prose.isEmpty ? answer : prose + "\n\n" + answer)))
+                    answerIndexes.insert(raw.count - 1)
+                    if let callId = event.toolCallId, !callId.isEmpty {
+                        callIdToIndex[callId] = raw.count - 1
+                    } else {
+                        fifoToolCallIndexes.append(raw.count - 1)
+                    }
+                    continue
+                }
 
                 if hasText {
                     raw.append(.assistant(event))
@@ -381,6 +400,10 @@ enum TimelineBuilder {
                     resultPairing = .fifo
                 }
 
+                if let idx = matchedIndex, answerIndexes.contains(idx) {
+                    // Ack for a final-answer call: the answer is already rendered.
+                    continue
+                }
                 if let idx = matchedIndex,
                    case .tool(let call, _, let pairing) = raw[idx] {
                     raw[idx] = .tool(call: call, result: event, pairing: resultPairing ?? pairing)
@@ -459,6 +482,15 @@ enum TimelineBuilder {
         }
         flush()
         return out
+    }
+
+    /// Markdown for a final-answer tool call, or nil for an ordinary tool call
+    /// (or a final-answer call carrying no payload yet, which still deserves a
+    /// visible in-flight tool row).
+    static func finalAnswerText(for event: SessionEvent) -> String? {
+        let tool = presentedToolName(event)
+        guard ToolTiers.isFinalAnswerTool(tool) else { return nil }
+        return FinalAnswer.format(event.toolInputValue)
     }
 
     /// Extract a one-line human summary from a tool call's input JSON.

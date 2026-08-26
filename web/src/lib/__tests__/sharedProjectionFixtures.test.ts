@@ -47,6 +47,8 @@ type SharedProjectionFixture = {
     tool_count: number;
     activity_group_count: number;
     orphan_tool_ids: number[];
+    /** Present only for fixtures whose last row is a projected final answer. */
+    final_answer_markdown?: string;
   };
 };
 
@@ -116,6 +118,7 @@ describe("shared session projection fixtures", () => {
     "parallel-tool-id-pairing.json",
     "codex-wrapper-presentation.json",
     "live-claude-session.json",
+    "structured-output-final-answer.json",
   ])(
     "matches %s",
     (fixtureName) => {
@@ -130,6 +133,14 @@ describe("shared session projection fixtures", () => {
           .filter((interaction) => interaction.pairing === "orphan")
           .map((interaction) => interaction.resultEvent?.id),
       ).toEqual(fixture.expectations.orphan_tool_ids);
+
+      if (fixture.expectations.final_answer_markdown !== undefined) {
+        const last = model.items[model.items.length - 1];
+        expect(last.kind).toBe("message");
+        expect(last.kind === "message" ? last.event.content_text : null).toBe(
+          fixture.expectations.final_answer_markdown,
+        );
+      }
     },
   );
 });

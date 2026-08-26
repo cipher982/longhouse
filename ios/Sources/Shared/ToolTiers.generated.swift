@@ -55,6 +55,7 @@ public enum ToolTiers {
         "TodoWrite": ToolTierMeta(tier: .action, aggregate: nil, icon: "+", label: "TodoWrite", color: .accent),
         "WebFetch": ToolTierMeta(tier: .context, aggregate: nil, icon: "W", label: "Fetch", color: .cyan),
         "WebSearch": ToolTierMeta(tier: .context, aggregate: nil, icon: "S", label: "Search", color: .secondary),
+        "StructuredOutput": ToolTierMeta(tier: .action, aggregate: nil, icon: "✓", label: "Result", color: .success),
         "read_file": ToolTierMeta(tier: .context, aggregate: .read, icon: "R", label: "read_file", color: .cyan),
         "grep": ToolTierMeta(tier: .noise, aggregate: .search, icon: "~", label: "grep", color: .muted),
         "list_files": ToolTierMeta(tier: .noise, aggregate: .list, icon: "/", label: "list", color: .muted),
@@ -142,6 +143,16 @@ public enum ToolTiers {
 
     public static func aggregate(_ name: String) -> ToolAggregate? {
         resolve(name).aggregate
+    }
+
+    /// Tools whose call input IS the agent's final answer (schema-constrained
+    /// returns). Timeline builders render the payload as the closing assistant
+    /// message instead of an opaque tool row.
+    public static let finalAnswerTools: Set<String> = ["StructuredOutput"]
+
+    public static func isFinalAnswerTool(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return finalAnswerTools.contains { $0.lowercased() == lower }
     }
 
     private static func parseMcp(_ name: String) -> (namespace: String, method: String)? {

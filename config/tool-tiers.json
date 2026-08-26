@@ -31,6 +31,7 @@
     "TodoWrite":        { "tier": "action",  "aggregate": null,     "icon": "+", "label": "TodoWrite", "color": "accent" },
     "WebFetch":         { "tier": "context", "aggregate": null,     "icon": "W", "label": "Fetch",     "color": "cyan" },
     "WebSearch":        { "tier": "context", "aggregate": null,     "icon": "S", "label": "Search",    "color": "secondary" },
+    "StructuredOutput": { "tier": "action",  "aggregate": null,     "icon": "✓", "label": "Result",    "color": "success" },
 
     "read_file":        { "tier": "context", "aggregate": "read",   "icon": "R", "label": "read_file", "color": "cyan" },
     "grep":             { "tier": "noise",   "aggregate": "search", "icon": "~", "label": "grep",      "color": "muted" },
@@ -64,6 +65,8 @@
     "read_url_content": { "tier": "context", "aggregate": null,     "icon": "W", "label": "Fetch",     "color": "cyan" },
     "invoke_subagent":  { "tier": "action",  "aggregate": null,     "icon": "A", "label": "Agent",     "color": "tertiary" }
   },
+  "_final_answer_tools": "Tools whose call input IS the agent's final answer rather than a side effect. A schema-constrained agent (Claude subagent/workflow) returns by calling one of these; the tool result is a bare ack. Timeline builders render the payload as the closing assistant message instead of an opaque tool row, so a finished session does not read as truncated. See control-plane/docs/specs/final-answer-tool-rendering.md.",
+  "final_answer_tools": ["StructuredOutput"],
   "mcp_namespaces": {
     "longhouse":  { "icon": "O", "color": "brand" },
     "life-hub":   { "icon": "O", "color": "brand" },
