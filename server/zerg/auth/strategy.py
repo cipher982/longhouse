@@ -512,7 +512,18 @@ class HostedCPAuthStrategy(AuthStrategy):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Missing bearer token or session cookie",
             )
-        return self._user_from_token(token, db)
+        user = self._user_from_token(token, db)
+        # Name the caller for the access log. Device tokens stamp themselves on
+        # the machine surface; without this the hosted browser path -- the one a
+        # person actually reads transcripts through -- logged "unattributed" on
+        # authenticated requests, which is the exact question the log exists to
+        # answer. Observed live before this line existed.
+        if user is not None:
+            try:
+                request.state.principal = f"user:{user.id}"
+            except Exception:  # pragma: no cover - state always exists in ASGI
+                pass
+        return user
 
     def validate_ws_token(self, token: str | None, db: Session | None = None):  # noqa: D401 – impl
         if not token:
