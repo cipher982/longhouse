@@ -60,6 +60,7 @@ from zerg.services.agents import AgentsStore
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import enrolled_machines
 from zerg.services.catalog_read_gateway import machine_workspaces
+from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.live_catalog_timeline import read_live_catalog_session
@@ -993,6 +994,33 @@ def get_timeline_session_workflow_runs(
     store = AgentsStore(db)
     runs = store.list_workflow_runs_for_session(session_id)
     return {"session_id": str(session_id), "workflow_runs": runs}
+
+
+@router.get("/sessions/{session_id}/subagents")
+async def get_timeline_session_subagents(
+    session_id: UUID,
+    current_user=Depends(get_current_browser_user),
+) -> dict:
+    """Workers this session spawned (browser-auth mirror of the machine route).
+
+    Hidden from the timeline by design; this is how they stay reachable from the
+    tool call that spawned them.
+    """
+
+    owner_id = getattr(current_user, "id", None)
+    if owner_id is None:
+        raise HTTPException(status_code=400, detail="owner-scoped request required")
+    catalog = get_catalogd_client()
+    if catalog is None:
+        return {"session_id": str(session_id), "children": []}
+    try:
+        return await catalog.call(
+            "session.subagents.list.v2",
+            {"session_id": str(session_id), "owner_id": str(owner_id)},
+        )
+    except (CatalogRemoteError, CatalogUnavailable):
+        # A missing child list must not break the transcript it hangs off.
+        return {"session_id": str(session_id), "children": []}
 
 
 @router.get("/sessions/{session_id}/graph")

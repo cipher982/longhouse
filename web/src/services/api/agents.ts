@@ -1016,6 +1016,42 @@ export async function fetchAgentSessionThread(
 /** List the dynamic-workflow runs whose subagent threads live under a session.
  * Browser-cookie-authenticated via the /timeline router (NOT /agents, which is
  * machine-token auth). */
+/** One worker transcript a tool call spawned. */
+export interface SessionSubagent {
+  session_id: string;
+  provider: string;
+  parent_tool_call_id: string | null;
+  run_id: string | null;
+  started_at: string | null;
+  last_activity_at: string | null;
+  ended_at: string | null;
+  user_messages: number;
+  assistant_messages: number;
+  tool_calls: number;
+  title: string | null;
+  first_user_message_preview: string | null;
+  last_visible_text_preview: string | null;
+}
+
+export interface SessionSubagentsResponse {
+  session_id: string;
+  children: SessionSubagent[];
+}
+
+/**
+ * Workers this session spawned. They are hidden from the timeline by design —
+ * a subagent is a turn artifact, not a session — so this is the route that
+ * makes them reachable from the work they belong to.
+ */
+export async function fetchSessionSubagents(
+  sessionId: string,
+): Promise<SessionSubagentsResponse> {
+  return request<SessionSubagentsResponse>(
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/subagents`,
+    { method: "GET" },
+  );
+}
+
 export async function fetchSessionWorkflowRuns(
   sessionId: string,
 ): Promise<SessionWorkflowRunsResponse> {

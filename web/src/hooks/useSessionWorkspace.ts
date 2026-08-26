@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useAgentSessionProjectionInfinite,
   useAgentSessionWorkspace,
@@ -23,6 +23,7 @@ import {
   type AgentSessionProjectionResponse,
   type AgentSessionWorkspaceResponse,
   type SessionTranscriptPreview,
+  fetchSessionSubagents,
 } from "../services/api/agents";
 
 const INITIAL_EVENTS_PAGE_SIZE = 200;
@@ -457,7 +458,21 @@ export function useSessionWorkspace(
     () => projectionItemsWithTranscriptPreview(projectionItems, session),
     [projectionItems, session],
   );
-  const model = useMemo(() => buildTimelineModel(visibleProjectionItems), [visibleProjectionItems]);
+  // Workers this session spawned. Hidden from the timeline by design, so the
+  // transcript is the only place they surface — attached to the tool call that
+  // spawned them rather than listed as separate sessions.
+  const { data: subagentsData } = useQuery({
+    queryKey: ["session-subagents", sessionId],
+    queryFn: () => fetchSessionSubagents(sessionId as string),
+    enabled: Boolean(sessionId),
+    staleTime: 60_000,
+  });
+  const subagents = useMemo(() => subagentsData?.children ?? [], [subagentsData]);
+
+  const model = useMemo(
+    () => buildTimelineModel(visibleProjectionItems, subagents),
+    [visibleProjectionItems, subagents],
+  );
   const events = model.events;
 
   const threadSessions = useMemo(

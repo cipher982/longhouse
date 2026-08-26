@@ -2,9 +2,31 @@ import type { AgentEvent, AgentEventId, AgentSessionTranscriptAction, AgentToolP
 
 export type EventFilter = "all" | "messages" | "tools";
 
+/**
+ * One worker transcript a tool call spawned. A subagent is a turn artifact of
+ * its parent, not a session: it is hidden from the timeline and reachable only
+ * from the row that spawned it.
+ */
+export type SubagentChild = {
+  session_id: string;
+  provider: string;
+  parent_tool_call_id: string | null;
+  run_id: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  user_messages: number;
+  assistant_messages: number;
+  tool_calls: number;
+  title: string | null;
+  first_user_message_preview: string | null;
+  last_visible_text_preview: string | null;
+};
+
 export type ToolInteraction = {
   key: string;
   toolName: string;
+  /** Workers this call spawned, when the provider bound them to it. */
+  children?: SubagentChild[];
   callEvent: AgentEvent | null;
   resultEvent: AgentEvent | null;
   pairing: "id" | "fifo" | "orphan" | "pending";

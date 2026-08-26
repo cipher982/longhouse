@@ -132,8 +132,21 @@ actor RenderBeaconReporter {
     }
 }
 
+extension SessionWorkspaceClient {
+    /// Doubles that do not model worker transcripts report none rather than
+    /// forcing every fake to grow a method it has no opinion about.
+    func sessionSubagents(id: String) async throws -> SessionSubagentsResponse {
+        SessionSubagentsResponse(sessionId: id, children: [])
+    }
+}
+
 protocol SessionWorkspaceClient: Sendable {
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse
+    /// Workers this session spawned. Hidden from the timeline by design — a
+    /// subagent is a turn artifact, not a session — so this is the route that
+    /// keeps them reachable from the work they belong to.
+    func sessionSubagents(id: String) async throws -> SessionSubagentsResponse
+
     func sessionMobileTail(
         id: String,
         limit: Int,
@@ -292,6 +305,10 @@ struct LonghouseAPI: Sendable {
         return components.url!
     }
 
+    static func sessionSubagentsURL(baseURL: URL, id: String) -> URL {
+        baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/subagents")
+    }
+
     static func sessionMobileTailURL(
         baseURL: URL,
         id: String,
@@ -349,6 +366,20 @@ struct LonghouseAPI: Sendable {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try Self.decodeSessionWorkspace(data)
+    }
+
+    func sessionSubagents(id: String) async throws -> SessionSubagentsResponse {
+        var request = URLRequest(
+            url: Self.sessionSubagentsURL(baseURL: baseURL, id: id),
+            cachePolicy: .reloadIgnoringLocalCacheData
+        )
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(SessionSubagentsResponse.self, from: data)
     }
 
     func sessionMobileTail(

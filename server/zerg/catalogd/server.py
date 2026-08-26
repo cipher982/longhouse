@@ -570,6 +570,8 @@ class CatalogDaemon:
             return await self._resolve_session_prefix(request)
         if request.method == "session.alias.resolve.v2":
             return await self._resolve_session_alias(request)
+        if request.method == "session.subagents.list.v2":
+            return await self._list_session_subagents(request)
         if request.method == "machine.enrollment.list.v2":
             return await self._list_machine_enrollments(request)
         if request.method == "machine.health.list.v2":
@@ -2236,6 +2238,25 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "provider_session_id must be a trimmed string of 1 to 256 characters")
         assert self._store is not None
         result = await self._run_read_store(self._store.resolve_session_alias, provider_session_id=provider_session_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_session_subagents(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) - {"session_id", "owner_id", "limit"} or not {"session_id", "owner_id"} <= set(request.params):
+            return self._error(request, "invalid_request", "session.subagents.list.v2 requires session_id and owner_id")
+        session_id = request.params["session_id"]
+        owner_id = request.params["owner_id"]
+        if not isinstance(session_id, str) or not isinstance(owner_id, str):
+            return self._error(request, "invalid_request", "session_id and owner_id must be strings")
+        limit = request.params.get("limit", 200)
+        if type(limit) is not int or not 1 <= limit <= 500:
+            return self._error(request, "invalid_request", "limit must be between 1 and 500")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.list_session_subagents,
+            session_id=session_id,
+            owner_id=owner_id,
+            limit=limit,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_machine_enrollments(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -3923,11 +3944,20 @@ def _validate_storage_session_facts(value: object) -> dict:
         "launch_actor",
         "launch_surface",
     }
-    optional = {"provider_session_id"}
+    optional = {
+        "provider_session_id",
+        "is_subagent",
+        "parent_provider_session_id",
+        "parent_tool_call_id",
+        "workflow_run_id",
+    }
     if not isinstance(value, dict) or not expected.issubset(value) or set(value) - expected - optional:
         raise ValueError("session_facts has invalid fields")
     result = dict(value)
     result.setdefault("provider_session_id", None)
+    result.setdefault("is_subagent", False)
+    for lineage_field in ("parent_provider_session_id", "parent_tool_call_id", "workflow_run_id"):
+        result.setdefault(lineage_field, None)
     result["environment"] = _canonical_storage_text(result["environment"], field="environment", maximum_bytes=32)
     for field, maximum in (
         ("project", 255),
@@ -3938,6 +3968,9 @@ def _validate_storage_session_facts(value: object) -> dict:
         ("launch_actor", 32),
         ("launch_surface", 32),
         ("provider_session_id", 255),
+        ("parent_provider_session_id", 255),
+        ("parent_tool_call_id", 255),
+        ("workflow_run_id", 255),
     ):
         raw = result[field]
         if raw is not None:
@@ -3947,6 +3980,8 @@ def _validate_storage_session_facts(value: object) -> dict:
     result["ended_at"] = _parse_datetime(result["ended_at"], "ended_at") if result["ended_at"] is not None else None
     if type(result["hidden_from_default_timeline"]) is not bool:
         raise ValueError("hidden_from_default_timeline must be a boolean")
+    if type(result["is_subagent"]) is not bool:
+        raise ValueError("is_subagent must be a boolean")
     return result
 
 

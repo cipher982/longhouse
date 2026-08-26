@@ -2865,6 +2865,11 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
                 hidden_from_default_timeline: managed_session_id.is_none() || !render_ready,
                 launch_actor: None,
                 launch_surface: None,
+                // Cursor stores no subagent lineage.
+                is_subagent: false,
+                parent_provider_session_id: None,
+                parent_tool_call_id: None,
+                workflow_run_id: None,
             },
             records: selected
                 .into_iter()
@@ -2987,6 +2992,11 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
                 hidden_from_default_timeline: false,
                 launch_actor: None,
                 launch_surface: None,
+                // Cursor stores no subagent lineage.
+                is_subagent: false,
+                parent_provider_session_id: None,
+                parent_tool_call_id: None,
+                workflow_run_id: None,
             },
             records: batch
                 .records
@@ -3599,6 +3609,28 @@ fn session_facts(
         hidden_from_default_timeline: metadata.is_sidechain,
         launch_actor: metadata.launch_actor.clone(),
         launch_surface: metadata.launch_surface.clone(),
+        is_subagent: metadata.is_sidechain,
+        // Provider identity, deliberately unresolved. `forked_from_session_id`
+        // is the parent as the provider names it; mapping that to a Longhouse
+        // session is the host's job, because a session id here may have come
+        // from a managed binding override rather than from the transcript.
+        parent_provider_session_id: metadata
+            .is_sidechain
+            .then(|| {
+                metadata
+                    .parent_provider_session_id
+                    .clone()
+                    .or_else(|| metadata.forked_from_session_id.clone())
+            })
+            .flatten(),
+        parent_tool_call_id: metadata
+            .is_sidechain
+            .then(|| metadata.subagent_tool_use_id.clone())
+            .flatten(),
+        workflow_run_id: metadata
+            .is_sidechain
+            .then(|| metadata.workflow_run_id.clone())
+            .flatten(),
     })
 }
 

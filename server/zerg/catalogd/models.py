@@ -208,6 +208,14 @@ class StorageSession(CatalogBase):
     user_hidden_at = Column(DateTime(timezone=True), nullable=True)
     launch_actor = Column(String(32), nullable=True, index=True)
     launch_surface = Column(String(32), nullable=True, index=True)
+    # Subagent lineage — see control-plane/docs/specs/subagent-sessions-as-nested-work.md.
+    # The provider id is what the transcript states; the resolved id is filled in
+    # once the parent exists here, which may be after the child arrives.
+    is_subagent = Column(Integer, nullable=False, server_default=text("0"), index=True)
+    subagent_parent_provider_session_id = Column(String(255), nullable=True)
+    subagent_parent_session_id = Column(String(36), nullable=True, index=True)
+    subagent_parent_tool_call_id = Column(String(255), nullable=True)
+    subagent_run_id = Column(String(255), nullable=True)
     commit_seq = Column(BigInteger, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, index=True)

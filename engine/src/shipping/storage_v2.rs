@@ -92,6 +92,25 @@ pub struct StorageV2SessionFacts {
     pub hidden_from_default_timeline: bool,
     pub launch_actor: Option<String>,
     pub launch_surface: Option<String>,
+    /// True when this transcript is an in-harness subagent rather than a
+    /// session a human started. The Runtime Host classifies on this; without
+    /// it, worker transcripts land in the timeline as first-class sessions.
+    #[serde(default)]
+    pub is_subagent: bool,
+    /// Parent identity as the *provider* states it. This is not a Longhouse
+    /// session id and must not be treated as one: a shipped session id can come
+    /// from a managed binding override, so only the host can resolve provider
+    /// identity to its own row, through the alias table it already maintains.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_provider_session_id: Option<String>,
+    /// The parent tool call that spawned this subagent, when the provider says
+    /// so. Also the idempotency key for the lineage edge across replays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_tool_call_id: Option<String>,
+    /// Fan-out run this subagent belongs to, for providers that group workers
+    /// under one parent tool call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

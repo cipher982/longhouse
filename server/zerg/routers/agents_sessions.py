@@ -1869,6 +1869,66 @@ def get_session(
     )
 
 
+class SessionSubagentResponse(UTCBaseModel):
+    """One worker transcript a session's tool call spawned."""
+
+    session_id: str
+    provider: str
+    parent_tool_call_id: str | None = None
+    run_id: str | None = None
+    started_at: str | None = None
+    last_activity_at: str | None = None
+    ended_at: str | None = None
+    user_messages: int = 0
+    assistant_messages: int = 0
+    tool_calls: int = 0
+    title: str | None = None
+    first_user_message_preview: str | None = None
+    last_visible_text_preview: str | None = None
+
+
+class SessionSubagentsResponse(UTCBaseModel):
+    """Children of one session, ordered by start time."""
+
+    session_id: str
+    children: list[SessionSubagentResponse]
+
+
+@router.get("/sessions/{session_id}/subagents", response_model=SessionSubagentsResponse)
+async def list_session_subagents(
+    session_id: UUID,
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+    owner_id: int | None = Depends(_no_viewer_owner_id),
+) -> SessionSubagentsResponse:
+    """List the worker transcripts this session spawned.
+
+    These rows are hidden from the timeline on purpose — a subagent is a turn
+    artifact, not a session someone started. This is the route that makes them
+    reachable from the work they belong to.
+    """
+
+    if owner_id is None:
+        raise HTTPException(status_code=400, detail="owner-scoped request required")
+    catalog = get_catalogd_client()
+    if catalog is None:
+        raise HTTPException(status_code=503, detail={"code": "catalog_unavailable", "message": "The live catalog is unavailable."})
+    try:
+        result = await catalog.call(
+            "session.subagents.list.v2",
+            {"session_id": str(session_id), "owner_id": str(owner_id)},
+        )
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "catalog_unavailable", "message": "The live catalog is unavailable."},
+        ) from exc
+    return SessionSubagentsResponse(
+        session_id=str(session_id),
+        children=[SessionSubagentResponse(**child) for child in result.get("children") or []],
+    )
+
+
 @router.post("/sessions/{session_id}/resume-intent", response_model=SessionResumeIntentResponse)
 def create_session_resume_intent(
     session_id: UUID,

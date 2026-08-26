@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
+import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { EmptyState, Spinner } from "../ui";
 import { FunnelIcon } from "../icons";
@@ -36,6 +37,8 @@ import {
   parseLonghouseOutput,
   splitExplorationOverflow,
   timelineItemContainsSelection,
+  subagentLabel,
+  summarizeSubagents,
 } from "../../lib/sessionWorkspace";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useScrollToLoad } from "../../hooks/useScrollToLoad";
@@ -669,12 +672,42 @@ function ActionCard({
         </span>
       </button>
       {!expanded && failurePreview ? <FailurePreview text={failurePreview} /> : null}
+      <SubagentNode interaction={interaction} />
       {expanded ? (
         <div id={detailId}>
           <ToolDetail interaction={interaction} renderMedia={renderMedia} />
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Workers this tool call spawned, as a node the reader opens — not as separate
+ * sessions in the timeline, and not spliced into this transcript. A 22-agent
+ * fan-out inlined would bury the session it belongs to.
+ */
+function SubagentNode({ interaction }: { interaction: ToolInteraction }) {
+  const children = interaction.children ?? [];
+  if (children.length === 0) return null;
+  return (
+    <details className="tl-subagents" data-testid="tool-subagents">
+      <summary className="tl-subagents__summary">
+        <span className="tl-subagents__count">{summarizeSubagents(children)}</span>
+      </summary>
+      <ul className="tl-subagents__list">
+        {children.map((child) => (
+          <li key={child.session_id} className="tl-subagents__item">
+            <Link className="tl-subagents__link" to={`/sessions/${child.session_id}`}>
+              <span className="tl-subagents__label">{subagentLabel(child)}</span>
+              <span className="tl-subagents__meta">
+                {child.tool_calls} {child.tool_calls === 1 ? "call" : "calls"}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

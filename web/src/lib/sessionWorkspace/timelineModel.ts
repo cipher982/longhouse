@@ -8,6 +8,7 @@ import type {
   TimelineSeam,
   TimelineSelection,
   ToolInteraction,
+  SubagentChild,
 } from "./types";
 import { truncatePath } from "./formatters";
 import { formatEditStat, getEditStat } from "./editSummary";
@@ -24,6 +25,7 @@ import {
 } from "./toolTiers.generated";
 import { classifyShellCommand, isShellTool, type ShellSalience } from "./shellSalience";
 import { formatFinalAnswer } from "./finalAnswer";
+import { childrenForToolCall } from "./subagents";
 
 /** Latest completed activity calls shown when a run is expanded. */
 export const EXPLORATION_OVERFLOW_VISIBLE = 8;
@@ -624,7 +626,10 @@ function finalAnswerText(interaction: ToolInteraction): string | null {
   return formatFinalAnswer(interactionInput(interaction));
 }
 
-export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]): TimelineModel {
+export function buildTimelineModel(
+  projectionItems: AgentSessionProjectionItem[],
+  subagents: readonly SubagentChild[] = [],
+): TimelineModel {
   const byCallId = new Map<string, ToolInteraction>();
   const byCallEventId = new Map<AgentEventId, ToolInteraction>();
   const fifoQueue: ToolInteraction[] = [];
@@ -651,6 +656,14 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
         presentation: event.tool_presentation ?? null,
       };
 
+      if (subagents.length > 0) {
+        const children = childrenForToolCall(subagents, {
+          toolCallId: event.tool_call_id,
+          toolOutputText: null,
+        });
+        if (children.length > 0) interaction.children = children;
+      }
+
       byCallEventId.set(event.id, interaction);
       eventIdToSelectionKey.set(event.id, `tool:${interaction.key}`);
 
@@ -671,6 +684,15 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
 
       if (matched) {
         matched.resultEvent = event;
+        // A Workflow run is named only in the result, so binding needs the
+        // result in hand — the call alone cannot say which run it launched.
+        if (subagents.length > 0) {
+          const children = childrenForToolCall(subagents, {
+            toolCallId: matched.callEvent?.tool_call_id,
+            toolOutputText: event.tool_output_text,
+          });
+          if (children.length > 0) matched.children = children;
+        }
         absorbedResultIds.add(event.id);
         eventIdToSelectionKey.set(event.id, `tool:${matched.key}`);
       } else {

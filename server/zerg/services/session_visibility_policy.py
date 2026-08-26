@@ -46,6 +46,11 @@ class SessionVisibilityFacts:
     machine_id: str | None = None
     first_user_message: str | None = None
     primary_thread_is_worker_only: bool = False
+    # Same product fact, second evidence source. The legacy graph proves a
+    # worker through its thread's branch_kind; storage-v2 sessions have no live
+    # thread row to carry that, so the engine's observation is stored on the
+    # session itself. One reason key either way — this is not a second policy.
+    is_subagent: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,7 +92,7 @@ def evaluate_origin_visibility(facts: SessionVisibilityFacts) -> OriginVisibilit
         reasons.append("hatch_contract")
     if _is_internal_canary(provider=provider, project=project, machine_id=machine_id):
         reasons.append("internal_canary")
-    if facts.primary_thread_is_worker_only:
+    if facts.primary_thread_is_worker_only or facts.is_subagent:
         reasons.append("worker_only")
 
     unique_reasons = tuple(dict.fromkeys(reasons))
@@ -121,6 +126,9 @@ def known_hidden_evidence_clause(model, *, include_test: bool = False):
     machine = _column(columns, "machine_id", "device_id")
     first_user = _column(columns, "first_user_message_preview")
 
+    is_subagent = _column(columns, "is_subagent")
+    if is_subagent is not None:
+        clauses.append(func.coalesce(is_subagent, 0) == 1)
     if origin_kind is not None:
         clauses.append(func.lower(func.coalesce(origin_kind, "")).in_(HIDDEN_ORIGIN_KINDS))
     if environment is not None and not include_test:

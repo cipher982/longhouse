@@ -117,7 +117,15 @@ _EXPECTED_SESSION_FIELDS = {
     "launch_actor",
     "launch_surface",
 }
-_OPTIONAL_SESSION_FIELDS = {"provider_session_id"}
+_OPTIONAL_SESSION_FIELDS = {
+    "provider_session_id",
+    # Subagent lineage. Optional so an engine that predates it still ships;
+    # absent means "not a subagent", which is what an older engine meant too.
+    "is_subagent",
+    "parent_provider_session_id",
+    "parent_tool_call_id",
+    "workflow_run_id",
+}
 _EXPECTED_RENDER_FIELDS = {"generation_id", "parser_revision", "ordering_revision", "records"}
 _LEGACY_RENDER_RECORD_FIELDS = {
     "event_id",
@@ -272,6 +280,13 @@ def _parse_session_facts(value: object) -> dict[str, object]:
     result["ended_at"] = ended_at.isoformat() if ended_at is not None else None
     if type(result["hidden_from_default_timeline"]) is not bool:
         raise ValueError("session.hidden_from_default_timeline must be a boolean")
+    result.setdefault("is_subagent", False)
+    if type(result["is_subagent"]) is not bool:
+        raise ValueError("session.is_subagent must be a boolean")
+    for field in ("parent_provider_session_id", "parent_tool_call_id", "workflow_run_id"):
+        result.setdefault(field, None)
+        if result[field] is not None and not isinstance(result[field], str):
+            raise ValueError(f"session.{field} must be a string")
     return result
 
 

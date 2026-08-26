@@ -82,6 +82,8 @@ def _raw_params(
     opaque_source_id: str = "history.jsonl",
     machine_id: str = "cinder",
     provider: str = "codex",
+    provider_session_id: str | None = None,
+    subagent: dict | None = None,
 ) -> dict:
     record_hashes = tuple(hashlib.sha256(record).digest() for record in records)
     identity = EnvelopeIdentity(
@@ -138,6 +140,8 @@ def _raw_params(
             "hidden_from_default_timeline": False,
             "launch_actor": None,
             "launch_surface": None,
+            **({"provider_session_id": provider_session_id} if provider_session_id else {}),
+            **(subagent or {}),
         },
         "sealed_at": sealed_at.isoformat(),
     }
@@ -3566,3 +3570,146 @@ async def test_restore_generation_requires_retired_current_and_durable_target(da
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_subagent_ingest_stays_hidden_across_reingest(daemon_paths):
+    """A worker transcript must not land in the timeline as a session.
+
+    The regression this guards is specific: the engine ships
+    hidden_from_default_timeline=True, and the visibility recomputation used to
+    overwrite it with "not hidden" because nothing on the storage-v2 path marked
+    the primary thread as a subagent. A replay re-runs that recomputation, so
+    hiding has to survive a second commit, not just the first.
+    """
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    child_id = uuid4()
+    subagent_facts = {
+        "is_subagent": True,
+        "parent_provider_session_id": "claude-parent-1",
+        "parent_tool_call_id": "toolu_parent_call",
+        "workflow_run_id": "wf_test-run",
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        epoch = uuid4()
+        record = b"worker\n"
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=child_id,
+            start=0,
+            end=len(record),
+            records=(record,),
+            sealed_at=now,
+            provider="claude",
+            opaque_source_id="agent-child.jsonl",
+            subagent=subagent_facts,
+        )
+        raw.update(
+            render_state="ready",
+            render_manifest=_render_manifest(
+                uuid4(), source_epoch=epoch, seed=b"worker", opaque_source_id="agent-child.jsonl", provider="claude"
+            ),
+        )
+        await client.call("storage.raw_object.commit.v2", raw)
+
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    store = CatalogStore(engine)
+    with Session(engine) as db:
+        session_row = db.get(StorageSession, str(child_id))
+        assert session_row.hidden_from_default_timeline == 1
+        assert session_row.is_subagent == 1
+        assert session_row.subagent_parent_provider_session_id == "claude-parent-1"
+        assert session_row.subagent_parent_tool_call_id == "toolu_parent_call"
+        assert session_row.subagent_run_id == "wf_test-run"
+        # The parent has not shipped, so the resolved edge stays open.
+        assert session_row.subagent_parent_session_id is None
+
+    # The visibility sweep recomputes from scratch for the whole corpus. It is
+    # the same recomputation that overwrote the shipped fact at ingest, so a
+    # worker it can still see is a worker that comes back to the timeline.
+    applied = store.reconcile_all_session_visibility(apply=True, observed_at=now + timedelta(seconds=5))
+    assert str(child_id) not in applied["actionable_session_ids"]
+    with Session(engine) as db:
+        assert db.get(StorageSession, str(child_id)).hidden_from_default_timeline == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_late_parent_adopts_its_orphan_subagents(daemon_paths):
+    """Workers routinely ship before the session that spawned them."""
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    child_id = uuid4()
+    parent_id = uuid4()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        child_epoch = uuid4()
+        child = _raw_params(
+            epoch=child_epoch,
+            session_id=child_id,
+            start=0,
+            end=10,
+            records=(b"worker",),
+            sealed_at=now,
+            provider="claude",
+            opaque_source_id="agent-child.jsonl",
+            subagent={
+                "is_subagent": True,
+                "parent_provider_session_id": "claude-parent-late",
+                "parent_tool_call_id": "toolu_late",
+                "workflow_run_id": None,
+            },
+        )
+        child.update(
+            render_state="ready",
+            render_manifest=_render_manifest(
+                uuid4(), source_epoch=child_epoch, seed=b"child-render", opaque_source_id="agent-child.jsonl", provider="claude"
+            ),
+        )
+        await client.call("storage.raw_object.commit.v2", child)
+
+        parent_epoch = uuid4()
+        parent = _raw_params(
+            epoch=parent_epoch,
+            session_id=parent_id,
+            start=0,
+            end=10,
+            records=(b"parent",),
+            sealed_at=now,
+            provider="claude",
+            opaque_source_id="parent.jsonl",
+            provider_session_id="claude-parent-late",
+        )
+        parent.update(
+            render_state="ready",
+            render_manifest=_render_manifest(
+                uuid4(), source_epoch=parent_epoch, seed=b"parent-render", opaque_source_id="parent.jsonl", provider="claude"
+            ),
+        )
+        await client.call("storage.raw_object.commit.v2", parent)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        child_row = db.get(StorageSession, str(child_id))
+        assert child_row.subagent_parent_session_id == str(parent_id)
+        assert child_row.hidden_from_default_timeline == 1
+        # The parent is ordinary work and stays in the timeline.
+        assert db.get(StorageSession, str(parent_id)).hidden_from_default_timeline == 0
+    engine.dispose()

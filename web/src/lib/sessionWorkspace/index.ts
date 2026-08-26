@@ -10,6 +10,7 @@ export type {
   TimelineSeam,
   TimelineSelection,
   ToolInteraction,
+  SubagentChild,
 } from "./types";
 
 export type { ToolTier } from "./toolTiers.generated";
@@ -56,6 +57,8 @@ export {
 } from "./timelineModel";
 
 export { formatFinalAnswer } from "./finalAnswer";
+
+export { childrenForToolCall, runIdsInToolOutput, subagentLabel, summarizeSubagents } from "./subagents";
 
 export { getSessionInteractionCapabilities } from "./interaction";
 

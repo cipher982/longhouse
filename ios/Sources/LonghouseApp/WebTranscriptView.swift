@@ -44,6 +44,8 @@ final class TranscriptWebView: WKWebView {
 struct WebTranscriptView: UIViewRepresentable {
     let serverURL: String
     let items: [TimelineItem]
+    /// Workers this session spawned, attached to the tool rows that spawned them.
+    let subagents: [SessionSubagent]
     let submittedInputs: [SubmittedInput]
     let errorMessage: String?
     let sourceRevision: Int?
@@ -51,20 +53,26 @@ struct WebTranscriptView: UIViewRepresentable {
     let onNearTop: (() -> Void)?
     let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
     let onLifecycle: ((String) -> Void)?
+    /// Tapping a worker row opens that child's transcript.
+    let onOpenSubagent: ((String) -> Void)?
 
     init(
         serverURL: String,
         items: [TimelineItem],
+        subagents: [SessionSubagent] = [],
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
         sourceRevision: Int? = nil,
         sourceOperation: String? = nil,
         onNearTop: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
-        onLifecycle: ((String) -> Void)? = nil
+        onLifecycle: ((String) -> Void)? = nil,
+        onOpenSubagent: ((String) -> Void)? = nil
     ) {
         self.serverURL = serverURL
         self.items = items
+        self.subagents = subagents
+        self.onOpenSubagent = onOpenSubagent
         self.submittedInputs = submittedInputs
         self.errorMessage = errorMessage
         self.sourceRevision = sourceRevision
@@ -82,6 +90,13 @@ struct WebTranscriptView: UIViewRepresentable {
         let pooled = WebTranscriptWebViewPool.takeOrCreate()
         let webView = pooled.webView
         webView.navigationDelegate = context.coordinator
+        // One narrowly-scoped bridge: a session id, validated as a UUID before
+        // it reaches navigation. Custom-scheme links stay inert on purpose (see
+        // decidePolicyFor), so transcript text still has no route out of here.
+        context.coordinator.onOpenSubagent = onOpenSubagent
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: WebTranscriptView.bridgeName)
+        controller.add(context.coordinator, name: WebTranscriptView.bridgeName)
         webView.scrollView.delegate = context.coordinator
         webView.scrollView.keyboardDismissMode = .interactive
         webView.scrollView.alwaysBounceVertical = true
@@ -141,7 +156,14 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
+    static let bridgeName = "longhouse"
+
     static func dismantleUIView(_ webView: TranscriptWebView, coordinator: Coordinator) {
+        // The content controller retains its handler strongly; leaving it
+        // registered would keep this coordinator (and the session it closes
+        // over) alive inside a pooled WebView.
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: bridgeName)
+        coordinator.onOpenSubagent = nil
         let documentIsLoaded = coordinator.isLoaded
         coordinator.prepareForReuse()
         // Only a WebView still showing a transcript document we loaded ourselves
@@ -206,12 +228,13 @@ struct WebTranscriptView: UIViewRepresentable {
     nonisolated static func payloadItems(
         serverURL: String? = nil,
         timelineItems: [TimelineItem],
+        subagents: [SessionSubagent] = [],
         submittedInputs: [SubmittedInput]
     ) -> [WebTranscriptPayloadItem] {
         let durableUserInputs = durableUserInputIdentities(timelineItems)
         let visibleSubmittedInputs = submittedInputs.filter { !durableUserInputs.contains($0) }
         guard !visibleSubmittedInputs.isEmpty else {
-            return timelineItems.map { payloadItem($0, serverURL: serverURL) }
+            return timelineItems.map { payloadItem($0, serverURL: serverURL, subagents: subagents) }
         }
 
         var rows: [WebTranscriptPayloadItem] = []
@@ -228,7 +251,7 @@ struct WebTranscriptView: UIViewRepresentable {
                     remainingSubmittedInputs.removeAll { insertionIds.contains($0.id) }
                 }
             }
-            rows.append(payloadItem(item, serverURL: serverURL))
+            rows.append(payloadItem(item, serverURL: serverURL, subagents: subagents))
         }
 
         rows.append(contentsOf: remainingSubmittedInputs.map(payloadSubmittedInput))
@@ -280,7 +303,11 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
-    private nonisolated static func payloadItem(_ item: TimelineItem, serverURL: String?) -> WebTranscriptPayloadItem {
+    private nonisolated static func payloadItem(
+        _ item: TimelineItem,
+        serverURL: String?,
+        subagents: [SessionSubagent] = []
+    ) -> WebTranscriptPayloadItem {
         switch item {
         case .user(let event):
             return messagePayload(
@@ -301,7 +328,7 @@ struct WebTranscriptView: UIViewRepresentable {
         case .action(let action, _):
             return actionPayload(id: item.id, action: action)
         case .tool(let call, let result, _):
-            return toolPayload(id: item.id, call: call, result: result, serverURL: serverURL)
+            return toolPayload(id: item.id, call: call, result: result, serverURL: serverURL, subagents: subagents)
         case .orphanTool(let event):
             return toolPayload(id: item.id, call: event, result: event, orphan: true, serverURL: serverURL)
         case .activityGroup(let calls):
@@ -457,7 +484,8 @@ struct WebTranscriptView: UIViewRepresentable {
         call: SessionEvent,
         result: SessionEvent?,
         orphan: Bool = false,
-        serverURL: String?
+        serverURL: String?,
+        subagents: [SessionSubagent] = []
     ) -> WebTranscriptPayloadItem {
         let toolName = call.toolName ?? "Tool"
         if toolName == "AskUserQuestion" {
@@ -511,6 +539,12 @@ struct WebTranscriptView: UIViewRepresentable {
             )
         }
 
+        let spawned = Subagents.children(
+            from: subagents,
+            toolCallId: call.toolCallId,
+            toolOutputText: result?.toolOutputText
+        )
+
         return WebTranscriptPayloadItem(
             id: id,
             kind: "tool",
@@ -536,7 +570,17 @@ struct WebTranscriptView: UIViewRepresentable {
             failurePreview: TimelineBuilder.failurePreview(call: call, result: result),
             diff: editStat.flatMap { EditSummary.diffLines(for: $0) }.map { lines in
                 lines.map { WebTranscriptDiffLine(kind: $0.kind.rawValue, text: $0.text) }
-            }
+            },
+            subagents: spawned.isEmpty
+                ? nil
+                : spawned.map {
+                    WebTranscriptSubagent(
+                        sessionId: $0.sessionId,
+                        label: Subagents.label(for: $0),
+                        toolCalls: $0.toolCalls
+                    )
+                },
+            subagentSummary: spawned.isEmpty ? nil : Subagents.summary(spawned)
         )
     }
 
@@ -719,7 +763,23 @@ struct WebTranscriptView: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate, WKScriptMessageHandler {
+        var onOpenSubagent: ((String) -> Void)?
+
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard message.name == WebTranscriptView.bridgeName,
+                  let payload = message.body as? [String: Any],
+                  payload["type"] as? String == "openSubagent",
+                  let sessionId = payload["sessionId"] as? String,
+                  UUID(uuidString: sessionId) != nil,
+                  let handler = onOpenSubagent
+            else { return }
+            Task { @MainActor in handler(sessionId) }
+        }
+
         weak var webView: WKWebView?
         private let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
         fileprivate var isLoaded = false
@@ -1382,6 +1442,16 @@ struct WebTranscriptPayloadItem: Encodable {
     var failurePreview: String? = nil
     /// Rendered diff for edit rows (R3).
     var diff: [WebTranscriptDiffLine]? = nil
+    /// Workers this call spawned, opened in place rather than spliced in.
+    var subagents: [WebTranscriptSubagent]? = nil
+    /// "22 agents · 4m12s" — the shape of the work while still collapsed.
+    var subagentSummary: String? = nil
+}
+
+struct WebTranscriptSubagent: Encodable {
+    let sessionId: String
+    let label: String
+    let toolCalls: Int
 }
 
 struct WebTranscriptDiffLine: Encodable {
@@ -2287,7 +2357,25 @@ private extension WebTranscriptView {
           <div class="details-body">${input}${provenance}${output}${media}</div>
         </details>
         ${preview}
+        ${subagentNode(item)}
       `;
+    }
+
+    /// Workers this tool call spawned, opened in place. Not spliced into this
+    /// transcript: a 22-agent fan-out inlined would bury the session it belongs
+    /// to. Tapping one asks the app to open that child.
+    function subagentNode(item) {
+      const children = item.subagents || [];
+      if (!children.length) return '';
+      const rows = children.map(child =>
+        '<li><button type="button" class="subagent-link" data-subagent-session="'
+        + escapeHtml(child.sessionId) + '">'
+        + '<span class="subagent-label">' + escapeHtml(child.label) + '</span>'
+        + '<span class="subagent-meta">' + String(child.toolCalls) + (child.toolCalls === 1 ? ' call' : ' calls') + '</span>'
+        + '</button></li>'
+      ).join('');
+      return '<details class="subagents"><summary>' + escapeHtml(item.subagentSummary || '')
+        + '</summary><ul class="subagent-list">' + rows + '</ul></details>';
     }
 
     /// Render diff lines as gutter-prefixed rows (R3). Mirrors EditDiffView.
@@ -2436,7 +2524,22 @@ private extension WebTranscriptView {
       return '';
     }
 
+    function attachSubagentHandlers(scope = document) {
+      for (const button of scope.querySelectorAll('[data-subagent-session]')) {
+        button.addEventListener('click', () => {
+          const sessionId = button.getAttribute('data-subagent-session');
+          if (!sessionId) return;
+          try {
+            window.webkit.messageHandlers.longhouse.postMessage({ type: 'openSubagent', sessionId });
+          } catch (error) {
+            /* The bridge is absent in previews and tests; the row stays inert. */
+          }
+        });
+      }
+    }
+
     function attachExpandHandlers(scope = document) {
+      attachSubagentHandlers(scope);
       for (const button of scope.querySelectorAll('[data-expand-index]')) {
         button.addEventListener('click', () => {
           const index = Number(button.getAttribute('data-expand-index'));

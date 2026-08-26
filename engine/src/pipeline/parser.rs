@@ -640,6 +640,15 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
         result.metadata.workflow_run_id = workflow_run_id_from_path(path);
     }
 
+    // A Task/Agent subagent names its own spawning tool call in a sidecar
+    // beside the transcript. Nothing inside the transcript carries it, so
+    // without this read the child can never be bound to the row that spawned
+    // it. Workflow children have no sidecar; their binding runs through the
+    // run id and the parent's tool result instead.
+    if result.metadata.subagent_tool_use_id.is_none() {
+        result.metadata.subagent_tool_use_id = subagent_tool_use_id_from_sidecar(path);
+    }
+
     let canonical_session_id = result.metadata.session_id.clone();
     if result
         .events
@@ -652,6 +661,29 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     }
 
     Ok(result)
+}
+
+/// Read `toolUseId` from the `agent-<id>.meta.json` sidecar Claude writes beside
+/// a Task/Agent subagent transcript.
+///
+/// Fail-closed: a missing, unreadable, oversized, or malformed sidecar yields
+/// no binding, and the child renders as an unattached subagent rather than
+/// being attached to a guess.
+fn subagent_tool_use_id_from_sidecar(path: &Path) -> Option<String> {
+    const MAX_SIDECAR_BYTES: u64 = 64 * 1024;
+
+    let stem = path.file_stem().and_then(|value| value.to_str())?;
+    if !stem.starts_with("agent-") {
+        return None;
+    }
+    let sidecar = path.with_file_name(format!("{stem}.meta.json"));
+    if std::fs::metadata(&sidecar).ok()?.len() > MAX_SIDECAR_BYTES {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&sidecar).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let tool_use_id = parsed.get("toolUseId")?.as_str()?.trim();
+    (!tool_use_id.is_empty()).then(|| tool_use_id.to_string())
 }
 
 /// Extract the dynamic-workflow run id from a Claude workflow subagent path:
@@ -3261,6 +3293,92 @@ mod tests {
     }
 
     #[test]
+    /// A Task/Agent subagent's spawning tool call exists only in the sidecar.
+    /// Without this read the child can never be bound to the row that spawned
+    /// it, which is the whole navigational value of nesting.
+    #[test]
+    fn claude_task_subagent_reads_tool_use_id_from_its_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "agent-a7bc5fa882b7a5890.jsonl",
+            &[&json!({
+                "type": "user",
+                "uuid": "u1",
+                "timestamp": "2026-06-22T21:02:00.000Z",
+                "isSidechain": true,
+                "sessionId": "04757373-353b-43b1-b3fd-07b42385ccdc",
+                "agentId": "a7bc5fa882b7a5890",
+                "cwd": "/Users/davidrose/git/zerg",
+                "message": {"content": "Map steer-loop send path"}
+            })
+            .to_string()],
+        );
+        std::fs::write(
+            path.with_file_name("agent-a7bc5fa882b7a5890.meta.json"),
+            r#"{"agentType":"Explore","description":"Map steer-loop send path","toolUseId":"toolu_bdrk_01D9TRPzuFXSbfdQojYmK34J"}"#,
+        )
+        .unwrap();
+
+        let result = parse_session_file(&path, 0).unwrap();
+
+        assert!(result.metadata.is_sidechain);
+        assert_eq!(
+            result.metadata.subagent_tool_use_id.as_deref(),
+            Some("toolu_bdrk_01D9TRPzuFXSbfdQojYmK34J")
+        );
+    }
+
+    /// Fail closed. A malformed sidecar must leave the child unattached rather
+    /// than attached to a guess, and a transcript with no sidecar at all is the
+    /// ordinary workflow case.
+    #[test]
+    fn subagent_sidecar_binding_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let line = json!({
+            "type": "user",
+            "uuid": "u1",
+            "timestamp": "2026-06-22T21:02:00.000Z",
+            "isSidechain": true,
+            "sessionId": "04757373-353b-43b1-b3fd-07b42385ccdc",
+            "agentId": "a7bc5fa882b7a5890",
+            "message": {"content": "work"}
+        })
+        .to_string();
+        let lines = [line.as_str()];
+
+        let missing = make_jsonl_file(dir.path(), "agent-amissing.jsonl", &lines);
+        assert!(parse_session_file(&missing, 0)
+            .unwrap()
+            .metadata
+            .subagent_tool_use_id
+            .is_none());
+
+        let malformed = make_jsonl_file(dir.path(), "agent-amalformed.jsonl", &lines);
+        std::fs::write(
+            malformed.with_file_name("agent-amalformed.meta.json"),
+            "{not json",
+        )
+        .unwrap();
+        assert!(parse_session_file(&malformed, 0)
+            .unwrap()
+            .metadata
+            .subagent_tool_use_id
+            .is_none());
+
+        let empty = make_jsonl_file(dir.path(), "agent-aempty.jsonl", &lines);
+        std::fs::write(
+            empty.with_file_name("agent-aempty.meta.json"),
+            r#"{"agentType":"Explore","toolUseId":"   "}"#,
+        )
+        .unwrap();
+        assert!(parse_session_file(&empty, 0)
+            .unwrap()
+            .metadata
+            .subagent_tool_use_id
+            .is_none());
+    }
+
     fn test_parse_claude_sidechain_parentage() {
         let dir = tempfile::tempdir().unwrap();
         let parent_id = "f6a553e2-8aca-49c4-9823-3b3d8690fd2e";

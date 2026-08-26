@@ -4147,6 +4147,7 @@ class CatalogStore:
                             else catalog.first_user_message_preview
                         ),
                         primary_thread_is_worker_only=bool(primary_thread and primary_thread.branch_kind == "subagent"),
+                        is_subagent=bool(storage_session is not None and storage_session.is_subagent),
                     )
                 ).system_hidden
                 catalog.hidden_from_default_timeline = int(policy_hidden)
@@ -5801,6 +5802,11 @@ class CatalogStore:
                         machine_id=content.get("machine_id") or provenance.get("device_id"),
                         first_user_message=content.get("first_user_message_preview"),
                         primary_thread_is_worker_only=thread_row.get("branch_kind") == "subagent",
+                        # Storage-v2 sessions have no live thread row, so the
+                        # sweep must read the same worker evidence ingest stored.
+                        # Without this it would revisit every hidden subagent and
+                        # helpfully reveal it again.
+                        is_subagent=bool(storage_row.get("is_subagent")) if storage_row else False,
                     )
                 )
                 for reason in decision.reason_keys:
@@ -6062,6 +6068,70 @@ class CatalogStore:
                 "session": session_preview,
                 "owner": owner_preview,
             }
+
+    @staticmethod
+    def _iso_or_none(value) -> str | None:
+        aware = _as_aware_utc(value)
+        return aware.isoformat() if aware is not None else None
+
+    def list_session_subagents(self, *, session_id: str, owner_id: str, limit: int = 200) -> dict[str, Any]:
+        """List the worker transcripts one session spawned.
+
+        Grouped by the fan-out run when the provider has one, and by the
+        spawning tool call otherwise. The rows are hidden sessions by design:
+        this is the only route to them, so it deliberately ignores the
+        visibility flag it set.
+        """
+
+        session_table = StorageSession.__table__
+        with _read_snapshot(self.engine) as connection:
+            rows = (
+                connection.execute(
+                    select(
+                        session_table.c.session_id,
+                        session_table.c.provider,
+                        session_table.c.started_at,
+                        session_table.c.last_activity_at,
+                        session_table.c.ended_at,
+                        session_table.c.user_messages,
+                        session_table.c.assistant_messages,
+                        session_table.c.tool_calls,
+                        session_table.c.summary_title,
+                        session_table.c.first_user_message_preview,
+                        session_table.c.last_visible_text_preview,
+                        session_table.c.subagent_parent_tool_call_id,
+                        session_table.c.subagent_run_id,
+                    )
+                    .where(
+                        session_table.c.subagent_parent_session_id == session_id,
+                        session_table.c.owner_id == owner_id,
+                        session_table.c.is_subagent == 1,
+                    )
+                    .order_by(session_table.c.started_at.asc(), session_table.c.session_id.asc())
+                    .limit(max(1, min(int(limit), 500)))
+                )
+                .mappings()
+                .all()
+            )
+        children = [
+            {
+                "session_id": str(row["session_id"]),
+                "provider": row["provider"],
+                "parent_tool_call_id": row["subagent_parent_tool_call_id"],
+                "run_id": row["subagent_run_id"],
+                "started_at": self._iso_or_none(row["started_at"]),
+                "last_activity_at": self._iso_or_none(row["last_activity_at"]),
+                "ended_at": self._iso_or_none(row["ended_at"]),
+                "user_messages": int(row["user_messages"] or 0),
+                "assistant_messages": int(row["assistant_messages"] or 0),
+                "tool_calls": int(row["tool_calls"] or 0),
+                "title": row["summary_title"],
+                "first_user_message_preview": row["first_user_message_preview"],
+                "last_visible_text_preview": row["last_visible_text_preview"],
+            }
+            for row in rows
+        ]
+        return {"session_id": session_id, "children": children}
 
     def resolve_session_alias(self, *, provider_session_id: str) -> dict[str, Any]:
         """Resolve a provider-native session id alias to its Longhouse session id.
@@ -7178,6 +7248,29 @@ class CatalogStore:
                         updated_at=commit_time,
                     )
                 )
+            # Subagent lineage. The engine observes that a transcript is an
+            # in-harness worker; nothing downstream knew, because the storage-v2
+            # contract carried no lineage and the visibility recomputation below
+            # reads only the primary thread's branch_kind. Mark the thread here
+            # and the existing policy hides the row on its own — one authority,
+            # not a second visibility fact.
+            #
+            # The parent id is provider identity. Resolving it to a Longhouse
+            # session is this side's job, through the alias table, and it can
+            # legitimately fail: a child routinely ships before its parent. Keep
+            # the provider id either way so a later arrival can bind it.
+            if bool(session_facts.get("is_subagent")):
+                parent_provider_id = str(session_facts.get("parent_provider_session_id") or "").strip() or None
+                session_values["subagent_parent_provider_session_id"] = parent_provider_id
+                session_values["subagent_parent_session_id"] = (
+                    _resolve_session_id_by_provider_session_id(connection, provider=provider, provider_session_id=parent_provider_id)
+                    if parent_provider_id
+                    else None
+                )
+                session_values["subagent_parent_tool_call_id"] = str(session_facts.get("parent_tool_call_id") or "").strip() or None
+                session_values["subagent_run_id"] = str(session_facts.get("workflow_run_id") or "").strip() or None
+                session_values["is_subagent"] = 1
+
             primary_branch_kind = connection.execute(
                 select(live_session_thread.c.branch_kind).where(
                     live_session_thread.c.session_id == session_key,
@@ -7198,6 +7291,7 @@ class CatalogStore:
                         session_values.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
                     ),
                     primary_thread_is_worker_only=primary_branch_kind == "subagent",
+                    is_subagent=bool(session_values.get("is_subagent")),
                 )
             ).system_hidden
             session_values["hidden_from_default_timeline"] = int(canonical_hidden)
@@ -7451,6 +7545,16 @@ class CatalogStore:
                     connection.execute(
                         update(storage_session).where(storage_session.c.session_id == session_key).values(**projection_values)
                     )
+            # This session may be the parent a previously-shipped worker named
+            # but could not resolve. Its aliases are only now known, so adopt
+            # those orphans in the same commit.
+            _bind_orphan_subagents_to_parent(
+                connection,
+                provider=provider,
+                session_key=session_key,
+                alias_values=alias_values,
+                commit_time=commit_time,
+            )
             timer.mark("project_render")
             if predecessor_row is not None and render_state == "ready":
                 generation_to_recompute = (
@@ -13075,6 +13179,55 @@ def _source_epoch_conflict(connection, *, reason: str, **evidence: Any) -> dict[
         "conflict_details": details,
         "commit_seq": str(_current_commit_seq(connection)),
     }
+
+
+def _resolve_session_id_by_provider_session_id(connection, *, provider: str, provider_session_id: str) -> str | None:
+    """Resolve provider identity to the Longhouse session that owns it.
+
+    The engine cannot do this: a shipped session id may come from a managed
+    binding override rather than from the transcript, so the parent it names is
+    only ever provider-native. The alias table is the mapping, and the routing
+    index makes (provider, provider_session_id) resolve to one thread.
+
+    Returns None when the parent has not been ingested yet, which is ordinary —
+    children routinely arrive before parents.
+    """
+
+    alias_table = LiveSessionThreadAlias.__table__
+    thread_table = LiveSessionThread.__table__
+    return connection.execute(
+        select(thread_table.c.session_id)
+        .select_from(alias_table.join(thread_table, thread_table.c.id == alias_table.c.thread_id))
+        .where(alias_table.c.provider == provider)
+        .where(alias_table.c.alias_kind == "provider_session_id")
+        .where(alias_table.c.alias_value == provider_session_id)
+        .order_by(alias_table.c.id.asc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _bind_orphan_subagents_to_parent(connection, *, provider: str, session_key: str, alias_values: list[str], commit_time) -> int:
+    """Attach children that shipped before this parent existed.
+
+    Ordering is not guaranteed — a fan-out's workers frequently land before the
+    session that spawned them. Those children stored the provider id they were
+    told and left the resolved id null; this closes the loop when the parent
+    finally appears, so the binding does not depend on ship order.
+    """
+
+    if not alias_values:
+        return 0
+    session_table = StorageSession.__table__
+    return connection.execute(
+        update(session_table)
+        .where(
+            session_table.c.provider == provider,
+            session_table.c.subagent_parent_session_id.is_(None),
+            session_table.c.subagent_parent_provider_session_id.in_(alias_values),
+            session_table.c.session_id != session_key,
+        )
+        .values(subagent_parent_session_id=session_key, updated_at=commit_time)
+    ).rowcount
 
 
 def _current_commit_seq(connection) -> int:

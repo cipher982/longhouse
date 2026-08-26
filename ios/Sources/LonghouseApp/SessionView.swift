@@ -32,6 +32,8 @@ struct SessionView: View {
     let sessionId: String
     let fallbackTitle: String
     let onTranscriptDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
+    /// Pushes a worker transcript. Owned by the navigation stack, not this view.
+    var onOpenSubagent: ((String) -> Void)? = nil
 
     @EnvironmentObject var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
@@ -47,11 +49,13 @@ struct SessionView: View {
         sessionId: String,
         fallbackTitle: String,
         viewModel: SessionViewModel = SessionViewModel(),
-        onTranscriptDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil
+        onTranscriptDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
+        onOpenSubagent: ((String) -> Void)? = nil
     ) {
         self.sessionId = sessionId
         self.fallbackTitle = fallbackTitle
         self.onTranscriptDiagnostics = onTranscriptDiagnostics
+        self.onOpenSubagent = onOpenSubagent
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
@@ -299,6 +303,7 @@ struct SessionView: View {
                 WebTranscriptView(
                     serverURL: appState.serverURL,
                     items: viewModel.items,
+                    subagents: viewModel.subagents,
                     submittedInputs: viewModel.submittedInputs,
                     errorMessage: viewModel.errorMessage,
                     sourceRevision: viewModel.benchmarkSourceRevision,
@@ -318,7 +323,8 @@ struct SessionView: View {
                     },
                     onLifecycle: { stage in
                         viewModel.recordTranscriptLifecycle(stage)
-                    }
+                    },
+                    onOpenSubagent: onOpenSubagent
                 )
                 .accessibilityIdentifier("session-chat-transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1740,6 +1746,8 @@ final class SessionViewModel: ObservableObject {
     private(set) var benchmarkSourceRevision: Int?
     private(set) var benchmarkSourceOperation: String?
     @Published var items: [TimelineItem] = []
+    /// Workers this session spawned, attached to the tool rows that spawned them.
+    @Published var subagents: [SessionSubagent] = []
     /// Blocking load error: only set when there is genuinely nothing to show
     /// (no cache, never loaded). Drives the full-screen error overlay.
     @Published var errorMessage: String?
@@ -1857,6 +1865,7 @@ final class SessionViewModel: ObservableObject {
             isInitialLoading = true
             detail = nil
             items = []
+            subagents = []
             submittedInputs = []
             transcriptDiagnostics = nil
             pendingRealtimeTelemetry = nil
@@ -2019,6 +2028,10 @@ final class SessionViewModel: ObservableObject {
             return
         }
         openWaterfall?.mark("reload_start")
+        // Worker transcripts load beside the tail, never gating it: a session
+        // that spawned none is the common case, and a failure here must not
+        // cost the transcript.
+        loadSubagents(api: api, sessionId: sessionId)
         do {
             try await refreshTail(api: api, sessionId: sessionId)
             errorMessage = nil
@@ -2038,6 +2051,17 @@ final class SessionViewModel: ObservableObject {
             }
         }
         isInitialLoading = false
+    }
+
+    /// Fetch this session's worker transcripts in the background.
+    private func loadSubagents(api: SessionWorkspaceClient, sessionId: String) {
+        Task { [weak self] in
+            let response = try? await api.sessionSubagents(id: sessionId)
+            await MainActor.run {
+                guard let self, self.activeSessionId == sessionId else { return }
+                self.subagents = response?.children ?? []
+            }
+        }
     }
 
     func prepareResume(sessionId: String, appState: AppState) async {
