@@ -9,6 +9,10 @@ fail() {
   exit 1
 }
 
+# `set -e` can kill this script at a command that printed nothing, which reads
+# on CI as a bare non-zero exit with no cause. Always name the line.
+trap 'status=$?; [[ $status -eq 0 ]] || echo "FAIL: aborted at line $LINENO (exit $status)" >&2' ERR
+
 sha256_file() {
   local path="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -104,12 +108,28 @@ PY
 
   local instance count manifests latest ts manifest restore expected_sha actual_sha
   for instance in alice bob; do
-    count="$(ls -1 "$backup_root/$instance"/longhouse.*.sqlite.* 2>/dev/null | wc -l | tr -d ' ')"
-    manifests="$(ls -1 "$backup_root/$instance"/longhouse.*.manifest.json 2>/dev/null | wc -l | tr -d ' ')"
+    # Globs, not `ls | wc -l` / `ls -1t | head -n1`. Under `set -o pipefail`
+    # both of those are silent killers: a glob that matches nothing exits ls
+    # non-zero, and `head` closing the pipe early SIGPIPEs an ls that has not
+    # finished writing. Either takes down the script before the `fail` below
+    # can say why -- which is exactly how this arrived as 25 seconds of silence
+    # and a bare "Error 1" on CI while passing on every machine here.
+    local -a archives manifest_files
+    archives=("$backup_root/$instance"/longhouse.*.sqlite.*)
+    [[ -e "${archives[0]}" ]] || archives=()
+    manifest_files=("$backup_root/$instance"/longhouse.*.manifest.json)
+    [[ -e "${manifest_files[0]}" ]] || manifest_files=()
+    count="${#archives[@]}"
+    manifests="${#manifest_files[@]}"
     [[ "$count" == "5" ]] || fail "expected 5 archives for $instance, got $count"
     [[ "$manifests" == "$count" ]] || fail "manifest/archive count mismatch for $instance"
 
-    latest="$(ls -1t "$backup_root/$instance"/longhouse.*.sqlite.* | head -n1)"
+    latest=""
+    local candidate
+    for candidate in "${archives[@]}"; do
+      [[ -z "$latest" || "$candidate" -nt "$latest" ]] && latest="$candidate"
+    done
+    [[ -n "$latest" ]] || fail "no latest archive for $instance"
     ts="$(basename "$latest")"
     ts="${ts#longhouse.}"
     ts="${ts%.sqlite.*}"
