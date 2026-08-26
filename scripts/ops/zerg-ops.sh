@@ -849,7 +849,12 @@ report() {
   echo
 
   if [[ -d /var/lib/docker ]]; then
-    du -xh --max-depth=1 /var/lib/docker 2>/dev/null | sort -h | tail -n 20
+    # `du` still exits non-zero after printing its total when it could not read
+    # a subdirectory, and 2>/dev/null hides the message but not the status. On
+    # any unprivileged run -- a CI runner, a developer shell -- pipefail then
+    # turned this one line of disk reporting into an aborted `cleanup`. A
+    # partial listing is the correct outcome here; it is diagnostic output.
+    du -xh --max-depth=1 /var/lib/docker 2>/dev/null | sort -h | tail -n 20 || true
     echo
   fi
 
