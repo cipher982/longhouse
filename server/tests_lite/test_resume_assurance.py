@@ -141,6 +141,7 @@ def test_compiler_emits_deterministic_two_variant_plan() -> None:
         "clean_exit",
         "process_loss",
     ]
+    assert first["plan"]["qualification_commands"] == first["plan"]["commands"]
     assert {command["module"] for command in first["plan"]["commands"]} == {"zerg.qa.codex_native_resume"}
     assert {command["qualification_model"] for command in first["plan"]["commands"]} == {
         "gpt-5.3-codex-low"
@@ -278,6 +279,10 @@ def test_compiler_reuses_only_exact_fresh_published_proof() -> None:
 
     assert compiled["report"]["valid"] is True
     assert len(compiled["plan"]["commands"]) == 1
+    assert len(compiled["plan"]["qualification_commands"]) == 2
+    assert {
+        command["variant"] for command in compiled["plan"]["qualification_commands"]
+    } == {"clean_exit", "process_loss"}
     reused = compiled["plan"]["reused_proofs"][0]
     assert reused["artifact_id"] == "a" * 64
     assert reused["producer_id"] == REGISTRATION.producer_id

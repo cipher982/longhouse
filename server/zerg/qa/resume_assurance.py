@@ -486,6 +486,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     compiled_cells: list[dict[str, Any]] = []
     commands: list[dict[str, Any]] = []
+    qualification_commands: list[dict[str, Any]] = []
     reused_proofs: list[dict[str, Any]] = []
     for selected in sorted(expected_cells, key=_cell_sort_key):
         key = _cell_key(selected)
@@ -541,22 +542,6 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             compiled["producer_id"] = registration["producer_id"]
             decision = decision_by_key[key]
             compiled["disposition"] = decision["action"]
-            if decision["action"] == "reuse":
-                reused_proofs.append(
-                    {
-                        **dict(decision["proof"]),
-                        # Proof rows are assertion-shaped, but a scenario
-                        # producer makes one observation for all of its cells.
-                        # Keep that grouping inside the retained plan so exact
-                        # admission can reject legacy/mixed generations.
-                        "producer_id": registration["producer_id"],
-                        "scenario_id": cell["scenario_id"],
-                        "scenario_revision": registration["scenario_revision"],
-                        "observation_scope": registration.get("observation_scope", "cell"),
-                    }
-                )
-                compiled_cells.append(compiled)
-                continue
             command = {
                 "producer_id": registration["producer_id"],
                 "producer_revision": registration["producer_revision"],
@@ -628,7 +613,27 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             if _cell_subject_kind(selected) == PROVIDER_RELEASE_SUBJECT:
                 command["provider_artifact"] = dict(cell_subject.get("provider_artifact") or {})
             command["longhouse_source_sha"] = cell_subject.get("longhouse_source_sha")
-            commands.append(command)
+            # Loop 1 may reuse an exact proof, but Loop 2 must still know how
+            # to execute this cell against a new Longhouse candidate. Keep one
+            # complete, immutable command denominator in the retained plan;
+            # `commands` remains only the Loop 1 execution subset.
+            qualification_commands.append(command)
+            if decision["action"] == "reuse":
+                reused_proofs.append(
+                    {
+                        **dict(decision["proof"]),
+                        # Proof rows are assertion-shaped, but a scenario
+                        # producer makes one observation for all of its cells.
+                        # Keep that grouping inside the retained plan so exact
+                        # admission can reject legacy/mixed generations.
+                        "producer_id": registration["producer_id"],
+                        "scenario_id": cell["scenario_id"],
+                        "scenario_revision": registration["scenario_revision"],
+                        "observation_scope": registration.get("observation_scope", "cell"),
+                    }
+                )
+            else:
+                commands.append(command)
         compiled_cells.append(compiled)
 
     subject_keys = sorted(
@@ -660,6 +665,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             "worker_census_digest": census.get("census_digest"),
             "subject": dict(subject),
             "subject_keys": subject_keys,
+            "qualification_commands": qualification_commands,
             "commands": commands,
             "reused_proofs": reused_proofs,
             "cost_budget_usd": scheduling.get("total_execute_cost_budget_usd"),

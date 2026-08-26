@@ -16,7 +16,9 @@ def awareness_post_compaction_assertions(observation: Mapping[str, object]) -> d
         "coordination_instructions_model_visible_after_compaction": (
             observation.get("coordination_instructions_model_visible_after_compaction") is True
         ),
-        "no_duplicate_visible_bootstrap": observation.get("visible_bootstrap_count") in {None, 0, 1},
+        "no_duplicate_visible_bootstrap": (
+            observation.get("visible_bootstrap_count") is not None and observation.get("visible_bootstrap_count") in {0, 1}
+        ),
     }
 
 

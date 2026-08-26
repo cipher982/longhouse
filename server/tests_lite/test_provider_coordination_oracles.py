@@ -25,6 +25,12 @@ def test_awareness_oracles_require_model_visibility_and_no_duplicate_cards() -> 
         "coordination_instructions_model_visible_after_compaction": False,
         "no_duplicate_visible_bootstrap": False,
     }
+    assert awareness_post_compaction_assertions(
+        {"coordination_instructions_model_visible_after_compaction": True}
+    ) == {
+        "coordination_instructions_model_visible_after_compaction": True,
+        "no_duplicate_visible_bootstrap": False,
+    }
 
 
 def test_directed_input_oracle_keeps_persistence_receipt_and_visibility_separate() -> None:
