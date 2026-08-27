@@ -279,8 +279,12 @@
     {
       "path": "engine/src/state/recover.rs",
       "providers": [
+        "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "cursor",
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -870,6 +874,7 @@
       "providers": [
         "claude",
         "codex",
+        "cursor",
         "opencode"
       ]
     },
