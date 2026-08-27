@@ -2,11 +2,12 @@
 
 This is deliberately a process-startup seam, not a fault-injection API. A
 Runtime Host only accepts the binding when all four factory gates are present:
-explicit assurance mode, the test runtime, a loopback HTTP endpoint, and an
-owner-only absolute token file. The path and transport are immutable for the
-life of the process; the factory may advance the token file contents to prove
-credential-generation recovery without teaching production how to rotate a
-credential on command.
+explicit assurance mode, the dedicated candidate environment, a loopback HTTP
+endpoint, and an owner-only absolute token file. The Runtime Host stays on its
+normal production code paths; the environment is the isolation gate. The path
+and transport are immutable for the life of the process; the factory may advance
+the token file contents to prove credential-generation recovery without teaching
+production how to rotate a credential on command.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from urllib.parse import urlparse
 FACTORY_ASSURANCE_MODE_ENV = "LONGHOUSE_FACTORY_ASSURANCE"
 FACTORY_ASSURANCE_TITLE_BASE_URL_ENV = "LONGHOUSE_FACTORY_ASSURANCE_TITLE_BASE_URL"
 FACTORY_ASSURANCE_TITLE_TOKEN_FILE_ENV = "LONGHOUSE_FACTORY_ASSURANCE_TITLE_TOKEN_FILE"
+FACTORY_ASSURANCE_ENVIRONMENT = "candidate-qualification"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
@@ -77,8 +79,11 @@ def load_factory_assurance_title_binding(
     configured = _enabled(mode) or bool(base_url) or bool(token_path)
     if not configured:
         return None
-    if not _enabled(mode) or not _enabled(env.get("TESTING")):
-        raise ValueError("factory assurance title binding requires explicit assurance mode and TESTING=1")
+    runtime_environment = str(env.get("ENVIRONMENT") or "").strip()
+    if not _enabled(mode) or runtime_environment != FACTORY_ASSURANCE_ENVIRONMENT:
+        raise ValueError(
+            "factory assurance title binding requires explicit assurance mode " f"and ENVIRONMENT={FACTORY_ASSURANCE_ENVIRONMENT}"
+        )
     if not base_url or not token_path:
         raise ValueError("factory assurance title binding requires a base URL and token file")
     path = Path(token_path)
@@ -109,6 +114,7 @@ def factory_assurance_title_enabled() -> bool:
 
 
 __all__ = [
+    "FACTORY_ASSURANCE_ENVIRONMENT",
     "FACTORY_ASSURANCE_MODE_ENV",
     "FACTORY_ASSURANCE_TITLE_BASE_URL_ENV",
     "FACTORY_ASSURANCE_TITLE_TOKEN_FILE_ENV",

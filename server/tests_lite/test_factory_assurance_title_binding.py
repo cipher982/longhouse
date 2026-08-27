@@ -4,6 +4,7 @@ import os
 
 import pytest
 
+from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_ENVIRONMENT
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_MODE_ENV
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_TITLE_BASE_URL_ENV
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_TITLE_TOKEN_FILE_ENV
@@ -12,7 +13,7 @@ from zerg.services.factory_assurance_title_binding import load_factory_assurance
 
 def _environment(token_file, *, base_url="http://127.0.0.1:43123/v1"):
     return {
-        "TESTING": "1",
+        "ENVIRONMENT": FACTORY_ASSURANCE_ENVIRONMENT,
         FACTORY_ASSURANCE_MODE_ENV: "1",
         FACTORY_ASSURANCE_TITLE_BASE_URL_ENV: base_url,
         FACTORY_ASSURANCE_TITLE_TOKEN_FILE_ENV: str(token_file),
@@ -42,7 +43,7 @@ def test_factory_title_binding_reads_generation_from_owner_only_file(tmp_path):
 @pytest.mark.parametrize(
     ("override", "message"),
     [
-        ({"TESTING": "0"}, "TESTING=1"),
+        ({"ENVIRONMENT": "production"}, f"ENVIRONMENT={FACTORY_ASSURANCE_ENVIRONMENT}"),
         ({FACTORY_ASSURANCE_MODE_ENV: "0"}, "explicit assurance mode"),
         ({FACTORY_ASSURANCE_TITLE_BASE_URL_ENV: "https://127.0.0.1:443/v1"}, "loopback HTTP URL"),
         ({FACTORY_ASSURANCE_TITLE_BASE_URL_ENV: "http://example.com:80/v1"}, "loopback"),
