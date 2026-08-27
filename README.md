@@ -45,6 +45,10 @@ longhouse opencode     # managed server session: send, interrupt, reattach (not 
 longhouse cursor       # managed PTY session: send, interrupt, reattach (not active-turn steer)
 ```
 
+Use `longhouse opencode --model <provider/model>` when the OpenCode session
+must stay on a specific model. Longhouse carries that explicit choice through
+both the initial Helm launch and a later cold reattach.
+
 OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer. Cursor Helm supports send, interrupt, terminate, and reattach but not active-turn steer or pause-answer.
 
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
