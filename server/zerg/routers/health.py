@@ -212,11 +212,12 @@ def health_db(request: Request):
     status so this isn't a public schema-disclosure surface.
     """
     from zerg.database import default_engine
+    from zerg.database import get_live_engine
     from zerg.database import live_catalog_enabled
 
     trusted = _request_is_trusted(request)
     catalog_mode = live_catalog_enabled()
-    if catalog_mode:
+    if catalog_mode and not get_settings().testing:
         try:
             from zerg.catalogd.client import call_catalogd_sync
             from zerg.catalogd.schema import catalogd_ping_is_compatible
@@ -232,7 +233,10 @@ def health_db(request: Request):
         except Exception:
             return JSONResponse(status_code=503, content={"status": "error", "detail": "Catalog connection failed"})
 
-    health_engine = default_engine
+    # Tests intentionally do not start the catalogd supervisor. Their live
+    # catalog is initialized in-process, so readiness must inspect that exact
+    # test-owned database instead of waiting for a socket that cannot exist.
+    health_engine = get_live_engine() if catalog_mode else default_engine
     required_tables = (
         ["users", "live_session_catalog", "live_timeline_cards", "live_runtime_state"]
         if catalog_mode

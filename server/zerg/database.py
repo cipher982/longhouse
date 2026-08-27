@@ -763,7 +763,12 @@ def _get_db_from_factory(session_factory: Any = None) -> Iterator[Session]:
 def get_db() -> Iterator[Session]:
     """FastAPI dependency provider for database sessions."""
 
-    if live_catalog_enabled():
+    # Unit and E2E tests deliberately retain this exact dependency callable so
+    # FastAPI dependency overrides and per-worker SQLite routing keep working.
+    # Only a real Runtime Host must refuse an in-process archive route while
+    # catalogd owns the live catalog.
+    testing = _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}
+    if live_catalog_enabled() and not testing:
         from fastapi import HTTPException
         from fastapi import status
 

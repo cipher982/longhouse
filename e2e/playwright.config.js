@@ -217,6 +217,7 @@ const config = {
       cwd: __dirname,
       reuseExistingServer: false,
       timeout: 120_000, // Backend needs time for schema setup
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
       env: {
         ...process.env,
         BACKEND_PORT: String(BACKEND_PORT),

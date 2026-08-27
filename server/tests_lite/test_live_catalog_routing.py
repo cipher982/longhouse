@@ -64,6 +64,25 @@ def test_catalog_dependency_stays_overrideable_during_tests(monkeypatch):
     assert catalog_db_dependency() is get_db
 
 
+def test_get_db_keeps_test_owned_sqlite_route_when_live_catalog_is_enabled(monkeypatch):
+    class TestSession:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    session = TestSession()
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(database_module._settings, "testing", True)
+    monkeypatch.setenv("TESTING", "1")
+    monkeypatch.setattr(database_module, "get_session_factory", lambda: lambda: session)
+
+    dependency = get_db()
+    assert next(dependency) is session
+    dependency.close()
+    assert session.closed is True
+
+
 def test_production_catalog_mode_does_not_construct_api_sqlite_engines(monkeypatch):
     settings = type("Settings", (), {"live_database_url": "sqlite:////data/longhouse-live.db", "testing": False})()
     monkeypatch.setenv("TESTING", "0")

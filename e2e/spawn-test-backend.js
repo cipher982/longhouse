@@ -132,7 +132,7 @@ console.log(`[spawn-backend] Starting E2E backend on port ${port} with SQLite: $
 
 // Spawn the test backend with E2E configuration
 const backend = spawn('uv', [
-    'run', 'python', '-m', 'uvicorn', 'zerg.main:app',
+    'run', 'python', '-m', 'uvicorn', 'zerg.qa.e2e_app:app',
     `--host=127.0.0.1`,
     `--port=${port}`,
     `--workers=${uvicornWorkers}`,
@@ -177,7 +177,11 @@ const backend = spawn('uv', [
     },
     cwd: join(__dirname, '..', 'server'),
     // Inherit stdio so Playwright can detect startup and we can see errors
-    stdio: 'inherit'
+    stdio: 'inherit',
+    // uv launches Python as a child process. Give that tree its own process
+    // group so Playwright teardown can stop the whole backend rather than
+    // orphaning uvicorn on the cached port.
+    detached: process.platform !== 'win32',
 });
 
 let backendClosed = false;
@@ -196,10 +200,21 @@ backend.on('close', (code) => {
 
 function shutdown(signal) {
     console.log(`[spawn-backend] Worker ${workerId} received ${signal}, shutting down backend`);
-    backend.kill(signal);
+    const terminateBackend = (nextSignal) => {
+        if (process.platform !== 'win32' && backend.pid) {
+            try {
+                process.kill(-backend.pid, nextSignal);
+                return;
+            } catch {
+                // Fall back to the direct child if its process group exited.
+            }
+        }
+        backend.kill(nextSignal);
+    };
+    terminateBackend(signal);
     setTimeout(() => {
         if (!backendClosed) {
-            backend.kill('SIGKILL');
+            terminateBackend('SIGKILL');
         }
     }, 5000).unref();
 }
