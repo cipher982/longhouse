@@ -1784,7 +1784,7 @@ where
     // database is unopenable: no writer can be holding it, so there is nothing
     // to race. Recovery refuses to run on any database that does open, which is
     // what keeps that guarantee true rather than assumed.
-    let corrupt_state_db = state_database_needs_recovery(state_root);
+    let corrupt_state_db = state_database_needs_recovery(&status_path);
     if let Some(db_path) = corrupt_state_db {
         return Ok(native_repair_state_recovery(
             dry_run,
@@ -1872,9 +1872,12 @@ where
 }
 
 /// The shipper database when it is present and unreadable, otherwise `None`.
-fn state_database_needs_recovery(state_root: Option<&Path>) -> Option<PathBuf> {
-    let root = state_root?;
-    let db_path = root.join("agent").join("longhouse-shipper.db");
+///
+/// Resolved from the engine status path rather than the raw `state_root`, which
+/// is `None` for the ordinary invocation — the status file already sits in the
+/// agent directory the database shares, so one resolution serves both.
+fn state_database_needs_recovery(status_path: &Path) -> Option<PathBuf> {
+    let db_path = status_path.parent()?.join("longhouse-shipper.db");
     if !db_path.exists() {
         return None;
     }
@@ -5484,7 +5487,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         drop(file);
 
         assert!(
-            state_database_needs_recovery(Some(&state_root)).is_some(),
+            state_database_needs_recovery(&agent.join("engine-status.json")).is_some(),
             "an unopenable database must be recognized as needing recovery"
         );
     }
@@ -5504,7 +5507,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             .unwrap();
         drop(conn);
 
-        assert!(state_database_needs_recovery(Some(&state_root)).is_none());
+        assert!(state_database_needs_recovery(&agent.join("engine-status.json")).is_none());
     }
 
     fn native_repair_execution_rejects_unconfigured_machine_before_service_touch() {

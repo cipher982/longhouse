@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import datetime
+from datetime import timezone
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
@@ -18,6 +20,9 @@ TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 3
 TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.25
 CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 2
 CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT = 2
+# Long enough that an idle laptop between sessions is not called unhealthy, short
+# enough that a real outage surfaces the same day. cinder's went 33 hours.
+SHIP_STALLED_DEGRADED_MIN_SECONDS = 6 * 60 * 60
 ACTIVE_TRANSPORT_WINDOW_LABEL = "last 10 minutes"
 
 
@@ -33,6 +38,17 @@ def _normalize_int(value: Any) -> int:
         return int(raw)
     except ValueError:
         return 0
+
+
+def _normalize_optional_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
 
 
 @dataclass(frozen=True)
@@ -60,6 +76,34 @@ class TransportHealthSample:
     last_ship_error_kind: str | None = None
     last_ship_error_message: str | None = None
     is_offline: bool = False
+    # The only elapsed-time inputs this assessment has. Without them it can
+    # answer "are ships failing?" but not "has anything shipped at all?" — and a
+    # machine whose heartbeats are current while its last successful ship was 33
+    # hours ago classified healthy, which is exactly how one went unnoticed.
+    last_ship_at: datetime | None = None
+    observed_at: datetime | None = None
+
+    @property
+    def seconds_since_last_ship(self) -> float | None:
+        """Age of the last successful ship, or None when it cannot be known.
+
+        Absent rather than zero when either timestamp is missing: a machine that
+        has never shipped is not the same as one that shipped a moment ago, and
+        guessing either way would put a fabricated number into a health verdict.
+        """
+
+        if self.last_ship_at is None:
+            return None
+        last_ship_at = self.last_ship_at
+        # Builders stay pure: neither stamps a clock reading, so the two remain
+        # directly comparable. "Now" is only supplied here, where the question
+        # is actually being asked.
+        observed_at = self.observed_at or datetime.now(timezone.utc)
+        if last_ship_at.tzinfo is None:
+            last_ship_at = last_ship_at.replace(tzinfo=timezone.utc)
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (observed_at - last_ship_at).total_seconds())
 
     @property
     def ship_success_rate_1h(self) -> float | None:
@@ -129,6 +173,7 @@ def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHeal
         last_ship_error_kind=_normalize_optional_str(raw.get("last_ship_error_kind")),
         last_ship_error_message=_normalize_optional_str(raw.get("last_ship_error_message")),
         is_offline=bool(getattr(row, "is_offline", False)),
+        last_ship_at=_normalize_optional_datetime(getattr(row, "last_ship_at", None) or raw.get("last_ship_at")),
     )
 
 
@@ -139,6 +184,7 @@ def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any
         spool_dead=_normalize_int(raw_payload.get("spool_dead_count")),
         parse_errors_1h=_normalize_int(raw_payload.get("parse_error_count_1h")),
         consecutive_failures=_normalize_int(raw_payload.get("consecutive_ship_failures")),
+        last_ship_at=_normalize_optional_datetime(raw_payload.get("last_ship_at")),
         ship_attempts_1h=_normalize_int(raw_payload.get("ship_attempts_1h")),
         ship_successes_1h=_normalize_int(raw_payload.get("ship_successes_1h")),
         ship_rate_limited_1h=_normalize_int(raw_payload.get("ship_rate_limited_1h")),
@@ -186,7 +232,28 @@ def _transport_window_phrase(sample: TransportHealthSample) -> str:
     return f"in the {ACTIVE_TRANSPORT_WINDOW_LABEL}" if sample.has_active_window else "in the last hour"
 
 
+def _humanize_age(seconds: float) -> str:
+    hours = int(seconds // 3600)
+    if hours >= 24:
+        days = hours // 24
+        return f"{days} day(s)"
+    if hours >= 1:
+        return f"{hours} hour(s)"
+    return f"{int(seconds // 60)} minute(s)"
+
+
 def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAssessment:
+    # A live machine that has stopped shipping is the failure this assessment
+    # could not previously express: every other input asks whether ship attempts
+    # are erroring, and a machine whose attempts stopped happening entirely has
+    # no errors to report. Only counted when the agent is demonstrably present —
+    # an offline machine is already described by being offline.
+    stalled_age = sample.seconds_since_last_ship
+    ship_stalled = (
+        not sample.is_offline
+        and stalled_age is not None
+        and stalled_age >= SHIP_STALLED_DEGRADED_MIN_SECONDS
+    )
     connect_error_burst = is_transport_error_burst(
         error_count=sample.ship_connect_errors_active,
         ship_attempts=sample.ship_attempts_active,
@@ -225,6 +292,8 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         reasons.append("parse_errors")
     if sample.consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT:
         reasons.append("consecutive_failures")
+    if ship_stalled:
+        reasons.append("ship_stalled")
     if connect_error_burst:
         reasons.append("connect_errors")
     if server_error_burst:
@@ -257,6 +326,12 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         status = "degraded"
         status_reason = "consecutive_failures"
         status_summary = f"{sample.consecutive_failures} consecutive ship failure(s)."
+    elif ship_stalled:
+        status = "degraded"
+        status_reason = "ship_stalled"
+        status_summary = (
+            f"Heartbeats are current but nothing has shipped for {_humanize_age(stalled_age)}."
+        )
     elif connect_error_burst:
         status = "degraded"
         status_reason = "connect_errors"

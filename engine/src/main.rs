@@ -240,8 +240,7 @@ enum Commands {
         json: bool,
     },
 
-    /// Parse a JSONL file and report event counts (dev/validation tool)
-    /// Salvage a shipper state database SQLite refuses to open.
+    /// Salvage a shipper state database SQLite refuses to open
     RecoverState {
         /// State database to recover (defaults to the configured shipper DB)
         #[arg(long)]
@@ -256,6 +255,7 @@ enum Commands {
         json: bool,
     },
 
+    /// Parse a JSONL file and report event counts (dev/validation tool)
     Parse {
         /// Path to session JSONL file
         path: PathBuf,

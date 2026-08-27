@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -304,3 +305,61 @@ def test_transport_health_surfaces_last_transport_error_detail():
     assert assessment.status == "degraded"
     assert assessment.status_reason == "connect_errors"
     assert assessment.status_summary == "2 ship connect error(s) in the last hour. Last error: timeout."
+
+
+def test_current_heartbeats_with_a_stale_last_ship_are_degraded_not_healthy():
+    """The exact shape that hid a 33-hour outage.
+
+    Every counter this assessment used to read said things were fine — the last
+    recorded result was ``ok``, the 1h window showed 41 of 41 attempts
+    succeeding, no parse errors — because ship attempts had stopped happening
+    rather than started failing. Nothing in the sample expressed elapsed time,
+    so a machine that had shipped nothing since the previous day classified
+    healthy.
+    """
+
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    sample = transport_health_sample_from_engine_status_payload(
+        {"last_ship_result": "ok", "ship_attempts_1h": 41, "ship_successes_1h": 41}
+    )
+    stalled = replace(sample, last_ship_at=now - timedelta(hours=33), observed_at=now)
+
+    assessment = assess_transport_health(stalled)
+
+    assert assessment.status == "degraded"
+    assert assessment.status_reason == "ship_stalled"
+    assert "ship_stalled" in assessment.reasons
+
+
+def test_a_recent_ship_and_an_unknown_ship_time_both_stay_healthy():
+    """Quiet is not the same as stalled, and unknown is not the same as stale.
+
+    A machine between sessions ships nothing for minutes at a time, and a
+    heartbeat that carries no ``last_ship_at`` cannot support any claim about
+    elapsed time. Neither may be reported as an outage.
+    """
+
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    base = transport_health_sample_from_engine_status_payload({"last_ship_result": "ok"})
+
+    recent = replace(base, last_ship_at=now - timedelta(minutes=5), observed_at=now)
+    assert assess_transport_health(recent).status == "healthy"
+
+    assert base.seconds_since_last_ship is None
+    assert assess_transport_health(base).status == "healthy"
+
+
+def test_an_offline_machine_is_described_by_being_offline():
+    """Offline already explains the silence; stalled would only add noise."""
+
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    sample = transport_health_sample_from_engine_status_payload({"is_offline": True})
+    offline = replace(sample, is_offline=True, last_ship_at=now - timedelta(hours=33), observed_at=now)
+
+    assert "ship_stalled" not in assess_transport_health(offline).reasons
