@@ -1353,6 +1353,7 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 86400
+        assurance_priority: sampled
     coordination.directed_input.send:
       disposition: implemented
       reason_code: semantic_proof_missing

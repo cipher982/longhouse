@@ -411,6 +411,9 @@ def _validate_capabilities(item: dict[str, Any]) -> None:
             max_age = assertion.get("max_age_seconds")
             if not isinstance(max_age, int) or isinstance(max_age, bool) or max_age < 1:
                 raise ValueError(f"{prefix}.required_assertions max_age_seconds must be positive")
+            priority = assertion.get("assurance_priority", "release_gate")
+            if priority not in {"release_gate", "sampled"}:
+                raise ValueError(f"{prefix}.required_assertions assurance_priority must be release_gate or sampled")
 
 
 def _validate_factory_contract(item: dict[str, Any]) -> None:

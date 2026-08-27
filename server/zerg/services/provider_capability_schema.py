@@ -74,6 +74,7 @@ class CapabilityAssertion:
     acceptable_evidence: tuple[str, ...]
     max_age_seconds: int
     disposition: str = "implemented"
+    assurance_priority: str = "release_gate"
 
 
 def _load_schema() -> dict:
@@ -119,6 +120,7 @@ def _load_capability_assertions() -> tuple[CapabilityAssertion, ...]:
                         acceptable_evidence=tuple(assertion.get("acceptable_evidence") or ()),
                         max_age_seconds=int(assertion["max_age_seconds"]),
                         disposition=str(capability_entry.get("disposition") or "implemented"),
+                        assurance_priority=str(assertion.get("assurance_priority") or "release_gate"),
                     )
                 )
     return tuple(out)

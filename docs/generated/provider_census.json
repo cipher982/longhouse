@@ -1342,7 +1342,8 @@
       "path": "server/tests_lite/test_resume_assurance.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {

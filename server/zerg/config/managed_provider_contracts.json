@@ -2230,6 +2230,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
+              "assurance_priority": "sampled",
               "oracle_digest": "704120f0072cc223e1c8edc602507b5ee70f04ad2a280150b8f445ef82bf1f6d"
             }
           ]

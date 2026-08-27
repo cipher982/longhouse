@@ -17,6 +17,18 @@ from zerg.qa.resume_assurance import execution_variant_key
 from zerg.services.provider_capability_schema import load_capability_assertions
 
 
+def test_cursor_model_choice_awareness_is_sampled_not_a_release_gate() -> None:
+    contract = capability_contract_shape(
+        load_capability_assertions(),
+        provider="cursor",
+        capability="coordination.awareness.create",
+    )
+
+    assert len(contract) == 1
+    assert contract[0]["assertion_id"] == "coordination_instructions_model_visible"
+    assert contract[0]["assurance_priority"] == "sampled"
+
+
 def _inputs() -> dict:
     contract = capability_contract_shape(
         load_capability_assertions(),

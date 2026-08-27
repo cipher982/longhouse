@@ -169,6 +169,7 @@ def capability_contract_shape(assertions: Sequence[object], *, provider: str, ca
                 "oracle_source": getattr(assertion, "oracle_source"),
                 "acceptable_evidence": sorted(getattr(assertion, "acceptable_evidence")),
                 "max_age_seconds": getattr(assertion, "max_age_seconds"),
+                "assurance_priority": getattr(assertion, "assurance_priority", "release_gate"),
             }
         )
     return sorted(rows, key=_cell_sort_key)
@@ -669,7 +670,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                     if selected.get("provider") is not None
                     else None
                 ),
-                "priority": "release_gate",
+                "priority": cell.get("assurance_priority", "release_gate"),
                 "timeout_seconds": 600,
                 "max_cost_usd": 2.0,
                 "freshness_max_age_seconds": cell["max_age_seconds"],
