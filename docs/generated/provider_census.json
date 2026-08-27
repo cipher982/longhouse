@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 267,
+  "file_count": 268,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -274,6 +274,13 @@
         "claude",
         "codex",
         "cursor"
+      ]
+    },
+    {
+      "path": "engine/src/state/recover.rs",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {
@@ -863,7 +870,6 @@
       "providers": [
         "claude",
         "codex",
-        "cursor",
         "opencode"
       ]
     },

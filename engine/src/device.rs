@@ -510,8 +510,14 @@ pub fn cmd_shipping_inspect(source_epoch: Option<&str>, json: bool) -> anyhow::R
     for source in &sources {
         let epoch = source["source_epoch"].as_str().unwrap_or("?");
         println!("Source epoch {epoch}");
-        println!("  provider     {}", source["provider"].as_str().unwrap_or("?"));
-        println!("  file         {}", source["source_path"].as_str().unwrap_or("?"));
+        println!(
+            "  provider     {}",
+            source["provider"].as_str().unwrap_or("?")
+        );
+        println!(
+            "  file         {}",
+            source["source_path"].as_str().unwrap_or("?")
+        );
         println!(
             "  retained     {} events, {} bytes, range {}..{}",
             source["event_count"], source["raw_bytes"], source["range_start"], source["range_end"]
@@ -1049,11 +1055,7 @@ fn native_fast_health_from_parts(
             .and_then(Value::as_u64)
             .unwrap_or(0)
             > 0
-            || value
-                .get("dead_bytes")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                > 0
+            || value.get("dead_bytes").and_then(Value::as_u64).unwrap_or(0) > 0
     });
     let transport = native_transport_status(object);
     let managed_session_count = object
@@ -1774,6 +1776,29 @@ where
         ));
     };
 
+    // A state database SQLite refuses to open is a different fault with a
+    // different remedy, and restarting into it just resumes the failure loop —
+    // the observed machine logged 290,944 identical open failures that way.
+    //
+    // Recovery is safe to run before the restart here precisely because the
+    // database is unopenable: no writer can be holding it, so there is nothing
+    // to race. Recovery refuses to run on any database that does open, which is
+    // what keeps that guarantee true rather than assumed.
+    let corrupt_state_db = state_database_needs_recovery(state_root);
+    if let Some(db_path) = corrupt_state_db {
+        return Ok(native_repair_state_recovery(
+            dry_run,
+            platform,
+            &command,
+            &db_path,
+            machine_state,
+            service,
+            before_health,
+            &status_path,
+            restart_runner,
+        ));
+    }
+
     if dry_run {
         return Ok(native_repair_execution_result(
             true,
@@ -1843,6 +1868,170 @@ where
                 "Native repair did not attempt any fallback process killing or file regeneration.",
             ],
         )),
+    }
+}
+
+/// The shipper database when it is present and unreadable, otherwise `None`.
+fn state_database_needs_recovery(state_root: Option<&Path>) -> Option<PathBuf> {
+    let root = state_root?;
+    let db_path = root.join("agent").join("longhouse-shipper.db");
+    if !db_path.exists() {
+        return None;
+    }
+    crate::state::recover::is_unreadable(&db_path).then_some(db_path)
+}
+
+/// Recover the state database, then restart the agent onto it.
+#[allow(clippy::too_many_arguments)]
+fn native_repair_state_recovery<F>(
+    dry_run: bool,
+    platform: NativeServicePlatform,
+    command: &NativeRestartCommand,
+    db_path: &Path,
+    machine_state: NativeMachineStateStatus,
+    service: NativeRepairServiceStatus,
+    before_health: NativeFastLocalHealth,
+    status_path: &Path,
+    restart_runner: F,
+) -> NativeRepairExecution
+where
+    F: FnOnce(&NativeRestartCommand) -> Result<(), String>,
+{
+    if dry_run {
+        let planned = match crate::state::recover::recover_state_database(db_path, true) {
+            Ok(report) => NativeRepairExecutionAction {
+                id: "recover_state_database",
+                label: "Recover the unreadable shipper state database",
+                status: "planned",
+                platform: platform.as_str(),
+                command: Some(format!(
+                    "recover {} ({} rows recoverable)",
+                    db_path.display(),
+                    report.total_recovered()
+                )),
+                error: None,
+            },
+            Err(error) => NativeRepairExecutionAction {
+                id: "recover_state_database",
+                label: "Recover the unreadable shipper state database",
+                status: "blocked",
+                platform: platform.as_str(),
+                command: Some(format!("recover {}", db_path.display())),
+                error: Some(error.to_string()),
+            },
+        };
+        return native_repair_execution_result(
+            true,
+            "dry_run_planned",
+            "Longhouse can recover the unreadable shipper state database and restart the agent",
+            vec![
+                planned,
+                NativeRepairExecutionAction {
+                    id: "restart_machine_agent_service",
+                    label: "Restart existing Machine Agent service",
+                    status: "planned",
+                    platform: platform.as_str(),
+                    command: Some(command.display.clone()),
+                    error: None,
+                },
+            ],
+            machine_state,
+            Some(service),
+            before_health,
+            None,
+            vec![
+                "Dry run only; the state database was not modified.",
+                "The corrupt database is kept alongside the recovered one, never deleted.",
+            ],
+        );
+    }
+
+    let recovery = match crate::state::recover::recover_state_database(db_path, false) {
+        Ok(report) => report,
+        Err(error) => {
+            return native_repair_execution_result(
+                false,
+                "failed",
+                "Longhouse could not recover the shipper state database",
+                vec![NativeRepairExecutionAction {
+                    id: "recover_state_database",
+                    label: "Recover the unreadable shipper state database",
+                    status: "failed",
+                    platform: platform.as_str(),
+                    command: Some(format!("recover {}", db_path.display())),
+                    error: Some(error.to_string()),
+                }],
+                machine_state,
+                Some(service),
+                before_health,
+                None,
+                vec!["The original database was left exactly as it was found."],
+            );
+        }
+    };
+
+    let recovered_action = NativeRepairExecutionAction {
+        id: "recover_state_database",
+        label: "Recover the unreadable shipper state database",
+        status: "completed",
+        platform: platform.as_str(),
+        command: Some(format!(
+            "recovered {} rows into {}",
+            recovery.total_recovered(),
+            db_path.display()
+        )),
+        error: None,
+    };
+
+    match restart_runner(command) {
+        Ok(()) => {
+            let after_health = collect_native_fast_local_health(status_path);
+            native_repair_execution_result(
+                false,
+                "completed",
+                "Longhouse recovered the state database and restarted the Machine Agent",
+                vec![
+                    recovered_action,
+                    NativeRepairExecutionAction {
+                        id: "restart_machine_agent_service",
+                        label: "Restart existing Machine Agent service",
+                        status: "completed",
+                        platform: platform.as_str(),
+                        command: Some(command.display.clone()),
+                        error: None,
+                    },
+                ],
+                machine_state,
+                Some(service),
+                before_health,
+                Some(after_health),
+                vec![
+                    "Recovered lanes resync to the host watermark on their next ship.",
+                    "The corrupt database was kept, not deleted.",
+                ],
+            )
+        }
+        Err(error) => native_repair_execution_result(
+            false,
+            "failed",
+            "Longhouse recovered the state database but could not restart the Machine Agent",
+            vec![
+                recovered_action,
+                NativeRepairExecutionAction {
+                    id: "restart_machine_agent_service",
+                    label: "Restart existing Machine Agent service",
+                    status: "failed",
+                    platform: platform.as_str(),
+                    command: Some(command.display.clone()),
+                    error: Some(error),
+                },
+            ],
+            machine_state,
+            Some(service),
+            before_health,
+            None,
+            vec!["The database is recovered; the service still needs a restart."],
+        ),
     }
 }
 
@@ -4391,7 +4580,10 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"storage_v2_sources_unresolved".to_string()));
-        assert_eq!(health.headline, "Longhouse has unresolved durable source evidence");
+        assert_eq!(
+            health.headline,
+            "Longhouse has unresolved durable source evidence"
+        );
     }
 
     #[test]
@@ -5264,6 +5456,57 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
     }
 
     #[test]
+    /// A corrupt state database must not be answered with a restart. The
+    /// observed machine logged 290,944 identical open failures doing exactly
+    /// that, because restarting reopens the same unreadable file.
+    #[test]
+    fn native_repair_plans_state_recovery_when_the_database_is_unreadable() {
+        use std::io::Write;
+
+        let home = tempfile::tempdir().unwrap();
+        let state_root = home.path().join(".longhouse");
+        let agent = state_root.join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+
+        // A real SQLite file whose magic has been destroyed.
+        let db_path = agent.join("longhouse-shipper.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch("CREATE TABLE file_state (path TEXT PRIMARY KEY);")
+                .unwrap();
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&db_path)
+            .unwrap();
+        file.write_all(&[0u8; 16]).unwrap();
+        file.flush().unwrap();
+        drop(file);
+
+        assert!(
+            state_database_needs_recovery(Some(&state_root)).is_some(),
+            "an unopenable database must be recognized as needing recovery"
+        );
+    }
+
+    /// The inverse, and the guarantee that makes recover-before-restart safe:
+    /// a database that opens is never a recovery candidate, so recovery can
+    /// never race a live writer.
+    #[test]
+    fn native_repair_leaves_a_readable_database_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let state_root = home.path().join(".longhouse");
+        let agent = state_root.join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        let db_path = agent.join("longhouse-shipper.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch("CREATE TABLE file_state (path TEXT PRIMARY KEY);")
+            .unwrap();
+        drop(conn);
+
+        assert!(state_database_needs_recovery(Some(&state_root)).is_none());
+    }
+
     fn native_repair_execution_rejects_unconfigured_machine_before_service_touch() {
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
@@ -6286,23 +6529,38 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         assert!(!quiet.scan_error);
 
         crate::managed_launch_lifecycle::record_registration_retry(
-            &agent_dir, "session-a", "Codex", false,
+            &agent_dir,
+            "session-a",
+            "Codex",
+            false,
         )
         .unwrap();
-        let retrying = collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
-        assert_eq!(retrying.active_count, 1, "a retrying launch must read as active recovery");
+        let retrying =
+            collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
+        assert_eq!(
+            retrying.active_count, 1,
+            "a retrying launch must read as active recovery"
+        );
         assert_eq!(retrying.exhausted_count, 0);
 
         crate::managed_launch_lifecycle::record_registration_retry(
-            &agent_dir, "session-a", "Codex", true,
+            &agent_dir,
+            "session-a",
+            "Codex",
+            true,
         )
         .unwrap();
-        let exhausted = collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
-        assert_eq!(exhausted.active_count, 0, "an abandoned retry must stop reading as active");
+        let exhausted =
+            collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
+        assert_eq!(
+            exhausted.active_count, 0,
+            "an abandoned retry must stop reading as active"
+        );
         assert_eq!(exhausted.exhausted_count, 1);
 
         crate::managed_launch_lifecycle::clear_registration_retry(&agent_dir, "session-a");
-        let recovered = collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
+        let recovered =
+            collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
         assert_eq!(recovered.active_count, 0);
         assert_eq!(recovered.exhausted_count, 0);
     }
@@ -6313,7 +6571,10 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         let agent_dir = root.path().join("agent");
         std::fs::create_dir_all(&agent_dir).unwrap();
         crate::managed_launch_lifecycle::record_registration_retry(
-            &agent_dir, "session-b", "OpenCode", false,
+            &agent_dir,
+            "session-b",
+            "OpenCode",
+            false,
         )
         .unwrap();
         let raw = std::fs::read_to_string(

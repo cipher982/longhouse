@@ -1,3 +1,5 @@
+mod antigravity_print;
+mod antigravity_workspace;
 mod bench;
 mod build_identity;
 mod claude_channel_control;
@@ -21,8 +23,6 @@ mod cursor_helm_control;
 mod cursor_helm_launcher;
 mod cursor_hooks;
 mod cursor_launch_binding;
-mod antigravity_print;
-mod antigravity_workspace;
 mod cursor_print;
 mod cursor_store;
 mod cursor_visibility;
@@ -38,14 +38,14 @@ mod managed_antigravity_scan;
 mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_contract_janitor;
+mod managed_cursor_helm_scan;
 mod managed_identity;
 mod managed_identity_contract;
-mod managed_cursor_helm_scan;
 mod managed_launch_lifecycle;
 mod managed_launch_payload;
+mod managed_opencode_scan;
 mod managed_phase_contract;
 mod managed_process_janitor;
-mod managed_opencode_scan;
 mod managed_resume_scan;
 mod managed_terminal;
 mod media_redaction;
@@ -241,6 +241,21 @@ enum Commands {
     },
 
     /// Parse a JSONL file and report event counts (dev/validation tool)
+    /// Salvage a shipper state database SQLite refuses to open.
+    RecoverState {
+        /// State database to recover (defaults to the configured shipper DB)
+        #[arg(long)]
+        db: Option<PathBuf>,
+
+        /// Report what each table would yield without writing anything
+        #[arg(long)]
+        dry_run: bool,
+
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+
     Parse {
         /// Path to session JSONL file
         path: PathBuf,
@@ -1288,6 +1303,7 @@ fn prune_old_logs(log_dir: &std::path::Path, keep_days: u64) {
 fn command_name(command: &Commands) -> &'static str {
     match command {
         Commands::Parse { .. } => "parse",
+        Commands::RecoverState { .. } => "recover-state",
         Commands::BuildIdentity { .. } => "build-identity",
         Commands::Update { command } => match command {
             UpdateCommands::Status { .. } => "update-status",
@@ -1482,6 +1498,32 @@ fn main() -> anyhow::Result<()> {
             compress,
         } => {
             commands::cmd_parse::cmd_parse(&path, offset, dump_events, compress)?;
+        }
+        Commands::RecoverState { db, dry_run, json } => {
+            let db_path = state::db::resolve_db_path(db.as_deref())?;
+            let report = state::recover::recover_state_database(&db_path, dry_run)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "{} {}",
+                    if report.dry_run {
+                        "Would recover"
+                    } else {
+                        "Recovered"
+                    },
+                    db_path.display()
+                );
+                for table in &report.tables {
+                    println!(
+                        "  {:<24} {:>7} kept  {:>7} rejected  ({} attributed)",
+                        table.table, table.recovered, table.rejected, table.attributed
+                    );
+                }
+                for note in &report.notes {
+                    println!("  note: {note}");
+                }
+            }
         }
         Commands::Bench {
             level,
@@ -1784,9 +1826,7 @@ fn main() -> anyhow::Result<()> {
             }
             UpdateCommands::Rollback { version } => {
                 update::rollback_to_local(&version)?;
-                println!(
-                    "Reinstalled {version}. Restart the Longhouse engine service to run it."
-                );
+                println!("Reinstalled {version}. Restart the Longhouse engine service to run it.");
             }
         },
         Commands::Device { command } => match command {
