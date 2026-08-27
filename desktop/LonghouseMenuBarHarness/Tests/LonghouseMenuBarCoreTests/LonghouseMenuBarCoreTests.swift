@@ -443,6 +443,54 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func localRefreshToleratesDuplicateCachedSessionIds() throws {
+        let connection = RealtimeConnectionSnapshot(
+            runtimeUrl: "https://runtime.example",
+            machineName: "cinder",
+            tokenPath: "/tmp/device-token"
+        )
+        let antigravity = ManagedSessionSnapshot(
+            sessionId: "shared-id", provider: "antigravity", workspaceLabel: "zerg",
+            timelineTitle: "Antigravity title", branch: "main", state: "attached",
+            phase: "Using shell", lastActivityAt: nil, bridgeStatus: "ready",
+            bridgePid: 42, bridgeHeartbeatAt: nil, reasonCodes: [],
+            authority: "runtime_host"
+        )
+        let claude = ManagedSessionSnapshot(
+            sessionId: "shared-id", provider: "claude", workspaceLabel: "zerg",
+            timelineTitle: "Claude title", branch: "main", state: "attached",
+            phase: "Waiting", lastActivityAt: nil, bridgeStatus: "ready",
+            bridgePid: 43, bridgeHeartbeatAt: nil, reasonCodes: [],
+            authority: "runtime_host"
+        )
+        let localPreview = ManagedSessionSnapshot(
+            sessionId: "shared-id", provider: "antigravity", workspaceLabel: "zerg",
+            branch: "new-local-branch", state: "attached", phase: nil,
+            lastActivityAt: nil, bridgeStatus: "ready", bridgePid: 42,
+            bridgeHeartbeatAt: nil, reasonCodes: [], authority: "machine_preview"
+        )
+        let previous = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-08-20T23:17:29Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: [antigravity, claude],
+            realtime: connection, launchReadiness: nil
+        )
+        let refreshed = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-08-26T23:04:37Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: [localPreview],
+            realtime: connection, launchReadiness: nil
+        ).preservingRealtimeProjection(from: previous)
+
+        let session = try #require(refreshed.managedSessions?.first)
+        #expect(session.timelineTitle == "Antigravity title")
+        #expect(session.phase == "Using shell")
+        #expect(session.authority == "runtime_host")
+    }
+
+    @Test
     func localRefreshPreservesCanonicalPhaseAndControlProjection() throws {
         let connection = RealtimeConnectionSnapshot(
             runtimeUrl: "https://runtime.example",

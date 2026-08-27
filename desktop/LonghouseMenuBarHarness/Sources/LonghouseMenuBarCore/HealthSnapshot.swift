@@ -172,14 +172,12 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     func preservingSessionTitles(from previous: HealthSnapshot?) -> HealthSnapshot {
         guard let previousSessions = previous?.managedSessions else { return self }
-        let previousById = Dictionary(
-            uniqueKeysWithValues: previousSessions.compactMap { session in
-                session.sessionId.map { ($0, session) }
-            }
-        )
+        let previousById = Self.sessionsById(previousSessions)
         let sessions = managedSessions?.map { session in
             guard let sessionId = session.sessionId,
-                  let previousSession = previousById[sessionId]
+                  let candidates = previousById[sessionId],
+                  let previousSession = candidates.first(where: { $0.provider == session.provider })
+                    ?? candidates.first
             else { return session }
             return session.preservingTitle(from: previousSession)
         }
@@ -198,18 +196,27 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
               let previousSessions = previous.managedSessions
         else { return refreshed }
 
-        let previousById = Dictionary(
-            uniqueKeysWithValues: previousSessions.compactMap { session in
-                session.sessionId.map { ($0, session) }
-            }
-        )
+        let previousById = Self.sessionsById(previousSessions)
         let sessions = refreshed.managedSessions?.map { session in
             guard let sessionId = session.sessionId,
-                  let previousSession = previousById[sessionId]
+                  let candidates = previousById[sessionId],
+                  let previousSession = candidates.first(where: { $0.provider == session.provider })
+                    ?? candidates.first
             else { return session }
             return session.preservingRuntimeHostProjection(from: previousSession)
         }
         return refreshed.replacingManagedSessions(sessions)
+    }
+
+    private static func sessionsById(
+        _ sessions: [ManagedSessionSnapshot]
+    ) -> [String: [ManagedSessionSnapshot]] {
+        var sessionsById: [String: [ManagedSessionSnapshot]] = [:]
+        for session in sessions {
+            guard let sessionId = session.sessionId else { continue }
+            sessionsById[sessionId, default: []].append(session)
+        }
+        return sessionsById
     }
 
     /// Drop Runtime Host presentation and control once the projection stream has
