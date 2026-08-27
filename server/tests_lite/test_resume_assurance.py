@@ -255,6 +255,30 @@ def test_compiler_emits_deterministic_two_variant_plan() -> None:
     assert {command["qualification_model"] for command in first["plan"]["commands"]} == {"gpt-5.3-codex-low"}
 
 
+def test_compiler_keeps_sampled_cells_executable_but_outside_the_release_gate() -> None:
+    inputs = _inputs()
+    sampled = inputs["accepted_epoch"]["selected_cells"].pop()
+    inputs["accepted_epoch"]["sampled_cells"] = [copy.deepcopy(sampled)]
+    for row in inputs["accepted_epoch"]["contract_shape"]:
+        if row["variant"] == sampled["variant"]:
+            row["assurance_priority"] = "sampled"
+    inputs["current_contract"] = copy.deepcopy(inputs["accepted_epoch"]["contract_shape"])
+    inputs["accepted_epoch"]["epoch_digest"] = content_digest(inputs["accepted_epoch"], "epoch_digest")
+
+    compiled = compile_resume_plan(inputs)
+
+    assert compiled["report"]["valid"] is True
+    assert [row["cell"]["variant"] for row in compiled["report"]["cells"]] == ["clean_exit"]
+    assert [row["cell"]["variant"] for row in compiled["report"]["sampled_cells"]] == ["process_loss"]
+    assert [command["variant"] for command in compiled["plan"]["commands"]] == ["clean_exit"]
+    assert [command["variant"] for command in compiled["plan"]["sampled_commands"]] == ["process_loss"]
+    assert [command["variant"] for command in compiled["plan"]["qualification_commands"]] == [
+        "clean_exit",
+        "process_loss",
+    ]
+    assert compiled["plan"]["sampled_commands"][0]["priority"] == "sampled"
+
+
 def test_product_canary_compiles_an_exact_auxiliary_vehicle_without_changing_subject() -> None:
     compiled = compile_resume_plan(_product_vehicle_inputs())
 

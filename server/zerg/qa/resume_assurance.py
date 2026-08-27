@@ -502,7 +502,17 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
     if census_by_id != accepted_by_id:
         diagnostics.append(_diagnostic("producer_census_mismatch", "deployed producer census differs from accepted epoch"))
 
-    expected_cells = epoch.get("selected_cells") if isinstance(epoch.get("selected_cells"), list) else []
+    selected_cells = epoch.get("selected_cells") if isinstance(epoch.get("selected_cells"), list) else []
+    sampled_cells = epoch.get("sampled_cells") if isinstance(epoch.get("sampled_cells"), list) else []
+    expected_cells = [*selected_cells, *sampled_cells]
+    selected_keys = {_cell_key(cell) for cell in selected_cells if isinstance(cell, Mapping)}
+    sampled_keys = {_cell_key(cell) for cell in sampled_cells if isinstance(cell, Mapping)}
+    if len(selected_keys) != len(selected_cells) or len(sampled_keys) != len(sampled_cells):
+        diagnostics.append(_diagnostic("accepted_epoch_cell_duplicate", "accepted epoch cells are not unique"))
+    if selected_keys.intersection(sampled_keys):
+        diagnostics.append(
+            _diagnostic("accepted_epoch_priority_overlap", "an accepted epoch cell cannot be both release-gating and sampled")
+        )
     requested_cells = scheduling.get("requested_cells") if isinstance(scheduling.get("requested_cells"), list) else []
     if sorted(requested_cells, key=_cell_sort_key) != sorted(expected_cells, key=_cell_sort_key):
         diagnostics.append(_diagnostic("scheduled_cell_omission", "scheduling did not request every accepted Resume cell"))
@@ -516,8 +526,10 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
         diagnostics.append(_diagnostic("scheduling_concurrency_invalid", "Resume scheduling must remain single-concurrency"))
 
     compiled_cells: list[dict[str, Any]] = []
+    sampled_compiled_cells: list[dict[str, Any]] = []
     commands: list[dict[str, Any]] = []
     qualification_commands: list[dict[str, Any]] = []
+    sampled_commands: list[dict[str, Any]] = []
     reused_proofs: list[dict[str, Any]] = []
     for selected in sorted(expected_cells, key=_cell_sort_key):
         key = _cell_key(selected)
@@ -690,7 +702,14 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             # complete, immutable command denominator in the retained plan;
             # `commands` remains only the Loop 1 execution subset.
             qualification_commands.append(command)
-            if decision["action"] == "reuse":
+            is_sampled = key in sampled_keys
+            if is_sampled:
+                # Sampled behavior is intentionally executed by Loop 2 but is
+                # never admitted into Loop 1's proof/reuse gate. Keeping it in
+                # the same immutable manifest makes the signal real without
+                # letting a model-choice observation block a release.
+                sampled_commands.append(command)
+            elif decision["action"] == "reuse":
                 reused_proofs.append(
                     {
                         **dict(decision["proof"]),
@@ -706,10 +725,17 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 )
             else:
                 commands.append(command)
-        compiled_cells.append(compiled)
+        if key in sampled_keys:
+            sampled_compiled_cells.append(compiled)
+        else:
+            compiled_cells.append(compiled)
 
     subject_keys = sorted(
-        {str(item.get("subject_key")) for item in (*commands, *reused_proofs) if isinstance(item, Mapping) and item.get("subject_key")}
+        {
+            str(item.get("subject_key"))
+            for item in (*qualification_commands, *reused_proofs)
+            if isinstance(item, Mapping) and item.get("subject_key")
+        }
     )
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -724,6 +750,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
         "valid": not diagnostics,
         "diagnostics": diagnostics,
         "cells": compiled_cells,
+        "sampled_cells": sampled_compiled_cells,
     }
     plan: dict[str, Any] | None = None
     if not diagnostics:
@@ -738,6 +765,7 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             "subject": dict(subject),
             "subject_keys": subject_keys,
             "qualification_commands": qualification_commands,
+            "sampled_commands": sampled_commands,
             "commands": commands,
             "reused_proofs": reused_proofs,
             "cost_budget_usd": scheduling.get("total_execute_cost_budget_usd"),
