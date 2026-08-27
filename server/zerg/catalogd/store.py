@@ -13218,6 +13218,20 @@ def _bind_orphan_subagents_to_parent(connection, *, provider: str, session_key: 
     if not alias_values:
         return 0
     session_table = StorageSession.__table__
+    # Cheap existence probe before the write. Almost every commit has no orphan
+    # waiting on it, and a bounded indexed SELECT is a far better default than
+    # entering an UPDATE — which takes write locks — to touch nothing.
+    has_orphan = connection.execute(
+        select(session_table.c.session_id)
+        .where(
+            session_table.c.provider == provider,
+            session_table.c.subagent_parent_session_id.is_(None),
+            session_table.c.subagent_parent_provider_session_id.in_(alias_values),
+        )
+        .limit(1)
+    ).first()
+    if has_orphan is None:
+        return 0
     return connection.execute(
         update(session_table)
         .where(

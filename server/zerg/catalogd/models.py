@@ -212,7 +212,11 @@ class StorageSession(CatalogBase):
     # The provider id is what the transcript states; the resolved id is filled in
     # once the parent exists here, which may be after the child arrives.
     is_subagent = Column(Integer, nullable=False, server_default=text("0"), index=True)
-    subagent_parent_provider_session_id = Column(String(255), nullable=True)
+    # Indexed because orphan adoption filters on it inside the single-writer
+    # transaction on every ingest commit. Unindexed, that is a full scan of
+    # `sessions` per commit, which is enough to hold the writer and time
+    # catalogd out.
+    subagent_parent_provider_session_id = Column(String(255), nullable=True, index=True)
     subagent_parent_session_id = Column(String(36), nullable=True, index=True)
     subagent_parent_tool_call_id = Column(String(255), nullable=True)
     subagent_run_id = Column(String(255), nullable=True)
