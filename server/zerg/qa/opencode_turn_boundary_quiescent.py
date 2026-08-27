@@ -94,7 +94,7 @@ _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
 
 REGISTRATION = ProducerRegistration(
     producer_id="opencode.turn_boundary_quiescent.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id="opencode_turn_boundary_quiescent",
     scenario_revision=1,
     # The schema declares no "variant" key for this assertion cell, so the

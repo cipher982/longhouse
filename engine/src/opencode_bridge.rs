@@ -39,6 +39,7 @@ pub struct StartConfig {
     pub launch_mode: String,
     pub resume_provider_session_id: Option<String>,
     pub coordination_token: String,
+    pub model: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -122,10 +123,7 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     let engine = std::env::current_exe().context("resolve native engine for OpenCode MCP")?;
     // This process is the paired engine binary, so the registered command is
     // absolute and remains valid even when the facade is not on PATH.
-    let model = std::env::var("LONGHOUSE_OPENCODE_MODEL")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
+    let model = configured_model(config.model.as_deref());
     let mcp_config = opencode_mcp_config(&engine, &session_id, coordination_token, model.as_deref());
     // OpenCode 1.18.x treats `--port 0` as the default server port (4096)
     // instead of asking the OS for an ephemeral port. A Resume can therefore
@@ -298,6 +296,7 @@ pub fn attach(
     session_id: &str,
     opencode_bin: Option<String>,
     claude_dir: Option<PathBuf>,
+    model: Option<String>,
 ) -> Result<i32> {
     let state_dir = state_dir(claude_dir.as_deref())?;
     let state_path = state_dir.join(format!(
@@ -325,11 +324,7 @@ pub fn attach(
     command
         .env("OPENCODE_SERVER_USERNAME", &state.username)
         .env("OPENCODE_SERVER_PASSWORD", &state.password);
-    if let Some(model) = std::env::var("LONGHOUSE_OPENCODE_MODEL")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(model) = configured_model(model.as_deref()) {
         command.env(
             "OPENCODE_CONFIG_CONTENT",
             serde_json::to_string(&json!({"model": model}))?,
@@ -363,6 +358,24 @@ pub fn attach(
         Err(_) => tracing::warn!("OpenCode session rollover monitor panicked"),
     }
     Ok(status.code().unwrap_or(1))
+}
+
+fn configured_model(explicit: Option<&str>) -> Option<String> {
+    let fallback = std::env::var("LONGHOUSE_OPENCODE_MODEL").ok();
+    configured_model_with_fallback(explicit, fallback.as_deref())
+}
+
+fn configured_model_with_fallback(explicit: Option<&str>, fallback: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            fallback
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
 }
 
 fn monitor_opencode_session_rollovers(
@@ -1041,6 +1054,17 @@ mod tests {
         assert_eq!(
             embedded["mcp"]["longhouse"]["environment"]["LONGHOUSE_COORDINATION_TOKEN"],
             "session-secret"
+        );
+    }
+
+    #[test]
+    fn explicit_model_wins_over_the_compatibility_environment() {
+        assert_eq!(
+            configured_model_with_fallback(
+                Some(" openrouter/selected "),
+                Some("openrouter/fallback")
+            ),
+            Some("openrouter/selected".to_string())
         );
     }
 

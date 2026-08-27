@@ -2094,6 +2094,16 @@ def test_cursor_resume_commands_pin_the_factory_model(tmp_path: Path, monkeypatc
     assert bootstrap_receipt["executed_argv"][-1] == bootstrap
 
 
+def test_opencode_resume_commands_pin_the_factory_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = _args(tmp_path)
+    session_id = "11111111-1111-4111-8111-111111111111"
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_MODEL", "openrouter/deepseek/deepseek-v4-flash")
+
+    command = _launch_command(SPECS["opencode"], args, session_id)
+
+    assert command[command.index("--model") + 1] == "openrouter/deepseek/deepseek-v4-flash"
+
+
 @pytest.mark.parametrize(
     ("provider", "selector"),
     (("claude", "--resume"), ("cursor", "--resume-session"), ("opencode", "--resume-session")),

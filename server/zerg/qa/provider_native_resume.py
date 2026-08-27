@@ -467,7 +467,7 @@ def registration_for(provider: str) -> ProducerRegistration:
     spec = SPECS[provider]
     return ProducerRegistration(
         producer_id=spec.producer_id,
-        producer_revision=2,
+        producer_revision=3,
         scenario_id="helm_cold_resume",
         scenario_revision=4,
         assertion_cells=(
@@ -3527,6 +3527,10 @@ def _launch_command(
     command.extend((spec.binary_flag, str(args.provider_bin)))
     if spec.provider == "cursor":
         command.extend(("--permission-mode", "auto_approve"))
+    if spec.provider == "opencode":
+        opencode_model = os.environ.get("LONGHOUSE_OPENCODE_MODEL", "").strip()
+        if opencode_model:
+            command.extend(("--model", opencode_model))
     if session_id is not None:
         command.extend((spec.resume_flag, session_id))
     if spec.provider == "cursor":

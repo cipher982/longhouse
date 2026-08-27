@@ -719,6 +719,8 @@ enum OpencodeBridgeCommands {
         launch_mode: String,
         #[arg(long)]
         resume_provider_session_id: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Stop a native OpenCode bridge only when its recorded process identity matches.
     Stop {
@@ -735,6 +737,8 @@ enum OpencodeBridgeCommands {
         opencode_bin: Option<String>,
         #[arg(long)]
         claude_dir: Option<PathBuf>,
+        #[arg(long)]
+        model: Option<String>,
     },
 }
 
@@ -1870,6 +1874,7 @@ fn main() -> anyhow::Result<()> {
                 claude_dir,
                 launch_mode,
                 resume_provider_session_id,
+                model,
             } => {
                 let result = opencode_bridge::start(opencode_bridge::StartConfig {
                     session_id,
@@ -1882,6 +1887,7 @@ fn main() -> anyhow::Result<()> {
                     resume_provider_session_id,
                     coordination_token: std::env::var("LONGHOUSE_COORDINATION_TOKEN")
                         .unwrap_or_default(),
+                    model,
                 })?;
                 println!("{}", serde_json::to_string(&result)?);
             }
@@ -1900,8 +1906,9 @@ fn main() -> anyhow::Result<()> {
                 session_id,
                 opencode_bin,
                 claude_dir,
+                model,
             } => {
-                let exit = opencode_bridge::attach(&session_id, opencode_bin, claude_dir)?;
+                let exit = opencode_bridge::attach(&session_id, opencode_bin, claude_dir, model)?;
                 if exit != 0 {
                     std::process::exit(exit);
                 }

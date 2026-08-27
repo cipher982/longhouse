@@ -341,6 +341,9 @@ struct OpencodeLaunchArgs {
     token: Option<String>,
     #[arg(long)]
     opencode_bin: Option<String>,
+    /// Select the stock OpenCode model for this managed session.
+    #[arg(long)]
+    model: Option<String>,
     /// Resume an ended managed OpenCode Helm session without changing its provider session.
     #[arg(long)]
     resume_session: Option<String>,
@@ -410,6 +413,8 @@ struct OpencodeAttachArgs {
     opencode_bin: Option<String>,
     #[arg(long, alias = "config-dir")]
     claude_dir: Option<PathBuf>,
+    #[arg(long)]
+    model: Option<String>,
 }
 #[derive(Args)]
 struct OpencodeStopArgs {
@@ -1809,6 +1814,18 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         "OpenCode",
         "--opencode-bin",
     )?;
+    let model = args
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            std::env::var("LONGHOUSE_OPENCODE_MODEL")
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        });
     let resume_target = args
         .resume_session
         .as_deref()
@@ -1968,6 +1985,9 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             .arg("--resume-provider-session-id")
             .arg(&target.provider_session_id);
     }
+    if let Some(model) = &model {
+        start.arg("--model").arg(model);
+    }
     let output = start.output().context("start native OpenCode bridge")?;
     if !output.status.success() {
         let _ = stop_opencode_bridge(&session_id, args.claude_dir.clone());
@@ -2036,6 +2056,9 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         "--opencode-bin",
         &opencode_bin,
     ]);
+    if let Some(model) = &model {
+        attach.arg("--model").arg(model);
+    }
     let run_result = run_foreground_command(&mut attach);
     if let Some(registration) = &degraded_registration {
         registration.provider_alive.store(false, Ordering::Release);
@@ -2138,6 +2161,9 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
     }
     if let Some(dir) = args.claude_dir {
         command.arg("--claude-dir").arg(dir);
+    }
+    if let Some(model) = args.model {
+        command.arg("--model").arg(model);
     }
     let run_result = run_foreground_command(&mut command);
     let stop_result = stop_opencode_bridge(&args.session_id, None);
