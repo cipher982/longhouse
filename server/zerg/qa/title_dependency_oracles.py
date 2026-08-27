@@ -31,6 +31,7 @@ from uuid import uuid4
 
 import httpx
 
+from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_ENVIRONMENT
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_SURFACE
@@ -240,6 +241,7 @@ class _RuntimeHost:
                 "TESTING": "1",
                 "AUTH_DISABLED": "1",
                 "SINGLE_TENANT": "1",
+                "ENVIRONMENT": FACTORY_ASSURANCE_ENVIRONMENT,
                 "INSTANCE_ID": "factory-title-assurance",
                 "LONGHOUSE_DATA_DIR": str(self.root / "data"),
                 "LONGHOUSE_HOME": str(self.root / "home"),

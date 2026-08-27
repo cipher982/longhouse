@@ -3,11 +3,12 @@
 This is deliberately a process-startup seam, not a fault-injection API. A
 Runtime Host only accepts the binding when all four factory gates are present:
 explicit assurance mode, the dedicated candidate environment, a loopback HTTP
-endpoint, and an owner-only absolute token file. The Runtime Host stays on its
-normal production code paths; the environment is the isolation gate. The path
-and transport are immutable for the life of the process; the factory may advance
-the token file contents to prove credential-generation recovery without teaching
-production how to rotate a credential on command.
+endpoint, and an owner-only absolute token file. The candidate Runtime Host can
+therefore stay on its normal production code paths; the environment is the
+isolation gate. The path and transport are immutable for the life of the
+process; the factory may advance the token file contents to prove
+credential-generation recovery without teaching production how to rotate a
+credential on command.
 """
 
 from __future__ import annotations
