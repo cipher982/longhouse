@@ -25,8 +25,9 @@ def test_registration_binds_one_codex_provider_release_cell():
     assert registration["scenario_id"] == "codex_helm_launch_visibility"
     assert registration["assertion_cells"] == [{"assertion_id": "helm_launch_visibility_preserved", "variant": None}]
     assert registration["credential_binding_ids"] == ["codex_provider_token", "runtime_host_control"]
-    assert registration["producer_revision"] == 7
-    assert registration["scenario_revision"] == 5
+    assert registration["producer_revision"] == 8
+    assert registration["scenario_revision"] == 6
+    assert "open_working_set_with_factory_isolation" in registration["observed_activity"]
 
 
 def test_helm_launch_bridge_socket_fits_linux_unix_path_budget():
@@ -154,7 +155,7 @@ def test_wait_canonical_launch_requires_exact_run_open_and_default_visibility(mo
         }
 
     monkeypatch.setattr(launch, "_runtime_request", request)
-    monkeypatch.setattr(launch, "_session_visible", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(launch, "_session_visible", lambda *_args, **_kwargs: False)
     result = launch._wait_canonical_launch(  # noqa: SLF001 - pure product-proof seam
         argparse.Namespace(wait_ready_secs=0.1),
         registration=registration,
@@ -162,13 +163,14 @@ def test_wait_canonical_launch_requires_exact_run_open_and_default_visibility(mo
         device_id="machine",
         expected_actor="human_shell",
         expected_surface="terminal",
-        expect_visible=True,
+        expect_visible=False,
+        expect_open=True,
         launched_at=time.monotonic(),
     )
 
     assert result["working_set"] == "open"
     assert result["control_run_id"] == "run-1"
-    assert result["default_timeline_visible"] is True
+    assert result["default_timeline_visible"] is False
 
 
 def test_launch_lane_records_the_session_before_asserting_visibility():

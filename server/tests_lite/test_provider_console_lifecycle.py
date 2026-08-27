@@ -62,6 +62,7 @@ def test_registration_covers_each_launch_provider_with_least_authority_credentia
     assert registration["providers"] == list(lifecycle.PROVIDERS)
     assert registration["subject_kind"] == "provider_release"
     assert registration["provider_artifact_required"] is True
+    assert registration["producer_revision"] == 10
     assert registration["credential_binding_ids"] == []
     for provider in lifecycle.PROVIDERS:
         assert registration["credential_binding_ids_by_provider"][provider] == [
@@ -69,6 +70,21 @@ def test_registration_covers_each_launch_provider_with_least_authority_credentia
             "runtime_host_control",
         ]
         assert f"{provider}_console_adapter_lifecycle" in registration["scenario_ids"]
+
+
+def test_artifact_manifest_covers_nested_shipper_diagnostics(tmp_path):
+    (tmp_path / "cleanup-receipt.json").write_text("{}\n", encoding="utf-8")
+    nested = tmp_path / "shipper" / "engine-logs" / "engine.log"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("diagnostic\n", encoding="utf-8")
+    (tmp_path / "result.json").write_text("not self-bound\n", encoding="utf-8")
+
+    manifest = lifecycle._artifact_manifest(tmp_path)
+
+    assert {item["path"] for item in manifest} == {
+        "cleanup-receipt.json",
+        "shipper/engine-logs/engine.log",
+    }
 
 
 def test_schema_gates_every_console_adapter_on_its_typed_release_assertion():

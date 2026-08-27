@@ -27,6 +27,7 @@ def test_the_registration_is_a_longhouse_product_subject_with_live_evidence():
     # Nothing here is reconstructed from fixtures.
     assert registration["evidence_classes"] == ["live_token"]
     assert registration["modes"] == ["console"]
+    assert registration["producer_revision"] == 4
 
 
 def test_the_vehicle_is_exact_without_changing_the_subject():
@@ -209,3 +210,21 @@ def test_the_result_identity_carries_no_provider_but_still_names_the_vehicle(mon
     assert result["vehicle_provider"] == "codex"
     assert result["observation"]["provider"] == "codex"
     assert result["status"] == "pass"
+
+
+def test_failure_result_retains_vehicle_identity_and_false_verdicts():
+    result = producer._failure_result(
+        model="gpt-5.6-sol",
+        provider="codex",
+        device_id="factory-machine",
+        session_id="session-1",
+        failure=RuntimeError("runtime unavailable"),
+    )
+
+    assert result["provider"] is None
+    assert result["vehicle_provider"] == "codex"
+    assert result["vehicle_qualification_model"] == "gpt-5.6-sol"
+    assert result["assertions"] == {
+        producer.ASSERTION_LIVE: False,
+        producer.ASSERTION_SETTLED: False,
+    }

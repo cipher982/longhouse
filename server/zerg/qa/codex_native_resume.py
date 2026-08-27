@@ -37,7 +37,7 @@ _CODEX_REMOTE_TOKEN_ENV = "CODEX_REMOTE_AUTH_TOKEN"
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.native_resume.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id="helm_cold_resume",
     scenario_revision=5,
     assertion_cells=(
@@ -586,6 +586,13 @@ def _record_post_stop_ship_receipt(
     return receipt
 
 
+def _require_transcript_ship(receipt: dict[str, Any], *, label: str) -> None:
+    if receipt.get("status") == "pass":
+        return
+    reason = receipt.get("retry_reason") or receipt.get("error") or receipt.get("exit_code")
+    raise RuntimeError(f"{label} transcript ship failed: {reason}")
+
+
 def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -639,7 +646,9 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         initial_state, initial_thread_path = _wait_for_marker(initial_state_file, seed_marker, timeout=args.live_send_timeout_secs)
         _write_json(root / "initial-bridge-state.json", _redact_state_for_evidence(initial_state))
         shutil.copy2(initial_thread_path, root / "initial-transcript.jsonl")
-        _write_json(root / "initial-transcript-ship-receipt.json", shipper.flush("initial"))
+        initial_ship_receipt = shipper.flush("initial")
+        _write_json(root / "initial-transcript-ship-receipt.json", initial_ship_receipt)
+        _require_transcript_ship(initial_ship_receipt, label="initial")
         old_pids = {int(value) for value in (initial_state.get("pid"), initial_state.get("app_server_pid")) if value}
 
         if args.variant == "clean_exit":
@@ -741,7 +750,9 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         _write_json(root / "stale-input-receipt.json", stale_input_receipt)
         _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
         _write_json(root / "post-resume-send.json", send_summary)
-        _write_json(root / "post-resume-transcript-ship-receipt.json", shipper.flush("post-resume"))
+        post_resume_ship_receipt = shipper.flush("post-resume")
+        _write_json(root / "post-resume-transcript-ship-receipt.json", post_resume_ship_receipt)
+        _require_transcript_ship(post_resume_ship_receipt, label="post-resume")
         shutil.copy2(resumed_thread_path, root / "resumed-transcript.jsonl")
         concurrent_resume_receipt = _attempt_concurrent_resume(
             args,

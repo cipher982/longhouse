@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
+
 ASSERTION_ID = "helm_launch_visibility_preserved"
 SCENARIO_ID = "codex_helm_launch_visibility"
 
@@ -25,7 +27,9 @@ def _human_launch_ok(observation: object, *, resumed: bool) -> bool:
         and canonical.get("working_set") == "open"
         and canonical.get("control_head_current") is True
         and canonical.get("control_run_id") == registration.get("run_id")
-        and canonical.get("default_timeline_visible") is True
+        and canonical.get("factory_machine_identity") == PROVIDER_FACTORY_MACHINE_ID
+        and canonical.get("factory_policy_hidden") is True
+        and canonical.get("default_timeline_visible") is False
         and canonical.get("observed_within_seconds") is not None
         and float(canonical["observed_within_seconds"]) <= 45.0
         and bool(registration.get("resume_attempt_id")) is resumed

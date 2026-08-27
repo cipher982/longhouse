@@ -1945,6 +1945,18 @@ def test_codex_post_stop_ship_receipt_is_retained_separately_from_transition(tmp
     assert json.loads((tmp_path / "post-stop-transcript-ship-receipt.json").read_text()) == receipt
 
 
+def test_codex_native_resume_rejects_a_failed_transcript_ship_immediately() -> None:
+    with pytest.raises(RuntimeError, match="initial transcript ship failed: source_epoch_conflict_unresolved"):
+        codex_native_resume._require_transcript_ship(
+            {"status": "fail", "retry_reason": "source_epoch_conflict_unresolved"},
+            label="initial",
+        )
+
+
+def test_codex_native_resume_accepts_a_passing_transcript_ship() -> None:
+    codex_native_resume._require_transcript_ship({"status": "pass"}, label="post-resume")
+
+
 def test_codex_resume_contract_snapshot_matches_machine_scanner_layout(tmp_path: Path) -> None:
     isolation_root = tmp_path / "isolation"
     workspace = isolation_root / "workspace"

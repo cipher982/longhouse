@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live producer for Codex Helm launch provenance and Open visibility.
+"""Live producer for Codex Helm launch provenance and factory isolation.
 
 This producer deliberately drives the installed ``longhouse codex`` facade in
 an owned PTY.  Direct bridge startup or a synthetic registration would miss
@@ -46,6 +46,7 @@ from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.qa.runtime_host_canary_isolation import hide_and_verify_canary_isolation
 from zerg.qa.runtime_host_canary_isolation import runtime_host_request
+from zerg.services.internal_sessions import PROVIDER_FACTORY_MACHINE_ID
 
 _EXECUTION_VARIANT = execution_variant_key(
     provider="codex",
@@ -56,9 +57,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
-    producer_revision=7,
+    producer_revision=8,
     scenario_id=SCENARIO_ID,
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -69,7 +70,7 @@ REGISTRATION = ProducerRegistration(
         "fresh_interactive_facade_registration",
         "resumed_interactive_facade_registration",
         "canonical_control_head",
-        "open_working_set_visibility",
+        "open_working_set_with_factory_isolation",
         "automation_hidden",
         "provenance_free_rejected",
     ),
@@ -291,6 +292,7 @@ def _wait_canonical_launch(
     expected_actor: str,
     expected_surface: str,
     expect_visible: bool,
+    expect_open: bool,
     launched_at: float,
 ) -> dict[str, Any]:
     request_payload = registration["request"]
@@ -332,7 +334,7 @@ def _wait_canonical_launch(
             and last["control_head_current"] is True
             and last["control_run_id"] == run_id
             and visible is expect_visible
-            and (not expect_visible or last["working_set"] == "open")
+            and (not expect_open or last["working_set"] == "open")
         )
         if ready:
             return last
@@ -525,9 +527,19 @@ def _human_launch_sequence(
             device_id=canonical_device_id,
             expected_actor="human_shell",
             expected_surface="terminal",
-            expect_visible=True,
+            # The factory token is deliberately bound to the
+            # provider-factory-resume machine. Product policy hides every
+            # session from that machine even when the launch itself has
+            # genuine human Helm provenance. Prove the independent Open
+            # working-set fact here and the mandatory factory isolation at
+            # the default-list boundary; a factory canary cannot honestly
+            # impersonate a neutral user machine.
+            expect_visible=False,
+            expect_open=True,
             launched_at=launched_at,
         )
+        fresh_canonical["factory_machine_identity"] = canonical_device_id
+        fresh_canonical["factory_policy_hidden"] = canonical_device_id == PROVIDER_FACTORY_MACHINE_ID
         seed_receipt = _seed_codex_rollout(
             fresh_tui,
             codex_home=Path(environment["CODEX_HOME"]),
@@ -562,9 +574,12 @@ def _human_launch_sequence(
             device_id=canonical_device_id,
             expected_actor="human_shell",
             expected_surface="terminal",
-            expect_visible=True,
+            expect_visible=False,
+            expect_open=True,
             launched_at=resumed_at,
         )
+        resumed_canonical["factory_machine_identity"] = canonical_device_id
+        resumed_canonical["factory_policy_hidden"] = canonical_device_id == PROVIDER_FACTORY_MACHINE_ID
         stop_receipts.append(_stop_launch(args, tui=resumed_tui, session_id=session_id, isolation_root=isolation_root))
         write_json(root / "human-stop-receipts.json", {"stops": stop_receipts})
         write_json(root / "human-transcript-shipper-receipt.json", shipper.stop())
@@ -673,6 +688,7 @@ def _automation_launch(
             expected_actor="automation",
             expected_surface="test",
             expect_visible=False,
+            expect_open=False,
             launched_at=launched_at,
         )
         stop = _stop_launch(
@@ -826,6 +842,8 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "codex_helm_launch_visibility_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            "observation": {"failure_code": "codex_helm_launch_visibility_failed"},
+            "assertions": {ASSERTION_ID: False},
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)

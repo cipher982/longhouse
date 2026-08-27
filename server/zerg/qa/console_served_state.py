@@ -51,7 +51,7 @@ ASSERTION_SETTLED = "served_state_settles_once_the_reply_is_served"
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.console_served_state.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=SCENARIO_ID,
     scenario_revision=2,
     assertion_cells=((ASSERTION_LIVE, None), (ASSERTION_SETTLED, None)),
@@ -117,6 +117,45 @@ def _manifest(root: Path) -> list[dict[str, object]]:
             }
         )
     return entries
+
+
+def _failure_result(
+    *,
+    model: str,
+    provider: str,
+    device_id: str | None,
+    session_id: str | None,
+    failure: Exception,
+) -> dict[str, object]:
+    """Return a complete typed observation even when shared infrastructure fails."""
+
+    return {
+        "schema_version": 1,
+        "artifact_kind": "longhouse_console_served_state_result",
+        "producer": REGISTRATION.to_dict(),
+        "provider": None,
+        "vehicle_provider": provider,
+        "vehicle_qualification_model": model,
+        "vehicle_device_id": device_id,
+        "variant": None,
+        "scenario_id": SCENARIO_ID,
+        "scenario_revision": REGISTRATION.scenario_revision,
+        "evidence_class": "live_token",
+        "generated_at": _now(),
+        "status": "fail",
+        "failure_code": "console_served_state_failed",
+        "observation": {
+            "failure_code": "console_served_state_failed",
+            "vehicle_provider": provider,
+            "vehicle_device_id": device_id,
+            "session_id": session_id,
+        },
+        "assertions": {
+            ASSERTION_LIVE: False,
+            ASSERTION_SETTLED: False,
+        },
+        "error": f"{type(failure).__name__}: {failure}",
+    }
 
 
 def _sha256_file(path: Path) -> str:
@@ -467,29 +506,13 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(root / "cleanup-receipt.json", cleanup)
 
     if failure is not None or result is None:
-        result = {
-            "schema_version": 1,
-            "artifact_kind": "longhouse_console_served_state_result",
-            "producer": REGISTRATION.to_dict(),
-            "provider": None,
-            "vehicle_provider": provider,
-            "vehicle_device_id": device_id,
-            "variant": None,
-            "scenario_id": SCENARIO_ID,
-            "scenario_revision": REGISTRATION.scenario_revision,
-            "evidence_class": "live_token",
-            "generated_at": _now(),
-            "status": "fail",
-            "failure_code": "console_served_state_failed",
-            "observation": {
-                "failure_code": "console_served_state_failed",
-                "vehicle_provider": provider,
-                "vehicle_device_id": device_id,
-                "session_id": session_id,
-            },
-            "assertions": {},
-            "error": f"{type(failure).__name__}: {failure}",
-        }
+        result = _failure_result(
+            model=str(args.model),
+            provider=provider,
+            device_id=device_id,
+            session_id=session_id,
+            failure=failure or RuntimeError("served-state producer returned no result"),
+        )
         result["artifact_manifest"] = _manifest(root)
         _write_json(root / "result.json", result)
         print(json.dumps(result, sort_keys=True, default=str))

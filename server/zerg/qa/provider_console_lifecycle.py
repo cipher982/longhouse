@@ -54,17 +54,6 @@ OBSERVED_ACTIVITY = (
     "post_interrupt_sendable",
     "no_orphan_provider_processes",
 )
-RECEIPT_FILES = (
-    "provider-binary-receipt.json",
-    "provider-auth-receipt.json",
-    "adapter-dispatch-receipt.json",
-    "transcript-flush-receipt.json",
-    "console-boundary-receipt.json",
-    "provider-response-binding-receipt.json",
-    "interrupt-contract-receipt.json",
-    "cleanup-receipt.json",
-    "provider-failure-diagnostics.json",
-)
 PROVIDER_BIN_ENV = {
     "codex": "LONGHOUSE_CODEX_BIN",
     "claude": "LONGHOUSE_CLAUDE_BIN",
@@ -87,7 +76,7 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=9,
+    producer_revision=10,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     scenario_revision=3,
@@ -151,12 +140,15 @@ def _write_json(path: Path, payload: object) -> None:
 
 
 def _artifact_manifest(root: Path) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    for name in RECEIPT_FILES:
-        path = root / name
-        if path.is_file():
-            rows.append({"path": name, "size": path.stat().st_size, "sha256": _sha256_file(path)})
-    return rows
+    return [
+        {
+            "path": path.relative_to(root).as_posix(),
+            "size": path.stat().st_size,
+            "sha256": _sha256_file(path),
+        }
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path.name != "result.json"
+    ]
 
 
 def _expected_variant(provider: str) -> str:

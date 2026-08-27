@@ -26,7 +26,9 @@ def _human(*, resumed: bool, run_id: str) -> dict:
             "working_set": "open",
             "control_head_current": True,
             "control_run_id": run_id,
-            "default_timeline_visible": True,
+            "factory_machine_identity": "provider-factory-resume",
+            "factory_policy_hidden": True,
+            "default_timeline_visible": False,
             "observed_within_seconds": 2.5,
         },
     }
@@ -77,6 +79,7 @@ def test_helm_launch_oracle_requires_complete_live_transaction():
         (("fresh", "registration", "launch_surface"), None),
         (("fresh", "canonical", "working_set"), "history"),
         (("fresh", "canonical", "control_head_current"), False),
+        (("fresh", "canonical", "factory_machine_identity"), "some-other-machine"),
         (("resumed", "registration", "resume_attempt_id"), None),
         (("automation", "registration", "launch_actor"), None),
         (("automation", "canonical", "default_timeline_visible"), True),
