@@ -590,6 +590,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bundled_sqlite_excludes_the_wal_reset_corruption_window() {
+        // SQLite's WAL-reset race is fixed in 3.51.3. The Machine Agent has
+        // legitimate cross-process writers (the daemon plus managed Console
+        // workers), so bundling an older library risks corrupting page 1 when
+        // a writer and checkpoint reset the WAL concurrently.
+        assert!(
+            rusqlite::version_number() >= 3_051_003,
+            "bundled SQLite {} is vulnerable to the WAL-reset race",
+            rusqlite::version()
+        );
+    }
+
+    #[test]
     fn test_open_in_memory() {
         // Use a temp file instead of :memory: to test real file behavior
         let tmp = tempfile::NamedTempFile::new().unwrap();

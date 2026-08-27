@@ -30,7 +30,7 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots", "
 futures-util = "0.3"
 
 # SQLite
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", default-features = false, features = ["bundled", "fallible_uint"] }
 
 # Parallelism
 rayon = "1"
