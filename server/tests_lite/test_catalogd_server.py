@@ -158,6 +158,55 @@ async def test_interactive_read_lane_preserves_eighth_admission_slot(daemon_path
 
 
 @pytest.mark.asyncio
+async def test_identical_timeline_reads_share_one_inflight_snapshot(daemon_paths, monkeypatch):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path, max_concurrency=2)
+    calls = 0
+
+    def slow_timeline(**params):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.1)
+        return {"commit_seq": "0", "provider": params["provider"]}
+
+    assert daemon._store is not None
+    monkeypatch.setattr(daemon._store, "list_session_timeline", slow_timeline)
+    params = {
+        "project": None,
+        "provider": None,
+        "environment": None,
+        "include_test": False,
+        "hide_autonomous": True,
+        "include_automation": False,
+        "device_id": None,
+        "days_back": 14,
+        "limit": 20,
+        "offset": 0,
+    }
+    try:
+        identical = await asyncio.gather(
+            client.call("session.timeline.list.v2", params),
+            client.call("session.timeline.list.v2", params),
+        )
+        assert identical == [
+            {"commit_seq": "0", "provider": None},
+            {"commit_seq": "0", "provider": None},
+        ]
+        assert calls == 1
+
+        await asyncio.gather(
+            client.call("session.timeline.list.v2", {**params, "provider": "provider-a"}),
+            client.call("session.timeline.list.v2", {**params, "provider": "provider-b"}),
+        )
+        assert calls == 3
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_device_auth_is_typed_read_only_and_reports_commit_seq(daemon_paths):
     database_path, socket_path = daemon_paths
     engine = create_catalog_engine(database_path)

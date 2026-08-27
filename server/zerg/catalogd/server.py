@@ -188,6 +188,7 @@ class CatalogDaemon:
         self._store: CatalogStore | None = None
         self._checkpoint_task: asyncio.Task | None = None
         self._maintenance_executor: ThreadPoolExecutor | None = None
+        self._timeline_reads: dict[tuple[tuple[str, object], ...], asyncio.Task[dict]] = {}
         self._writer_stats = CatalogWriterStats()
         self._writer_slow_ms = float(os.getenv("CATALOGD_WRITER_SLOW_MS", str(CATALOG_WRITER_SLOW_MS_DEFAULT)))
         self._writer_max_depth = max(
@@ -2081,7 +2082,7 @@ class CatalogDaemon:
         # Timeline is a read-only snapshot. Keep it on the read executor so a
         # projector claim/commit cannot queue the launch visibility path behind
         # the catalog writer.
-        result = await self._run_read_store(self._store.list_session_timeline, **params)
+        result = await self._coalesced_timeline_read(params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -3663,6 +3664,33 @@ class CatalogDaemon:
             raise CatalogDaemonError("catalog read executor is not ready")
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._read_executor, lambda: operation(*args, **kwargs))
+
+    async def _coalesced_timeline_read(self, params: dict[str, object]) -> dict:
+        """Share one in-flight snapshot across identical timeline readers.
+
+        Concurrent copies of this disk-heavy query make every copy slower on
+        the large dogfood catalog. Browser retries and SSE reconnects then turn
+        one slow read into a self-sustaining timeout wave. Sharing only the
+        in-flight task removes that amplification without caching a stale
+        catalog snapshot.
+        """
+
+        assert self._store is not None
+        key = tuple(sorted(params.items()))
+        task = self._timeline_reads.get(key)
+        if task is None:
+            task = asyncio.create_task(
+                self._run_read_store(self._store.list_session_timeline, **params),
+                name="catalogd-timeline-read",
+            )
+            self._timeline_reads[key] = task
+
+            def forget(completed: asyncio.Task[dict]) -> None:
+                if self._timeline_reads.get(key) is completed:
+                    self._timeline_reads.pop(key, None)
+
+            task.add_done_callback(forget)
+        return await asyncio.shield(task)
 
     async def _run_projector_read_store(self, operation, *args, **kwargs):
         if self._projector_read_executor is None:
