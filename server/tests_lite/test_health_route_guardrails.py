@@ -276,6 +276,37 @@ def test_readyz_requires_catalogd_in_live_catalog_production(tmp_path, monkeypat
     assert b"catalog_unavailable" in response.body
 
 
+def test_readyz_probes_catalogd_for_factory_assurance_test_runtime(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import zerg.database as database_module
+
+    observed = {}
+
+    def ping(*_args, **kwargs):
+        observed.update(kwargs)
+        return {"ready": True}
+
+    monkeypatch.setattr(health_router, "get_settings", lambda: SimpleNamespace(testing=True))
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(
+        "zerg.services.factory_assurance_title_binding.factory_assurance_title_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr("zerg.catalogd.client.call_catalogd_sync", ping)
+    monkeypatch.setattr("zerg.catalogd.schema.catalogd_ping_is_compatible", lambda payload: payload["ready"])
+    monkeypatch.setattr(
+        "zerg.services.catalogd_supervisor.catalogd_paths",
+        lambda: (tmp_path / "live.db", tmp_path / "catalogd.sock"),
+    )
+
+    response = health_router.readyz_check()
+
+    assert response == {"status": "ok"}
+    assert observed["timeout_seconds"] == health_router.CATALOG_HEALTH_TIMEOUT_SECONDS
+
+
 def test_readyz_catalog_probe_has_bounded_budget(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

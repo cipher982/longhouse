@@ -299,15 +299,21 @@ def readyz_check():
         )
 
     catalog_mode = live_catalog_enabled()
-    readiness_engine = None if catalog_mode else ((get_live_engine() if live_store_configured() else None) or default_engine)
-    if readiness_engine is None and not catalog_mode:
+    factory_assurance_catalog = False
+    if catalog_mode and _settings.testing:
+        from zerg.services.factory_assurance_title_binding import factory_assurance_title_enabled
+
+        factory_assurance_catalog = factory_assurance_title_enabled()
+    catalogd_required = catalog_mode and (not _settings.testing or factory_assurance_catalog)
+    readiness_engine = None if catalogd_required else ((get_live_engine() if live_store_configured() else None) or default_engine)
+    if readiness_engine is None and not catalogd_required:
         return JSONResponse(
             status_code=503,
             content={"status": "unhealthy", "reason": "database engine not initialized"},
         )
 
     catalogd_ready = False
-    if catalog_mode and not _settings.testing:
+    if catalogd_required:
         try:
             from zerg.catalogd.client import call_catalogd_sync
             from zerg.catalogd.schema import catalogd_ping_is_compatible
