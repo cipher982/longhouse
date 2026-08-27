@@ -714,6 +714,25 @@ def test_catalog_gateway_keeps_fast_reads_on_short_budget(monkeypatch):
     assert attempts == [0.35]
 
 
+@pytest.mark.parametrize("method", ["session.read.v2", "session.read.batch.v2"])
+def test_catalog_gateway_gives_composed_session_snapshots_a_bounded_retry_budget(monkeypatch, method):
+    attempts: list[float] = []
+
+    def fake_call(_socket_path, called_method, *, params, timeout_seconds):
+        assert called_method == method
+        assert params == {"session_ids": ["session-1"]}
+        attempts.append(timeout_seconds)
+        if len(attempts) == 1:
+            raise catalog_read_gateway.CatalogUnavailable("transient")
+        return {"sessions": []}
+
+    monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
+    monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+
+    assert catalog_read_gateway._call(method, {"session_ids": ["session-1"]}) == {"sessions": []}
+    assert attempts == [1.0, 1.0]
+
+
 @pytest.mark.asyncio
 async def test_active_owner_read_is_catalog_owned(daemon_paths):
     database_path, socket_path = daemon_paths

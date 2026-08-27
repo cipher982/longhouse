@@ -18,6 +18,13 @@ from zerg.services.catalogd_supervisor import catalogd_paths
 
 _DEFAULT_DEADLINE_SECONDS = 0.75
 _DEFAULT_ATTEMPT_SECONDS = 0.35
+# A session snapshot joins the canonical session, control connection, run,
+# readiness, and transcript facts. Two saturated exact-SHA CI runs timed these
+# reads out at the generic point-lookup budget while the same catalog remained
+# healthy. Keep owner/auth lookups fast, but give this bounded product snapshot
+# the same one-second attempt budget as the other composed catalog reads.
+_SESSION_SNAPSHOT_DEADLINE_SECONDS = 2.25
+_SESSION_SNAPSHOT_ATTEMPT_SECONDS = 1.0
 # The real 5,000-session hosted timeline measures about 0.39s at p50 and
 # 0.7-0.8s during browser QA. The old 0.35s attempt budget timed out ordinary
 # successful work and amplified load with an immediate retry. Keep this
@@ -46,6 +53,8 @@ _TITLE_HEALTH_DEADLINE_SECONDS = 4.25
 _TITLE_HEALTH_ATTEMPT_SECONDS = 2.0
 
 _READ_BUDGETS = {
+    "session.read.v2": (_SESSION_SNAPSHOT_DEADLINE_SECONDS, _SESSION_SNAPSHOT_ATTEMPT_SECONDS),
+    "session.read.batch.v2": (_SESSION_SNAPSHOT_DEADLINE_SECONDS, _SESSION_SNAPSHOT_ATTEMPT_SECONDS),
     "session.timeline.list.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
     "machine.workspace.list.v2": (_WORKSPACE_DEADLINE_SECONDS, _WORKSPACE_ATTEMPT_SECONDS),
     "session.shadow_state.read.v2": (_SHADOW_STATE_DEADLINE_SECONDS, _SHADOW_STATE_ATTEMPT_SECONDS),
