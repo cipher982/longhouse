@@ -89,9 +89,9 @@ _CELL_BY_VARIANT: dict[str, tuple[str, str]] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
-    producer_revision=7,
+    producer_revision=8,
     scenario_id=_SCENARIO_CREATE,
-    scenario_revision=4,
+    scenario_revision=5,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
     assertion_cells=tuple((assertion_id, None) for assertion_id, _scenario_id in _CELLS),
     providers=("codex",),
@@ -282,9 +282,9 @@ def _last_assistant_message(thread_path: Path) -> str:
 
 def _post_compaction_inbox_probe(marker: str) -> str:
     return (
-        "Using the Longhouse coordination facility already described to you, recover any durable "
-        "attributed peer input currently waiting for this session. Actually call the appropriate tool "
-        f"once with its defaults. After it returns, reply with exactly {marker} and nothing else."
+        "Call the Longhouse inbox MCP tool exactly once with its defaults to recover any durable "
+        "attributed peer input currently waiting for this session. After it returns, reply with "
+        f"exactly {marker} and nothing else."
     )
 
 
@@ -835,7 +835,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
             "generated_at": _now(),
-            "status": "pass",
+            "status": "pass" if all(assertions.values()) else "fail",
             "observation_scope": "scenario",
             "observation": observation,
             "assertions": assertions,

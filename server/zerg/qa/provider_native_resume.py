@@ -154,6 +154,7 @@ class TranscriptShipper:
             diagnostic.update(
                 {
                     "size_bytes": self.db_path.stat().st_size,
+                    "header_hex": header.hex(),
                     "header_sha256": hashlib.sha256(header).hexdigest(),
                     "sqlite_header": header == b"SQLite format 3\x00",
                     "wal_size_bytes": self.db_path.with_name(f"{self.db_path.name}-wal").stat().st_size

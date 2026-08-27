@@ -51,7 +51,7 @@ ASSERTION_SETTLED = "served_state_settles_once_the_reply_is_served"
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.console_served_state.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=SCENARIO_ID,
     scenario_revision=2,
     assertion_cells=((ASSERTION_LIVE, None), (ASSERTION_SETTLED, None)),

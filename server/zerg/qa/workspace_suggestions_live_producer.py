@@ -22,7 +22,8 @@ ASSERTION_ID = "responsive_human_only_projection"
 RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
 RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
 MAX_LIVE_LATENCY_SECONDS = 3.0
-MAX_MACHINES = 3
+MAX_MACHINES = 10
+_PROOF_MACHINE_MARKERS = ("provider-factory", "canary", "github-actions", "sauron")
 _DISALLOWED_PATH_MARKERS = (
     "/canaries/provider-live/",
     "longhouse-provider-live-proof",
@@ -35,9 +36,9 @@ _DISALLOWED_PATH_MARKERS = (
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.workspace_suggestions_live.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id="workspace_suggestions_live",
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((ASSERTION_ID, None),),
     providers=(),
     platforms=("linux",),
@@ -117,16 +118,19 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
     machines = machines_payload.get("machines") if isinstance(machines_payload, dict) else None
     if machines_status != 200 or not isinstance(machines, list):
         raise RuntimeError(f"machine directory failed status={machines_status}")
-    connected = [
+    candidates = [
         row
         for row in machines
-        if isinstance(row, dict) and row.get("control_channel_status") == "connected" and isinstance(row.get("device_id"), str)
+        if isinstance(row, dict)
+        and isinstance(row.get("device_id"), str)
+        and not any(marker in str(row["device_id"]).lower() for marker in _PROOF_MACHINE_MARKERS)
     ]
-    if not connected:
-        raise RuntimeError("machine directory has no connected machine for workspace assurance")
+    candidates.sort(key=lambda row: (row.get("control_channel_status") != "connected", str(row["device_id"])))
+    if not candidates:
+        raise RuntimeError("machine directory has no human machine for workspace assurance")
 
     reads: list[dict[str, Any]] = []
-    for machine in connected[:MAX_MACHINES]:
+    for machine in candidates[:MAX_MACHINES]:
         device_id = str(machine["device_id"])
         status, latency, payload = _get_json(
             f"{api_url}/api/agents/machines/{quote(device_id, safe='')}/workspaces?limit=50&days_back=180",
@@ -146,7 +150,9 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
     all_paths = [path for read in reads for path in read["paths"]]
     leaking_paths = [path for path in all_paths if any(marker in path.replace("\\", "/").lower() for marker in _DISALLOWED_PATH_MARKERS)]
     observation = {
-        "connected_machine_count": len(connected),
+        "machine_directory_count": len(machines),
+        "human_machine_count": len(candidates),
+        "connected_human_machine_count": sum(row.get("control_channel_status") == "connected" for row in candidates),
         "checked_machine_count": len(reads),
         "machine_directory_status": machines_status,
         "machine_directory_latency_seconds": round(machines_latency, 6),

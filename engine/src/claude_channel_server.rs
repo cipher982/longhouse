@@ -435,7 +435,16 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         Ok(config) => config,
         Err(error) => return tool_result(id, json!({"error": error.to_string()})),
     };
-    let client = reqwest::Client::new();
+    // A provider turn must not stay active forever because a coordination
+    // read stopped responding. Every tool result is useful even when it is a
+    // typed timeout, and the model can then finish or report the failure.
+    let client = match reqwest::Client::builder()
+        .timeout(DEFAULT_HTTP_TIMEOUT)
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return tool_result(id, json!({"error": error.to_string()})),
+    };
     let base = config.api_url.trim_end_matches('/');
     let request_token = if matches!(name, "send" | "inbox" | "reply") {
         match coordination_token() {

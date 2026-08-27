@@ -87,7 +87,7 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=8,
+    producer_revision=9,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     scenario_revision=3,
@@ -729,7 +729,12 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     # ephemeral IPC paths compact: Linux Unix sockets cap the complete path
     # near 108 bytes, so semantic directory names plus another UUID make the
     # Console harness deployment-path dependent for no isolation benefit.
-    runtime_root, engine_evidence, workspace, longhouse_home = _console_runtime_paths(home)
+    runtime_root, _ephemeral_engine_evidence, workspace, longhouse_home = _console_runtime_paths(home)
+    # Retain the Machine Agent's own logs with a failed qualification. The
+    # provider HOME is deliberately destroyed by the sandbox, so placing these
+    # under it made the only process that owned a corrupt shipper DB disappear
+    # before the failure could be diagnosed.
+    engine_evidence = root / "shipper"
     engine_evidence.mkdir(mode=0o700, parents=True)
     workspace.mkdir(mode=0o700, parents=True)
     if provider == "cursor":

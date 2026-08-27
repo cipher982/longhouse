@@ -266,7 +266,7 @@ def test_run_coordination_awareness_create_passes_when_the_model_calls_the_tool(
     assert written == result
 
 
-def test_run_coordination_awareness_create_retains_false_assertion_without_failing_observation(tmp_path: Path, monkeypatch) -> None:
+def test_run_coordination_awareness_create_retains_false_assertion_as_failed_scenario(tmp_path: Path, monkeypatch) -> None:
     args = _base_args(tmp_path, evidence_root=tmp_path / "evidence-awareness-fail")
     args.variant = execution_variant_key(
         provider="cursor",
@@ -301,7 +301,7 @@ def test_run_coordination_awareness_create_retains_false_assertion_without_faili
 
     result = m.run_coordination(args)
 
-    assert result["status"] == "pass"
+    assert result["status"] == "fail"
     assert result["observation_scope"] == "scenario"
     assert result["assertions"] == {"coordination_instructions_model_visible": False}
     assert len(launched_prompts) == 1
@@ -338,7 +338,7 @@ def test_awareness_timeout_is_a_typed_provider_finding(tmp_path: Path, monkeypat
 
     result = m.run_coordination(args)
 
-    assert result["status"] == "pass"
+    assert result["status"] == "fail"
     assert result["assertions"] == {"coordination_instructions_model_visible": False}
     assert result["observation"]["provider_turn_timed_out"] is True
 
@@ -524,7 +524,7 @@ def test_run_coordination_directed_input_retains_asymmetric_assertions_in_one_ob
 
     result = m.run_coordination(args)
 
-    assert result["status"] == "pass"
+    assert result["status"] == "fail"
     assert result["observation_scope"] == "scenario"
     assert result["assertions"]["provider_input_receipt_linked"] is False
     # "Specifically" is the whole point of this case, and it only became true

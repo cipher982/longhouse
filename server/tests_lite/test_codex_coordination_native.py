@@ -54,8 +54,8 @@ def test_registration_covers_exactly_the_five_schema_declared_cells() -> None:
     }
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     assert m.REGISTRATION.required_executables == ("jq",)
-    assert m.REGISTRATION.producer_revision == 7
-    assert m.REGISTRATION.scenario_revision == 4
+    assert m.REGISTRATION.producer_revision == 8
+    assert m.REGISTRATION.scenario_revision == 5
     assert m.REGISTRATION.observation_scope == "scenario"
     assert "typed_compaction_receipt" not in m.REGISTRATION.required_artifacts
     assert m.REGISTRATION.required_artifacts_by_scenario == {
@@ -565,3 +565,22 @@ def test_run_coordination_dispatches_by_variant_and_uses_pass_not_passed(tmp_pat
     assert result["variant"] is None
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
+
+
+def test_run_coordination_mixed_scenario_status_matches_complete_assertion_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = _args(tmp_path)
+    args.evidence_root = tmp_path / "evidence-mixed"
+    args.variant = next(variant for variant, cell in m._CELL_BY_VARIANT.items() if cell[0] == "no_duplicate_visible_bootstrap")
+    assertions = {
+        "coordination_instructions_model_visible_after_compaction": False,
+        "no_duplicate_visible_bootstrap": True,
+    }
+    monkeypatch.setattr(m, "_run_awareness_post_compaction", lambda _args, _root: ({}, assertions))
+    monkeypatch.setattr(m.bridge_canary, "_run", _fake_run_version)
+
+    result = m.run_coordination(args)
+
+    assert result["status"] == "fail"
+    assert result["assertions"] == assertions

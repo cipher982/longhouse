@@ -619,7 +619,7 @@ def test_retained_artifact_secret_scan_redacts_and_reports_leak(tmp_path) -> Non
 def test_direct_producer_registration_names_real_evidence_and_cleanup() -> None:
     registration = REGISTRATION.to_dict()
 
-    assert registration["scenario_revision"] == 4
+    assert registration["scenario_revision"] == 5
     assert registration["assertion_cells"] == [
         {"assertion_id": "native_provider_resume_proven", "variant": "clean_exit"},
         {"assertion_id": "native_provider_resume_proven", "variant": "process_loss"},

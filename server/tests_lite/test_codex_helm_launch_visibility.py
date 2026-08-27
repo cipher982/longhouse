@@ -25,7 +25,7 @@ def test_registration_binds_one_codex_provider_release_cell():
     assert registration["scenario_id"] == "codex_helm_launch_visibility"
     assert registration["assertion_cells"] == [{"assertion_id": "helm_launch_visibility_preserved", "variant": None}]
     assert registration["credential_binding_ids"] == ["codex_provider_token", "runtime_host_control"]
-    assert registration["producer_revision"] == 6
+    assert registration["producer_revision"] == 7
     assert registration["scenario_revision"] == 5
 
 

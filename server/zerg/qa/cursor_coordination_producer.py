@@ -104,9 +104,9 @@ REGISTRATION = ProducerRegistration(
     # coordination tool invocation rather than by keyword-matching the model's
     # prose. Different evidence for the same assertion, so the scenario revision
     # moves and proofs from revision 6 do not satisfy it.
-    producer_revision=10,
+    producer_revision=11,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=8,
+    scenario_revision=9,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -365,6 +365,27 @@ def _teardown_cursor_session(
     except Exception as exc:  # noqa: BLE001 - exact-owner cleanup below is the bounded fallback
         graceful_stop_error = f"{type(exc).__name__}: {exc}"
     cleanup = _cleanup_processes(_SPEC, (session.process,), [session.state])
+    # An abnormal provider timeout can leave the exact session's Unix socket
+    # inode behind after every owning process is dead. It is no longer a live
+    # endpoint, but required cleanup means removing the stale inode too.
+    if cleanup.get("orphan_count") == 0:
+        for endpoint in cleanup.get("control_endpoints") or []:
+            if not isinstance(endpoint, dict) or endpoint.get("kind") != "unix_socket":
+                continue
+            raw_path = endpoint.get("endpoint")
+            if not isinstance(raw_path, str) or not raw_path:
+                continue
+            Path(raw_path).unlink(missing_ok=True)
+            endpoint["absent"] = not Path(raw_path).exists()
+        socket_absent = all(
+            not isinstance(endpoint, dict) or endpoint.get("kind") != "unix_socket" or endpoint.get("absent") is True
+            for endpoint in cleanup.get("control_endpoints") or []
+        )
+        cleanup["final_socket_absent"] = socket_absent
+        verification = cleanup.get("verification")
+        if isinstance(verification, dict):
+            verification["verified"] = socket_absent
+        cleanup["verified"] = socket_absent
     cleanup["graceful_stop"] = graceful_stop
     cleanup["graceful_stop_error"] = graceful_stop_error
     return cleanup
@@ -937,9 +958,10 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_class": "live_token",
             "generated_at": _now(),
             # This producer executes one scenario and emits its complete
-            # assertion map.  Assertion truth is judged by the factory for
-            # each compiled cell; it is not process/execution status.
-            "status": "pass",
+            # assertion map. The process result still has to describe that
+            # complete observation truthfully; the factory then projects each
+            # compiled cell from the same assertion map.
+            "status": "pass" if all(assertions.values()) else "fail",
             "observation_scope": "scenario",
             "observation": observation,
             "assertions": assertions,

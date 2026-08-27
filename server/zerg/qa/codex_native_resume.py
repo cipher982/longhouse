@@ -33,12 +33,13 @@ from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
 
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
+_CODEX_REMOTE_TOKEN_ENV = "CODEX_REMOTE_AUTH_TOKEN"
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.native_resume.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id="helm_cold_resume",
-    scenario_revision=4,
+    scenario_revision=5,
     assertion_cells=(
         ("native_provider_resume_proven", "clean_exit"),
         ("native_provider_resume_proven", "process_loss"),
@@ -531,10 +532,28 @@ def _wait_for_marker(state_file: Path, marker: str, *, timeout: int) -> tuple[di
     return state, thread_path
 
 
-def _native_resume_tui_environment(isolation_root: Path, session_id: str) -> dict[str, str]:
+def _native_resume_tui_environment(isolation_root: Path, session_id: str, ws_auth_token: str) -> dict[str, str]:
     environment = bridge_canary._provider_runtime_environment(os.environ, isolation_root)
     environment["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+    environment[_CODEX_REMOTE_TOKEN_ENV] = ws_auth_token
     return environment
+
+
+def _native_resume_command(codex_bin: Path, thread_id: str, ws_url: str) -> list[str]:
+    return [
+        str(codex_bin),
+        "resume",
+        thread_id,
+        "-c",
+        "check_for_update_on_startup=false",
+        "--enable",
+        "tui_app_server",
+        "--remote",
+        ws_url,
+        "--remote-auth-token-env",
+        _CODEX_REMOTE_TOKEN_ENV,
+        "--no-alt-screen",
+    ]
 
 
 def _start_initial_bridge(
@@ -677,19 +696,12 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         )
         resumed_state_file = Path(str(resumed_summary.get("state_file") or ""))
         ws_url = str(resumed_summary.get("ws_url") or "")
+        resumed_bridge_state = bridge_canary._read_json(resumed_state_file)
+        ws_auth_token = str(resumed_bridge_state.get("ws_auth_token") or "").strip()
+        if not ws_url or not ws_auth_token:
+            raise RuntimeError("resumed Codex bridge did not expose its authenticated relay")
         recording = root / "native-resume.tty"
-        command = [
-            str(args.codex_bin),
-            "resume",
-            thread_id,
-            "-c",
-            "check_for_update_on_startup=false",
-            "--enable",
-            "tui_app_server",
-            "--remote",
-            ws_url,
-            "--no-alt-screen",
-        ]
+        command = _native_resume_command(args.codex_bin, thread_id, ws_url)
         native_resume_command = command[:3] == [str(args.codex_bin), "resume", thread_id]
         resume_intent_receipt.update(
             {
@@ -713,7 +725,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
                 return True
             return False
 
-        tui_env = _native_resume_tui_environment(isolation_root, session_id)
+        tui_env = _native_resume_tui_environment(isolation_root, session_id, ws_auth_token)
         tui_result = bridge_canary._record_pty_session(args, command, recording, env=tui_env, ready=subscribed)
         if tui_result.returncode not in {0, 124} or subscribed_state is None:
             raise RuntimeError("stock Codex native resume command did not subscribe to the retained thread")

@@ -66,7 +66,7 @@ def test_live_workspace_producer_rejects_provider_proof_root(tmp_path, monkeypat
 def test_live_workspace_registration_is_a_providerless_product_cell() -> None:
     registration = producer.REGISTRATION.to_dict()
     assert producer.RUNTIME_AGENTS_TOKEN_ENV == "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
-    assert registration["producer_revision"] == 3
+    assert registration["producer_revision"] == 4
     assert registration["subject_kind"] == "longhouse_product"
     assert registration["providers"] == []
     assert registration["assertion_cells"] == [{"assertion_id": producer.ASSERTION_ID, "variant": None}]
@@ -91,3 +91,30 @@ def test_no_human_workspace_is_blocked_not_a_product_failure(tmp_path, monkeypat
     assert result["status"] == "blocked"
     assert result["failure_code"] == "human_workspace_prerequisite_unavailable"
     assert result["assertions"] == {}
+
+
+def test_durable_workspace_projection_does_not_require_a_live_control_channel(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "https://runtime.test")
+    monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
+
+    def fake_get(url, **_kwargs):
+        if url.endswith("/api/agents/machines"):
+            return _response(
+                200,
+                {
+                    "machines": [
+                        {"device_id": "provider-factory-resume", "control_channel_status": "connected"},
+                        {"device_id": "cinder", "control_channel_status": "disconnected"},
+                    ]
+                },
+            )
+        assert "/cinder/workspaces" in url
+        return _response(200, {"device_id": "cinder", "workspaces": [{"path": "/Users/davidrose/git/zerg"}]})
+
+    monkeypatch.setattr(producer.httpx, "get", fake_get)
+    result = producer.run(tmp_path / "evidence")
+
+    assert result["status"] == "pass"
+    assert result["observation"]["human_machine_count"] == 1
+    assert result["observation"]["connected_human_machine_count"] == 0
+    assert result["observation"]["reads"][0]["device_id"] == "cinder"

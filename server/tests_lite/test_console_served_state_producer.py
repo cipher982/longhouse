@@ -168,6 +168,26 @@ def test_shared_oracle_binds_the_vehicle_model_and_exposes_created_session(monke
     assert requests[0][2]["model"] == "gpt-5.6-sol"
 
 
+def test_shared_oracle_waits_for_machine_adapter_registration(monkeypatch):
+    from zerg.qa import console_served_state_core as core
+
+    attempts = 0
+
+    class _Client:
+        def request(self, method, path, payload=None):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise core.ApiError(409, "adapter_unavailable")
+            return {"session_id": "session-1"}
+
+    monkeypatch.setattr(core.time, "sleep", lambda _seconds: None)
+    created = core._create_session(_Client(), {"provider": "codex"}, timeout=1)
+
+    assert created == {"session_id": "session-1"}
+    assert attempts == 2
+
+
 def test_the_result_identity_carries_no_provider_but_still_names_the_vehicle(monkeypatch, tmp_path):
     # A longhouse_product result that names a provider is compared against a
     # contract pinning `provider: null` and rejected as an inadmissible result

@@ -46,6 +46,7 @@ from uuid import uuid4
 ROOT = Path(__file__).resolve().parents[3]
 API_RETRY_ATTEMPTS = 3
 API_RETRY_DELAY_S = 2.0
+SESSION_CREATE_TIMEOUT_S = 45.0
 
 
 class ApiError(RuntimeError):
@@ -249,6 +250,25 @@ def _start_turn(client: Client, session_id: str, message: str) -> dict:
     raise RuntimeError("queued Console turn was not assigned a run within 30 seconds")
 
 
+def _create_session(client: Client, payload: dict, *, timeout: float = SESSION_CREATE_TIMEOUT_S) -> dict:
+    """Wait for the disposable Machine Agent to advertise its adapter.
+
+    The engine creates its wake socket before the control WebSocket has
+    registered provider capabilities. A live proof that starts in that small
+    window should wait for the same machine, not classify the registration
+    race as a served-state failure.
+    """
+
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return client.request("POST", "/api/agents/sessions", payload)
+        except ApiError as exc:
+            if exc.status != 409 or "adapter_unavailable" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+
+
 @contextlib.contextmanager
 def armed_terminal_drop(session_id: str, enabled: bool):
     """Arm the engine's terminal drop for one session, and always disarm.
@@ -305,11 +325,7 @@ def run(
     model = str(getattr(args, "model", "") or "").strip()
     if model:
         create_payload["model"] = model
-    created = client.request(
-        "POST",
-        "/api/agents/sessions",
-        create_payload,
-    )
+    created = _create_session(client, create_payload)
     session_id = str(created["session_id"])
     report["session_id"] = session_id
     if on_session_created is not None:

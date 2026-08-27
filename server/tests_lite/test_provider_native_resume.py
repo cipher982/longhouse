@@ -1884,11 +1884,20 @@ def test_codex_native_resume_tui_uses_the_bridge_provider_home(
     monkeypatch.setenv("HOME", "/root")
     isolation_root = tmp_path / "isolation"
 
-    environment = codex_native_resume._native_resume_tui_environment(isolation_root, "session-1")
+    environment = codex_native_resume._native_resume_tui_environment(isolation_root, "session-1", "relay-secret")
 
     assert environment["HOME"] == str(isolation_root / "provider-home")
     assert environment["CODEX_HOME"] == str(isolation_root / "provider-home" / ".codex")
     assert environment["LONGHOUSE_MANAGED_SESSION_ID"] == "session-1"
+    assert environment["CODEX_REMOTE_AUTH_TOKEN"] == "relay-secret"
+
+
+def test_codex_native_resume_command_names_but_never_contains_relay_secret(tmp_path: Path) -> None:
+    command = codex_native_resume._native_resume_command(tmp_path / "codex", "thread-1", "ws://127.0.0.1:1")
+
+    assert command[:3] == [str(tmp_path / "codex"), "resume", "thread-1"]
+    assert command[command.index("--remote-auth-token-env") + 1] == "CODEX_REMOTE_AUTH_TOKEN"
+    assert "relay-secret" not in command
 
 
 def test_codex_initial_bridge_reuses_the_shipper_isolation_root(
