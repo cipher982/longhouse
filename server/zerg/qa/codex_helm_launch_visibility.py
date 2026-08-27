@@ -56,7 +56,7 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
-    producer_revision=5,
+    producer_revision=6,
     scenario_id=SCENARIO_ID,
     scenario_revision=5,
     assertion_cells=((ASSERTION_ID, None),),
@@ -480,9 +480,10 @@ def _human_launch_sequence(
         evidence_root=root / "human-shipper",
         longhouse_home=isolation_root / "longhouse",
     )
+    facade_device_id = f"codex-launch-proof-{uuid.uuid4().hex}"
     _set_facade_machine_label(
         isolation_root,
-        label=f"codex-launch-proof-{uuid.uuid4().hex}",
+        label=facade_device_id,
         api_url=args.api_url,
     )
     pids = [shipper.process.pid]
@@ -520,7 +521,7 @@ def _human_launch_sequence(
             args,
             registration=fresh_record,
             project=project,
-            device_id=str(shipper.receipt["machine_name"]),
+            device_id=facade_device_id,
             expected_actor="human_shell",
             expected_surface="terminal",
             expect_visible=True,
@@ -557,7 +558,7 @@ def _human_launch_sequence(
             args,
             registration=resumed_record,
             project=project,
-            device_id=str(shipper.receipt["machine_name"]),
+            device_id=facade_device_id,
             expected_actor="human_shell",
             expected_surface="terminal",
             expect_visible=True,
@@ -571,7 +572,7 @@ def _human_launch_sequence(
             session_id=session_id,
             provider="codex",
             project=project,
-            device_id=str(shipper.receipt["machine_name"]),
+            device_id=facade_device_id,
             cwd=str(workspace),
             owned_processes_dead=lambda: all(_pid_dead(pid) for pid in pids),
             timeout_seconds=args.cleanup_timeout_secs,
@@ -635,9 +636,10 @@ def _automation_launch(
         evidence_root=root / "automation-shipper",
         longhouse_home=isolation_root / "longhouse",
     )
+    facade_device_id = f"codex-automation-proof-{uuid.uuid4().hex}"
     _set_facade_machine_label(
         isolation_root,
-        label=f"codex-automation-proof-{uuid.uuid4().hex}",
+        label=facade_device_id,
         api_url=args.api_url,
     )
     pids = [shipper.process.pid]
@@ -665,7 +667,7 @@ def _automation_launch(
             args,
             registration=record,
             project=project,
-            device_id=str(shipper.receipt["machine_name"]),
+            device_id=facade_device_id,
             expected_actor="automation",
             expected_surface="test",
             expect_visible=False,
@@ -684,7 +686,7 @@ def _automation_launch(
             session_id=session_id,
             provider="codex",
             project=project,
-            device_id=str(shipper.receipt["machine_name"]),
+            device_id=facade_device_id,
             cwd=str(workspace),
             owned_processes_dead=lambda: all(_pid_dead(pid) for pid in pids),
             timeout_seconds=args.cleanup_timeout_secs,

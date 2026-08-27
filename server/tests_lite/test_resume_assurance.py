@@ -9,9 +9,11 @@ import sys
 import pytest
 
 from zerg.qa.codex_native_resume import REGISTRATION
+from zerg.qa.console_served_state import REGISTRATION as CONSOLE_SERVED_STATE_REGISTRATION
 from zerg.qa.resume_assurance import capability_contract_shape
 from zerg.qa.resume_assurance import compile_resume_plan
 from zerg.qa.resume_assurance import content_digest
+from zerg.qa.resume_assurance import execution_variant_key
 from zerg.services.provider_capability_schema import load_capability_assertions
 
 
@@ -128,6 +130,101 @@ def _codes(compiled: dict) -> set[str]:
     return {item["code"] for item in compiled["report"]["diagnostics"]}
 
 
+def _product_vehicle_inputs() -> dict:
+    inputs = _inputs()
+    assertions = (
+        ("console.served_state_live", "live_frames_reach_the_viewer_during_the_turn"),
+        ("console.served_state_settlement", "served_state_settles_once_the_reply_is_served"),
+    )
+    contract = [
+        {
+            "subject_kind": "longhouse_product",
+            "provider": None,
+            "capability": capability,
+            "disposition": "implemented",
+            "assertion_id": assertion_id,
+            "variant": None,
+            "scenario_id": "console_served_state",
+            "minimum_scenario_revision": 2,
+            "oracle_source": "server/zerg/qa/console_served_state_core.py",
+            "acceptable_evidence": ["live_token"],
+            "max_age_seconds": 86400,
+        }
+        for capability, assertion_id in assertions
+    ]
+    selected = [
+        {
+            "subject_kind": row["subject_kind"],
+            "provider": row["provider"],
+            "capability": row["capability"],
+            "assertion_id": row["assertion_id"],
+            "variant": row["variant"],
+        }
+        for row in contract
+    ]
+    producer = {
+        "registration": CONSOLE_SERVED_STATE_REGISTRATION.to_dict(),
+        "code_digest": "sha256:" + "1" * 64,
+        "oracle_digest": "sha256:" + "2" * 64,
+    }
+    protected_inputs = {
+        "server/zerg/qa/console_served_state.py": producer["code_digest"],
+        "server/zerg/qa/console_served_state_core.py": producer["oracle_digest"],
+        "server/zerg/qa/resume_assurance.py": "sha256:" + "3" * 64,
+    }
+    epoch = inputs["accepted_epoch"]
+    epoch.update(
+        {
+            "contract_shape": copy.deepcopy(contract),
+            "selected_cells": copy.deepcopy(selected),
+            "protected_inputs": dict(protected_inputs),
+            "compiler_digest": protected_inputs["server/zerg/qa/resume_assurance.py"],
+            "producers": [copy.deepcopy(producer)],
+        }
+    )
+    epoch["epoch_digest"] = content_digest(epoch, "epoch_digest")
+    census = inputs["worker_census"]
+    census.update(
+        {
+            "compiler_digest": epoch["compiler_digest"],
+            "producers": [copy.deepcopy(producer)],
+        }
+    )
+    census["census_digest"] = content_digest(census, "census_digest")
+    inputs.update(
+        {
+            "current_contract": contract,
+            "protected_inputs": protected_inputs,
+            "product_subject": {
+                "subject_id": "longhouse-product:fixture",
+                "subject_key": "longhouse_product:sha256:" + "4" * 64,
+                "subject_kind": "longhouse_product",
+                "provider": None,
+                "longhouse_source_sha": census["longhouse_source_sha"],
+            },
+            "scheduling": {
+                "requested_cells": copy.deepcopy(selected),
+                "evaluated_at": "2026-08-03T00:00:00Z",
+                "changed_paths": [],
+                "decisions": [
+                    {
+                        "cell": copy.deepcopy(cell),
+                        "action": "execute",
+                        "reason": "never_proven",
+                        "priority": "release_gate",
+                        "timeout_seconds": 600,
+                        "max_cost_usd": 2.0,
+                    }
+                    for cell in selected
+                ],
+                "max_concurrency": 1,
+                "total_execute_cost_budget_usd": 4.0,
+            },
+        }
+    )
+    return inputs
+
+
 def test_compiler_emits_deterministic_two_variant_plan() -> None:
     inputs = _inputs()
     first = compile_resume_plan(inputs)
@@ -143,9 +240,74 @@ def test_compiler_emits_deterministic_two_variant_plan() -> None:
     ]
     assert first["plan"]["qualification_commands"] == first["plan"]["commands"]
     assert {command["module"] for command in first["plan"]["commands"]} == {"zerg.qa.codex_native_resume"}
-    assert {command["qualification_model"] for command in first["plan"]["commands"]} == {
-        "gpt-5.3-codex-low"
-    }
+    assert {command["qualification_model"] for command in first["plan"]["commands"]} == {"gpt-5.3-codex-low"}
+
+
+def test_product_canary_compiles_an_exact_auxiliary_vehicle_without_changing_subject() -> None:
+    compiled = compile_resume_plan(_product_vehicle_inputs())
+
+    assert compiled["report"]["valid"] is True
+    commands = compiled["plan"]["commands"]
+    assert len(commands) == 2
+    assert {command["subject_kind"] for command in commands} == {"longhouse_product"}
+    assert {command["provider"] for command in commands} == {None}
+    assert {command["vehicle_provider"] for command in commands} == {"codex"}
+    assert {command["vehicle_qualification_model"] for command in commands} == {"gpt-5.3-codex-low"}
+    assert {command["vehicle_provider_artifact"]["executable_identity"] for command in commands} == {"sha256:" + "9" * 64}
+
+
+def test_product_canary_fails_closed_without_its_vehicle_artifact() -> None:
+    inputs = _product_vehicle_inputs()
+    inputs["subjects"].pop("codex")
+
+    compiled = compile_resume_plan(inputs)
+
+    assert compiled["plan"] is None
+    assert "eligible_producer_missing" in _codes(compiled)
+
+
+def test_product_proof_reuse_is_bound_to_the_exact_vehicle_and_model() -> None:
+    inputs = _product_vehicle_inputs()
+    artifact = inputs["subjects"]["codex"]["provider_artifact"]
+    model = inputs["worker_census"]["qualification_model_pins"]["codex"]
+    for index, decision in enumerate(inputs["scheduling"]["decisions"]):
+        cell = decision["cell"]
+        decision.update(
+            action="reuse",
+            reason="fresh_exact_proof",
+            proof={
+                "artifact_id": f"{index + 1:064x}",
+                "subject_kind": "longhouse_product",
+                "subject_key": inputs["product_subject"]["subject_key"],
+                "provider": None,
+                "assertion_id": cell["assertion_id"],
+                "variant": execution_variant_key(
+                    provider=None,
+                    assertion_id=cell["assertion_id"],
+                    scenario_id="console_served_state",
+                    variant=None,
+                    subject_kind="longhouse_product",
+                ),
+                "evidence_class": "live_token",
+                "longhouse_source_sha": inputs["subject"]["longhouse_source_sha"],
+                "accepted_epoch_digest": inputs["accepted_epoch"]["epoch_digest"],
+                "generated_at": "2026-08-02T23:59:00Z",
+                "publication_message_id": f"provider-assurance-proof:{index}",
+                "vehicle_provider": "codex",
+                "vehicle_provider_version": artifact["version"],
+                "vehicle_provider_executable_identity": artifact["executable_identity"],
+                "vehicle_provider_build_identity": artifact["build_identity"],
+                "qualification_model": model,
+            },
+        )
+
+    assert compile_resume_plan(inputs)["report"]["valid"] is True
+
+    inputs["scheduling"]["decisions"][0]["proof"]["vehicle_provider_executable_identity"] = "sha256:" + "0" * 64
+    compiled = compile_resume_plan(inputs)
+
+    assert compiled["plan"] is None
+    assert "scheduled_proof_not_reusable" in _codes(compiled)
 
 
 def test_compiler_selects_provider_specific_producer_credentials() -> None:
@@ -160,20 +322,15 @@ def test_compiler_selects_provider_specific_producer_credentials() -> None:
             "codex": ["codex_provider_token", "runtime_host_control"],
             "claude": ["claude_provider_token", "runtime_host_control"],
         }
-    inputs["worker_census"]["census_digest"] = content_digest(
-        inputs["worker_census"], "census_digest"
-    )
-    inputs["accepted_epoch"]["epoch_digest"] = content_digest(
-        inputs["accepted_epoch"], "epoch_digest"
-    )
+    inputs["worker_census"]["census_digest"] = content_digest(inputs["worker_census"], "census_digest")
+    inputs["accepted_epoch"]["epoch_digest"] = content_digest(inputs["accepted_epoch"], "epoch_digest")
 
     compiled = compile_resume_plan(inputs)
 
     assert compiled["report"]["valid"] is True
-    assert {
-        tuple(command["credential_binding_ids"])
-        for command in compiled["plan"]["commands"]
-    } == {("codex_provider_token", "runtime_host_control")}
+    assert {tuple(command["credential_binding_ids"]) for command in compiled["plan"]["commands"]} == {
+        ("codex_provider_token", "runtime_host_control")
+    }
 
 
 @pytest.mark.parametrize(
@@ -210,9 +367,7 @@ def test_compiler_selects_provider_specific_producer_credentials() -> None:
             "eligible_producer_missing",
         ),
         (
-            lambda value: value["worker_census"]["producers"][0].update(
-                oracle_digest="sha256:" + "0" * 64
-            ),
+            lambda value: value["worker_census"]["producers"][0].update(oracle_digest="sha256:" + "0" * 64),
             "producer_census_mismatch",
         ),
         (
@@ -280,9 +435,7 @@ def test_compiler_reuses_only_exact_fresh_published_proof() -> None:
     assert compiled["report"]["valid"] is True
     assert len(compiled["plan"]["commands"]) == 1
     assert len(compiled["plan"]["qualification_commands"]) == 2
-    assert {
-        command["variant"] for command in compiled["plan"]["qualification_commands"]
-    } == {"clean_exit", "process_loss"}
+    assert {command["variant"] for command in compiled["plan"]["qualification_commands"]} == {"clean_exit", "process_loss"}
     reused = compiled["plan"]["reused_proofs"][0]
     assert reused["artifact_id"] == "a" * 64
     assert reused["producer_id"] == REGISTRATION.producer_id

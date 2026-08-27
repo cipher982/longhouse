@@ -89,7 +89,7 @@ _CELL_BY_VARIANT: dict[str, tuple[str, str]] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
-    producer_revision=6,
+    producer_revision=7,
     scenario_id=_SCENARIO_CREATE,
     scenario_revision=4,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
@@ -303,11 +303,24 @@ def _recv_app_server_message(socket: Any, *, deadline: float) -> dict[str, Any]:
     return value
 
 
-def _typed_compact_thread(ws_url: str, thread_id: str, *, timeout: float) -> dict[str, Any]:
+def _typed_compact_thread(
+    ws_url: str,
+    thread_id: str,
+    *,
+    ws_auth_token: str,
+    timeout: float,
+) -> dict[str, Any]:
     """Compact one Codex thread and retain only typed, credential-free proof."""
 
+    if not ws_auth_token:
+        raise RuntimeError("Codex bridge state did not expose relay authority")
     deadline = time.monotonic() + timeout
-    with websocket_connect(ws_url, open_timeout=min(timeout, 10), close_timeout=5) as socket:
+    with websocket_connect(
+        ws_url,
+        additional_headers={"Authorization": f"Bearer {ws_auth_token}"},
+        open_timeout=min(timeout, 10),
+        close_timeout=5,
+    ) as socket:
         socket.send(
             json.dumps(
                 {
@@ -595,6 +608,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
             timeout=args.live_send_timeout_secs,
         )
         thread_id = str(state.get("thread_id") or "").strip()
+        ws_auth_token = str(state.get("ws_auth_token") or "").strip()
         seeded_thread_path = Path(str(state.get("thread_path") or ""))
         seed_reply = _last_assistant_message(seeded_thread_path) if seeded_thread_path.is_file() else ""
         if not thread_id or state.get("last_turn_status") != "completed" or seed_marker not in seed_reply:
@@ -603,6 +617,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         compaction_receipt = _typed_compact_thread(
             ws_url,
             thread_id,
+            ws_auth_token=ws_auth_token,
             timeout=float(args.live_send_timeout_secs),
         )
         _write_json(root / "typed-compaction-receipt.json", compaction_receipt)

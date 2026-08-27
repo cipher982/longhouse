@@ -106,6 +106,11 @@ class ProducerRegistration:
     # Only assertion-neutral scenario envelopes may be shared by sibling
     # assertion cells. Cell-scoped producers remain one invocation per cell.
     observation_scope: str = "cell"
+    # A Longhouse-product producer may need a stock provider as an auxiliary
+    # instrument without changing the subject under test. The compiler pins
+    # that provider's exact artifact into the command as vehicle evidence; it
+    # never becomes the product proof's subject identity.
+    vehicle_provider: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -139,6 +144,8 @@ class ProducerRegistration:
             }
         else:
             payload.pop("required_artifacts_by_scenario", None)
+        if self.vehicle_provider is None:
+            payload.pop("vehicle_provider", None)
         return payload
 
 
@@ -268,11 +275,16 @@ def _producer_supports_cell(
             failures.append("product_provider_declaration")
         if registration.get("provider_artifact_required") is not False:
             failures.append("product_provider_artifact")
+        vehicle_provider = registration.get("vehicle_provider")
+        if vehicle_provider is not None and (not isinstance(vehicle_provider, str) or not vehicle_provider):
+            failures.append("vehicle_provider")
     elif declared_subject_kind == PROVIDER_RELEASE_SUBJECT:
         if not registration.get("providers"):
             failures.append("provider_declaration")
         if registration.get("provider_artifact_required") is not True:
             failures.append("provider_artifact_required")
+        if registration.get("vehicle_provider") is not None:
+            failures.append("vehicle_provider")
     declared_cells = {
         (item.get("assertion_id"), item.get("variant")) for item in registration.get("assertion_cells", []) if isinstance(item, Mapping)
     }
@@ -367,6 +379,10 @@ def _reuse_failures(
     subject: Mapping[str, Any],
     epoch: Mapping[str, Any],
     scheduling: Mapping[str, Any],
+    *,
+    registration: Mapping[str, Any],
+    subjects: Mapping[str, Any],
+    census: Mapping[str, Any],
 ) -> list[str]:
     failures: list[str] = []
     artifact = subject.get("provider_artifact") if isinstance(subject.get("provider_artifact"), Mapping) else {}
@@ -404,6 +420,20 @@ def _reuse_failures(
                 }[field]
             )
             if proof.get(field) != expected_value:
+                failures.append(field)
+    vehicle_provider = registration.get("vehicle_provider")
+    if isinstance(vehicle_provider, str):
+        vehicle_subject = subjects.get(vehicle_provider)
+        vehicle_artifact = vehicle_subject.get("provider_artifact") if isinstance(vehicle_subject, Mapping) else {}
+        expected_vehicle = {
+            "vehicle_provider": vehicle_provider,
+            "vehicle_provider_version": vehicle_artifact.get("version"),
+            "vehicle_provider_executable_identity": vehicle_artifact.get("executable_identity"),
+            "vehicle_provider_build_identity": vehicle_artifact.get("build_identity"),
+            "qualification_model": (census.get("qualification_model_pins") or {}).get(vehicle_provider),
+        }
+        for field, value in expected_vehicle.items():
+            if proof.get(field) != value:
                 failures.append(field)
     if proof.get("evidence_class") not in cell.get("acceptable_evidence", []):
         failures.append("evidence_class")
@@ -507,6 +537,32 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                     continue
                 registration = item["registration"]
                 failures = _producer_supports_cell(registration, cell, census, cell_subject)
+                vehicle_provider = registration.get("vehicle_provider")
+                if not failures and isinstance(vehicle_provider, str):
+                    vehicle_subject = subjects.get(vehicle_provider)
+                    vehicle_artifact = vehicle_subject.get("provider_artifact") if isinstance(vehicle_subject, Mapping) else None
+                    if not isinstance(vehicle_artifact, Mapping):
+                        failures.append("vehicle_provider_artifact")
+                    else:
+                        required_vehicle_fields = (
+                            "provider",
+                            "version",
+                            "executable_identity",
+                            "build_identity",
+                            "entrypoint",
+                            "build_root",
+                        )
+                        if (
+                            vehicle_artifact.get("provider") != vehicle_provider
+                            or any(
+                                not isinstance(vehicle_artifact.get(field), str) or not vehicle_artifact.get(field)
+                                for field in required_vehicle_fields
+                            )
+                            or vehicle_artifact.get("platform") != census.get("platform")
+                            or vehicle_artifact.get("architecture") != census.get("architecture")
+                            or not (census.get("qualification_model_pins") or {}).get(vehicle_provider)
+                        ):
+                            failures.append("vehicle_provider_artifact")
                 if not failures:
                     eligible.append(item)
             if not eligible:
@@ -521,7 +577,16 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
                 cell_diagnostics.append(_diagnostic("scheduling_action_invalid", "cell scheduling action is invalid", cell=cell))
             elif action == "reuse":
                 proof = decision.get("proof") if isinstance(decision.get("proof"), Mapping) else {}
-                failures = _reuse_failures(proof, cell, cell_subject, epoch, scheduling)
+                failures = _reuse_failures(
+                    proof,
+                    cell,
+                    cell_subject,
+                    epoch,
+                    scheduling,
+                    registration=eligible[0]["registration"] if len(eligible) == 1 else {},
+                    subjects=subjects,
+                    census=census,
+                )
                 if failures:
                     cell_diagnostics.append(
                         _diagnostic("scheduled_proof_not_reusable", f"scheduled proof cannot be reused: {sorted(set(failures))}", cell=cell)
@@ -612,6 +677,12 @@ def compile_resume_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
             }
             if _cell_subject_kind(selected) == PROVIDER_RELEASE_SUBJECT:
                 command["provider_artifact"] = dict(cell_subject.get("provider_artifact") or {})
+            elif isinstance(registration.get("vehicle_provider"), str):
+                vehicle_provider = str(registration["vehicle_provider"])
+                vehicle_subject = subjects[vehicle_provider]
+                command["vehicle_provider"] = vehicle_provider
+                command["vehicle_provider_artifact"] = dict(vehicle_subject.get("provider_artifact") or {})
+                command["vehicle_qualification_model"] = (census.get("qualification_model_pins") or {}).get(vehicle_provider)
             command["longhouse_source_sha"] = cell_subject.get("longhouse_source_sha")
             # Loop 1 may reuse an exact proof, but Loop 2 must still know how
             # to execute this cell against a new Longhouse candidate. Keep one

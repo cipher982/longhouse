@@ -24,18 +24,14 @@ HTTP surface in ``zerg.routers.agents_sessions``:
 ``POST /sessions/{id}/coordination-token``, ``POST /directed-inputs``,
 ``GET /directed-inputs``).
 
-Design notes / open uncertainty (flagged for human review before this is
-registered and run for real):
+Design notes:
 
 * ``coordination.awareness.create`` -> ``coordination_instructions_model_visible``
-  has no established live proof anywhere in this codebase. The coordination
-  MCP server's ``instructions`` field (delivered at MCP `initialize`, not a
-  per-tool description) is what "model visible" means here. There is no way
-  to intercept that handshake without changing cursor-agent, so this producer
-  probes behaviorally whether the live model classifies cross-session input
-  as attributed, untrusted peer input. This is a recitation probe, not a
-  protocol-level capture, and is the single highest-uncertainty design choice
-  in this module.
+  is a behavioral release check: the prompt explicitly requires the Longhouse
+  ``peers`` call, and the retained Runtime Host event must prove that call. A
+  completed reply without the call, or a turn that does not complete within
+  the bounded window, is a provider-release finding rather than a harness
+  crash. Free-text recitation never satisfies the assertion.
 * ``coordination.directed_input.send``/``.receive`` accept ``hermetic``
   evidence per the schema, but this producer always proves them with
   ``live_token`` (two real, simultaneously-live Cursor Helm sessions) rather
@@ -108,9 +104,9 @@ REGISTRATION = ProducerRegistration(
     # coordination tool invocation rather than by keyword-matching the model's
     # prose. Different evidence for the same assertion, so the scenario revision
     # moves and proofs from revision 6 do not satisfy it.
-    producer_revision=9,
+    producer_revision=10,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=7,
+    scenario_revision=8,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -681,14 +677,30 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
         # Working phase indefinitely, leaving only an uncommitted TTY redraw
         # for the marker and making the real MCP handshake impossible to
         # distinguish from a producer bug.
-        reply_text = _wait_marker_reply(
-            args.api_url,
-            args.agents_token,
-            session.session_id,
-            marker,
-            timeout=args.live_timeout_secs,
-        )
-        _wait_first_turn_settled(args.api_url, args.agents_token, session.session_id, timeout=args.live_timeout_secs)
+        provider_timeout = False
+        try:
+            reply_text = _wait_marker_reply(
+                args.api_url,
+                args.agents_token,
+                session.session_id,
+                marker,
+                timeout=args.live_timeout_secs,
+            )
+        except RuntimeError as exc:
+            if not str(exc).startswith("timed out waiting for Cursor session"):
+                raise
+            # The scenario explicitly asks for one tool call and a bounded
+            # marker reply. Timing out after a successful native launch is a
+            # negative provider observation, not a malformed harness result.
+            reply_text = ""
+            provider_timeout = True
+        if reply_text:
+            _wait_first_turn_settled(
+                args.api_url,
+                args.agents_token,
+                session.session_id,
+                timeout=args.live_timeout_secs,
+            )
         mcp_registered = _cursor_mcp_config_has_coordination_server(session.provider_cwd)
         recited = _recites_untrusted_peer_guidance(reply_text)
         events = _hosted_events(args.api_url, args.agents_token, session.session_id) or {}
@@ -698,6 +710,7 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
             "initial_turn_completed": bool(reply_text),
             "model_answered_coordination_probe": bool(reply_text),
             "coordination_tool_invoked": peers_invoked,
+            "provider_turn_timed_out": provider_timeout,
             # Retained as diagnostics. It used to gate this assertion and no
             # longer does; how the model phrases an answer is not evidence about
             # Longhouse.

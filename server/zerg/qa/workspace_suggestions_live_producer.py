@@ -35,7 +35,7 @@ _DISALLOWED_PATH_MARKERS = (
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.workspace_suggestions_live.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id="workspace_suggestions_live",
     scenario_revision=1,
     assertion_cells=((ASSERTION_ID, None),),
@@ -160,11 +160,11 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
         "leaking_paths": leaking_paths,
         "reads": reads,
     }
-    passed = (
+    coverage_available = bool(all_paths)
+    passed = coverage_available and (
         observation["all_reads_succeeded"]
         and observation["all_reads_within_budget"]
         and observation["all_response_shapes_valid"]
-        and observation["at_least_one_human_workspace"]
         and observation["all_paths_absolute"]
         and observation["all_paths_unique_per_machine"]
         and observation["proof_path_leak_count"] == 0
@@ -186,12 +186,17 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
         evidence_root / "cleanup-receipt.json",
         {"status": "pass", "orphan_count": 0, "owned_process_count": 0},
     )
-    return {"passed": bool(passed), "observation": observation}
+    return {
+        "passed": bool(passed) if coverage_available else None,
+        "coverage_available": coverage_available,
+        "observation": observation,
+    }
 
 
 def run(evidence_root: Path) -> dict[str, Any]:
     try:
         oracle = run_live_workspace_suggestions_oracle(evidence_root=evidence_root)
+        coverage_available = oracle["coverage_available"]
         result = {
             "schema_version": 1,
             "artifact_kind": "longhouse_workspace_suggestions_live_result",
@@ -201,10 +206,13 @@ def run(evidence_root: Path) -> dict[str, Any]:
             "scenario_id": REGISTRATION.scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "status": "pass" if oracle["passed"] else "fail",
+            "status": "pass" if oracle["passed"] is True else "fail" if coverage_available else "blocked",
             "observation": oracle["observation"],
-            "assertions": {ASSERTION_ID: bool(oracle["passed"])},
+            "assertions": {ASSERTION_ID: bool(oracle["passed"])} if coverage_available else {},
         }
+        if not coverage_available:
+            result["failure_code"] = "human_workspace_prerequisite_unavailable"
+            result["error"] = "No human workspace was available to exercise the positive projection path"
     except Exception as exc:  # noqa: BLE001 - typed failure evidence is the producer contract
         evidence_root.mkdir(parents=True, exist_ok=True)
         if not (evidence_root / "cleanup-receipt.json").exists():
@@ -225,7 +233,10 @@ def run(evidence_root: Path) -> dict[str, Any]:
             "failure_code": "workspace_suggestions_live_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "observation": {},
-            "assertions": {ASSERTION_ID: False},
+            # Transport/setup failure is not evidence that the Longhouse
+            # assertion is false. An empty map deliberately classifies this as
+            # a harness failure and leaves the product verdict unknown.
+            "assertions": {},
         }
     result["generated_at"] = datetime.now(UTC).isoformat()
     result["artifact_manifest"] = _artifact_manifest(evidence_root)

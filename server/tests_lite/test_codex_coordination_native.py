@@ -54,7 +54,7 @@ def test_registration_covers_exactly_the_five_schema_declared_cells() -> None:
     }
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     assert m.REGISTRATION.required_executables == ("jq",)
-    assert m.REGISTRATION.producer_revision == 6
+    assert m.REGISTRATION.producer_revision == 7
     assert m.REGISTRATION.scenario_revision == 4
     assert m.REGISTRATION.observation_scope == "scenario"
     assert "typed_compaction_receipt" not in m.REGISTRATION.required_artifacts
@@ -223,9 +223,21 @@ def test_typed_compaction_requires_the_app_server_completion_item(monkeypatch: p
             {"id": 3, "result": {}},
         ]
     )
-    monkeypatch.setattr(m, "websocket_connect", lambda *_a, **_k: socket)
+    connection: dict[str, object] = {}
 
-    receipt = m._typed_compact_thread("ws://127.0.0.1:1234", "thread-1", timeout=1)
+    def connect(*args: object, **kwargs: object):
+        connection["args"] = args
+        connection["kwargs"] = kwargs
+        return socket
+
+    monkeypatch.setattr(m, "websocket_connect", connect)
+
+    receipt = m._typed_compact_thread(
+        "ws://127.0.0.1:1234",
+        "thread-1",
+        ws_auth_token="relay-secret",
+        timeout=1,
+    )
 
     assert receipt == {
         "subscription_method": "thread/resume",
@@ -245,6 +257,7 @@ def test_typed_compaction_requires_the_app_server_completion_item(monkeypatch: p
         "thread/resume",
         "thread/compact/start",
     ]
+    assert connection["kwargs"]["additional_headers"] == {"Authorization": "Bearer relay-secret"}
 
 
 def test_run_awareness_post_compaction_pass_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

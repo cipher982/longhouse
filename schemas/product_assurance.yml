@@ -39,7 +39,7 @@ assertions:
     assertion_id: live_frames_reach_the_viewer_during_the_turn
     variant: null
     scenario_id: console_served_state
-    minimum_scenario_revision: 1
+    minimum_scenario_revision: 2
     oracle_source: server/zerg/qa/console_served_state_core.py
     acceptable_evidence:
       - live_token
@@ -50,7 +50,7 @@ assertions:
     assertion_id: served_state_settles_once_the_reply_is_served
     variant: null
     scenario_id: console_served_state
-    minimum_scenario_revision: 1
+    minimum_scenario_revision: 2
     oracle_source: server/zerg/qa/console_served_state_core.py
     acceptable_evidence:
       - live_token

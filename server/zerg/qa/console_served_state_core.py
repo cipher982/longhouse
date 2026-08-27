@@ -39,6 +39,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
 
@@ -269,7 +270,11 @@ def armed_terminal_drop(session_id: str, enabled: bool):
         control.unlink(missing_ok=True)
 
 
-def run(args: argparse.Namespace) -> dict:
+def run(
+    args: argparse.Namespace,
+    *,
+    on_session_created: Callable[[str], None] | None = None,
+) -> dict:
     api_url, token = _defaults()
     api_url = args.api_url.rstrip("/") if args.api_url else api_url
     if not api_url or not token:
@@ -289,20 +294,26 @@ def run(args: argparse.Namespace) -> dict:
         "marker": marker,
     }
 
+    create_payload = {
+        "provider": args.provider,
+        "device_id": args.device_id,
+        "cwd": str(Path(args.cwd).resolve()),
+        "project": "console-served-state-e2e",
+        "display_name": "Console served-state E2E",
+        "launch_surface": "product-e2e",
+    }
+    model = str(getattr(args, "model", "") or "").strip()
+    if model:
+        create_payload["model"] = model
     created = client.request(
         "POST",
         "/api/agents/sessions",
-        {
-            "provider": args.provider,
-            "device_id": args.device_id,
-            "cwd": str(Path(args.cwd).resolve()),
-            "project": "console-served-state-e2e",
-            "display_name": "Console served-state E2E",
-            "launch_surface": "product-e2e",
-        },
+        create_payload,
     )
     session_id = str(created["session_id"])
     report["session_id"] = session_id
+    if on_session_created is not None:
+        on_session_created(session_id)
 
     if args.drop_terminal:
         report["terminal_dropped"] = True
@@ -347,7 +358,7 @@ def _observe_turn(
     turn = _start_turn(
         client,
         session_id,
-        f"Use the shell tool to run exactly: sleep 6 && echo {marker}. " f"Then reply with exactly {marker} and nothing else.",
+        f"Use the shell tool to run exactly: sleep 6 && echo {marker}. Then reply with exactly {marker} and nothing else.",
     )
     run_id = str(turn["run_id"])
     report["run_id"] = run_id

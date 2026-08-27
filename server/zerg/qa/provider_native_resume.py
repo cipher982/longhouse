@@ -135,6 +135,45 @@ class TranscriptShipper:
             value = value.replace(secret, "<redacted>")
         return value
 
+    def _database_diagnostics(self) -> dict[str, Any]:
+        """Retain enough metadata to locate a SQLite ownership failure.
+
+        The qualification sandbox is destroyed after every attempt. A bad DB
+        header used to leave only SQLite error 26, making it impossible to tell
+        whether the daemon created invalid state or the one-shot flush changed
+        a valid database. This records no rows or transcript content.
+        """
+
+        diagnostic: dict[str, Any] = {
+            "path_name": self.db_path.name,
+            "exists": self.db_path.is_file(),
+        }
+        try:
+            with self.db_path.open("rb") as stream:
+                header = stream.read(16)
+            diagnostic.update(
+                {
+                    "size_bytes": self.db_path.stat().st_size,
+                    "header_sha256": hashlib.sha256(header).hexdigest(),
+                    "sqlite_header": header == b"SQLite format 3\x00",
+                    "wal_size_bytes": self.db_path.with_name(f"{self.db_path.name}-wal").stat().st_size
+                    if self.db_path.with_name(f"{self.db_path.name}-wal").is_file()
+                    else 0,
+                    "shm_size_bytes": self.db_path.with_name(f"{self.db_path.name}-shm").stat().st_size
+                    if self.db_path.with_name(f"{self.db_path.name}-shm").is_file()
+                    else 0,
+                }
+            )
+            connection = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+            try:
+                row = connection.execute("PRAGMA quick_check").fetchone()
+                diagnostic["quick_check"] = row[0] if row else None
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error) as exc:
+            diagnostic["error"] = f"{type(exc).__name__}: {exc}"
+        return diagnostic
+
     def flush(self, label: str) -> dict[str, Any]:
         """Force a bounded scan before a hosted projection assertion."""
 
@@ -157,6 +196,7 @@ class TranscriptShipper:
         daemon_restart_error: str | None = None
         if daemon_was_live:
             self._terminate_daemon()
+        database_before_ship = self._database_diagnostics()
         attempts: list[dict[str, Any]] = []
         log_sections: list[str] = []
         retry_reasons_seen: set[str] = set()
@@ -241,6 +281,8 @@ class TranscriptShipper:
                 continue
             time.sleep(retry_delay_secs)
         result = dict(attempts[-1])
+        result["database_before_ship"] = database_before_ship
+        result["database_after_ship"] = self._database_diagnostics()
         result["attempts"] = len(attempts)
         retry_reasons = [attempt["retry_reason"] for attempt in attempts if "retry_reason" in attempt]
         if retry_reasons:
@@ -267,6 +309,7 @@ class TranscriptShipper:
         result["daemon_restarted"] = daemon_was_live and daemon_restart_error is None
         if daemon_restart_error:
             result["daemon_restart_error"] = daemon_restart_error
+            result["database_after_restart_failure"] = self._database_diagnostics()
         return result
 
     def capture_cursor_projection_diagnostics(
