@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 268,
+  "file_count": 264,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -719,13 +719,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_agents_session_tail_roles.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_agents_sessions_queryless_listing.py",
       "providers": [
         "claude",
@@ -874,7 +867,6 @@
       "providers": [
         "claude",
         "codex",
-        "cursor",
         "opencode"
       ]
     },
@@ -945,14 +937,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_fleet_wall.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_hatch_automation_origin.py",
       "providers": [
         "cursor",
@@ -967,13 +951,6 @@
         "codex",
         "cursor",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_hot_write_backpressure_routes.py",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {
@@ -1377,13 +1354,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_session_archive_bundle_api.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_session_capabilities.py",
       "providers": [
         "antigravity",
@@ -1468,6 +1438,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_loop_mode.py",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {
@@ -1654,8 +1631,7 @@
       "path": "server/tests_lite/test_timeline_runtime_overlay.py",
       "providers": [
         "claude",
-        "codex",
-        "opencode"
+        "codex"
       ]
     },
     {
@@ -1711,13 +1687,6 @@
       "path": "server/tests_lite/test_usage_stats.py",
       "providers": [
         "antigravity",
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_worklog_day_export_api.py",
-      "providers": [
         "claude",
         "codex"
       ]

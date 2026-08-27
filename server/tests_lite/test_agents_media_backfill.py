@@ -16,6 +16,10 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from zerg.catalogd.models import StorageSession
+from zerg.catalogd.schema import create_catalog_engine
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -27,6 +31,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
+from zerg.services import catalogd_supervisor
 from zerg.services.ingest_health import compute_ingest_health_from_catalog_facts
 
 
@@ -185,39 +190,39 @@ def test_inline_media_backfill_accepts_line_wrapped_base64(tmp_path, monkeypatch
         cleanup()
 
 
-def test_ingest_health_reports_media_repair_debt_separately(tmp_path, monkeypatch):
-    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
-    client = TestClient(api_app)
+def test_ingest_health_reports_media_repair_debt_separately(live_catalog, live_catalog_client):  # noqa: F811
+    """Media debt is counted apart from the session count, not folded into it.
 
+    A session whose commit referenced media the Runtime Host does not hold is
+    still a session: it stays in ``session_count`` and shows up separately in
+    ``media_repair_refs``. The incomplete state is set here directly because
+    what is under test is the health projection, not the media commit path.
+    """
+
+    owner_id = live_catalog.create_user("owner@media-debt.test")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="cinder")
+    live_catalog.commit_session(owner_id=owner_id)
+    incomplete = live_catalog.commit_session(owner_id=owner_id)
+
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+    engine = create_catalog_engine(database_path)
     try:
-        with factory() as db:
-            session = AgentSession(
-                provider="codex",
-                environment="test",
-                started_at=datetime.now(timezone.utc),
+        with engine.begin() as connection:
+            connection.execute(
+                StorageSession.__table__.update()
+                .where(StorageSession.__table__.c.session_id == str(incomplete.session_id))
+                .values(media_state="missing", missing_media_hashes_json=json.dumps([hashlib.sha256(b"pending").hexdigest()]))
             )
-            db.add(session)
-            db.commit()
-            db.refresh(session)
-            db.add(
-                SessionMediaRef(
-                    session_id=session.id,
-                    source_path="/tmp/pending.jsonl",
-                    source_offset=1,
-                    original_kind="inline_data_url",
-                    media_sha256=hashlib.sha256(b"pending").hexdigest(),
-                    media_state="pending",
-                )
-            )
-            db.commit()
-
-        response = client.get("/agents/ingest-health")
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["media_repair_refs"] == 1
-        assert body["media_repair_bytes"] == 0
     finally:
-        cleanup()
+        engine.dispose()
+
+    response = live_catalog_client.get("/agents/ingest-health", headers={"X-Agents-Token": token})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["session_count"] == 2
+    assert body["media_repair_refs"] == 1
+    assert body["media_repair_bytes"] == 0
 
 
 def test_catalog_ingest_health_route_does_not_read_legacy_tables(tmp_path, monkeypatch):
@@ -237,7 +242,6 @@ def test_catalog_ingest_health_route_does_not_read_legacy_tables(tmp_path, monke
             }
 
     api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=42)
-    monkeypatch.setattr(route_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(route_module, "get_catalogd_client", lambda: Catalog())
     client = TestClient(api_app)
     try:

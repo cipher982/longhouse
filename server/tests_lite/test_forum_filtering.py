@@ -20,13 +20,17 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import Base, get_db, initialize_live_database, make_engine, make_live_engine, make_sessionmaker
+from sqlalchemy.orm import Session as SqlSession
+
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from zerg.catalogd.schema import create_catalog_engine
+from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession, SessionRuntimeState
 from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.models.live_store import LiveSessionCatalog
-from zerg.routers import agents_sessions as agents_sessions_router
 from zerg.services.agents import AgentsStore
+from zerg.services.catalogd_supervisor import catalogd_paths
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
@@ -90,10 +94,49 @@ def _client(factory):
     return TestClient(api_app)
 
 
-def _make_live_db(tmp_path, name="live.db"):
-    engine = make_live_engine(f"sqlite:///{tmp_path / name}")
-    initialize_live_database(engine)
-    return engine, make_sessionmaker(engine)
+def _seed_live_rows(rows):
+    """Write hot-lane rows straight into the live catalog catalogd is serving."""
+
+    database_path, _socket_path = catalogd_paths()
+    engine = create_catalog_engine(database_path)
+    try:
+        with SqlSession(engine) as db:
+            db.add_all(rows)
+            db.commit()
+    finally:
+        engine.dispose()
+
+
+def _seed_live_snoozed_session(session_id):
+    """Mirror one archived session into the live catalog as the user snoozed it."""
+
+    now = datetime.now(timezone.utc)
+    _seed_live_rows(
+        [
+            LiveSessionCatalog(
+                session_id=session_id,
+                provider="claude",
+                environment="production",
+                started_at=now,
+                user_state="snoozed",
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+    )
+
+
+def _get_live_user_state(session_id):
+    """Read the user state catalogd owns, which is the one presence flips."""
+
+    database_path, _socket_path = catalogd_paths()
+    engine = create_catalog_engine(database_path)
+    try:
+        with SqlSession(engine) as db:
+            row = db.get(LiveSessionCatalog, session_id)
+            return row.user_state if row is not None else None
+    finally:
+        engine.dispose()
 
 
 def _get_user_state(factory, session_id):
@@ -229,10 +272,9 @@ def test_archived_filter_before_limit(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_active_sessions_uses_live_store_candidates_when_configured(tmp_path, monkeypatch):
+def test_active_sessions_uses_live_store_candidates_when_configured(tmp_path, live_catalog):
     """Fresh live_sessions rows are the candidate source for /sessions/active."""
     factory = _make_db(tmp_path, "live_candidate_archive.db")
-    live_engine, live_factory = _make_live_db(tmp_path, "live_candidate_hot.db")
     now = datetime.now(timezone.utc)
     old = now - timedelta(days=30)
     newest_live_id = _seed(factory, user_state="active", started_at=old, project="zerg")
@@ -242,100 +284,96 @@ def test_active_sessions_uses_live_store_candidates_when_configured(tmp_path, mo
     wrong_project_live_id = _seed(factory, user_state="active", started_at=old, project="other")
     missing_live_id = _seed(factory, user_state="active", started_at=old, project="zerg")
 
-    with live_factory() as live_db:
-        live_db.add_all(
-            [
-                LiveSessionCatalog(
-                    session_id=newest_live_id,
-                    provider="claude",
-                    environment="production",
-                    project="zerg",
-                    started_at=old,
-                    user_state="active",
-                ),
-                LiveSessionCatalog(
-                    session_id=older_live_id,
-                    provider="claude",
-                    environment="production",
-                    project="zerg",
-                    started_at=old,
-                    user_state="active",
-                ),
-                LiveSessionCatalog(
-                    session_id=archived_live_id,
-                    provider="claude",
-                    environment="production",
-                    project="zerg",
-                    started_at=old,
-                    user_state="archived",
-                ),
-                LiveSessionCatalog(
-                    session_id=wrong_project_live_id,
-                    provider="claude",
-                    environment="production",
-                    project="other",
-                    started_at=old,
-                    user_state="active",
-                ),
-                LiveSessionCatalog(
-                    session_id=missing_live_id,
-                    provider="claude",
-                    environment="production",
-                    project="zerg",
-                    started_at=old,
-                    user_state="active",
-                ),
-                LiveSessionRow(
-                    session_id=newest_live_id,
-                    provider="claude",
-                    device_id="cinder",
-                    state="attached",
-                    started_at=old,
-                    last_seen_at=now,
-                    updated_at=now,
-                ),
-                LiveSessionRow(
-                    session_id=older_live_id,
-                    provider="claude",
-                    device_id="cinder",
-                    state="attached",
-                    started_at=old,
-                    last_seen_at=now - timedelta(seconds=1),
-                    updated_at=now - timedelta(seconds=1),
-                ),
-                LiveSessionRow(
-                    session_id=archived_live_id,
-                    provider="claude",
-                    device_id="cinder",
-                    state="attached",
-                    started_at=old,
-                    last_seen_at=now - timedelta(seconds=2),
-                    updated_at=now - timedelta(seconds=2),
-                ),
-                LiveSessionRow(
-                    session_id=wrong_project_live_id,
-                    provider="claude",
-                    device_id="cinder",
-                    state="attached",
-                    started_at=old,
-                    last_seen_at=now - timedelta(seconds=3),
-                    updated_at=now - timedelta(seconds=3),
-                ),
-                LiveSessionRow(
-                    session_id=missing_live_id,
-                    provider="claude",
-                    device_id="cinder",
-                    state="missing",
-                    started_at=old,
-                    last_seen_at=now,
-                    updated_at=now,
-                ),
-            ]
-        )
-        live_db.commit()
+    _seed_live_rows(
+        [
+            LiveSessionCatalog(
+                session_id=newest_live_id,
+                provider="claude",
+                environment="production",
+                project="zerg",
+                started_at=old,
+                user_state="active",
+            ),
+            LiveSessionCatalog(
+                session_id=older_live_id,
+                provider="claude",
+                environment="production",
+                project="zerg",
+                started_at=old,
+                user_state="active",
+            ),
+            LiveSessionCatalog(
+                session_id=archived_live_id,
+                provider="claude",
+                environment="production",
+                project="zerg",
+                started_at=old,
+                user_state="archived",
+            ),
+            LiveSessionCatalog(
+                session_id=wrong_project_live_id,
+                provider="claude",
+                environment="production",
+                project="other",
+                started_at=old,
+                user_state="active",
+            ),
+            LiveSessionCatalog(
+                session_id=missing_live_id,
+                provider="claude",
+                environment="production",
+                project="zerg",
+                started_at=old,
+                user_state="active",
+            ),
+            LiveSessionRow(
+                session_id=newest_live_id,
+                provider="claude",
+                device_id="cinder",
+                state="attached",
+                started_at=old,
+                last_seen_at=now,
+                updated_at=now,
+            ),
+            LiveSessionRow(
+                session_id=older_live_id,
+                provider="claude",
+                device_id="cinder",
+                state="attached",
+                started_at=old,
+                last_seen_at=now - timedelta(seconds=1),
+                updated_at=now - timedelta(seconds=1),
+            ),
+            LiveSessionRow(
+                session_id=archived_live_id,
+                provider="claude",
+                device_id="cinder",
+                state="attached",
+                started_at=old,
+                last_seen_at=now - timedelta(seconds=2),
+                updated_at=now - timedelta(seconds=2),
+            ),
+            LiveSessionRow(
+                session_id=wrong_project_live_id,
+                provider="claude",
+                device_id="cinder",
+                state="attached",
+                started_at=old,
+                last_seen_at=now - timedelta(seconds=3),
+                updated_at=now - timedelta(seconds=3),
+            ),
+            LiveSessionRow(
+                session_id=missing_live_id,
+                provider="claude",
+                device_id="cinder",
+                state="missing",
+                started_at=old,
+                last_seen_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
 
-    monkeypatch.setattr(agents_sessions_router, "live_store_configured", lambda: True)
-    monkeypatch.setattr(agents_sessions_router, "get_live_session_factory", lambda: live_factory)
     client = _client(factory)
     try:
         resp = client.get("/agents/sessions/active?days_back=14&limit=10&project=zerg", headers={"X-Agents-Token": "dev"})
@@ -346,54 +384,48 @@ def test_active_sessions_uses_live_store_candidates_when_configured(tmp_path, mo
         from zerg.main import api_app
 
         api_app.dependency_overrides.clear()
-        live_engine.dispose()
 
 
-def test_active_sessions_do_not_backfill_archive_rows_when_live_candidates_are_ghosts(tmp_path, monkeypatch):
+def test_active_sessions_do_not_backfill_archive_rows_when_live_candidates_are_ghosts(tmp_path, live_catalog):
     """The active page stays on canonical live candidates even when an old liveness row is stale."""
     factory = _make_db(tmp_path, "live_candidate_ghost_archive.db")
-    live_engine, live_factory = _make_live_db(tmp_path, "live_candidate_ghost_hot.db")
     now = datetime.now(timezone.utc)
     old = now - timedelta(days=30)
     live_session_id = _seed(factory, user_state="active", started_at=old, project="zerg")
     archive_backfill_id = _seed(factory, user_state="active", started_at=now - timedelta(seconds=1), project="zerg")
     ghost_session_id = str(uuid4())
 
-    with live_factory() as live_db:
-        live_db.add_all(
-            [
-                LiveSessionCatalog(
-                    session_id=live_session_id,
-                    provider="claude",
-                    environment="production",
-                    project="zerg",
-                    started_at=old,
-                    user_state="active",
-                ),
-                LiveSessionRow(
-                    session_id=ghost_session_id,
-                    provider="claude",
-                    device_id="cinder",
-                    state="attached",
-                    started_at=old,
-                    last_seen_at=now,
-                    updated_at=now,
-                ),
-                LiveSessionRow(
-                    session_id=live_session_id,
-                    provider="claude",
-                    device_id="cinder",
-                    state="attached",
-                    started_at=old,
-                    last_seen_at=now - timedelta(seconds=1),
-                    updated_at=now - timedelta(seconds=1),
-                ),
-            ]
-        )
-        live_db.commit()
+    _seed_live_rows(
+        [
+            LiveSessionCatalog(
+                session_id=live_session_id,
+                provider="claude",
+                environment="production",
+                project="zerg",
+                started_at=old,
+                user_state="active",
+            ),
+            LiveSessionRow(
+                session_id=ghost_session_id,
+                provider="claude",
+                device_id="cinder",
+                state="attached",
+                started_at=old,
+                last_seen_at=now,
+                updated_at=now,
+            ),
+            LiveSessionRow(
+                session_id=live_session_id,
+                provider="claude",
+                device_id="cinder",
+                state="attached",
+                started_at=old,
+                last_seen_at=now - timedelta(seconds=1),
+                updated_at=now - timedelta(seconds=1),
+            ),
+        ]
+    )
 
-    monkeypatch.setattr(agents_sessions_router, "live_store_configured", lambda: True)
-    monkeypatch.setattr(agents_sessions_router, "get_live_session_factory", lambda: live_factory)
     client = _client(factory)
     try:
         resp = client.get("/agents/sessions/active?days_back=14&limit=2&project=zerg", headers={"X-Agents-Token": "dev"})
@@ -405,7 +437,6 @@ def test_active_sessions_do_not_backfill_archive_rows_when_live_candidates_are_g
         from zerg.main import api_app
 
         api_app.dependency_overrides.clear()
-        live_engine.dispose()
 
 
 def test_active_sessions_use_projected_role_previews(tmp_path, monkeypatch):
@@ -500,12 +531,12 @@ def test_active_sessions_handles_ended_session_datetime(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_presence_auto_resumes_snoozed_on_thinking(tmp_path):
+def test_presence_auto_resumes_snoozed_on_thinking(tmp_path, live_catalog):
     """Presence thinking signal auto-resumes a snoozed session."""
     factory = _make_db(tmp_path, "auto_resume.db")
     sid = _seed(factory, user_state="snoozed")
+    _seed_live_snoozed_session(sid)
 
-    # Patch presence router to use test DB
     client = _client(factory)
     try:
         resp = client.post(
@@ -514,7 +545,7 @@ def test_presence_auto_resumes_snoozed_on_thinking(tmp_path):
             headers={"X-Device-Token": "dev"},
         )
         assert resp.status_code == 204
-        assert _get_user_state(factory, sid) == "active"
+        assert _get_live_user_state(sid) == "active"
     finally:
         from zerg.main import api_app
         api_app.dependency_overrides.clear()
@@ -562,10 +593,11 @@ def test_stale_presence_does_not_auto_resume_snoozed_session(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_presence_auto_resumes_snoozed_on_running(tmp_path):
+def test_presence_auto_resumes_snoozed_on_running(tmp_path, live_catalog):
     """Presence running signal auto-resumes a snoozed session."""
     factory = _make_db(tmp_path, "auto_resume_run.db")
     sid = _seed(factory, user_state="snoozed")
+    _seed_live_snoozed_session(sid)
 
     client = _client(factory)
     try:
@@ -575,7 +607,7 @@ def test_presence_auto_resumes_snoozed_on_running(tmp_path):
             headers={"X-Device-Token": "dev"},
         )
         assert resp.status_code == 204
-        assert _get_user_state(factory, sid) == "active"
+        assert _get_live_user_state(sid) == "active"
     finally:
         from zerg.main import api_app
         api_app.dependency_overrides.clear()

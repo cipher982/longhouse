@@ -65,22 +65,13 @@ _MANAGED_LOCAL_ACTIVE_HOOK_PHASES = frozenset({"thinking", "running"})
 def _managed_local_action_available(db: Session, session: AgentSession, action: str) -> bool:
     """Revalidate the exact action against the current control lease."""
 
-    import zerg.database as database_module
+    if getattr(session, "catalog_facts", None) is not None:
+        from zerg.services.live_control_catalog import live_control_session_capability_available
 
-    if database_module.live_catalog_enabled():
-        if getattr(session, "catalog_facts", None) is not None:
-            from zerg.services.live_control_catalog import live_control_session_capability_available
+        return live_control_session_capability_available(session, capability=action)
+    from zerg.services.live_control_catalog import live_control_capability_available
 
-            return live_control_session_capability_available(session, capability=action)
-        from zerg.services.live_control_catalog import live_control_capability_available
-
-        return live_control_capability_available(db, session_id=session.id, capability=action)
-    capabilities = project_session_capabilities(db, session_id=session.id)
-    return {
-        "send": capabilities.can_send_input,
-        "interrupt": capabilities.can_interrupt,
-        "terminate": capabilities.can_terminate,
-    }.get(action, False)
+    return live_control_capability_available(db, session_id=session.id, capability=action)
 
 
 _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS = {

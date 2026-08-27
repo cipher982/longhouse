@@ -7,7 +7,6 @@ from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.routers.runners import _runner_websocket_with_db
-from zerg.routers.runners import runner_websocket
 
 
 def _make_db(tmp_path):
@@ -18,8 +17,6 @@ def _make_db(tmp_path):
 
 
 class _DisconnectBeforeHelloWebSocket:
-    query_params = {}
-
     def __init__(self):
         self.accepted = False
         self.close_calls = 0
@@ -80,15 +77,3 @@ async def test_runner_invalid_hello_close_race_is_swallowed(tmp_path, caplog):
     assert websocket.accepted is True
     assert "Failed to receive hello message: boom" in caplog.text
     assert "Error in runner websocket handler" not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_runner_websocket_uses_catalog_database_in_catalog_mode(monkeypatch, tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    websocket = _DisconnectBeforeHelloWebSocket()
-    monkeypatch.setattr("zerg.routers.runners.live_catalog_enabled", lambda: True)
-    monkeypatch.setattr("zerg.routers.runners.get_catalog_session_factory", lambda: SessionLocal)
-
-    await runner_websocket(websocket)
-
-    assert websocket.accepted is True

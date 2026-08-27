@@ -7,8 +7,6 @@ from datetime import datetime
 from datetime import timezone
 from uuid import UUID
 
-from zerg.models.live_store import LiveSessionCatalog
-
 
 @dataclass(frozen=True)
 class SessionPreferences:
@@ -33,43 +31,28 @@ def load_session_preferences(session_id: UUID | str, *, standalone_session=None)
             user_hidden_from_timeline=bool(getattr(standalone_session, "user_hidden_from_timeline", False)),
         )
 
-    if database_module.live_catalog_enabled():
-        facts = getattr(standalone_session, "catalog_facts", None)
-        catalog = facts.get("catalog") if isinstance(facts, dict) else None
-        if isinstance(catalog, dict):
-            return SessionPreferences(
-                user_state=str(catalog.get("user_state") or "active"),
-                loop_mode=str(catalog.get("loop_mode") or "assist"),
-                notification_muted=catalog.get("notification_muted") is True,
-                user_hidden_from_timeline=bool(catalog.get("user_hidden_from_timeline")),
-            )
-        from zerg.services.catalog_read_gateway import session_snapshot
-
-        result = session_snapshot(str(session_id))
-        facts = result.get("facts") if result.get("found") is True else None
-        catalog = facts.get("catalog") if isinstance(facts, dict) else None
-        if not isinstance(catalog, dict):
-            return SessionPreferences()
+    facts = getattr(standalone_session, "catalog_facts", None)
+    catalog = facts.get("catalog") if isinstance(facts, dict) else None
+    if isinstance(catalog, dict):
         return SessionPreferences(
             user_state=str(catalog.get("user_state") or "active"),
             loop_mode=str(catalog.get("loop_mode") or "assist"),
             notification_muted=catalog.get("notification_muted") is True,
             user_hidden_from_timeline=bool(catalog.get("user_hidden_from_timeline")),
         )
+    from zerg.services.catalog_read_gateway import session_snapshot
 
-    factory = database_module.get_live_session_factory()
-    if factory is None:
-        raise RuntimeError("Live session catalog is unavailable")
-    with factory() as live_db:
-        row = live_db.get(LiveSessionCatalog, str(session_id))
-        if row is None:
-            return SessionPreferences()
-        return SessionPreferences(
-            user_state=str(row.user_state or "active"),
-            loop_mode=str(row.loop_mode or "assist"),
-            notification_muted=bool(row.notification_muted),
-            user_hidden_from_timeline=bool(row.user_hidden_from_timeline),
-        )
+    result = session_snapshot(str(session_id))
+    facts = result.get("facts") if result.get("found") is True else None
+    catalog = facts.get("catalog") if isinstance(facts, dict) else None
+    if not isinstance(catalog, dict):
+        return SessionPreferences()
+    return SessionPreferences(
+        user_state=str(catalog.get("user_state") or "active"),
+        loop_mode=str(catalog.get("loop_mode") or "assist"),
+        notification_muted=catalog.get("notification_muted") is True,
+        user_hidden_from_timeline=bool(catalog.get("user_hidden_from_timeline")),
+    )
 
 
 async def update_session_preferences(

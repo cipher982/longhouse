@@ -41,6 +41,9 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -308,104 +311,95 @@ def test_needs_user_clears_tool_name(client, tmp_path):
 
 # ---------------------------------------------------------------------------
 # 3. Backend: auto-resume behaviour
+#
+# Auto-resume is a live-catalog fact. A Runtime Host hands the presence signal
+# to catalogd, which is where the snoozed row lives and where the resume
+# happens; these three tests therefore run against a real catalog instead of an
+# archive session that production never opens.
 # ---------------------------------------------------------------------------
 
 
-def test_needs_user_does_not_auto_resume_snoozed(client, tmp_path):
+def _snoozed_console_session(live_catalog: LiveCatalog, *, owner_id: int) -> str:
+    """One Console session the user has snoozed, in the store that owns that fact."""
+
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    created = live_catalog.rpc(
+        "session.console.create.v2",
+        {
+            "session": {
+                "session_id": str(session_id),
+                "thread_id": str(uuid4()),
+                "owner_id": owner_id,
+                "provider": "claude",
+                "device_id": "presence-fixture",
+                "cwd": "/tmp",
+                "started_at": now.isoformat(),
+            }
+        },
+    )
+    assert created["created"] is True, created
+    snoozed = live_catalog.rpc(
+        "session.preferences.update.v2",
+        {
+            "session_id": str(session_id),
+            "user_state": "snoozed",
+            "loop_mode": None,
+            "notification_muted": None,
+            "user_hidden_from_timeline": None,
+            "last_read_at": None,
+            "observed_at": now.isoformat(),
+        },
+    )
+    assert snoozed["found"] is True, snoozed
+    return str(session_id)
+
+
+def _user_state(live_catalog: LiveCatalog, session_id: str) -> str:
+    return str(live_catalog.rpc("session.read.v2", {"session_id": session_id})["facts"]["catalog"]["user_state"])
+
+
+def _post_presence(live_catalog: LiveCatalog, client, *, owner_id: int, session_id: str, state: str) -> None:
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="presence-fixture")
+    response = client.post(
+        "/agents/presence",
+        json={"session_id": session_id, "state": state, "cwd": "/tmp", "provider": "claude"},
+        headers={"X-Agents-Token": token},
+    )
+    assert response.status_code == 204, response.text
+
+
+def test_needs_user_does_not_auto_resume_snoozed(live_catalog, live_catalog_client):
     """needs_user must NOT auto-resume a snoozed session."""
-    engine, SessionLocal = _make_db(tmp_path)
+    owner_id = live_catalog.create_user("owner@presence.test")
+    session_id = _snoozed_console_session(live_catalog, owner_id=owner_id)
 
-    def override_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+    _post_presence(live_catalog, live_catalog_client, owner_id=owner_id, session_id=session_id, state="needs_user")
 
-    api_app.dependency_overrides[get_db] = override_db
-    with TestClient(api_app) as c:
-        db = SessionLocal()
-        session = _make_session(db)
-        # Snooze the session
-        db.query(AgentSession).filter(AgentSession.id == session.id).update({"user_state": "snoozed"}, synchronize_session=False)
-        db.commit()
-
-        c.post(
-            "/agents/presence",
-            json={"session_id": str(session.id), "state": "needs_user", "cwd": "/tmp"},
-            headers=_auth_headers(),
-        )
-
-        db.expire_all()
-        updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-        assert updated.user_state == "snoozed", f"needs_user should NOT auto-resume snoozed session, got user_state={updated.user_state!r}"
-        db.close()
-    api_app.dependency_overrides.clear()
-    engine.dispose()
+    user_state = _user_state(live_catalog, session_id)
+    assert user_state == "snoozed", f"needs_user should NOT auto-resume snoozed session, got user_state={user_state!r}"
 
 
-def test_blocked_does_not_auto_resume_snoozed(client, tmp_path):
+def test_blocked_does_not_auto_resume_snoozed(live_catalog, live_catalog_client):
     """blocked must NOT auto-resume a snoozed session."""
-    engine, SessionLocal = _make_db(tmp_path)
+    owner_id = live_catalog.create_user("owner@presence.test")
+    session_id = _snoozed_console_session(live_catalog, owner_id=owner_id)
 
-    def override_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+    _post_presence(live_catalog, live_catalog_client, owner_id=owner_id, session_id=session_id, state="blocked")
 
-    api_app.dependency_overrides[get_db] = override_db
-    with TestClient(api_app) as c:
-        db = SessionLocal()
-        session = _make_session(db)
-        db.query(AgentSession).filter(AgentSession.id == session.id).update({"user_state": "snoozed"}, synchronize_session=False)
-        db.commit()
-
-        c.post(
-            "/agents/presence",
-            json={"session_id": str(session.id), "state": "blocked", "cwd": "/tmp"},
-            headers=_auth_headers(),
-        )
-
-        db.expire_all()
-        updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-        assert updated.user_state == "snoozed", f"blocked should NOT auto-resume snoozed session, got user_state={updated.user_state!r}"
-        db.close()
-    api_app.dependency_overrides.clear()
-    engine.dispose()
+    user_state = _user_state(live_catalog, session_id)
+    assert user_state == "snoozed", f"blocked should NOT auto-resume snoozed session, got user_state={user_state!r}"
 
 
-def test_thinking_still_auto_resumes_snoozed(client, tmp_path):
+def test_thinking_still_auto_resumes_snoozed(live_catalog, live_catalog_client):
     """thinking still auto-resumes snoozed sessions (existing behaviour must not regress)."""
-    engine, SessionLocal = _make_db(tmp_path)
+    owner_id = live_catalog.create_user("owner@presence.test")
+    session_id = _snoozed_console_session(live_catalog, owner_id=owner_id)
 
-    def override_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+    _post_presence(live_catalog, live_catalog_client, owner_id=owner_id, session_id=session_id, state="thinking")
 
-    api_app.dependency_overrides[get_db] = override_db
-    with TestClient(api_app) as c:
-        db = SessionLocal()
-        session = _make_session(db)
-        db.query(AgentSession).filter(AgentSession.id == session.id).update({"user_state": "snoozed"}, synchronize_session=False)
-        db.commit()
-
-        c.post(
-            "/agents/presence",
-            json={"session_id": str(session.id), "state": "thinking", "cwd": "/tmp"},
-            headers=_auth_headers(),
-        )
-
-        db.expire_all()
-        updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-        assert updated.user_state == "active", f"thinking should auto-resume snoozed session, got user_state={updated.user_state!r}"
-        db.close()
-    api_app.dependency_overrides.clear()
-    engine.dispose()
+    user_state = _user_state(live_catalog, session_id)
+    assert user_state == "active", f"thinking should auto-resume snoozed session, got user_state={user_state!r}"
 
 
 # ---------------------------------------------------------------------------

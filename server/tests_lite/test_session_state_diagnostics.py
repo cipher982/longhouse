@@ -423,7 +423,6 @@ def test_control_identity_comparison_reports_legacy_only_without_control_evidenc
 def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkeypatch):
     session_id = "44444444-4444-4444-8444-444444444444"
     shadow = _shadow()
-    monkeypatch.setattr(diagnostics_router.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(
         diagnostics_router,
         "shadow_session_state_snapshot",
@@ -511,7 +510,6 @@ def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkey
 
 
 def test_reducer_health_route_reports_failures_without_claiming_cutover(monkeypatch):
-    monkeypatch.setattr(diagnostics_router.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(
         diagnostics_router,
         "shadow_session_state_health",
@@ -599,7 +597,6 @@ def test_reducer_health_distinguishes_not_reducing_from_not_comparable(monkeypat
             "parity_missing_heads": 0,
         },
     }
-    monkeypatch.setattr(diagnostics_router.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(diagnostics_router, "shadow_session_state_health", lambda owner_id: snapshot)
     app = FastAPI()
     app.include_router(diagnostics_router.health_router, prefix="/api")

@@ -24,6 +24,7 @@ from zerg.qa.universal_agent_harness import _subprocess_runtime_env
 from zerg.qa.universal_agent_harness import _uniform_operation_evidence
 from zerg.qa.universal_agent_harness import register_adapter
 from zerg.qa.universal_agent_harness import run_provider_control_e2e_canary
+from zerg.services.managed_provider_contracts import contract_for_provider
 
 
 def _claude_control_canary(artifact: Mapping[str, Any]) -> dict[str, Any]:
@@ -375,11 +376,17 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
 
         Unlike a hand-faked contract, this drives Longhouse's actual code: the
         real ``permission_gate.py`` hook subprocess registers a held request and
-        polls, served by the real ``upsert_pause_request`` store on a throwaway
-        SQLite, and a background thread answers via the real pull-mode resolve
-        (``resolve_pause_request`` writing permissionDecision). The hook must then
-        emit ``permissionDecision: allow``.
+        polls, and a background thread answers through the real pull-mode
+        resolve. Held interactions live in the live catalog, so the loop runs
+        against a real catalogd -- the same daemon, client and RPCs a Runtime
+        Host uses. The hook must then emit ``permissionDecision: allow``.
         """
+        from zerg.qa.harness_catalog import provision_harness_catalog
+
+        with provision_harness_catalog() as catalog:
+            return self._run_permission_gate_proof(package, catalog)
+
+    def _run_permission_gate_proof(self, package: EvidencePackage, catalog: Any) -> dict[str, Any]:
         import http.server as _http_server
         import subprocess as _subprocess
         import sys as _sys
@@ -427,6 +434,19 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             )
             db.commit()
 
+        # The gate refuses to hold an interaction for a session the catalog has
+        # never seen, so the session enters through the same launch transaction
+        # a Runtime Host runs rather than an insert behind it.
+        contract = contract_for_provider("claude")
+        assert contract is not None
+        catalog.create_managed_session(
+            session_id=session_id,
+            provider="claude",
+            managed_transport=contract.managed_transport.value,
+            device_id="universal-harness",
+            cwd=str(package.path("workspace")),
+        )
+
         captured: dict[str, Any] = {"register_seen": False, "polls": 0, "ack": None}
 
         # The stub socket exists only because the hook is a real subprocess that
@@ -438,6 +458,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
 
         from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
         from zerg.auth.managed_session_tokens import ManagedSessionToken
+        from zerg.routers.permission_gate import PERMISSION_PROMPT_KIND
         from zerg.routers.permission_gate import PermissionRequestIn
         from zerg.routers.permission_gate import get_permission_decision
         from zerg.routers.permission_gate import register_permission_request
@@ -528,31 +549,22 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         def _answer_when_registered() -> None:
             import asyncio as _aio
 
-            from zerg.models.agents import SessionPauseRequest
             from zerg.routers.session_chat import PauseRequestResponseRequest
             from zerg.routers.session_chat import _respond_to_pause_request
-            from zerg.services.session_pause_requests import PENDING_STATUS as _PENDING
 
             for _ in range(200):
                 if stop.is_set():
                     return
-                with session_factory() as db:
-                    row = (
-                        db.query(SessionPauseRequest)
-                        .filter(
-                            SessionPauseRequest.session_id == session_uuid,
-                            SessionPauseRequest.kind == "permission_prompt",
-                        )
-                        .first()
-                    )
-                    if row is not None and row.status == _PENDING:
+                held = catalog.pending_interaction(session_id=session_id)
+                if held is not None and held.get("kind") == PERMISSION_PROMPT_KIND:
+                    with session_factory() as db:
                         source_session = db.query(AgentSession).filter(AgentSession.id == session_uuid).first()
                         try:
                             resp = _aio.run(
                                 _respond_to_pause_request(
                                     source_session=source_session,
                                     owner_id=1,
-                                    pause_request_id=str(row.id),
+                                    pause_request_id=str(held["id"]),
                                     body=PauseRequestResponseRequest(decision="answer"),
                                     db=db,
                                 )
@@ -562,7 +574,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
                         except Exception as exc:  # pragma: no cover - defensive
                             answer_result["error"] = f"{type(exc).__name__}: {exc}"
                         db.commit()
-                        return
+                    return
                 _time.sleep(0.05)
 
         answerer = _threading.Thread(target=_answer_when_registered, daemon=True)

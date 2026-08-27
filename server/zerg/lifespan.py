@@ -12,9 +12,7 @@ from contextlib import contextmanager
 from fastapi import FastAPI
 
 from zerg.config import get_settings
-from zerg.database import initialize_database
 from zerg.database import initialize_live_database
-from zerg.database import live_catalog_enabled
 from zerg.database import live_store_configured
 from zerg.database import refresh_database_settings_from_env
 from zerg.observability import configure_observability
@@ -84,12 +82,9 @@ def _enforce_single_tenant_startup(app: FastAPI) -> None:
     if not _settings.single_tenant or _settings.testing:
         return
 
-    from zerg.database import catalog_db_session
     from zerg.services.single_tenant import OSS_DEFAULT_EMAIL
     from zerg.services.single_tenant import SingleTenantViolation
-    from zerg.services.single_tenant import bootstrap_owner_user
     from zerg.services.single_tenant import get_owner_email
-    from zerg.services.single_tenant import validate_single_tenant
     from zerg.services.single_tenant import validate_single_tenant_config
 
     config_error = validate_single_tenant_config()
@@ -99,33 +94,29 @@ def _enforce_single_tenant_startup(app: FastAPI) -> None:
         raise RuntimeError(config_error)
 
     try:
-        if live_catalog_enabled():
-            from zerg.catalogd.client import CatalogRemoteError
-            from zerg.catalogd.client import call_catalogd_sync
-            from zerg.services.catalogd_supervisor import catalogd_paths
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.catalogd.client import call_catalogd_sync
+        from zerg.services.catalogd_supervisor import catalogd_paths
 
-            owner_email = get_owner_email()
-            provider = "local" if owner_email in {OSS_DEFAULT_EMAIL, "owner@longhouse.local"} else "google"
-            provider_user_id = "local-user-1" if owner_email == OSS_DEFAULT_EMAIL else None
-            _database_path, socket_path = catalogd_paths()
-            try:
-                call_catalogd_sync(
-                    socket_path,
-                    "auth.single_tenant.ensure.v2",
-                    params={
-                        "email": owner_email,
-                        "provider": provider,
-                        "provider_user_id": provider_user_id,
-                    },
-                    timeout_seconds=1.0,
-                )
-            except CatalogRemoteError as exc:
-                reason = (exc.details or {}).get("reason") if isinstance(exc.details, dict) else None
-                raise SingleTenantViolation(f"Single-tenant violation: {reason or exc.code}") from exc
-            return
-        with catalog_db_session() as db:
-            validate_single_tenant(db)
-            bootstrap_owner_user(db)
+        owner_email = get_owner_email()
+        provider = "local" if owner_email in {OSS_DEFAULT_EMAIL, "owner@longhouse.local"} else "google"
+        provider_user_id = "local-user-1" if owner_email == OSS_DEFAULT_EMAIL else None
+        _database_path, socket_path = catalogd_paths()
+        try:
+            call_catalogd_sync(
+                socket_path,
+                "auth.single_tenant.ensure.v2",
+                params={
+                    "email": owner_email,
+                    "provider": provider,
+                    "provider_user_id": provider_user_id,
+                },
+                timeout_seconds=1.0,
+            )
+        except CatalogRemoteError as exc:
+            reason = (exc.details or {}).get("reason") if isinstance(exc.details, dict) else None
+            raise SingleTenantViolation(f"Single-tenant violation: {reason or exc.code}") from exc
+        return
     except SingleTenantViolation as exc:
         app.state.single_tenant_violation = str(exc)
         logger.error(str(exc))
@@ -193,19 +184,14 @@ async def lifespan(app: FastAPI):
     _settings = get_settings()
     refresh_database_settings_from_env()
     startup_started = time.monotonic()
-    catalog_mode = live_catalog_enabled()
     from zerg.services.factory_assurance_title_binding import factory_assurance_title_enabled
 
     factory_title_assurance = factory_assurance_title_enabled()
     try:
         with _timed_startup_step("configure_observability"):
             configure_observability()
-        if not catalog_mode:
-            with _timed_startup_step("initialize_database"):
-                initialize_database()
-        else:
-            logger.info("Storage-v2 mode: retired cold database is not initialized or mounted")
-        if catalog_mode and not _settings.testing:
+        logger.info("Storage-v2 mode: retired cold database is not initialized or mounted")
+        if not _settings.testing:
             with _timed_startup_step("catalogd_supervisor"):
                 from zerg.services.catalogd_supervisor import start_catalogd_supervisor
 
@@ -259,7 +245,7 @@ async def lifespan(app: FastAPI):
                 logger.info("Storage telemetry refresh loop started")
             except Exception:
                 logger.exception("Failed to start storage telemetry refresh loop (non-fatal)")
-        elif catalog_mode and factory_title_assurance:
+        elif factory_title_assurance:
             # The hermetic title oracle needs the real catalog owner and real
             # storage lanes, but none of the unrelated production projectors.
             with _timed_startup_step("catalogd_supervisor"):
@@ -279,81 +265,10 @@ async def lifespan(app: FastAPI):
             with _timed_startup_step("initialize_live_database"):
                 initialize_live_database()
 
-        from zerg.database import configure_live_write_serializer
-        from zerg.database import configure_write_serializer
-
-        if not catalog_mode:
-            with _timed_startup_step("configure_write_serializer"):
-                configure_write_serializer()
-        if not catalog_mode:
-            with _timed_startup_step("configure_live_write_serializer"):
-                configure_live_write_serializer()
-
-        try:
-            from zerg.database import default_engine
-
-            if not catalog_mode and not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
-                logger.info(
-                    "SQLite mode: single-writer serializer active. See VISION.md (Architecture Constraints / SQLite-only core) for details."
-                )
-        except Exception as _e:
-            logger.error(str(_e))
-            raise
-        logger.info("Catalog services initialized" if catalog_mode else "Database tables initialized")
-
-        if not catalog_mode:
-            try:
-                url = default_engine.url
-                masked = str(url).replace(url.password or "", "***") if url.password else str(url)
-                logger.info("Database bound to: %s", masked)
-            except Exception:
-                pass
-
-        if not catalog_mode:
-            with _timed_startup_step("fts5_readiness_check"):
-                try:
-                    from sqlalchemy import text
-
-                    from zerg.database import default_engine
-
-                    if default_engine is not None and default_engine.dialect.name == "sqlite":
-                        with default_engine.connect() as conn:
-                            fts_row = conn.execute(
-                                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")
-                            ).fetchone()
-                            if not fts_row:
-                                raise RuntimeError("events_fts table is missing (FTS5 required).")
-                            fts_probe_sql = "SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1"
-                            conn.execute(text(fts_probe_sql)).fetchone()
-                except Exception as fts_error:
-                    app.state.fts_violation = str(fts_error)
-                    logger.error(f"FTS5 readiness check failed: {fts_error}")
-                    raise
+        logger.info("Catalog services initialized")
 
         with _timed_startup_step("single_tenant_startup"):
             _enforce_single_tenant_startup(app)
-
-        # Demo session seeding
-        if not catalog_mode and _settings.demo_mode and not _settings.testing:
-            try:
-                from zerg.database import get_session_factory
-                from zerg.services.demo_seed import seed_missing_demo_sessions
-
-                with _timed_startup_step("demo_seed"):
-                    session_factory = get_session_factory()
-                    with session_factory() as db:
-                        seeded_count, failed_count = seed_missing_demo_sessions(db)
-                    if seeded_count > 0:
-                        logger.info("Demo mode: seeded %d demo sessions", seeded_count)
-                    elif failed_count > 0:
-                        logger.warning(
-                            "Demo mode: demo seed had %d failures (see per-session errors above)",
-                            failed_count,
-                        )
-                    else:
-                        logger.info("Demo mode: demo sessions already present, skipping seed")
-            except Exception as e:
-                logger.warning(f"Demo mode auto-seed failed (non-fatal): {e}")
 
         with _timed_startup_step("models_config_validation"):
             _validate_models_config_startup()
@@ -363,7 +278,7 @@ async def lifespan(app: FastAPI):
 
         get_shared_runner().start()
 
-        if catalog_mode and not _settings.testing:
+        if not _settings.testing:
             try:
                 from zerg.services.live_control_catalog import run_live_catalog_input_recovery_loop
 
@@ -371,27 +286,23 @@ async def lifespan(app: FastAPI):
                 logger.info("Live catalog input recovery loop started")
             except Exception:
                 logger.exception("Failed to start live catalog input recovery loop")
-            # Machine-control lease expiry is catalogd's job in live mode
-            # (checkpoint loop). The old API-side reaper called
-            # get_live_write_serializer(), which is intentionally never
-            # configured when live_catalog_enabled().
+            # Machine-control lease expiry is catalogd's job (checkpoint loop).
+            # The old API-side reaper called get_live_write_serializer(), which
+            # is intentionally never configured on the catalog lane.
 
         # Factory title assurance is deliberately a test Runtime Host, but it
         # must exercise the real background worker. This is the only normal
         # production loop re-enabled by the startup-bound assurance gate.
-        if catalog_mode:
-            if not _settings.testing or factory_title_assurance:
-                try:
-                    from zerg.services.storage_session_titles import run_storage_title_reconciler
+        if not _settings.testing or factory_title_assurance:
+            try:
+                from zerg.services.storage_session_titles import run_storage_title_reconciler
 
-                    app.state.storage_title_reconciler_task = asyncio.create_task(run_storage_title_reconciler())
-                    logger.info("Storage-v2 AI title reconciler started")
-                except Exception:
-                    logger.exception("Failed to start storage-v2 AI title reconciler")
+                app.state.storage_title_reconciler_task = asyncio.create_task(run_storage_title_reconciler())
+                logger.info("Storage-v2 AI title reconciler started")
+            except Exception:
+                logger.exception("Failed to start storage-v2 AI title reconciler")
 
-        # Periodic runtime maintenance (runner-health reconcile, etc.). The
-        # loop's own body branches on live_catalog_enabled() internally, so it
-        # must start in every non-test process, not only the legacy cold-db lane.
+        # Periodic runtime maintenance (runner-health reconcile, etc.).
         if not _settings.testing:
             try:
                 from zerg.services.maintenance import start_maintenance_loop
@@ -400,21 +311,6 @@ async def lifespan(app: FastAPI):
                 logger.info("Maintenance loop started")
             except Exception:
                 logger.exception("Failed to start maintenance loop")
-
-        # Mark runners offline
-        if not catalog_mode:
-            try:
-                from sqlalchemy import update
-
-                from zerg.database import db_session
-                from zerg.models.models import Runner
-
-                with db_session() as db:
-                    result = db.execute(update(Runner).where(Runner.status == "online").values(status="offline"))
-                    if result.rowcount:
-                        logger.info("Startup: marked %d stale runner(s) offline", result.rowcount)
-            except Exception as e:
-                logger.warning("Startup: failed to reset runner statuses (non-fatal): %s", e)
 
         # WAL checkpoints
         if not _settings.testing:
@@ -430,7 +326,7 @@ async def lifespan(app: FastAPI):
         logger.info("Application startup complete elapsed_ms=%.1f", elapsed_ms)
     except Exception as e:
         logger.error(f"Error during startup: {e}")
-        if catalog_mode and (not _settings.testing or factory_title_assurance):
+        if not _settings.testing or factory_title_assurance:
             await _stop_storage_title_services(app)
             await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
@@ -506,7 +402,7 @@ async def lifespan(app: FastAPI):
 
         await topic_manager.shutdown()
 
-        if catalog_mode and (not _settings.testing or factory_title_assurance):
+        if not _settings.testing or factory_title_assurance:
             await _stop_storage_title_services(app)
             await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)

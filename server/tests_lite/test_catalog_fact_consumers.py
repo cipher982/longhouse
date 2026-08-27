@@ -72,7 +72,6 @@ def test_hot_fact_consumers_use_catalog_batch_without_sqlite(monkeypatch):
         },
     }
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(database_module, "get_live_session_factory", _fail_live_sqlite)
     monkeypatch.setattr("zerg.services.catalog_facts.session_facts_map", lambda _ids: {session_id: facts})
 
@@ -91,8 +90,6 @@ def test_active_candidate_ids_use_catalog_rpc_without_sqlite(monkeypatch):
     session_id = "22222222-2222-4222-8222-222222222222"
     now = datetime.now(UTC)
     monkeypatch.setattr(agents_sessions, "live_store_configured", lambda: True)
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(agents_sessions, "get_live_session_factory", _fail_live_sqlite)
     monkeypatch.setattr(
         "zerg.services.catalog_read_gateway.active_session_ids",
         lambda **_kwargs: {"session_ids": [session_id], "commit_seq": "4"},

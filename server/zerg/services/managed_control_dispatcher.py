@@ -16,11 +16,8 @@ from sqlalchemy.orm import Session
 import zerg.database as database_module
 from zerg.models.agents import AgentSession
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.machine_control_operations import create_live_machine_control_operation
-from zerg.services.machine_control_operations import finish_live_machine_control_operation
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import machine_control_capability_for_command
-from zerg.services.write_serializer import get_live_write_serializer
 
 logger = logging.getLogger(__name__)
 
@@ -137,51 +134,6 @@ def _engine_command_id(
     return f"managed-control:{getattr(session, 'id')}:{command}:{digest}"
 
 
-async def _create_live_managed_control_operation(
-    *,
-    owner_id: int,
-    session: AgentSession,
-    command_type: str,
-    command_id: str,
-    payload: Mapping[str, Any],
-    timeout_secs: int,
-) -> str | None:
-    if not database_module.live_store_configured():
-        return None
-    live_ws = get_live_write_serializer()
-    if not live_ws.is_configured:
-        return None
-    operation_id = str(uuid4())
-    device_id = _session_device_id(session)
-    if device_id is None:
-        return None
-    provider = str(getattr(session, "provider", "") or "").strip().lower() or None
-    try:
-        await live_ws.execute(
-            lambda live_db: create_live_machine_control_operation(
-                live_db,
-                operation_id=operation_id,
-                owner_id=owner_id,
-                session_id=str(getattr(session, "id")),
-                device_id=device_id,
-                provider=provider,
-                command_type=command_type,
-                command_id=command_id,
-                request_payload={
-                    "session_id": str(getattr(session, "id")),
-                    "payload": dict(payload or {}),
-                },
-                timeout_secs=timeout_secs,
-            ),
-            auto_commit=False,
-            label="live-machine-control-operation",
-        )
-    except Exception:
-        logger.warning("Failed to create live managed-control operation %s", command_id, exc_info=True)
-        return None
-    return operation_id
-
-
 async def _prepare_catalog_managed_control_operation(
     *,
     owner_id: int,
@@ -276,66 +228,25 @@ async def _finish_live_managed_control_operation(
 ) -> None:
     if not operation_id or not database_module.live_store_configured():
         return
-    if database_module.live_catalog_enabled():
-        from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.services.catalogd_supervisor import get_catalogd_client
 
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            logger.warning("Catalogd is unavailable while finishing managed-control operation %s", operation_id)
-            return
-        try:
-            await catalogd.call(
-                "control.operation.finish.v2",
-                {
-                    "operation_id": operation_id,
-                    "status": status,
-                    "result": dict(result) if result is not None else None,
-                    "error": dict(error) if error is not None else None,
-                },
-                timeout_seconds=1.0,
-            )
-        except Exception:
-            logger.warning("Failed to finish catalog managed-control operation %s", operation_id, exc_info=True)
-        return
-    live_ws = get_live_write_serializer()
-    if not live_ws.is_configured:
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        logger.warning("Catalogd is unavailable while finishing managed-control operation %s", operation_id)
         return
     try:
-        await live_ws.execute(
-            lambda live_db: _finish_live_managed_control_operation_row(
-                live_db,
-                operation_id=operation_id,
-                status=status,
-                result=result,
-                error=error,
-            ),
-            auto_commit=False,
-            label="live-machine-control-result",
+        await catalogd.call(
+            "control.operation.finish.v2",
+            {
+                "operation_id": operation_id,
+                "status": status,
+                "result": dict(result) if result is not None else None,
+                "error": dict(error) if error is not None else None,
+            },
+            timeout_seconds=1.0,
         )
     except Exception:
-        logger.warning("Failed to finish live managed-control operation %s", operation_id, exc_info=True)
-
-
-def _finish_live_managed_control_operation_row(
-    db: Session,
-    *,
-    operation_id: str,
-    status: str,
-    result: Mapping[str, Any] | None,
-    error: Mapping[str, Any] | None,
-) -> None:
-    from zerg.models.live_store import LiveMachineControlOperation
-
-    operation = db.query(LiveMachineControlOperation).filter(LiveMachineControlOperation.id == operation_id).first()
-    if operation is None:
-        return
-    finish_live_machine_control_operation(
-        db,
-        operation,
-        status=status,
-        result=dict(result or {}) if result is not None else None,
-        error=dict(error or {}) if error is not None else None,
-    )
+        logger.warning("Failed to finish catalog managed-control operation %s", operation_id, exc_info=True)
 
 
 async def dispatch_managed_control_command(
@@ -377,7 +288,7 @@ async def dispatch_managed_control_command(
             run_id=run_id,
         )
         prepared_operation_id = None
-        if database_module.live_catalog_enabled() and action is not None and command_type is not None and command_id is not None:
+        if action is not None and command_type is not None and command_id is not None:
             prepared, prepare_reason = await _prepare_catalog_managed_control_operation(
                 owner_id=owner_id,
                 session=session,
@@ -479,15 +390,6 @@ async def _dispatch_engine_channel(
         **dict(payload or {}),
     }
     live_operation_id = prepared_operation_id
-    if command_id is not None and live_operation_id is None and not database_module.live_catalog_enabled():
-        live_operation_id = await _create_live_managed_control_operation(
-            owner_id=owner_id,
-            session=session,
-            command_type=command_type,
-            command_id=command_id,
-            payload=payload_with_provider,
-            timeout_secs=timeout_secs,
-        )
 
     response = await get_machine_control_channel_registry().send_command(
         owner_id=owner_id,

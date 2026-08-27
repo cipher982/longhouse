@@ -20,6 +20,7 @@ from zerg.qa.universal_agent_harness import STATUS_UNSUPPORTED_GAP
 from zerg.qa.universal_agent_harness import EvidencePackage
 from zerg.qa.universal_agent_harness import UniversalProviderAdapter
 from zerg.qa.universal_agent_harness import _clean_optional_str
+from zerg.qa.universal_agent_harness import _initialize_managed_control_database
 from zerg.qa.universal_agent_harness import _project_managed_transport
 from zerg.qa.universal_agent_harness import _seed_managed_kernel_rows
 from zerg.qa.universal_agent_harness import _uniform_operation_evidence
@@ -338,7 +339,6 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         os.environ.setdefault("TESTING", "1")
         os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
 
-        from zerg.database import initialize_database
         from zerg.database import make_engine
         from zerg.database import make_sessionmaker
         from zerg.models.agents import AgentSession
@@ -348,7 +348,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         db_path = package.path("longhouse", "codex-steer-dispatch.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
         engine = make_engine(f"sqlite:///{db_path}")
-        initialize_database(engine)
+        _initialize_managed_control_database(engine)
         session_factory = make_sessionmaker(engine)
         now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
         steer_text = "Longhouse universal Codex steer transport proof."
@@ -839,7 +839,6 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         os.environ.setdefault("TESTING", "1")
         os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
 
-        from zerg.database import initialize_database
         from zerg.database import make_engine
         from zerg.database import make_sessionmaker
         from zerg.models.agents import AgentSession
@@ -849,7 +848,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         db_path = package.path("longhouse", "codex-interrupt-dispatch.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
         engine = make_engine(f"sqlite:///{db_path}")
-        initialize_database(engine)
+        _initialize_managed_control_database(engine)
         session_factory = make_sessionmaker(engine)
         now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
         calls: list[dict[str, Any]] = []

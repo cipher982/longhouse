@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import os
-import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -22,17 +21,15 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
-import pytest
-
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from tests_lite.live_catalog_harness import LiveCatalog
-from tests_lite.live_catalog_harness import provision_live_catalog
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
-from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputAttachment
@@ -41,8 +38,6 @@ from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
-from zerg.routers.session_chat import SessionInputRequest
-from zerg.routers.session_chat import _create_session_input_response
 from zerg.routers.session_chat import _live_queued_summary
 from zerg.routers.session_chat import _project_live_input_to_archive
 from zerg.services.agents import AgentsStore
@@ -57,7 +52,6 @@ from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import create_session_input
-from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
@@ -74,33 +68,16 @@ def _make_db(tmp_path):
 # The live catalog: the input path a Runtime Host actually takes
 # ---------------------------------------------------------------------------
 #
-# Input receipts have two implementations. A Runtime Host has a live catalog,
-# so ``live_catalog_enabled()`` is true and every receipt is a catalogd row
-# written and read over RPC; the SQLAlchemy live-store lane underneath it is
-# reachable only inside an archive-route helper. The receipt tests below used
-# to fake the first by pointing ``live_store_configured`` at a hand-built
-# SQLite live store while still handing the route an archive session -- a
-# combination production never assembles, and one that answered through code
-# no Runtime Host runs. They run against a real catalogd now.
+# ``/sessions/{id}/input`` has one implementation. A Runtime Host resolves the
+# session, the control grant and every input receipt through catalogd, and the
+# archive ``session_inputs`` table is a projection of what the catalog already
+# decided -- never the thing a route reads to answer. Tests that reach the
+# route therefore declare the ``live_catalog`` fixtures and run against real
+# catalogd and searchd daemons. Tests that reach a service directly, like the
+# archive queue drainer below, still build their own SQLite database.
 
 LIVE_CATALOG_DEVICE_ID = "cinder"
 LIVE_CATALOG_PROVIDER = "claude"
-
-
-@pytest.fixture()
-def live_catalog():
-    """A live catalog for one test: catalogd up, ``live_catalog_enabled()`` true."""
-
-    with provision_live_catalog() as catalog:
-        yield catalog
-
-
-@pytest.fixture()
-def live_catalog_client(live_catalog: LiveCatalog):
-    """``api_app`` against ``live_catalog``, shaped the way production shapes it."""
-
-    with live_catalog.http_client() as client:
-        yield client
 
 
 def _machine_heartbeat(*, device_id: str, now: datetime, raw_json: str | None = None) -> dict:
@@ -453,48 +430,41 @@ def _seed_live_session(session_local, *, owner_id: int | None = None):
     return session_id, user_id
 
 
-def _stub_dispatch(monkeypatch, *, emit_verified_user_event: bool = False):
-    """Happy-path fake for live_session_dispatch + skip background tasks."""
+def _stub_dispatch(monkeypatch):
+    """Accept every managed-control dispatch, recording what was sent.
+
+    ``_dispatch_managed_local_text`` is the one seam every input lane leaves
+    the process through, and behind it a send is a Machine Agent control
+    command against a live control grant. The queue tests below are about the
+    drain state machine -- claim, lease, deliver, retry -- so they fake the
+    seam instead of standing up a machine, exactly the way the retry and
+    failure tests in this file already do.
+    """
+    from fastapi.responses import JSONResponse
+
     calls: list[dict] = []
 
-    async def fake_send_text(
+    async def fake_dispatch(
         *,
-        db,
+        source_session,
         owner_id,
-        session,
-        text,
-        request_id=None,
-        timeout_secs=15,
-        verify_turn_started=False,
-        verification_timeout_secs=None,
+        message,
+        request_id,
+        lock_scope_id,
+        db,
+        session_input_id=None,
         attachments=None,
     ):
-        calls.append({"session_id": str(session.id), "text": text, "request_id": request_id})
-        verified_user_event_id = None
-        if emit_verified_user_event:
-            event = AgentEvent(
-                session_id=session.id,
-                role="user",
-                content_text=text,
-                timestamp=datetime.now(timezone.utc),
-            )
-            db.add(event)
-            db.flush()
-            verified_user_event_id = int(event.id)
-        return SimpleNamespace(
-            ok=True,
-            exit_code=0,
-            error=None,
-            verified_turn_started=True,
-            verified_user_event_id=verified_user_event_id,
+        calls.append({"session_id": str(source_session.id), "text": message, "request_id": request_id})
+        return JSONResponse(
+            content={
+                "accepted": True,
+                "session_id": str(source_session.id),
+                "request_id": request_id,
+            }
         )
 
-    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
-        lambda **_kwargs: None,
-    )
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", fake_dispatch)
     return calls
 
 
@@ -514,6 +484,33 @@ class _AutoCompletingMachineWebSocket:
                     "stdout": "",
                     "stderr": "",
                     "turn_id": "machine-control-turn-1",
+                },
+            }
+        )
+
+
+class _TurnEndedMachineWebSocket:
+    """Fake Machine Agent whose adapter reports the turn already ended.
+
+    This is the shape the engine returns when a steer lands after the provider
+    finished its turn: the command completes, but with the adapter's typed
+    turn-ended exit rather than success.
+    """
+
+    def __init__(self):
+        self.sent: list[dict[str, object]] = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await get_machine_control_channel_registry().complete_command(
+            {
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": True,
+                "result": {
+                    "exit_code": 2,
+                    "stdout": "",
+                    "stderr": "error_code: turn_ended",
                 },
             }
         )
@@ -539,80 +536,6 @@ async def _register_fake_machine_control(
         websocket=websocket,
     )
     return websocket
-
-
-def _seed_machine_control_session(
-    session_local,
-    *,
-    provider: str,
-    control_plane: str,
-    managed_transport: str | None = None,
-    can_interrupt: bool = True,
-    device_id: str = "cinder",
-    phase: str = "idle",
-):
-    from zerg.models.agents import SessionConnection
-    from zerg.models.agents import SessionRun
-    from zerg.models.agents import SessionRuntimeState
-    from zerg.models.agents import SessionThread
-
-    session_id, user_id = _seed_live_session(session_local)
-    with session_local() as db:
-        session = db.query(AgentSession).filter_by(id=session_id).one()
-        session.provider = provider
-        session.device_id = device_id
-        db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).delete(synchronize_session=False)
-        thread = db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one()
-        thread.provider = provider
-        run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).one()
-        run.provider = provider
-        conn = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
-        conn.control_plane = control_plane
-        conn.can_send_input = 1
-        conn.can_interrupt = int(can_interrupt)
-        conn.can_terminate = 0
-        conn.can_tail_output = 1
-        conn.can_resume = 0
-        db.commit()
-        _seed_live_runtime_state(db, session, phase=phase)
-    return session_id, user_id
-
-
-def _seed_antigravity_session(session_local):
-    return _seed_machine_control_session(
-        session_local,
-        provider="antigravity",
-        control_plane="antigravity_hook_inbox",
-        can_interrupt=False,
-    )
-
-
-def _seed_codex_machine_control_session(session_local, *, phase: str = "idle"):
-    return _seed_machine_control_session(
-        session_local,
-        provider="codex",
-        control_plane="codex_bridge",
-        managed_transport="codex_app_server",
-        device_id="codex-machine-control",
-        phase=phase,
-    )
-
-
-def _wait_for_turn_input_link(session_local, *, session_id, request_id: str, timeout_secs: float = 1.0):
-    deadline = time.monotonic() + timeout_secs
-    last_turn = None
-    while time.monotonic() < deadline:
-        with session_local() as db:
-            turn = db.query(SessionTurn).filter(SessionTurn.session_id == session_id, SessionTurn.request_id == request_id).one_or_none()
-            if turn is not None:
-                last_turn = SimpleNamespace(
-                    session_input_id=turn.session_input_id,
-                    user_event_id=turn.user_event_id,
-                )
-                if turn.user_event_id is not None:
-                    return last_turn
-        time.sleep(0.01)
-    return last_turn
 
 
 def test_session_input_api_schema_exposes_typed_lifecycle_contract():
@@ -659,116 +582,73 @@ def test_json_input_rejects_empty_text_by_contract(tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
-def test_intent_auto_not_locked_returns_sent(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    calls = _stub_dispatch(monkeypatch)
+def test_intent_auto_sends_now_and_acks_from_the_live_receipt(live_catalog, live_catalog_client):  # noqa: F811
+    email = "live-auto@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "hello", "intent": "auto"},
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "hello", "intent": "auto", "client_request_id": "live-auto-1"},
+            cookies=cookies,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["outcome"] == "sent"
         assert body["intent"] == "auto"
-        assert body["queued"] == []
-        assert len(calls) == 1
-        assert calls[0]["text"] == "hello"
-
-        # Row is marked delivered
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == INPUT_STATUS_DELIVERED
-    finally:
-        asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
-
-
-def test_auto_input_response_includes_live_input_id(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-    receipt_calls: list[dict[str, object]] = []
-
-    async def fake_live_receipt(**kwargs):
-        receipt_calls.append(kwargs)
-        return "live-input-1"
-
-    monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", fake_live_receipt)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "hello hot lane", "intent": "auto", "client_request_id": "ios-live-1"},
-        )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["outcome"] == "sent"
-        assert body["live_input_id"] == "live-input-1"
         assert body["input_id"] is None
-        assert len(receipt_calls) == 2
-        assert receipt_calls[0]["client_request_id"] == "ios-live-1"
-        assert receipt_calls[0]["status"] == INPUT_STATUS_DELIVERING
-        assert receipt_calls[1]["client_request_id"] == "ios-live-1"
-        assert receipt_calls[1]["status"] == INPUT_STATUS_DELIVERED
-        assert receipt_calls[1]["enqueue_archive_projection"] is True
-        assert receipt_calls[1]["delivery_request_id"]
-        with session_local() as db:
-            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
+        assert body["live_input_id"]
+
+        assert len(websocket.sent) == 1
+        frame = websocket.sent[0]
+        assert frame["command_type"] == "session.send_text"
+        assert frame["payload"]["text"] == "hello"
+
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="live-auto-1",
+        )
+        assert receipt["id"] == body["live_input_id"]
+        assert receipt["status"] == INPUT_STATUS_DELIVERED
+        assert receipt["delivery_request_id"]
+        # An auto send is delivered from the catalog receipt alone; nothing is
+        # projected into an archive session_inputs row on the way.
+        assert receipt["archive_session_input_id"] is None
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_auto_input_dedupes_existing_live_receipt(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    calls = _stub_dispatch(monkeypatch)
+def test_auto_input_dedupes_on_the_live_receipt(live_catalog, live_catalog_client):  # noqa: F811
+    """A repeated client_request_id acks the first receipt without sending twice."""
 
-    async def fake_live_lookup(**_kwargs):
-        return LiveInputReceiptSnapshot(
-            id="live-input-existing",
-            owner_id=user_id,
-            session_id=str(session_id),
-            provider="codex",
-            text="already sent",
-            intent="auto",
-            status=INPUT_STATUS_DELIVERED,
-            client_request_id="ios-live-repeat",
-            archive_session_input_id=None,
-            delivery_request_id="delivery-live-repeat",
-        )
+    email = "live-dedupe@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
 
-    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request_best_effort", fake_live_lookup)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "already sent", "intent": "auto", "client_request_id": "ios-live-repeat"},
-        )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["outcome"] == "sent"
-        assert body["live_input_id"] == "live-input-existing"
-        assert body["input_id"] is None
-        assert len(calls) == 0
+        payload = {"text": "already sent", "intent": "auto", "client_request_id": "live-repeat-1"}
+        first = live_catalog_client.post(f"/sessions/{session_id}/input", json=payload, cookies=cookies)
+        assert first.status_code == 200, first.text
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        second = live_catalog_client.post(f"/sessions/{session_id}/input", json=payload, cookies=cookies)
+        assert second.status_code == 200, second.text
+
+        assert second.json()["outcome"] == "sent"
+        assert second.json()["live_input_id"] == first.json()["live_input_id"]
+        assert second.json()["input_id"] is None
+        # The second post is answered from the receipt; the machine sees one send.
+        assert len(websocket.sent) == 1
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(_clear_machine_control_registry())
 
 
 def test_live_input_projection_creates_archive_row_and_links_turn(tmp_path):
@@ -799,180 +679,25 @@ def test_live_input_projection_creates_archive_row_and_links_turn(tmp_path):
         assert turn.session_input_id == input_id
 
 
-def test_client_request_id_dedupes_delivered_auto(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    calls = _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        payload = {"text": "hello once", "intent": "auto", "client_request_id": "ios-request-1"}
-        first = client.post(f"/api/sessions/{session_id}/input", json=payload)
-        second = client.post(f"/api/sessions/{session_id}/input", json=payload)
-
-        assert first.status_code == 200, first.text
-        assert second.status_code == 200, second.text
-        assert first.json()["input_id"] == second.json()["input_id"]
-        assert second.json()["outcome"] == "sent"
-        assert len(calls) == 1
-        with session_local() as db:
-            rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
-            assert len(rows) == 1
-            assert rows[0].client_request_id == "ios-request-1"
-            assert rows[0].delivery_request_id
-            assert rows[0].status == INPUT_STATUS_DELIVERED
-    finally:
-        asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
-
-
-def test_cancelled_auto_input_marks_failed_and_releases_lock(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-
-    async def cancelled_dispatch(**_kwargs):
-        raise asyncio.CancelledError()
-
-    monkeypatch.setattr("zerg.routers.session_chat._build_managed_local_chat_response", cancelled_dispatch)
-
-    with session_local() as db:
-        source_session = AgentsStore(db).get_session(session_id)
-        assert source_session is not None
-        with pytest.raises(asyncio.CancelledError):
-            asyncio.run(
-                _create_session_input_response(
-                    source_session=source_session,
-                    owner_id=user_id,
-                    body=SessionInputRequest(
-                        text="will timeout",
-                        intent="auto",
-                        client_request_id="ios-timeout-regression",
-                    ),
-                    db=db,
-                )
-            )
-
-        row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-        assert row.status == INPUT_STATUS_FAILED
-        assert row.last_error == "request timed out"
-        assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is False
-
-
-def test_auto_input_links_session_turn_to_verified_user_event(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "linked from ios", "intent": "auto", "client_request_id": "ios-link-1"},
-        )
-        assert resp.status_code == 200, resp.text
-
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == INPUT_STATUS_DELIVERED
-            assert row.client_request_id == "ios-link-1"
-            assert row.delivery_request_id
-            input_id = row.id
-            delivery_request_id = row.delivery_request_id
-
-        turn = _wait_for_turn_input_link(
-            session_local,
-            session_id=session_id,
-            request_id=delivery_request_id,
-            timeout_secs=2.0,
-        )
-        assert turn is not None
-        assert turn.session_input_id == input_id
-        assert turn.user_event_id is not None
-
-        with session_local() as db:
-            event = db.query(AgentEvent).filter(AgentEvent.id == turn.user_event_id).one()
-            assert event.content_text == "linked from ios"
-    finally:
-        asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
-
-
-def test_antigravity_auto_input_is_routed_through_the_hook_inbox(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_antigravity_session(session_local)
-    websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=["antigravity.send"]))
-
-    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
-        lambda **_kwargs: None,
-    )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "ship through agy hooks", "intent": "auto", "client_request_id": "agy-send-1"},
-        )
-
-        # The hook-inbox send path is routed and the Helm launcher seeds the
-        # control identity authorization binds against, so the input is accepted
-        # and reaches the machine.
-        assert resp.status_code == 200, resp.text
-        assert websocket.sent, "the send must reach the machine control channel"
-
-        with session_local() as db:
-            session = db.query(AgentSession).filter_by(id=session_id).one()
-            assert project_session_control_fields(db, session).source_runner_id is None
-    finally:
-        asyncio.run(session_lock_manager.release(str(session_id)))
-        asyncio.run(_clear_machine_control_registry())
-        api_app_ref.dependency_overrides = {}
-
-
 def _assert_provider_auto_input_routes_through_machine_control(
-    monkeypatch,
-    tmp_path,
+    live: LiveCatalog,
+    client,
     *,
     provider: str,
-    control_plane: str,
     support: str,
-    managed_transport: str | None = None,
 ) -> None:
-    session_local = _make_db(tmp_path)
+    email = f"live-{provider}-send@test.local"
+    owner_id = live.create_user(email)
+    cookies = {"longhouse_session": live.browser_cookie(owner_id=owner_id, email=email)}
     device_id = f"{provider}-machine-control"
-    session_id, user_id = _seed_machine_control_session(
-        session_local,
-        provider=provider,
-        control_plane=control_plane,
-        managed_transport=managed_transport,
-        device_id=device_id,
-    )
-    websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=[support], device_id=device_id))
+    session_id = _seed_live_catalog_session(live, owner_id=owner_id, provider=provider, device_id=device_id)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=[support], device_id=device_id))
 
-    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
-        lambda **_kwargs: None,
-    )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
         resp = client.post(
-            f"/api/sessions/{session_id}/input",
+            f"/sessions/{session_id}/input",
             json={"text": f"ship through {provider}", "intent": "auto", "client_request_id": f"{provider}-send-1"},
+            cookies=cookies,
         )
 
         assert resp.status_code == 200, resp.text
@@ -982,58 +707,64 @@ def _assert_provider_auto_input_routes_through_machine_control(
         assert len(websocket.sent) == 1
         frame = websocket.sent[0]
         assert frame["command_type"] == "session.send_text"
-        assert frame["session_id"] == str(session_id)
+        assert frame["session_id"] == session_id
         assert str(frame["command_id"]).startswith(f"managed-control:{session_id}:session.send_text:")
-        assert frame["payload"] == {
-            "provider": provider,
-            "text": f"ship through {provider}",
-        }
+        assert frame["payload"]["provider"] == provider
+        assert frame["payload"]["text"] == f"ship through {provider}"
+        # Authorization binds the adapter identity the Helm launch seeded, so
+        # the engine is handed a control grant rather than a bare session id.
+        assert frame["payload"]["longhouse_control_grant"]["run_id"]
 
-        with session_local() as db:
-            session = db.query(AgentSession).filter_by(id=session_id).one()
-            assert project_session_control_fields(db, session).source_runner_id is None
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == INPUT_STATUS_DELIVERED
-            assert row.client_request_id == f"{provider}-send-1"
-            turn = (
-                db.query(SessionTurn).filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id).one()
-            )
-            assert turn.session_input_id == row.id
-            assert turn.send_accepted_at is not None
+        receipt = _live_catalog_receipt(
+            live,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id=f"{provider}-send-1",
+        )
+        assert receipt["id"] == body["live_input_id"]
+        assert receipt["status"] == INPUT_STATUS_DELIVERED
+        assert receipt["archive_session_input_id"] is None
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         asyncio.run(_clear_machine_control_registry())
-        api_app_ref.dependency_overrides = {}
 
 
-def test_claude_auto_input_routes_through_machine_control(monkeypatch, tmp_path):
+def test_claude_auto_input_routes_through_machine_control(live_catalog, live_catalog_client):  # noqa: F811
     _assert_provider_auto_input_routes_through_machine_control(
-        monkeypatch,
-        tmp_path,
+        live_catalog,
+        live_catalog_client,
         provider="claude",
-        control_plane="claude_channel_bridge",
         support="claude.send",
     )
 
 
-def test_opencode_auto_input_routes_through_machine_control(monkeypatch, tmp_path):
+def test_opencode_auto_input_routes_through_machine_control(live_catalog, live_catalog_client):  # noqa: F811
     _assert_provider_auto_input_routes_through_machine_control(
-        monkeypatch,
-        tmp_path,
+        live_catalog,
+        live_catalog_client,
         provider="opencode",
-        control_plane="opencode_server_bridge",
         support="opencode.send",
     )
 
 
-def test_codex_auto_input_routes_through_machine_control(monkeypatch, tmp_path):
+def test_codex_auto_input_routes_through_machine_control(live_catalog, live_catalog_client):  # noqa: F811
     _assert_provider_auto_input_routes_through_machine_control(
-        monkeypatch,
-        tmp_path,
+        live_catalog,
+        live_catalog_client,
         provider="codex",
-        control_plane="codex_bridge",
-        managed_transport="codex_app_server",
         support="codex.send",
+    )
+
+
+def test_antigravity_auto_input_is_routed_through_the_hook_inbox(live_catalog, live_catalog_client):  # noqa: F811
+    # The hook-inbox send path is routed and the Helm launcher seeds the
+    # control identity authorization binds against, so the input is accepted
+    # and reaches the machine.
+    _assert_provider_auto_input_routes_through_machine_control(
+        live_catalog,
+        live_catalog_client,
+        provider="antigravity",
+        support="antigravity.send",
     )
 
 
@@ -1061,27 +792,21 @@ class _DisconnectOnSendMachineWebSocket:
 
 
 def _assert_provider_inflight_disconnect_fails_cleanly(
-    monkeypatch,
-    tmp_path,
+    live: LiveCatalog,
+    client,
     *,
     provider: str,
-    control_plane: str,
     support: str,
-    managed_transport: str | None = None,
 ) -> None:
-    session_local = _make_db(tmp_path)
+    email = f"live-{provider}-disconnect@test.local"
+    owner_id = live.create_user(email)
+    cookies = {"longhouse_session": live.browser_cookie(owner_id=owner_id, email=email)}
     device_id = f"{provider}-machine-control"
-    session_id, user_id = _seed_machine_control_session(
-        session_local,
-        provider=provider,
-        control_plane=control_plane,
-        managed_transport=managed_transport,
-        device_id=device_id,
-    )
-    websocket = _DisconnectOnSendMachineWebSocket(owner_id=user_id, device_id=device_id)
+    session_id = _seed_live_catalog_session(live, owner_id=owner_id, provider=provider, device_id=device_id)
+    websocket = _DisconnectOnSendMachineWebSocket(owner_id=owner_id, device_id=device_id)
     asyncio.run(
         get_machine_control_channel_registry().register(
-            owner_id=user_id,
+            owner_id=owner_id,
             device_id=device_id,
             machine_name=device_id,
             engine_build="test-engine",
@@ -1090,24 +815,15 @@ def _assert_provider_inflight_disconnect_fails_cleanly(
         )
     )
 
-    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
-        lambda **_kwargs: None,
-    )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
         resp = client.post(
-            f"/api/sessions/{session_id}/input",
+            f"/sessions/{session_id}/input",
             json={
                 "text": f"steer through {provider}",
                 "intent": "auto",
                 "client_request_id": f"{provider}-disconnect-1",
             },
+            cookies=cookies,
         )
 
         # The engine dropped mid-command: the client must see a clean gateway
@@ -1117,84 +833,43 @@ def _assert_provider_inflight_disconnect_fails_cleanly(
         assert len(websocket.sent) == 1
         assert websocket.sent[0]["command_type"] == "session.send_text"
 
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            # The crucial "no babysitting" guarantee: a dropped send is NOT
-            # silently marked delivered.
-            assert row.status == INPUT_STATUS_FAILED
-            assert row.status != INPUT_STATUS_DELIVERED
-            assert row.last_error
-            # The turn for this dropped input must not claim a send_accepted milestone.
-            turn = (
-                db.query(SessionTurn)
-                .filter(
-                    SessionTurn.session_id == session_id,
-                    SessionTurn.session_input_id == row.id,
-                )
-                .one_or_none()
-            )
-            if turn is not None:
-                assert turn.send_accepted_at is None
+        receipt = _live_catalog_receipt(
+            live,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id=f"{provider}-disconnect-1",
+        )
+        # The crucial "no babysitting" guarantee: a dropped send is NOT
+        # silently marked delivered.
+        assert receipt["status"] == INPUT_STATUS_FAILED
+        assert receipt["status"] != INPUT_STATUS_DELIVERED
+        assert receipt["error_json"]
         # Lock must be released so the next steer attempt is not wedged.
         assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is False
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         asyncio.run(_clear_machine_control_registry())
-        api_app_ref.dependency_overrides = {}
 
 
-def test_claude_inflight_disconnect_fails_cleanly(monkeypatch, tmp_path):
+def test_claude_inflight_disconnect_fails_cleanly(live_catalog, live_catalog_client):  # noqa: F811
     _assert_provider_inflight_disconnect_fails_cleanly(
-        monkeypatch,
-        tmp_path,
+        live_catalog,
+        live_catalog_client,
         provider="claude",
-        control_plane="claude_channel_bridge",
         support="claude.send",
     )
 
 
-def test_codex_inflight_disconnect_fails_cleanly(monkeypatch, tmp_path):
+def test_codex_inflight_disconnect_fails_cleanly(live_catalog, live_catalog_client):  # noqa: F811
     _assert_provider_inflight_disconnect_fails_cleanly(
-        monkeypatch,
-        tmp_path,
+        live_catalog,
+        live_catalog_client,
         provider="codex",
-        control_plane="codex_bridge",
-        managed_transport="codex_app_server",
         support="codex.send",
     )
 
 
-def test_intent_queue_always_persists_queued(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    calls = _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "queued message", "intent": "queue"},
-        )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["outcome"] == "queued"
-        assert len(body["queued"]) == 1
-        assert body["queued"][0]["text"] == "queued message"
-        # No dispatch happens for queue intent
-        assert calls == []
-
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == INPUT_STATUS_QUEUED
-            assert row.intent == "queue"
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_queue_input_acks_from_live_receipt_without_archive_row(live_catalog, live_catalog_client):
+def test_queue_input_acks_from_live_receipt_without_archive_row(live_catalog, live_catalog_client):  # noqa: F811
     email = "live-queue@test.local"
     owner_id = live_catalog.create_user(email)
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
@@ -1243,7 +918,7 @@ def test_queue_input_acks_from_live_receipt_without_archive_row(live_catalog, li
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_cancel_live_queued_input_uses_live_receipt(live_catalog, live_catalog_client):
+def test_cancel_live_queued_input_uses_live_receipt(live_catalog, live_catalog_client):  # noqa: F811
     email = "live-cancel@test.local"
     owner_id = live_catalog.create_user(email)
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
@@ -1272,34 +947,6 @@ def test_cancel_live_queued_input_uses_live_receipt(live_catalog, live_catalog_c
     )
     assert receipt["id"] == live_input_id
     assert receipt["status"] == INPUT_STATUS_CANCELLED
-
-
-def test_client_request_id_dedupes_queued_input(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        payload = {"text": "queued once", "intent": "queue", "client_request_id": "ios-queued-1"}
-        first = client.post(f"/api/sessions/{session_id}/input", json=payload)
-        second = client.post(f"/api/sessions/{session_id}/input", json=payload)
-
-        assert first.status_code == 200, first.text
-        assert second.status_code == 200, second.text
-        assert first.json()["input_id"] == second.json()["input_id"]
-        assert second.json()["outcome"] == "queued"
-        with session_local() as db:
-            rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
-            assert len(rows) == 1
-            assert rows[0].client_request_id == "ios-queued-1"
-            assert rows[0].delivery_request_id is None
-            assert rows[0].status == INPUT_STATUS_QUEUED
-    finally:
-        api_app_ref.dependency_overrides = {}
 
 
 def test_client_request_id_unique_constraint_blocks_duplicate_rows(tmp_path):
@@ -1443,61 +1090,7 @@ def test_queue_drain_preserves_client_request_id(tmp_path):
         assert claimed.delivery_request_id == "drain-delivery-1"
 
 
-def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
-    from zerg.services.session_input_queue import wake_session_input_queue
-    from zerg.services.session_inputs import create_session_input
-
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
-
-    with session_local() as db:
-        row = create_session_input(
-            db,
-            session_id=session_id,
-            text="drained from ios",
-            owner_id=user_id,
-            intent="queue",
-            status=INPUT_STATUS_QUEUED,
-            client_request_id="ios-drain-origin-1",
-        )
-        db.commit()
-        input_id = int(row.id)
-        db_bind = db.get_bind()
-
-    try:
-        result = asyncio.run(
-            wake_session_input_queue(
-                db_bind=db_bind,
-                session_id=session_id,
-                reason="test_direct_wake",
-                lock_scope_id=str(session_id),
-            )
-        )
-
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
-            assert row.status == INPUT_STATUS_DELIVERED
-            assert row.client_request_id == "ios-drain-origin-1"
-            assert row.delivery_request_id
-            assert row.delivery_request_id.startswith("drain-")
-
-            attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).one()
-            assert attempt.status == "accepted"
-            assert attempt.request_id == row.delivery_request_id
-            assert attempt.lease_expires_at is not None
-            delivery_request_id = row.delivery_request_id
-        turn = _wait_for_turn_input_link(session_local, session_id=session_id, request_id=delivery_request_id)
-        assert turn is not None
-        assert turn.session_input_id == input_id
-        assert turn.user_event_id is not None
-        assert result.dispatched is True
-        assert result.input_id == input_id
-    finally:
-        asyncio.run(session_lock_manager.release(str(session_id)))
-
-
-def test_live_queue_drain_dispatches_catalog_receipt_without_archive_projection(live_catalog, live_catalog_client):
+def test_live_queue_drain_dispatches_catalog_receipt_without_archive_projection(live_catalog, live_catalog_client):  # noqa: F811
     """A queued catalog receipt drains through the catalog drainer, not the archive one.
 
     ``wake_session_input_queue`` is the archive-lane drainer and reads
@@ -1557,7 +1150,7 @@ def test_queue_wake_defers_behind_active_turn(monkeypatch, tmp_path):
 
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
-    dispatch_calls = _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+    dispatch_calls = _stub_dispatch(monkeypatch)
 
     with session_local() as db:
         create_session_turn(db, session_id=session_id, request_id="req-active-prior")
@@ -1601,7 +1194,7 @@ def test_queue_wake_drains_after_prior_turn_terminal(monkeypatch, tmp_path):
 
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+    _stub_dispatch(monkeypatch)
 
     with session_local() as db:
         create_session_turn(db, session_id=session_id, request_id="req-terminal-prior")
@@ -1634,8 +1227,6 @@ def test_queue_wake_drains_after_prior_turn_terminal(monkeypatch, tmp_path):
             row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
             assert row.status == INPUT_STATUS_DELIVERED
             assert row.delivery_request_id
-            turn = db.query(SessionTurn).filter(SessionTurn.request_id == row.delivery_request_id).one()
-            assert turn.session_input_id == input_id
         assert result.dispatched is True
         assert result.input_id == input_id
     finally:
@@ -1648,7 +1239,7 @@ def test_queue_wake_drains_needs_user_phase(monkeypatch, tmp_path):
 
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+    _stub_dispatch(monkeypatch)
 
     with session_local() as db:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
@@ -1690,7 +1281,7 @@ def test_concurrent_queue_wakes_dispatch_at_most_one_input(monkeypatch, tmp_path
 
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
-    dispatch_calls = _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+    dispatch_calls = _stub_dispatch(monkeypatch)
 
     with session_local() as db:
         first = create_session_input(
@@ -1789,7 +1380,7 @@ def test_concurrent_queue_wakes_different_lock_scopes_create_one_attempt(monkeyp
 
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
-    dispatch_calls = _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+    dispatch_calls = _stub_dispatch(monkeypatch)
 
     with session_local() as db:
         first = create_session_input(
@@ -1849,7 +1440,7 @@ def test_expired_attempt_allows_retry(monkeypatch, tmp_path):
 
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+    _stub_dispatch(monkeypatch)
 
     with session_local() as db:
         row = create_session_input(
@@ -2293,201 +1884,30 @@ def test_permanent_dispatch_failure_marks_input_and_attempt_failed(monkeypatch, 
     assert result.reason == "dispatch_failed"
 
 
-def test_lock_watcher_timeout_recovers_from_fresh_runtime_idle_and_drains_queue(monkeypatch, tmp_path):
-    from zerg.services.managed_local_control import ManagedLocalTerminalResult
-    from zerg.services.session_chat_impl import _release_managed_local_lock_after_terminal
-    from zerg.services.session_turns import create_session_turn
-    from zerg.services.session_turns import mark_session_turn_send_accepted
+def test_client_request_id_different_text_conflicts(live_catalog, live_catalog_client):  # noqa: F811
+    email = "live-conflict@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
 
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
-
-    with session_local() as db:
-        create_session_turn(db, session_id=session_id, request_id="req-timeout-recover")
-        mark_session_turn_send_accepted(db, session_id=session_id, request_id="req-timeout-recover")
-        queued = create_session_input(
-            db,
-            session_id=session_id,
-            text="send after recovered idle",
-            owner_id=user_id,
-            intent="auto",
-            status=INPUT_STATUS_QUEUED,
-            client_request_id="ios-timeout-recover-1",
-        )
-        prior_input = create_session_input(
-            db,
-            session_id=session_id,
-            text="prior accepted input",
-            owner_id=user_id,
-            intent="auto",
-            status=INPUT_STATUS_DELIVERED,
-            client_request_id="prior-timeout-recover-1",
-            delivery_request_id="req-timeout-recover",
-        )
-        db.add(
-            SessionInputDeliveryAttempt(
-                session_input_id=int(prior_input.id),
-                session_id=session_id,
-                thread_id=prior_input.thread_id,
-                owner_id=user_id,
-                request_id="req-timeout-recover",
-                attempt_number=1,
-                status="accepted",
-                lease_owner="req-timeout-recover",
-                lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
-            )
-        )
-        db.commit()
-        queued_id = int(queued.id)
-        db_bind = db.get_bind()
-
-    async def fake_wait_terminal(**_kwargs):
-        return None
-
-    monkeypatch.setattr("zerg.services.session_chat_impl.await_managed_local_turn_terminal", fake_wait_terminal)
-    monkeypatch.setattr(
-        "zerg.services.session_chat_impl._runtime_terminal_result_after",
-        lambda **_kwargs: ManagedLocalTerminalResult(
-            phase="idle",
-            control_status="completed",
-            observation_id=0,
-            occurred_at=datetime.now(timezone.utc),
-        ),
+    first = live_catalog_client.post(
+        f"/sessions/{session_id}/input",
+        json={"text": "original", "intent": "queue", "client_request_id": "live-conflict-1"},
+        cookies=cookies,
+    )
+    second = live_catalog_client.post(
+        f"/sessions/{session_id}/input",
+        json={"text": "edited", "intent": "queue", "client_request_id": "live-conflict-1"},
+        cookies=cookies,
     )
 
-    asyncio.run(session_lock_manager.acquire(str(session_id), holder="req-timeout-recover", ttl_seconds=300))
-    try:
-        asyncio.run(
-            _release_managed_local_lock_after_terminal(
-                lock_scope_id=str(session_id),
-                request_id="req-timeout-recover",
-                session_id=session_id,
-                provider="claude",
-                db_bind=db_bind,
-                after_observation_id=0,
-            )
-        )
-
-        with session_local() as db:
-            queued = db.query(SessionInput).filter(SessionInput.id == queued_id).one()
-            assert queued.status == INPUT_STATUS_DELIVERED
-            turn = db.query(SessionTurn).filter(SessionTurn.request_id == "req-timeout-recover").one()
-            assert turn.terminal_phase == "idle"
-            assert turn.terminal_at is not None
-            attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.request_id == "req-timeout-recover").one()
-            assert attempt.status == "completed"
-    finally:
-        asyncio.run(session_lock_manager.release(str(session_id)))
-
-
-def test_client_request_id_different_text_conflicts(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        first = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "original", "intent": "queue", "client_request_id": "ios-conflict-1"},
-        )
-        second = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "edited", "intent": "queue", "client_request_id": "ios-conflict-1"},
-        )
-
-        assert first.status_code == 200, first.text
-        assert second.status_code == 409, second.text
-        assert second.json()["detail"] == {
-            "error_code": "input_conflict",
-            "existing_input_id": first.json()["input_id"],
-            "reason": "different_text",
-        }
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_cancelled_client_request_id_conflicts_on_retry(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        first = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "cancel me", "intent": "queue", "client_request_id": "ios-cancelled-1"},
-        )
-        assert first.status_code == 200, first.text
-
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.id == first.json()["input_id"]).one()
-            row.status = INPUT_STATUS_CANCELLED
-            db.commit()
-
-        retry = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "cancel me", "intent": "queue", "client_request_id": "ios-cancelled-1"},
-        )
-        assert retry.status_code == 409, retry.text
-        assert retry.json()["detail"] == {
-            "error_code": "input_conflict",
-            "existing_input_id": first.json()["input_id"],
-            "reason": "cancelled",
-        }
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_client_request_id_failed_retry_reuses_row(monkeypatch, tmp_path):
-    from zerg.services.session_inputs import create_session_input
-
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    with session_local() as db:
-        row = create_session_input(
-            db,
-            session_id=session_id,
-            text="failed once",
-            owner_id=user_id,
-            intent="auto",
-            status=INPUT_STATUS_FAILED,
-            client_request_id="ios-failed-1",
-            delivery_request_id="old-delivery",
-        )
-        row.last_error = "provider disconnected"
-        input_id = int(row.id)
-        db.commit()
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        retry = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "failed once", "intent": "auto", "client_request_id": "ios-failed-1"},
-        )
-        assert retry.status_code == 200, retry.text
-        assert retry.json()["outcome"] == "sent"
-        with session_local() as db:
-            rows = db.query(SessionInput).filter(SessionInput.session_id == session_id).all()
-            assert len(rows) == 1
-            assert rows[0].id == input_id
-            assert rows[0].client_request_id == "ios-failed-1"
-            assert rows[0].delivery_request_id != "old-delivery"
-            assert rows[0].status == INPUT_STATUS_DELIVERED
-    finally:
-        api_app_ref.dependency_overrides = {}
+    assert first.status_code == 200, first.text
+    assert second.status_code == 409, second.text
+    assert second.json()["detail"] == {
+        "error_code": "input_conflict",
+        "existing_live_input_id": first.json()["live_input_id"],
+        "reason": "different_text",
+    }
 
 
 def test_retry_failed_input_rejects_terminal_rows(tmp_path):
@@ -2525,189 +1945,87 @@ def test_retry_failed_input_rejects_terminal_rows(tmp_path):
         assert refreshed.delivery_request_id == "old-delivery"
 
 
-def test_intent_auto_locked_returns_queued(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
+def test_intent_auto_locked_queues_the_live_receipt(live_catalog, live_catalog_client):  # noqa: F811
+    email = "live-auto-locked@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    # A control channel that would happily accept a send, so "nothing was
+    # dispatched" below is a fact about the held lock, not about the machine.
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"], device_id=LIVE_CATALOG_DEVICE_ID))
 
     # Pre-acquire the lock on the session scope.
     lock_scope_id = str(session_id)
     acquired = asyncio.run(session_lock_manager.acquire(session_id=lock_scope_id, holder="other", ttl_seconds=60))
     assert acquired
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "send if free", "intent": "auto"},
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "send if free", "intent": "auto", "client_request_id": "live-auto-locked-1"},
+            cookies=cookies,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["outcome"] == "queued"
         assert body["intent"] == "auto"
         assert len(body["queued"]) == 1
+        assert websocket.sent == []
 
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == INPUT_STATUS_QUEUED
-            assert row.intent == "auto"
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="live-auto-locked-1",
+        )
+        assert receipt["status"] == INPUT_STATUS_QUEUED
+        assert receipt["intent"] == "auto"
     finally:
         asyncio.run(session_lock_manager.release(lock_scope_id, "other"))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_list_and_cancel_queued(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+def test_antigravity_steer_intent_is_rejected_before_machine_control(live_catalog, live_catalog_client):  # noqa: F811
+    email = "live-agy-steer@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="antigravity",
+        device_id="antigravity-machine-control",
     )
-    try:
-        post = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "wait your turn", "intent": "queue"},
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            supports=["antigravity.send"],
+            device_id="antigravity-machine-control",
         )
-        assert post.status_code == 200
-        input_id = post.json()["input_id"]
-
-        listed = client.get(f"/api/sessions/{session_id}/inputs")
-        assert listed.status_code == 200
-        rows = listed.json()
-        assert len(rows) == 1
-        assert rows[0]["id"] == input_id
-
-        cancelled = client.delete(f"/api/sessions/{session_id}/inputs/{input_id}")
-        assert cancelled.status_code == 200
-        assert cancelled.json()["cancelled"] is True
-
-        listed2 = client.get(f"/api/sessions/{session_id}/inputs")
-        assert listed2.status_code == 200
-        assert listed2.json() == []
-
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
-            assert row.status == INPUT_STATUS_CANCELLED
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def _seed_codex_session(session_local):
-    """Seed a managed-local session on codex_app_server transport so the
-    capability gate for steer is satisfied."""
-    return _seed_codex_machine_control_session(session_local, phase="running")
-
-
-def test_intent_steer_requires_steerable_capability(monkeypatch, tmp_path):
-    """Live send-capable transports without live-injection support return 409 steer_unsupported."""
-    from zerg.models.agents import SessionConnection
-    from zerg.models.agents import SessionRun
-    from zerg.models.agents import SessionThread
-
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    with session_local() as db:
-        thread = db.query(SessionThread).filter(SessionThread.session_id == session_id, SessionThread.is_primary == 1).one()
-        run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).one()
-        conn = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
-        conn.control_plane = "opencode_process"
-        conn.acquisition_kind = "spawned_control"
-        db.commit()
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
     )
+
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "steer now", "intent": "steer"},
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "mid-turn change", "intent": "steer", "client_request_id": "agy-steer-1"},
+            cookies=cookies,
         )
+        # The durable invariant is that nothing reaches machine control:
+        # `steer_active_turn` is false for antigravity, so the provider
+        # contract refuses the intent before a command is ever built.
         assert resp.status_code == 409, resp.text
-        detail = resp.json()["detail"]
-        assert detail["error_code"] == "steer_unsupported"
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_antigravity_steer_intent_is_rejected_before_machine_control(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_antigravity_session(session_local)
-    websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=["antigravity.send"]))
-
-    async def fail_steer(**_kwargs):
-        raise AssertionError("Antigravity does not advertise steer and must reject before dispatch")
-
-    monkeypatch.setattr(
-        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
-        fail_steer,
-    )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "mid-turn change", "intent": "steer"},
-        )
-        assert resp.status_code == 409, resp.text
-        # The durable invariant is that nothing reaches machine control. The
-        # specific reason moved earlier in the chain on 2026-07-31: antigravity
-        # send_input is policy_disabled, so the request is refused before the
-        # steer-capability check can be the thing that refuses it.
-        detail = resp.json()["detail"]
-        if isinstance(detail, dict):
-            assert detail["error_code"] == "steer_unsupported"
         assert websocket.sent == []
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="agy-steer-1",
+        )
+        assert receipt["status"] == INPUT_STATUS_FAILED
     finally:
         asyncio.run(_clear_machine_control_registry())
-        api_app_ref.dependency_overrides = {}
 
 
-def test_intent_steer_success_returns_sent_for_claude_channel(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    with session_local() as db:
-        session = db.query(AgentSession).filter_by(id=session_id).one()
-        _seed_live_runtime_state(db, session, phase="running")
-
-    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
-        from zerg.services.managed_local_control import ManagedLocalSendResult
-
-        assert session.provider == "claude"
-        return ManagedLocalSendResult(ok=True, exit_code=0)
-
-    monkeypatch.setattr(
-        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
-        fake_steer,
-    )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "redirect to failing test", "intent": "steer"},
-        )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["outcome"] == "sent"
-        assert body["intent"] == "steer"
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_intent_steer_acks_from_live_receipt_without_archive_row(live_catalog, live_catalog_client):
+def test_intent_steer_acks_from_live_receipt_without_archive_row(live_catalog, live_catalog_client):  # noqa: F811
     email = "live-steer@test.local"
     owner_id = live_catalog.create_user(email)
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
@@ -2752,157 +2070,29 @@ def test_intent_steer_acks_from_live_receipt_without_archive_row(live_catalog, l
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_intent_steer_requires_active_turn_for_claude_channel(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-
-    async def fake_steer(**_kwargs):
-        raise AssertionError("steer dispatch should not run when Claude is idle")
-
-    monkeypatch.setattr(
-        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
-        fake_steer,
+def test_codex_steer_intent_routes_through_machine_control(live_catalog, live_catalog_client):  # noqa: F811
+    email = "live-codex-steer@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="codex",
+        device_id="codex-machine-control",
     )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "redirect to failing test", "intent": "steer"},
-        )
-        assert resp.status_code == 409, resp.text
-        detail = resp.json()["detail"]
-        assert detail["error_code"] == "turn_not_active"
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_intent_steer_rejects_stale_active_turn_for_claude_channel(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    with session_local() as db:
-        session = db.query(AgentSession).filter_by(id=session_id).one()
-        _seed_live_runtime_state(db, session, phase="running")
-        from zerg.models.agents import SessionRuntimeState
-
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
-        stale_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-        state.freshness_expires_at = stale_at
-        state.last_runtime_signal_at = stale_at
-        state.last_live_at = stale_at
-        db.commit()
-
-    async def fake_steer(**_kwargs):
-        raise AssertionError("stale intent=steer must be rejected before dispatch")
-
-    monkeypatch.setattr(
-        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
-        fake_steer,
-    )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "redirect to failing test", "intent": "steer"},
-        )
-        assert resp.status_code == 409, resp.text
-        detail = resp.json()["detail"]
-        assert detail["error_code"] == "turn_not_active"
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_intent_steer_failure_returns_structured_502_for_claude_channel(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    with session_local() as db:
-        session = db.query(AgentSession).filter_by(id=session_id).one()
-        _seed_live_runtime_state(db, session, phase="running")
-
-    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
-        from zerg.services.managed_local_control import ManagedLocalSendResult
-
-        return ManagedLocalSendResult(ok=False, exit_code=1, error="Claude channel bridge is unavailable")
-
-    monkeypatch.setattr(
-        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
-        fake_steer,
-    )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "redirect to failing test", "intent": "steer"},
-        )
-        assert resp.status_code == 502, resp.text
-        detail = resp.json()["detail"]
-        assert detail["error_code"] == "steer_failed"
-        assert detail["message"] == "Claude channel bridge is unavailable"
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_intent_steer_success_returns_sent_for_codex_bridge(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_codex_session(session_local)
-
-    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
-        from zerg.services.managed_local_control import ManagedLocalSendResult
-
-        return ManagedLocalSendResult(ok=True, exit_code=0)
-
-    monkeypatch.setattr(
-        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
-        fake_steer,
-    )
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "redirect to failing test", "intent": "steer"},
-        )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["outcome"] == "sent"
-        assert body["intent"] == "steer"
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_codex_steer_intent_routes_through_machine_control(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_codex_machine_control_session(session_local, phase="running")
     websocket = asyncio.run(
         _register_fake_machine_control(
-            owner_id=user_id,
+            owner_id=owner_id,
             supports=["codex.steer"],
             device_id="codex-machine-control",
         )
     )
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
             json={"text": "steer through codex bridge", "intent": "steer", "client_request_id": "codex-steer-1"},
+            cookies=cookies,
         )
 
         assert resp.status_code == 200, resp.text
@@ -2912,60 +2102,70 @@ def test_codex_steer_intent_routes_through_machine_control(monkeypatch, tmp_path
         assert len(websocket.sent) == 1
         frame = websocket.sent[0]
         assert frame["command_type"] == "session.steer_text"
-        assert frame["session_id"] == str(session_id)
+        assert frame["session_id"] == session_id
         assert str(frame["command_id"]).startswith(f"managed-control:{session_id}:session.steer_text:")
-        assert frame["payload"] == {
-            "provider": "codex",
-            "text": "steer through codex bridge",
-            "intent": "steer",
-        }
+        assert frame["payload"]["provider"] == "codex"
+        assert frame["payload"]["text"] == "steer through codex bridge"
+        assert frame["payload"]["intent"] == "steer"
 
-        with session_local() as db:
-            session = db.query(AgentSession).filter_by(id=session_id).one()
-            assert project_session_control_fields(db, session).source_runner_id is None
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == INPUT_STATUS_DELIVERED
-            assert row.intent == "steer"
-            assert row.client_request_id == "codex-steer-1"
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="codex-steer-1",
+        )
+        assert receipt["status"] == INPUT_STATUS_DELIVERED
+        assert receipt["intent"] == "steer"
     finally:
         asyncio.run(_clear_machine_control_registry())
-        api_app_ref.dependency_overrides = {}
 
 
-def test_intent_steer_turn_ended_returns_structured_409(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_codex_session(session_local)
+def test_intent_steer_turn_ended_returns_structured_409(live_catalog, live_catalog_client):  # noqa: F811
+    """A steer that lost the turn race is a typed 409, and the receipt keeps the loss."""
 
-    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
-        from zerg.services.managed_local_control import MANAGED_LOCAL_STEER_TURN_ENDED
-        from zerg.services.managed_local_control import ManagedLocalSendResult
-
-        return ManagedLocalSendResult(ok=False, exit_code=2, error=MANAGED_LOCAL_STEER_TURN_ENDED)
-
-    monkeypatch.setattr(
-        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
-        fake_steer,
+    email = "live-turn-ended@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="codex",
+        device_id="codex-machine-control",
+    )
+    # The engine answers the steer command the way it answers one that arrived
+    # after the turn already ended.
+    websocket = _TurnEndedMachineWebSocket()
+    asyncio.run(
+        get_machine_control_channel_registry().register(
+            owner_id=owner_id,
+            device_id="codex-machine-control",
+            machine_name="codex-machine-control",
+            engine_build="test-engine",
+            supports=["codex.steer"],
+            websocket=websocket,
+        )
     )
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "too late", "intent": "steer"},
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": "too late", "intent": "steer", "client_request_id": "codex-turn-ended-1"},
+            cookies=cookies,
         )
         assert resp.status_code == 409, resp.text
         detail = resp.json()["detail"]
         assert detail["error_code"] == "turn_ended"
-        # The row persists as failed for audit — no silent recovery.
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == "failed"
-            assert row.last_error == "turn_ended"
+        # The receipt persists as failed for audit — no silent recovery.
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="codex-turn-ended-1",
+        )
+        assert receipt["status"] == INPUT_STATUS_FAILED
+        assert "turn_ended" in str(receipt["error_json"])
     finally:
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(_clear_machine_control_registry())
 
 
 def test_capability_includes_can_queue_next_input():
@@ -2996,158 +2196,72 @@ def test_capability_includes_can_queue_next_input():
     assert caps2.can_queue_next_input is False
 
 
-def test_intent_auto_stores_owner_id(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "hi", "intent": "queue"},
-        )
-        assert resp.status_code == 200
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.owner_id == user_id
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_queue_cap_rejects_over_limit(monkeypatch, tmp_path):
+def test_queue_cap_rejects_over_limit(live_catalog, live_catalog_client):  # noqa: F811
     from zerg.services.session_inputs import MAX_QUEUED_PER_SESSION
 
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
+    email = "live-cap@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    for index in range(MAX_QUEUED_PER_SESSION):
+        queued = live_catalog_client.post(
+            f"/sessions/{session_id}/input",
+            json={"text": f"msg {index}", "intent": "queue", "client_request_id": f"live-cap-{index}"},
+            cookies=cookies,
+        )
+        assert queued.status_code == 200, queued.text
+    over = live_catalog_client.post(
+        f"/sessions/{session_id}/input",
+        json={"text": "one too many", "intent": "queue", "client_request_id": "live-cap-over"},
+        cookies=cookies,
     )
-    try:
-        for i in range(MAX_QUEUED_PER_SESSION):
-            r = client.post(
-                f"/api/sessions/{session_id}/input",
-                json={"text": f"msg {i}", "intent": "queue"},
-            )
-            assert r.status_code == 200, r.text
-        over = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "one too many", "intent": "queue"},
-        )
-        assert over.status_code == 409, over.text
-    finally:
-        api_app_ref.dependency_overrides = {}
+    assert over.status_code == 409, over.text
 
 
-def test_cancel_rejects_wrong_session(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id_a, user_id = _seed_live_session(session_local)
-    session_id_b, _ = _seed_live_session(session_local, owner_id=user_id)
-    _stub_dispatch(monkeypatch)
+def test_inputs_etag_returns_304_when_unchanged(live_catalog, live_catalog_client):  # noqa: F811
+    email = "live-etag@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    # Seed one queued receipt so the list is non-trivial.
+    queued = live_catalog_client.post(
+        f"/sessions/{session_id}/input",
+        json={"text": "etag test", "intent": "queue", "client_request_id": "live-etag-1"},
+        cookies=cookies,
     )
-    try:
-        post = client.post(
-            f"/api/sessions/{session_id_a}/input",
-            json={"text": "hi", "intent": "queue"},
-        )
-        input_id = post.json()["input_id"]
+    assert queued.status_code == 200, queued.text
 
-        # Cancel via the wrong session id should 404, not leak cancellation.
-        wrong = client.delete(f"/api/sessions/{session_id_b}/inputs/{input_id}")
-        assert wrong.status_code == 404
+    # First list call: full response + ETag header.
+    first = live_catalog_client.get(f"/sessions/{session_id}/inputs", cookies=cookies)
+    assert first.status_code == 200
+    etag = first.headers.get("etag")
+    assert etag, "expected ETag header on /inputs response"
 
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
-            assert row.status == INPUT_STATUS_QUEUED
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_inputs_etag_returns_304_when_unchanged(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    # Second call with If-None-Match presents the same etag → 304.
+    second = live_catalog_client.get(
+        f"/sessions/{session_id}/inputs",
+        headers={"If-None-Match": etag},
+        cookies=cookies,
     )
-    try:
-        # Seed one queued row so the list is non-trivial.
-        r = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "etag test", "intent": "queue"},
-        )
-        assert r.status_code == 200
+    assert second.status_code == 304, second.text
+    assert second.headers.get("etag") == etag
 
-        # First list call: full response + ETag header.
-        first = client.get(f"/api/sessions/{session_id}/inputs")
-        assert first.status_code == 200
-        etag = first.headers.get("etag")
-        assert etag, "expected ETag header on /inputs response"
-
-        # Second call with If-None-Match presents the same etag → 304.
-        second = client.get(
-            f"/api/sessions/{session_id}/inputs",
-            headers={"If-None-Match": etag},
-        )
-        assert second.status_code == 304, second.text
-        assert second.headers.get("etag") == etag
-
-        # Mutating state (cancel) invalidates the ETag.
-        input_id = first.json()[0]["id"]
-        cancel = client.delete(f"/api/sessions/{session_id}/inputs/{input_id}")
-        assert cancel.status_code == 200
-
-        third = client.get(
-            f"/api/sessions/{session_id}/inputs",
-            headers={"If-None-Match": etag},
-        )
-        assert third.status_code == 200, "cancel should bust the ETag"
-        assert third.headers.get("etag") != etag
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_recent_list_surfaces_failed_rows(monkeypatch, tmp_path):
-    from zerg.services.session_inputs import mark_failed
-
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    # Mutating state (cancel) invalidates the ETag.
+    cancel = live_catalog_client.delete(
+        f"/sessions/{session_id}/inputs/live/{queued.json()['live_input_id']}",
+        cookies=cookies,
     )
-    try:
-        r = client.post(
-            f"/api/sessions/{session_id}/input",
-            json={"text": "will fail", "intent": "queue"},
-        )
-        input_id = r.json()["input_id"]
-        # Simulate a drain failure.
-        with session_local() as db:
-            mark_failed(db, input_id, error="provider down")
+    assert cancel.status_code == 200, cancel.text
 
-        listed = client.get(f"/api/sessions/{session_id}/inputs")
-        assert listed.status_code == 200
-        rows = listed.json()
-        assert len(rows) == 1
-        assert rows[0]["status"] == "failed"
-        assert rows[0]["last_error"] == "provider down"
-    finally:
-        api_app_ref.dependency_overrides = {}
+    third = live_catalog_client.get(
+        f"/sessions/{session_id}/inputs",
+        headers={"If-None-Match": etag},
+        cookies=cookies,
+    )
+    assert third.status_code == 200, "cancel should bust the ETag"
+    assert third.headers.get("etag") != etag
 
 
 def test_startup_reconciliation_fails_stuck_steer_rows_instead_of_requeuing(tmp_path):

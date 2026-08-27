@@ -6,7 +6,6 @@ from the app factory and router registration.
 
 import hmac
 import os
-import sqlite3
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -18,7 +17,6 @@ from zerg.config import get_settings
 
 router = APIRouter(tags=["health"])
 
-EVENTS_FTS_EXISTS_SQL = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1"
 CATALOG_HEALTH_TIMEOUT_SECONDS = 0.25
 _ARCHIVE_DEGRADABLE_WRITER_LABELS = {
     "archive-primary-manifest",
@@ -205,61 +203,26 @@ def _request_is_trusted(request: Request) -> bool:
 
 @router.get("/health/db", operation_id="health_db_check")
 def health_db(request: Request):
-    """Database readiness check - verifies critical tables are initialized.
+    """Database readiness check - verifies the catalog is answering.
 
-    Returns ready/initializing/error. Schema detail (which table is missing,
-    the verified table list) is operator-only; untrusted callers get a bare
-    status so this isn't a public schema-disclosure surface.
+    Returns ready/error. The catalog ping payload is operator-only; untrusted
+    callers get a bare status so this isn't a public schema-disclosure surface.
     """
-    from zerg.database import default_engine
-    from zerg.database import get_live_engine
-    from zerg.database import live_catalog_enabled
-
     trusted = _request_is_trusted(request)
-    catalog_mode = live_catalog_enabled()
-    if catalog_mode and not get_settings().testing:
-        try:
-            from zerg.catalogd.client import call_catalogd_sync
-            from zerg.catalogd.schema import catalogd_ping_is_compatible
-            from zerg.services.catalogd_supervisor import catalogd_paths
-
-            _database_path, catalog_socket = catalogd_paths()
-            ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=CATALOG_HEALTH_TIMEOUT_SECONDS)
-            # `ready` alone is not readiness: catalogd sets it true on every
-            # successful ping, so an incompatible peer answers like a healthy one.
-            if not catalogd_ping_is_compatible(ping):
-                raise RuntimeError("catalog not ready")
-            return {"status": "ready", "catalog": ping} if trusted else {"status": "ready"}
-        except Exception:
-            return JSONResponse(status_code=503, content={"status": "error", "detail": "Catalog connection failed"})
-
-    # Tests intentionally do not start the catalogd supervisor. Their live
-    # catalog is initialized in-process, so readiness must inspect that exact
-    # test-owned database instead of waiting for a socket that cannot exist.
-    health_engine = get_live_engine() if catalog_mode else default_engine
-    required_tables = (
-        ["users", "live_session_catalog", "live_timeline_cards", "live_runtime_state"]
-        if catalog_mode
-        else ["users", "sessions", "events", "events_fts"]
-    )
-
     try:
-        if health_engine is None:
-            raise RuntimeError("database engine unavailable")
-        with health_engine.connect() as conn:
-            for table in required_tables:
-                result = conn.execute(text(f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"))
-                if not result.fetchone():
-                    content = {"status": "initializing"}
-                    if trusted:
-                        content["missing_table"] = table
-                    return JSONResponse(status_code=503, content=content)
-        return {"status": "ready", "tables_verified": required_tables} if trusted else {"status": "ready"}
+        from zerg.catalogd.client import call_catalogd_sync
+        from zerg.catalogd.schema import catalogd_ping_is_compatible
+        from zerg.services.catalogd_supervisor import catalogd_paths
+
+        _database_path, catalog_socket = catalogd_paths()
+        ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=CATALOG_HEALTH_TIMEOUT_SECONDS)
+        # `ready` alone is not readiness: catalogd sets it true on every
+        # successful ping, so an incompatible peer answers like a healthy one.
+        if not catalogd_ping_is_compatible(ping):
+            raise RuntimeError("catalog not ready")
+        return {"status": "ready", "catalog": ping} if trusted else {"status": "ready"}
     except Exception:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "error", "detail": "Database connection failed"},
-        )
+        return JSONResponse(status_code=503, content={"status": "error", "detail": "Catalog connection failed"})
 
 
 @router.get("/livez", operation_id="livez_check_get")
@@ -274,8 +237,9 @@ def livez_check():
 def readyz_check():
     """Readiness probe: returns 503 when core dependencies are unavailable.
 
-    Uses a raw SQLite connection with a short timeout so it never blocks behind
-    a long write transaction.
+    Readiness is catalog readiness: catalogd owns the database, so a compatible
+    ping over its socket is the whole check. The probe carries a short timeout
+    so it never blocks behind a long write transaction.
     """
     # Access the parent app via the request scope (health is mounted on api_app,
     # which is mounted on app). We need app.state from the root app.
@@ -286,11 +250,6 @@ def readyz_check():
 
     _settings = get_settings()
 
-    from zerg.database import default_engine
-    from zerg.database import get_live_engine
-    from zerg.database import live_catalog_enabled
-    from zerg.database import live_store_configured
-
     single_tenant_violation = getattr(_health_app_ref, "single_tenant_violation", None)
     if single_tenant_violation:
         return JSONResponse(
@@ -298,22 +257,16 @@ def readyz_check():
             content={"status": "unhealthy", "reason": single_tenant_violation},
         )
 
-    catalog_mode = live_catalog_enabled()
-    factory_assurance_catalog = False
-    if catalog_mode and _settings.testing:
+    # The factory assurance runtime runs with testing settings against a real
+    # catalogd, so its readiness is catalogd readiness like any other host.
+    catalogd_required = not _settings.testing
+    if not catalogd_required:
         from zerg.services.factory_assurance_title_binding import factory_assurance_title_enabled
 
-        factory_assurance_catalog = factory_assurance_title_enabled()
-    catalogd_required = catalog_mode and (not _settings.testing or factory_assurance_catalog)
-    readiness_engine = None if catalogd_required else ((get_live_engine() if live_store_configured() else None) or default_engine)
-    if readiness_engine is None and not catalogd_required:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unhealthy", "reason": "database engine not initialized"},
-        )
+        catalogd_required = factory_assurance_title_enabled()
 
-    catalogd_ready = False
     if catalogd_required:
+        catalogd_ready = False
         try:
             from zerg.catalogd.client import call_catalogd_sync
             from zerg.catalogd.schema import catalogd_ping_is_compatible
@@ -329,83 +282,6 @@ def readyz_check():
                 status_code=503,
                 content={"status": "unhealthy", "reason": "catalog_unavailable"},
             )
-
-    db_url = str(readiness_engine.url) if readiness_engine is not None else ""
-    if not catalogd_ready and db_url.startswith("sqlite"):
-        db_path = db_url.replace("sqlite:///", "").replace("sqlite://", "")
-        if not db_path or db_path == ":memory:":
-            return {"status": "ok"}
-        try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
-            try:
-                conn.execute("SELECT 1")
-                if readiness_engine is default_engine:
-                    row = conn.execute(EVENTS_FTS_EXISTS_SQL).fetchone()
-                    if not row:
-                        return JSONResponse(
-                            status_code=503,
-                            content={"status": "unhealthy", "reason": "events_fts table missing (FTS5 required)"},
-                        )
-            finally:
-                conn.close()
-        except Exception:
-            return JSONResponse(
-                status_code=503,
-                content={"status": "unhealthy", "reason": "database unavailable"},
-            )
-    elif not catalogd_ready:
-        try:
-            with readiness_engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-        except Exception:
-            return JSONResponse(
-                status_code=503,
-                content={"status": "unhealthy", "reason": "database unavailable"},
-            )
-
-    catalog_mode = live_catalog_enabled()
-    writer_stale, writer_metrics = (False, {"status": "retired"}) if catalog_mode else _write_serializer_stall_check()
-    archive_degraded = writer_stale and _writer_stall_is_archive_degraded(writer_metrics)
-    live_writer_stale, live_writer_metrics = (
-        (False, {"status": "retired", "owner": "catalogd"}) if catalog_mode else _live_write_serializer_check()
-    )
-    if live_writer_stale:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "unhealthy",
-                "reason": "live_write_serializer_stalled",
-                "live_write_serializer": live_writer_metrics,
-            },
-        )
-    if archive_degraded:
-        return {
-            "status": "ready_with_archive_degraded",
-            "reason": "archive_write_serializer_stalled",
-            "write_serializer": _archive_degraded_metrics(writer_metrics),
-        }
-    if writer_stale:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "unhealthy",
-                "reason": "write_serializer_stalled",
-                "write_serializer": writer_metrics,
-            },
-        )
-
-    try:
-        from zerg.database import get_wal_bytes
-
-        archive_wal = _archive_wal_pressure_payload(None if catalog_mode else get_wal_bytes())
-        if archive_wal.get("shed"):
-            return {
-                "status": "ready_with_archive_degraded",
-                "reason": "archive_wal_pressure",
-                "sqlite_wal": archive_wal,
-            }
-    except Exception:
-        pass
 
     return {"status": "ok"}
 
@@ -424,14 +300,12 @@ def health_check(request: Request):
     """
     from zerg.build_info import BuildIdentityMissing
     from zerg.build_info import load as load_build_identity
-    from zerg.database import live_catalog_enabled
 
     _settings = get_settings()
-    catalog_mode = live_catalog_enabled()
     trusted = _request_is_trusted(request)
     health_status = {"status": "healthy", "message": "Longhouse API is running"}
 
-    # `critical_failure` drives the HTTP 503: only hard infra failures (db, fts5,
+    # `critical_failure` drives the HTTP 503: only hard infra failures (catalog,
     # environment, single-tenant) make the service "down". A missing build
     # identity flips overall status to unhealthy for operator signal but is NOT
     # critical (it is legitimately absent in source/dev installs), so it must not
@@ -511,7 +385,7 @@ def health_check(request: Request):
     # 1c. Durable product dependency state. This intentionally does not feed
     # /readyz: title generation can be degraded while the launch loop remains
     # healthy, but operators must still see the shared outage and its debt.
-    if catalog_mode and not _settings.testing:
+    if not _settings.testing:
         try:
             from zerg.services.catalog_read_gateway import title_dependency_health
 
@@ -528,7 +402,7 @@ def health_check(request: Request):
             checks["session_titles"] = {"status": "warn", "error": type(exc).__name__}
 
     # 2. Database connectivity
-    if catalog_mode and not _settings.testing:
+    if not _settings.testing:
         try:
             from zerg.catalogd.client import call_catalogd_sync
             from zerg.catalogd.schema import catalogd_ping_is_compatible
@@ -561,38 +435,11 @@ def health_check(request: Request):
             health_status["message"] = "Catalog service is unavailable"
             critical_failure = True
 
-    try:
-        from zerg.database import default_engine
-        from zerg.database import get_live_engine
-        from zerg.database import live_store_configured
-
-        if catalog_mode:
-            checks["database"] = {"status": "pass", "connection": "catalogd"}
-        else:
-            health_engine = (get_live_engine() if live_store_configured() else None) or default_engine
-            with health_engine.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                row = result.fetchone()
-                db_check = {
-                    "status": "pass" if row and row[0] == 1 else "fail",
-                    "connection": "ok",
-                }
-                if trusted:
-                    db_check["url"] = (
-                        str(health_engine.url).replace(health_engine.url.password or "", "***")
-                        if health_engine.url.password
-                        else str(health_engine.url)
-                    )
-                checks["database"] = db_check
-    except Exception as e:
-        checks["database"] = {"status": "fail", "error": str(e)}
-        health_status["status"] = "unhealthy"
-        critical_failure = True
+    checks["database"] = {"status": "pass", "connection": "catalogd"}
 
     # 2a. Canonical Live Store topology.
     try:
         from zerg.database import get_live_session_factory
-        from zerg.database import live_store_configured
         from zerg.services.db_diagnostics import collect_sqlite_store_stats
 
         diagnostics_db = None
@@ -665,9 +512,8 @@ def health_check(request: Request):
     try:
         from zerg.database import get_live_engine
         from zerg.database import get_pool_status
-        from zerg.database import live_catalog_enabled
 
-        pool_status = get_pool_status(get_live_engine() if live_catalog_enabled() else None)
+        pool_status = get_pool_status(get_live_engine())
         if pool_status is None:
             checks["db_pool"] = {"status": "skip", "reason": "engine unavailable"}
         else:
@@ -678,24 +524,8 @@ def health_check(request: Request):
     except Exception as e:
         checks["db_pool"] = {"status": "warn", "error": str(e)}
 
-    # 3. SQLite FTS5 readiness
-    try:
-        from zerg.database import default_engine
-
-        if catalog_mode:
-            checks["fts5"] = {"status": "skip", "reason": "searchd_owned"}
-        elif default_engine is not None and default_engine.dialect.name == "sqlite":
-            with default_engine.connect() as conn:
-                fts_row = conn.execute(text(EVENTS_FTS_EXISTS_SQL)).fetchone()
-                if not fts_row:
-                    raise RuntimeError("events_fts table is missing (FTS5 required).")
-            checks["fts5"] = {"status": "pass"}
-        else:
-            checks["fts5"] = {"status": "skip", "reason": "non-sqlite"}
-    except Exception as e:
-        checks["fts5"] = {"status": "fail", "error": str(e)}
-        health_status["status"] = "unhealthy"
-        critical_failure = True
+    # 3. Full-text search readiness is searchd's, not this process's.
+    checks["fts5"] = {"status": "skip", "reason": "searchd_owned"}
 
     # 5. Email config status (do not leak configured addresses to untrusted callers)
     try:
@@ -734,47 +564,14 @@ def health_check(request: Request):
 
     checks["migration"] = migration_status
 
-    # 7. Write serializer metrics
-    writer_stale, writer_metrics = (False, {"status": "retired"}) if catalog_mode else _write_serializer_stall_check()
-    archive_degraded = writer_stale and _writer_stall_is_archive_degraded(writer_metrics)
-    checks["write_serializer"] = _archive_degraded_metrics(writer_metrics) if archive_degraded else writer_metrics
-    if archive_degraded:
-        if health_status.get("status") == "healthy":
-            health_status["status"] = "degraded"
-            health_status["message"] = "Archive write serializer is stalled; live lane may remain available"
-    elif writer_stale:
-        health_status["status"] = "unhealthy"
-        health_status["message"] = "Write serializer is stalled"
-        critical_failure = True
-    _live_writer_stale, live_writer_metrics = (
-        (False, {"status": "retired", "owner": "catalogd"}) if catalog_mode else _live_write_serializer_check()
-    )
-    checks["live_write_serializer"] = live_writer_metrics
-    if _live_writer_stale:
-        health_status["status"] = "unhealthy"
-        health_status["message"] = "Live write serializer is stalled"
-        critical_failure = True
+    # 7. Write serializer metrics. catalogd owns every write lane now, so the
+    # in-process serializers report retired rather than a live measurement.
+    checks["write_serializer"] = {"status": "retired"}
+    checks["live_write_serializer"] = {"status": "retired", "owner": "catalogd"}
 
-    # 8. Projection catch-up lag. Archive ingest may skip expensive derived
-    # projections on the hot path; this should normally drain quickly in the
-    # background and should be visible separately from raw ingest health.
-    if catalog_mode:
-        checks["session_projection_lag"] = {"status": "skip", "reason": "storage_v2_projectors"}
-    else:
-        try:
-            checks["session_projection_lag"] = _session_projection_lag_check()
-        except Exception as e:
-            checks["session_projection_lag"] = {"status": "warn", "error": str(e)}
-
-    # 9. Enrichment lag. Embeddings/search enrichment run after durable ingest;
-    # they should be visible, but must not be mistaken for raw shipping health.
-    if catalog_mode:
-        checks["session_enrichment_lag"] = {"status": "skip", "reason": "storage_v2_projectors"}
-    else:
-        try:
-            checks["session_enrichment_lag"] = _session_enrichment_lag_check()
-        except Exception as e:
-            checks["session_enrichment_lag"] = {"status": "warn", "error": str(e)}
+    # 8/9. Projection and enrichment catch-up lag are catalogd projector work.
+    checks["session_projection_lag"] = {"status": "skip", "reason": "storage_v2_projectors"}
+    checks["session_enrichment_lag"] = {"status": "skip", "reason": "storage_v2_projectors"}
 
     # 10. SQLite WAL pressure: phase 1 instrumentation. WAL bytes is the cheapest
     # leading indicator of write-side backpressure; the engine's adaptive

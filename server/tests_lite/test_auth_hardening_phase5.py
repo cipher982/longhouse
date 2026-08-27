@@ -1,3 +1,12 @@
+"""Auth hardening, asserted against a real Runtime Host.
+
+``AUTH_DISABLED=1`` is the ``make dev`` shape, not a test shim, so the one
+route test here provisions a real live catalog and then disables auth on top of
+it. The old version proved a tokenless request reached a SQLAlchemy session
+that production never opens; what actually has to hold is that the agents auth
+dependency does not answer 401 when the operator turned auth off.
+"""
+
 from __future__ import annotations
 
 import os
@@ -6,80 +15,24 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-from zerg.database import Base
-from zerg.database import get_db
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
+from tests_lite.live_catalog_harness import provision_live_catalog
 from zerg.main import _enforce_single_tenant_startup
-from zerg.main import api_app
 
 
-def _make_db(tmp_path):
-    db_path = tmp_path / "auth_hardening_phase5.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    return make_sessionmaker(engine)
+def test_agents_routes_allow_missing_device_token_when_auth_disabled(monkeypatch):
+    """Dev mode serves a machine read that carries no token at all."""
 
-
-def test_agents_routes_allow_missing_device_token_when_auth_disabled(tmp_path):
-    session_local = _make_db(tmp_path)
-
-    def override_db():
-        with session_local() as db:
-            yield db
-
-    api_app.dependency_overrides[get_db] = override_db
-
-    try:
-        client = TestClient(api_app)
-        response = client.get("/agents/sessions")
-        assert response.status_code == 200
-        assert response.json()["total"] == 0
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_agents_ingest_allows_missing_device_token_when_auth_disabled(tmp_path):
-    session_local = _make_db(tmp_path)
-
-    def override_db():
-        with session_local() as db:
-            yield db
-
-    api_app.dependency_overrides[get_db] = override_db
-
-    try:
-        client = TestClient(api_app)
-        response = client.post(
-            "/agents/ingest",
-            json={
-                "provider": "claude",
-                "environment": "development",
-                "project": "provider-smoke",
-                "device_id": "auth-disabled-dev",
-                "cwd": "/tmp/provider-smoke",
-                "started_at": "2026-03-18T00:00:00Z",
-                "events": [
-                    {
-                        "role": "user",
-                        "content_text": "seed",
-                        "timestamp": "2026-03-18T00:00:01Z",
-                        "source_path": "/tmp/provider-smoke.jsonl",
-                        "source_offset": 0,
-                        "raw_json": "{\"type\":\"user\",\"text\":\"seed\"}",
-                    }
-                ],
-            },
-        )
+    with provision_live_catalog() as live:
+        # Only the environment: ``verify_agents_token`` reads settings per
+        # request, which is what makes the operator's switch take effect.
+        monkeypatch.setenv("AUTH_DISABLED", "1")
+        with live.http_client() as client:
+            response = client.get("/agents/sessions/wall")
 
         assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["events_inserted"] == 1
-    finally:
-        api_app.dependency_overrides.clear()
+        assert response.json()["total"] == 0
 
 
 def test_internal_calls_require_shared_secret_even_when_auth_disabled():

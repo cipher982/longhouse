@@ -107,7 +107,6 @@ def test_state_beacon_uses_catalog_fanout_as_emission_coordinate():
 def test_beacon_remains_available_when_live_catalog_owns_sqlite(monkeypatch):
     telemetry_mod._samples.clear()
     telemetry_mod._buckets.clear()
-    monkeypatch.setattr(telemetry_mod, "live_catalog_enabled", lambda: True)
     app = FastAPI()
     app.include_router(beacon_router)
     client = TestClient(app)

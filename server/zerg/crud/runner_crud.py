@@ -23,11 +23,7 @@ from zerg.utils.time import utc_now_naive
 
 
 def _remote(db: Session | None) -> bool:
-    if db is not None:
-        return False
-    from zerg.database import live_catalog_enabled
-
-    return live_catalog_enabled()
+    return db is None
 
 
 # ---------------------------------------------------------------------------

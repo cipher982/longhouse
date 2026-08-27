@@ -490,8 +490,6 @@ async def test_permission_and_pause_routes_use_catalog_without_db(daemon_paths, 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
-    monkeypatch.setattr(permission_gate.database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(session_chat.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: client)
     try:
         ack = await permission_gate.register_permission_request(

@@ -36,8 +36,6 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.database import get_db
-from zerg.database import live_catalog_enabled
 from zerg.dependencies.auth import require_admin
 from zerg.metrics import canary_latency_seconds
 from zerg.metrics import canary_observations_total
@@ -87,10 +85,7 @@ logger = logging.getLogger("longhouse.client_render")
 
 def _get_telemetry_db():
     """Legacy persistence is optional; live catalog is owned by catalogd."""
-    if live_catalog_enabled():
-        yield None
-        return
-    yield from get_db()
+    yield None
 
 
 def _take_token(ip: str, now: float) -> bool:
@@ -434,86 +429,62 @@ async def canary_session_lookup() -> dict:
     without plumbing a UUID through env. Gated by canary token.
     """
     from datetime import datetime
-    from datetime import timedelta
     from datetime import timezone
 
-    if live_catalog_enabled():
-        from zerg.catalogd.client import CatalogRemoteError
-        from zerg.catalogd.client import CatalogUnavailable
-        from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.services.catalogd_supervisor import get_catalogd_client
 
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "catalog_unavailable",
-                    "message": "Canary session lookup requires a live catalog.",
-                },
-            )
-        observed_at = datetime.now(timezone.utc)
-        try:
-            result = await catalogd.call(
-                "storage.session.canary.lookup.v2",
-                {
-                    "observed_at": observed_at.isoformat(),
-                    "max_age_seconds": 300,
-                },
-            )
-        except (CatalogUnavailable, CatalogRemoteError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "catalog_unavailable",
-                    "message": "Canary session lookup catalog is unavailable.",
-                },
-            ) from exc
-        if not isinstance(result, dict):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "catalog_unavailable",
-                    "message": "Canary session lookup returned an invalid catalog payload.",
-                },
-            )
-        session_id = result.get("session_id")
-        if session_id is None:
-            return {"session_id": None}
-        try:
-            canonical_session_id = str(UUID(session_id)) if isinstance(session_id, str) else None
-        except ValueError:
-            canonical_session_id = None
-        if canonical_session_id != session_id:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "catalog_unavailable",
-                    "message": "Canary session lookup returned an invalid session_id.",
-                },
-            )
-        return {"session_id": canonical_session_id}
-
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
-
-    db_gen = get_db()
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "catalog_unavailable",
+                "message": "Canary session lookup requires a live catalog.",
+            },
+        )
+    observed_at = datetime.now(timezone.utc)
     try:
-        db = next(db_gen)
-    except StopIteration:
+        result = await catalogd.call(
+            "storage.session.canary.lookup.v2",
+            {
+                "observed_at": observed_at.isoformat(),
+                "max_age_seconds": 300,
+            },
+        )
+    except (CatalogUnavailable, CatalogRemoteError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "catalog_unavailable",
+                "message": "Canary session lookup catalog is unavailable.",
+            },
+        ) from exc
+    if not isinstance(result, dict):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "catalog_unavailable",
+                "message": "Canary session lookup returned an invalid catalog payload.",
+            },
+        )
+    session_id = result.get("session_id")
+    if session_id is None:
         return {"session_id": None}
     try:
-        row = (
-            db.query(AgentSession)
-            .filter(AgentSession.provider == "canary")
-            .filter(AgentSession.last_activity_at >= cutoff)
-            .order_by(AgentSession.last_activity_at.desc().nullslast(), AgentSession.started_at.desc())
-            .first()
+        canonical_session_id = str(UUID(session_id)) if isinstance(session_id, str) else None
+    except ValueError:
+        canonical_session_id = None
+    if canonical_session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "catalog_unavailable",
+                "message": "Canary session lookup returned an invalid session_id.",
+            },
         )
-        return {"session_id": str(row.id) if row else None}
-    finally:
-        try:
-            next(db_gen, None)
-        except Exception:
-            pass
+    return {"session_id": canonical_session_id}
 
 
 @canary_router.post("/canary-observation", include_in_schema=False)

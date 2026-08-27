@@ -20,18 +20,20 @@ from cryptography.fernet import Fernet  # noqa: E402
 
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402,F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402,F401
+from zerg.catalogd.schema import create_catalog_engine  # noqa: E402
 from zerg.database import Base  # noqa: E402
-from zerg.database import get_db  # noqa: E402
 from zerg.database import make_engine  # noqa: E402
-from zerg.dependencies.agents_auth import require_single_tenant  # noqa: E402
-from zerg.dependencies.agents_auth import verify_agents_token  # noqa: E402
 from zerg.models import User  # noqa: E402
 from zerg.models.agents import AgentSession  # noqa: E402
 from zerg.models.agents import SessionThread  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
+from zerg.models.live_store import LiveSessionCatalog  # noqa: E402
+from zerg.services.catalogd_supervisor import catalogd_paths  # noqa: E402
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session  # noqa: E402
 from zerg.services.workspace_suggestion_projection import WORKSPACE_CANDIDATE_PAGE_SIZE  # noqa: E402
 from zerg.services.workspace_suggestion_projection import WorkspaceSessionFacts  # noqa: E402
@@ -114,6 +116,51 @@ def _seed_session(
             session.primary_thread_id = thread.id
         upsert_timeline_card_from_session(db, session)
         db.commit()
+
+
+def _seed_catalog_session(
+    *,
+    device_id: str,
+    cwd: str,
+    git_repo: str | None,
+    environment: str = "production",
+    project: str = "workspaces",
+    days_ago: float = 0.0,
+) -> None:
+    """Leave one session row in the live catalog the served route reads.
+
+    ``LiveCatalog.commit_session`` derives cwd and git facts from the project,
+    and this test needs specific ones, so the row goes in directly. Every other
+    hop -- enrollment, device scoping, ranking, response shape -- is catalogd's.
+    """
+
+    database_path, _socket_path = catalogd_paths()
+    engine = create_catalog_engine(database_path)
+    ts = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=days_ago)
+    try:
+        with Session(engine) as db:
+            db.add(
+                LiveSessionCatalog(
+                    session_id=str(uuid4()),
+                    provider="codex",
+                    environment=environment,
+                    project=project,
+                    device_id=device_id,
+                    cwd=cwd,
+                    git_repo=git_repo,
+                    git_branch="main",
+                    launch_actor="human_shell",
+                    launch_surface="terminal",
+                    started_at=ts,
+                    last_activity_at=ts,
+                    user_messages=1,
+                    created_at=ts,
+                    updated_at=ts,
+                )
+            )
+            db.commit()
+    finally:
+        engine.dispose()
 
 
 def test_device_scoping_excludes_ghost_rows(tmp_path):
@@ -442,48 +489,30 @@ def test_list_sessions_no_longer_falls_back_to_environment(tmp_path):
     assert device_ids == {"cinder"}
 
 
-def test_endpoint_returns_scoped_workspaces(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    _enroll(SessionLocal, "cinder")
-    _seed_session(
-        SessionLocal,
-        device_id="cinder",
-        cwd="/Users/d/git/zerg",
-        git_repo="x/zerg.git",
-        git_branch="main",
-        days_ago=0.1,
-    )
-    _seed_session(
-        SessionLocal, device_id="shipper-laptop", cwd="/Users/d/git/ghost", environment="cinder", days_ago=0.05
-    )
+def test_endpoint_returns_scoped_workspaces(live_catalog, live_catalog_client):  # noqa: F811
+    """The route reads the ranked list catalogd owns, scoped to one machine.
 
-    from zerg.main import api_app
+    The ranking itself is pinned by the unit tests above. What this adds is the
+    served path: a Runtime Host answers this route out of the live catalog, so
+    the enrollment, the device scoping and the response shape all have to hold
+    there rather than in an archive session the route never opens.
+    """
 
-    def _get_db_override():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+    owner = live_catalog.create_user("workspaces@example.com")
+    token = live_catalog.create_device_token(owner_id=owner, device_id="cinder")
+    _seed_catalog_session(device_id="cinder", cwd="/Users/d/git/zerg", git_repo="x/zerg.git")
+    # The renamed-machine ghost row: a dead device_id that must not surface for
+    # the machine whose name it now carries.
+    _seed_catalog_session(device_id="shipper-laptop", cwd="/Users/d/git/ghost", git_repo=None, environment="cinder")
 
-    def _token_override():
-        return DeviceToken(owner_id=OWNER_ID, device_id="cinder", token_hash="h")
+    resp = live_catalog_client.get("/agents/machines/cinder/workspaces", headers={"X-Agents-Token": token})
 
-    api_app.dependency_overrides[get_db] = _get_db_override
-    api_app.dependency_overrides[verify_agents_token] = _token_override
-    api_app.dependency_overrides[require_single_tenant] = lambda: None
-    try:
-        client = TestClient(api_app)
-        resp = client.get("/agents/machines/cinder/workspaces")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["device_id"] == "cinder"
-        paths = [w["path"] for w in body["workspaces"]]
-        assert paths == ["/Users/d/git/zerg"]
-        assert body["workspaces"][0]["label"] == "zerg (main)"
-    finally:
-        api_app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["device_id"] == "cinder"
+    paths = [w["path"] for w in body["workspaces"]]
+    assert paths == ["/Users/d/git/zerg"]
+    assert body["workspaces"][0]["label"] == "zerg (main)"
 
 
 def _ingested_facts(

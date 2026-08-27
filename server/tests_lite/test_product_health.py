@@ -168,6 +168,16 @@ def test_live_preview_no_observations_returns_unknown_with_missing(tmp_path, mon
 def test_product_health_summary_orders_launch_loop_checks(tmp_path, monkeypatch):
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
     monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(
+        catalog_read_gateway,
+        "title_dependency_health",
+        lambda: {
+            "status": "healthy",
+            "open_dependencies": 0,
+            "blocked_sessions": 0,
+            "dependencies": [{"state": "healthy", "incident_id": None}],
+        },
+    )
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
@@ -180,15 +190,16 @@ def test_product_health_summary_orders_launch_loop_checks(tmp_path, monkeypatch)
         "machine_connected",
         "render_freshness",
         "live_preview",
+        "session_titles",
     ]
     assert _check(payload, "machine_connected").verdict == "ok"
     assert _check(payload, "render_freshness").verdict == "ok"
     assert _check(payload, "live_preview").verdict == "ok"
+    assert _check(payload, "session_titles").verdict == "ok"
 
 
 def test_product_health_exposes_durable_session_title_dependency_incident(tmp_path, monkeypatch):
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
-    monkeypatch.setattr(product_health, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(
         catalog_read_gateway,
         "title_dependency_health",
@@ -215,7 +226,6 @@ def test_product_health_exposes_durable_session_title_dependency_incident(tmp_pa
 
 def test_product_health_degrades_on_aged_title_backlog_with_healthy_dependency(tmp_path, monkeypatch):
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
-    monkeypatch.setattr(product_health, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(
         catalog_read_gateway,
         "title_dependency_health",

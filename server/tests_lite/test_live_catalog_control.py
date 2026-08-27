@@ -373,7 +373,6 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
     with factory() as db:
         session_id = _seed_live_control(db)
 
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(database_module, "get_live_write_session_factory", lambda: factory)
     catalog_store = CatalogStore(engine)

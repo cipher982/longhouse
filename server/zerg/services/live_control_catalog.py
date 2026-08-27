@@ -118,8 +118,13 @@ def load_live_control_session_snapshot(session_id: UUID | str, *, owner_id: int 
         else:
             result = session_snapshot(str(session_id), owner_id=owner_id)
     except CatalogReadError:
+        # Do not answer "no such session" when the catalog could not answer at
+        # all. None here reaches callers that raise 404, so a timed-out or
+        # unavailable catalog was being reported to the user as a session that
+        # does not exist -- evidence we failed to read becoming a fact we
+        # invented. Unknown stays unknown and surfaces as unavailable.
         logger.warning("Catalog control snapshot failed for session %s", session_id, exc_info=True)
-        return None
+        raise
     facts = result.get("facts")
     if result.get("found") is not True or not isinstance(facts, dict):
         return None

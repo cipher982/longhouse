@@ -118,7 +118,6 @@ def test_directed_actor_binds_signed_identity_not_ambient_header(monkeypatch):
         "zst_test",
         session_id=other_session_id,
     )
-    monkeypatch.setattr("zerg.routers.agents_sessions.database_module.live_catalog_enabled", lambda: True)
 
     with pytest.raises(HTTPException) as denied:
         _resolve_directed_input_actor(db=None, request=request, token=token)

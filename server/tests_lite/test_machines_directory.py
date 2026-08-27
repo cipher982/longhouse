@@ -531,22 +531,16 @@ def test_provider_live_proof_route_dispatches_typed_machine_command():
     assert done_body["result"]["artifact"]["verdict"] == "green"
 
 
-def test_provider_live_proof_operation_is_prepared_in_the_live_catalog(monkeypatch):
+def test_provider_live_proof_operation_is_prepared_in_the_live_catalog():
     """A proof operation becomes durable in catalogd before the command ships.
 
-    This asserted the middle branch of ``_create_provider_live_proof_operation``
-    until 2026-08-24: with ``live_store_configured()`` forced true it checked
-    that the operation was written to a live *SQLAlchemy* store rather than the
-    archive. A Runtime Host never reaches that branch, because
-    ``live_catalog_enabled()`` is true whenever a live store is configured, so
-    the route prepares the operation over ``machine.operation.prepare.v2``
-    before either SQLAlchemy path is considered. The claim worth keeping is the
-    one it was making badly: the record a status poll later reads is created in
-    the catalog the Runtime Host owns, and no archive row stands in for it.
+    Until 2026-08-24 this guarded the claim by monkeypatching the route's two
+    SQLAlchemy operation creators to raise. Both are gone: the route prepares
+    the operation over ``machine.operation.prepare.v2`` and has no other path,
+    so the negative is now structural. What is left is the claim the guard was
+    making badly -- the record a status poll later reads is created in the
+    catalog the Runtime Host owns, and no archive row stands in for it.
     """
-
-    def sqlalchemy_stores_must_not_be_used(*_args, **_kwargs):
-        raise AssertionError("a provider live proof must be prepared in the live catalog")
 
     with provision_live_catalog() as live:
         owner_id = live.create_user("owner@machines.test")
@@ -562,8 +556,6 @@ def test_provider_live_proof_operation_is_prepared_in_the_live_catalog(monkeypat
         )
 
         original, module = _swap_agents_machines_registry(registry)
-        monkeypatch.setattr(module, "create_provider_live_proof_operation", sqlalchemy_stores_must_not_be_used)
-        monkeypatch.setattr(module, "create_live_provider_live_proof_operation", sqlalchemy_stores_must_not_be_used)
         try:
             with live.http_client() as client:
                 headers = {"X-Agents-Token": token}

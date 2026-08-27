@@ -17,6 +17,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import zerg.services.managed_provider_contracts as contract_registry  # noqa: E402
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402,F401
 from zerg.managed_provider_contract_manifest import normalize_contract_manifest  # noqa: E402
 from zerg.qa import provider_adapters  # noqa: E402
 from zerg.qa import universal_agent_harness as harness  # noqa: E402
@@ -25,6 +26,7 @@ from zerg.services.machines_directory import build_machines_directory  # noqa: E
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT  # noqa: E402
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL  # noqa: E402
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command  # noqa: E402
+from zerg.services.managed_control_dispatcher import select_managed_control_transport  # noqa: E402
 from zerg.services.managed_provider_contracts import managed_provider_contract_from_item  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
@@ -84,8 +86,14 @@ class _CompletingMachineWebSocket:
         )
 
 
-def test_schema_and_adapter_directory_onboard_a_sixth_product_provider(tmp_path, monkeypatch):
-    """One contract entry and adapter module reach every generic product seam."""
+def test_schema_and_adapter_directory_onboard_a_sixth_product_provider(tmp_path, monkeypatch, live_catalog):  # noqa: F811
+    """One contract entry and adapter module reach every generic product seam.
+
+    Every seam below is schema-driven except the last. Managed-control
+    *dispatch* is authorized by catalogd against the live catalog, and this test
+    runs one, so the refusal it records is the product's own boundary rather
+    than a missing daemon.
+    """
 
     adapter_dir = tmp_path / "server/zerg/qa/provider_adapters"
     adapter_dir.mkdir(parents=True)
@@ -160,6 +168,28 @@ def test_schema_and_adapter_directory_onboard_a_sixth_product_provider(tmp_path,
                 managed_transport=toy_contract.managed_transport.value,
                 source_runner_id=None,
             )
+            # Routing is schema-derived: the contract's machine_control_supports
+            # entry is the only thing that puts this command on the engine
+            # channel, with no per-provider code behind it.
+            assert (
+                select_managed_control_transport(
+                    session,
+                    owner_id=42,
+                    command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                )
+                == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            )
+
+            # Command authorization is the one seam a schema entry does not
+            # reach. catalogd resolves the control grant through
+            # ``_CANONICAL_AUTH_PROVIDERS`` in ``live_control_catalog``, a
+            # hardcoded set, so a sixth provider is refused before a frame is
+            # built and nothing reaches the engine. The reason separates the two
+            # ways this can fail: ``unsupported`` is the provider set refusing,
+            # ``control_unavailable`` would be no catalog behind the route at
+            # all. Onboarding a provider for real means adding it there too;
+            # test_advertised_control_reaches_the_served_grant.py owns that
+            # invariant.
             result = await dispatch_managed_control_command(
                 db=object(),
                 owner_id=42,
@@ -169,12 +199,9 @@ def test_schema_and_adapter_directory_onboard_a_sixth_product_provider(tmp_path,
                 payload={"text": "hello sixth provider"},
                 request_id="sixth-provider-gate",
             )
-            assert result.ok is True
-            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
-            assert websocket.sent[0]["payload"] == {
-                "provider": PROVIDER,
-                "text": "hello sixth provider",
-            }
+            assert result.ok is False
+            assert result.failure_reason == "unsupported"
+            assert websocket.sent == []
         finally:
             await registry.clear_for_tests()
 

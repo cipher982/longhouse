@@ -30,14 +30,10 @@ from fastapi import HTTPException
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-import zerg.database as database_module
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
-from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionInput
-from zerg.models.device_token import DeviceToken
 from zerg.services.session_shares import DEFAULT_SHARE_TTL_DAYS
 from zerg.services.session_shares import SessionShareError
 from zerg.services.session_shares import SessionShareNotFound
@@ -110,21 +106,17 @@ def _raise_share_error(exc: SessionShareError) -> None:
 
 
 def _share_store_db():
-    """Yield the archive session that holds share rows, or None.
+    """Yield no share store at all.
 
     ``session_shares`` and ``session_share_events`` are declared on the archive
-    ``Base``; they exist in no other schema. Every file-backed deployment runs
-    with the live catalog enabled, and there ``get_db`` raises 503 from the
-    dependency, before any handler body runs -- which is exactly what kept the
-    ownership check below off the production path. Yielding None instead puts
-    the check first and lets the handler name what is actually unavailable.
+    ``Base``; they exist in no other schema, and catalogd creates none of them.
+    ``get_db`` used to raise 503 from the dependency, before any handler body
+    ran -- which is exactly what kept the ownership check below off the
+    production path. Yielding None instead puts the check first and lets the
+    handler name what is actually unavailable.
     """
 
-    if database_module.live_catalog_enabled():
-        yield None
-        return
-    with database_module.get_session_factory()() as db:
-        yield db
+    yield None
 
 
 # Same seam as the neighbouring routers: keep ``get_db`` as the exact callable
@@ -149,39 +141,18 @@ def _require_share_store(db: Session | None) -> Session:
     return db
 
 
-def _require_session_owner(db: Session | None, *, session_id: UUID, user_id: int) -> None:
+def _require_session_owner(*, session_id: UUID, user_id: int) -> None:
     """Fail closed unless the caller demonstrably owns this session.
 
-    Two read backends, one rule. Under the live catalog the archive tables this
-    used to query are not written at all, so ownership is resolved where the
-    canonical session facts live: catalogd's owner-scoped session read, which
-    returns nothing unless a durable row binds the session to this owner. An
-    unreachable catalogd also returns nothing, so the closed direction is the
-    failure direction.
-
-    On the archive backend, ownership carries two independent signals: an input
-    the caller authored on the session, or the device token the session was
-    ingested under (ingest stamps ``device_id`` from the authenticated token).
-    Shadow sessions never have inputs, so the device signal is the only one they
-    carry, and a session with neither signal is not shareable by anyone.
+    Ownership is resolved where the canonical session facts live: catalogd's
+    owner-scoped session read, which returns nothing unless a durable row binds
+    the session to this owner. An unreachable catalogd also returns nothing, so
+    the closed direction is the failure direction.
     """
-    if database_module.live_catalog_enabled():
-        from zerg.services.live_control_catalog import load_live_control_session_snapshot
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
-        if load_live_control_session_snapshot(session_id, owner_id=user_id) is None:
-            _raise_share_error(SessionShareNotFound())
-        return
-
-    assert db is not None
-    authored = db.query(SessionInput.id).filter(SessionInput.session_id == session_id, SessionInput.owner_id == user_id).first()
-    if authored is not None:
-        return
-    device_id = (db.query(AgentSession.device_id).filter(AgentSession.id == session_id).scalar() or "").strip()
-    if device_id:
-        owns_device = db.query(DeviceToken.id).filter(DeviceToken.device_id == device_id, DeviceToken.owner_id == user_id).first()
-        if owns_device is not None:
-            return
-    _raise_share_error(SessionShareNotFound())
+    if load_live_control_session_snapshot(session_id, owner_id=user_id) is None:
+        _raise_share_error(SessionShareNotFound())
 
 
 @_shelved.post("/timeline/sessions/{session_id}/shares", response_model=SessionShareResponse)
@@ -195,7 +166,7 @@ def create_timeline_session_share(
     # Ownership first, on both backends, so no deployment can mint a link for a
     # session the caller does not own -- and so an unavailable store cannot
     # short-circuit the check.
-    _require_session_owner(db, session_id=session_id, user_id=int(current_user.id))
+    _require_session_owner(session_id=session_id, user_id=int(current_user.id))
     db = _require_share_store(db)
     try:
         share, token = create_session_share(

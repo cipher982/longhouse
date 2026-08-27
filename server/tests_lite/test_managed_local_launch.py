@@ -28,6 +28,7 @@ import pytest
 
 from tests_lite.live_catalog_harness import LiveCatalog
 from tests_lite.live_catalog_harness import provision_live_catalog
+from zerg.services import write_serializer
 from zerg.services.live_control_catalog import load_live_control_session_snapshot
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import _derive_project
@@ -402,10 +403,11 @@ def test_this_device_launch_returns_client_minted_identities_unchanged(client, d
 def test_this_device_launch_writes_launch_state_to_catalogd_not_the_api_writer(monkeypatch, client, device_headers, owner_id):
     """Catalogd owns launch state; the API process writes no store of its own."""
 
-    from zerg.routers import session_chat
-
+    # Poisoned where the serializer is defined, not where a router once
+    # imported it: the launch path no longer names it at all, so a guard bound
+    # to the router module would pass by naming nothing.
     monkeypatch.setattr(
-        session_chat,
+        write_serializer,
         "get_live_write_serializer",
         lambda: (_ for _ in ()).throw(AssertionError("a live-catalog launch must not use the API live serializer")),
     )
@@ -466,7 +468,7 @@ def test_this_device_launch_materializes_live_catalog_without_archive_db(
     from zerg.routers import session_chat
 
     monkeypatch.setattr(
-        session_chat,
+        write_serializer,
         "get_live_write_serializer",
         lambda: (_ for _ in ()).throw(AssertionError("catalog launch must not use the API live serializer")),
     )

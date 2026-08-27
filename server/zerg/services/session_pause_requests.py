@@ -12,7 +12,6 @@ from uuid import uuid5
 
 from sqlalchemy.orm import Session
 
-from zerg import database as database_module
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
 from zerg.models.live_store import LiveRuntimeState
@@ -70,7 +69,7 @@ def load_hot_session_projection_map(session_ids: list[UUID]) -> dict[UUID, tuple
     current interaction and convergence facts.  A present hot runtime row with
     no interaction intentionally clears a stale archive pause projection.
     """
-    if not session_ids or not database_module.live_catalog_enabled():
+    if not session_ids:
         return {}
     from zerg.services.catalog_facts import session_facts_map
     from zerg.services.catalog_read_gateway import CatalogReadError

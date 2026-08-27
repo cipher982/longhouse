@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 import zerg.services.console_sessions as console_sessions
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -24,7 +25,6 @@ from zerg.services.console_turns import claim_next_console_turn
 from zerg.services.console_turns import dispatch_catalog_claimed_turn
 from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import enqueue_console_turn
-from zerg.services.console_turns import interrupt_console_turn
 from zerg.services.console_turns import mark_console_turn_active
 from zerg.services.console_turns import reconcile_console_terminal_event
 from zerg.services.console_turns import reconcile_starting_console_turns_for_device
@@ -66,45 +66,46 @@ def _session(db):
 
 
 @pytest.mark.asyncio
-async def test_create_empty_console_session_has_target_but_no_run(tmp_path):
-    db = _db(tmp_path)
+async def test_create_empty_console_session_has_target_but_no_run(live_catalog):
+    owner_id = live_catalog.create_user("console-target@test.local")
 
     created = await create_empty_console_session(
-        db,
-        owner_id=1,
+        None,
+        owner_id=owner_id,
         provider="codex",
         device_id="cinder",
         cwd="/tmp/longhouse",
     )
 
-    session = db.get(AgentSession, created.session_id)
-    thread = ensure_primary_thread(db, session)
+    facts = live_catalog.rpc("session.read.v2", {"session_id": str(created.session_id)})["facts"]
     assert created.created is True
-    assert thread.id == created.thread_id
-    assert thread.device_id == "cinder"
-    assert thread.cwd == "/tmp/longhouse"
-    assert db.query(SessionRun).count() == 0
+    assert facts["primary_thread"]["id"] == str(created.thread_id)
+    assert facts["primary_thread"]["device_id"] == "cinder"
+    assert facts["primary_thread"]["cwd"] == "/tmp/longhouse"
+    # Identity first: a Console session exists and is addressable before any
+    # provider run is started against it.
+    assert facts["latest_run"] is None
 
 
 @pytest.mark.asyncio
-async def test_test_surface_console_session_is_automation_hidden(tmp_path):
-    db = _db(tmp_path)
+async def test_test_surface_console_session_is_automation_hidden(live_catalog):
+    owner_id = live_catalog.create_user("console-automation@test.local")
 
     created = await create_empty_console_session(
-        db,
-        owner_id=1,
+        None,
+        owner_id=owner_id,
         provider="codex",
         device_id="provider-factory-resume",
         cwd="/tmp/provider-factory",
         launch_surface="test",
     )
 
-    session = db.get(AgentSession, created.session_id)
-    assert session.environment == "test"
-    assert session.origin_kind == "console"
-    assert session.hidden_from_default_timeline == 1
-    assert session.launch_actor == "automation"
-    assert session.launch_surface == "test"
+    catalog = live_catalog.rpc("session.read.v2", {"session_id": str(created.session_id)})["facts"]["catalog"]
+    assert catalog["environment"] == "test"
+    assert catalog["origin_kind"] == "console"
+    assert catalog["hidden_from_default_timeline"] == 1
+    assert catalog["launch_actor"] == "automation"
+    assert catalog["launch_surface"] == "test"
 
 
 @pytest.mark.asyncio
@@ -116,7 +117,6 @@ async def test_catalog_console_create_uses_human_facing_write_budget(monkeypatch
             observed.update(method=method, params=params, timeout_seconds=timeout_seconds)
             return {"created": True}
 
-    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: True)
     monkeypatch.setattr(console_sessions, "get_catalogd_client", lambda: Catalog())
 
     created = await create_empty_console_session(
@@ -397,41 +397,7 @@ async def test_dispatch_next_console_turn_uses_run_id_as_durable_command_id(tmp_
 
 
 @pytest.mark.asyncio
-async def test_interrupt_console_turn_targets_exact_active_run(tmp_path, monkeypatch):
-    db = _db(tmp_path)
-    session = _session(db)
-    session.provider = "cursor"
-    thread = ensure_primary_thread(db, session)
-    thread.provider = "cursor"
-    set_thread_execution_target(thread, device_id="cinder", cwd="/tmp/longhouse")
-    db.commit()
-    enqueue_console_turn(db, session=session, owner_id=1, message="Work", client_request_id="interrupt-me")
-
-    class Registry:
-        command = None
-
-        def supports(self, **kwargs):
-            return kwargs["capability"] in {"cursor.turn_start", "cursor.turn_interrupt"}
-
-        async def send_command(self, **kwargs):
-            self.command = kwargs
-            return SimpleNamespace(transport_ok=True, message={"ok": True}, error=None)
-
-    registry = Registry()
-    dispatched = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=registry)
-    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: False)
-    result = await interrupt_console_turn(db, owner_id=1, session_id=session.id, registry=registry)
-
-    assert result.dispatched is True
-    assert result.run_id == dispatched.run_id
-    assert registry.command["command_type"] == "session.turn.interrupt"
-    assert registry.command["payload"]["provider"] == "cursor"
-    assert registry.command["payload"]["run_id"] == str(dispatched.run_id)
-    assert registry.command["command_id"] == f"{dispatched.run_id}:interrupt"
-
-
-@pytest.mark.asyncio
-async def test_opencode_console_dispatch_resumes_native_session_and_interrupts_exact_run(tmp_path, monkeypatch):
+async def test_opencode_console_dispatch_resumes_native_session(tmp_path):
     db = _db(tmp_path)
     session = _session(db)
     session.provider = "opencode"
@@ -471,17 +437,11 @@ async def test_opencode_console_dispatch_resumes_native_session_and_interrupts_e
 
     registry = Registry()
     dispatched = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=registry)
-    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: False)
-    interrupted = await interrupt_console_turn(db, owner_id=1, session_id=session.id, registry=registry)
 
     assert dispatched.state == SESSION_TURN_STATE_ACTIVE
     assert registry.commands[0]["command_type"] == "session.turn.start"
     assert registry.commands[0]["payload"]["provider"] == "opencode"
     assert registry.commands[0]["payload"]["resume_provider_thread_id"] == "ses_native_resume"
-    assert interrupted.dispatched is True
-    assert registry.commands[1]["command_type"] == "session.turn.interrupt"
-    assert registry.commands[1]["payload"]["provider"] == "opencode"
-    assert registry.commands[1]["payload"]["run_id"] == str(dispatched.run_id)
 
 
 @pytest.mark.asyncio
@@ -512,48 +472,6 @@ async def test_dispatch_timeout_keeps_durable_claim_starting_and_fifo_blocked(tm
     assert db.get(SessionInput, first.input_id).last_error == "turn_start_outcome_unknown: reply timeout"
     assert db.get(SessionTurn, second.turn_id).state == SESSION_TURN_STATE_QUEUED
     assert claim_next_console_turn(db, thread_id=thread.id) is None
-
-
-@pytest.mark.asyncio
-async def test_control_reconnect_replays_starting_turn_with_same_run_id(tmp_path, monkeypatch):
-    db = _db(tmp_path)
-    session = _session(db)
-    thread = ensure_primary_thread(db, session)
-    set_thread_execution_target(thread, device_id="cube", cwd="/tmp/longhouse")
-    db.commit()
-    enqueue_console_turn(
-        db,
-        session=session,
-        owner_id=1,
-        message="Continue after reconnect",
-        client_request_id="reconnect-request",
-    )
-    claimed = claim_next_console_turn(db, thread_id=thread.id)
-    assert claimed is not None
-
-    class Registry:
-        command = None
-
-        def supports(self, **_kwargs):
-            return True
-
-        async def send_command(self, **kwargs):
-            self.command = kwargs
-            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {}}, error=None)
-
-    registry = Registry()
-    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: False)
-    outcomes = await reconcile_starting_console_turns_for_device(
-        db,
-        owner_id=1,
-        device_id="cube",
-        registry=registry,
-    )
-
-    assert [outcome.state for outcome in outcomes] == [SESSION_TURN_STATE_ACTIVE]
-    assert registry.command["command_id"] == str(claimed.run_id)
-    assert registry.command["payload"]["run_id"] == str(claimed.run_id)
-    assert db.get(SessionTurn, claimed.turn_id).state == SESSION_TURN_STATE_ACTIVE
 
 
 @pytest.mark.asyncio
@@ -677,7 +595,6 @@ async def test_control_reconnect_replays_live_catalog_turn_with_same_run_id(monk
 
     catalog = Catalog()
     registry = Registry()
-    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: True)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: catalog)
 
     outcomes = await reconcile_starting_console_turns_for_device(

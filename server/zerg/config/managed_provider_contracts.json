@@ -1919,7 +1919,7 @@
         "antigravity.send",
         "antigravity.turn_start"
       ],
-      "adapter_digest": "1f12612715d34b9c11b1861961adfdbb06f6a6f040691045869c32773c2eed7a"
+      "adapter_digest": "0dd83c92f3fb4c97888e6b5ccfa75ff29779f5a139816176f948513c63ca0e3f"
     },
     {
       "provider": "cursor",
@@ -2370,7 +2370,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "a6dbbd5f390d42c5c5f5e7ab470d0931e838874e713fe77fed0fe4455f648889"
+      "adapter_digest": "405f6df67f01760c53f65889ef3dd1d8ed7d79f3b2d92f732fcf35f76a83c46e"
     },
     {
       "provider": "pi",

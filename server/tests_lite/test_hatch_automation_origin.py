@@ -17,6 +17,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("TESTING", "1")
 
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
@@ -36,7 +38,6 @@ from zerg.services.agents.automation_backfill import classify_reviewed_hatch_aut
 from zerg.services.agents.automation_backfill import reconcile_legacy_session_visibility
 from zerg.services.apns_sender import APNSDeviceTarget
 from zerg.services.apns_sender import prepare_session_attention_push
-from zerg.services.session_coordination import query_wall_sessions
 
 # These fixtures exercise live timeline and wall windows, so keep their
 # activity anchored to the current test run instead of a date that ages out.
@@ -274,38 +275,88 @@ def test_hatch_execution_contract_ingest_recovers_missing_origin_metadata(tmp_pa
         assert card.hidden_from_default_timeline == 1
 
 
-def test_hatch_automation_hides_from_timeline_api_and_wall_by_default(tmp_path):
-    SessionLocal = _session_factory(tmp_path)
-    with SessionLocal() as db:
-        store = AgentsStore(db)
-        store.ingest_session(_root_payload())
-        store.ingest_session(_hatch_payload())
+LIVE_OWNER_EMAIL = "owner@hatch-origin.test"
+LIVE_DEVICE_ID = "cinder"
 
-        wall = query_wall_sessions(db, project="longhouse", days=1, limit=10)
-        assert [item.session_id for item in wall] == [str(PARENT_ID)]
 
-        wall_with_automation = query_wall_sessions(db, project="longhouse", days=1, limit=10, include_automation=True)
-        assert {item.session_id for item in wall_with_automation} == {str(PARENT_ID), str(HATCH_ID)}
+def _ship_live_session(
+    live_catalog,
+    live_catalog_client,
+    token: str,
+    *,
+    session_id: UUID,
+    text: str,
+    origin_kind: str,
+    hidden: bool,
+) -> None:
+    """Ship one transcript the way a Machine Agent ships it.
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        default_resp = client.get(
-            "/api/timeline/sessions",
-            params={"project": "longhouse", "days_back": 1, "limit": 10},
-        )
-        assert default_resp.status_code == 200
-        default_ids = [card["detail"]["id"] for card in default_resp.json()["sessions"]]
-        assert default_ids == [str(PARENT_ID)]
+    Origin and the hidden bit it implies travel in the session facts of the
+    envelope, so the catalog decides visibility from what the machine
+    declared rather than from anything the reader passes.
+    """
 
-        include_resp = client.get(
-            "/api/timeline/sessions",
-            params={"project": "longhouse", "days_back": 1, "limit": 10, "include_automation": "true"},
-        )
-        assert include_resp.status_code == 200
-        include_ids = {card["detail"]["id"] for card in include_resp.json()["sessions"]}
-        assert include_ids == {str(PARENT_ID), str(HATCH_ID)}
-    finally:
-        api_ref.dependency_overrides = {}
+    body = live_catalog.envelope_body(
+        session_id=session_id,
+        device_id=LIVE_DEVICE_ID,
+        texts=(text,),
+        project="longhouse",
+    )
+    body["session"]["origin_kind"] = origin_kind
+    body["session"]["hidden_from_default_timeline"] = hidden
+    shipped = live_catalog_client.post(
+        "/agents/storage/v2/envelopes",
+        json=body,
+        headers={"X-Agents-Token": token, "X-Longhouse-Storage-Lane": "live"},
+    )
+    assert shipped.status_code == 200, shipped.text
+
+
+def test_hatch_automation_hides_from_timeline_by_default(live_catalog, live_catalog_client):
+    """Hatch automation stays out of the default timeline; the flag reveals it.
+
+    The wall query this test also drove is gone from every served path. What
+    remains is the timeline, and it is a catalogd snapshot: ``include_automation``
+    is a parameter of the catalog read, matched against the origin the shipping
+    machine declared.
+    """
+
+    owner_id = live_catalog.create_user(LIVE_OWNER_EMAIL)
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id=LIVE_DEVICE_ID)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=LIVE_OWNER_EMAIL)}
+
+    _ship_live_session(
+        live_catalog,
+        live_catalog_client,
+        token,
+        session_id=PARENT_ID,
+        text="Parent user task",
+        origin_kind="shadow",
+        hidden=False,
+    )
+    _ship_live_session(
+        live_catalog,
+        live_catalog_client,
+        token,
+        session_id=HATCH_ID,
+        text="Hatch automation unique review",
+        origin_kind="hatch_automation",
+        hidden=True,
+    )
+
+    params = {"project": "longhouse", "days_back": 1, "limit": 10}
+    default_resp = live_catalog_client.get("/timeline/sessions", params=params, cookies=cookies)
+    assert default_resp.status_code == 200, default_resp.text
+    assert [card["detail"]["id"] for card in default_resp.json()["sessions"]] == [str(PARENT_ID)]
+
+    include_resp = live_catalog_client.get(
+        "/timeline/sessions",
+        params={**params, "include_automation": "true"},
+        cookies=cookies,
+    )
+    assert include_resp.status_code == 200, include_resp.text
+    include_ids = {card["detail"]["id"] for card in include_resp.json()["sessions"]}
+    assert include_ids == {str(PARENT_ID), str(HATCH_ID)}
 
 
 def test_test_or_canary_origin_hides_from_default_timeline(tmp_path):

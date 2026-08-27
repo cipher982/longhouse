@@ -11,16 +11,16 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("TESTING", "1")
 
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+# The detail route reads the provider alias catalogd bound at launch, so the
+# header test needs a real launch against a real catalog.
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import Base
-from zerg.database import get_db
 from zerg.database import make_engine
-from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.main import api_app
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.services.agents import AgentsStore
@@ -242,32 +242,28 @@ def test_evaluator_flags_unmanaged_and_empty():
     assert empty.reason == "no_session"
 
 
-def test_session_detail_emits_provider_session_id_header(tmp_path):
+def test_session_detail_emits_provider_session_id_header(live_catalog, live_catalog_client):
     # The live audit groups sessions by the native id from this header; the list
     # API does not expose it, so the detail endpoint must.
-    factory = _session_factory(tmp_path)
-    db = factory()
-    try:
-        _seed_managed_launch(db, session_id=LAUNCH_SESSION_ID)
-        AgentsStore(db).ingest_session(_transcript_ingest())
-        db.commit()
-    finally:
-        db.close()
+    owner_id = live_catalog.create_user("owner@provider-binding.test")
+    headers = {"X-Agents-Token": live_catalog.create_device_token(owner_id=owner_id, device_id="cinder")}
 
-    def override_db():
-        d = factory()
-        try:
-            yield d
-        finally:
-            d.close()
+    # `longhouse opencode` launching: catalogd binds the provider-native id to
+    # the launch thread, which is where the detail read picks the alias up.
+    launch = live_catalog_client.post(
+        "/sessions/managed-local/this-device",
+        json={
+            "cwd": "/tmp/demo",
+            "provider": PROVIDER,
+            "project": "demo",
+            "session_id": str(LAUNCH_SESSION_ID),
+            "provider_session_id": NATIVE_ID,
+        },
+        headers=headers,
+    )
+    assert launch.status_code == 200, launch.text
 
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: None
-    api_app.dependency_overrides[require_single_tenant] = lambda: None
-    try:
-        client = TestClient(api_app)
-        response = client.get(f"/agents/sessions/{LAUNCH_SESSION_ID}")
-        assert response.status_code == 200, response.text
-        assert response.headers.get("X-Provider-Session-ID") == NATIVE_ID
-    finally:
-        api_app.dependency_overrides.clear()
+    response = live_catalog_client.get(f"/agents/sessions/{LAUNCH_SESSION_ID}", headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get("X-Provider-Session-ID") == NATIVE_ID

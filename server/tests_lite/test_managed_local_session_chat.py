@@ -1,26 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.database import get_db
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.dependencies.browser_route_auth import get_current_browser_route_user
-from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
@@ -28,6 +30,7 @@ from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services import session_chat_impl
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_local_control import ManagedLocalPhaseUpdate
 from zerg.services.managed_local_control import ManagedLocalTerminalResult
 from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
@@ -37,7 +40,6 @@ from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import mark_session_turn_send_accepted
-from zerg.session_execution_home import ManagedSessionTransport
 
 
 def _make_db(tmp_path):
@@ -45,24 +47,6 @@ def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
     return make_sessionmaker(engine)
-
-
-def _make_client(db_session, current_user):
-    from zerg.main import api_app
-    from zerg.main import app
-
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
-
-    def override_current_user():
-        return current_user
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
-    return TestClient(app, backend="asyncio"), api_app
 
 
 def _seed_user_and_runner(db):
@@ -147,6 +131,283 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
 
 
 # ---------------------------------------------------------------------------
+# Live catalog: a Helm session whose control path is real
+#
+# The multipart route is catalog-only now -- a receipt through catalogd, blob
+# metadata through catalogd, and a dispatch over the machine control channel.
+# Nothing below is seeded directly: the launch RPCs create the session, thread,
+# run and connection, and one Machine Agent heartbeat carries the control lease
+# and the typed facts that bind the adapter identity and report the session
+# idle. The capability gates the route checks are derived from those rows.
+# ---------------------------------------------------------------------------
+
+LIVE_DEVICE_ID = "cinder"
+
+
+def _machine_heartbeat(*, device_id: str, now: datetime, raw_json: str | None = None) -> dict:
+    """The heartbeat stamp the Machine Agent ships on every tick."""
+
+    return {
+        "device_id": device_id,
+        "received_at": now.isoformat(),
+        "version": "test-engine",
+        "last_ship_at": now.isoformat(),
+        "last_ship_attempt_at": now.isoformat(),
+        "last_ship_result": "ok",
+        "last_ship_latency_ms": 5,
+        "last_ship_http_status": 200,
+        "spool_pending": 0,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "ship_latency_p50_ms_1h": 5,
+        "ship_latency_p95_ms_1h": 5,
+        "disk_free_bytes": 1_000_000,
+        "is_offline": 0,
+        "raw_json": raw_json,
+        "sessions_digest": None,
+        "sessions_sequence": None,
+    }
+
+
+def _machine_evidence_json(*, provider: str, session_id: str, run_id: str, now: datetime) -> str:
+    """The typed facts the provider adapter reports through the heartbeat.
+
+    The control fact binds an adapter connection identity to the catalog
+    connection; without it every command is refused with ``identity_unbound``.
+    The activity fact is what makes the session quiescent.
+    """
+
+    from zerg.machine_evidence import canonical_evidence_hash
+
+    connection_id = str(uuid4())
+    lease_generation = str(uuid4())
+    activity = {
+        "authority_class": "provider_runtime",
+        "provider": provider,
+        "session_id": session_id,
+        "run_id": run_id,
+        "kind": "idle",
+        "raw_kind": "idle",
+        "tool_name": None,
+        "source": "provider_runtime",
+        "observed_at": now.isoformat(),
+        "valid_until": (now + timedelta(minutes=5)).isoformat(),
+    }
+    control = {
+        "authority_class": "provider_control",
+        "provider": provider,
+        "session_id": session_id,
+        "run_id": run_id,
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "granted_operations": ["interrupt", "send_input"],
+        "ownership": "managed",
+        "state": "attached",
+        "lease_ttl_ms": 300_000,
+        "source": "provider_control",
+        "observed_at": now.isoformat(),
+    }
+    return json.dumps(
+        {
+            "machine_evidence": {
+                "schema_version": 3,
+                "activity": [activity],
+                "control": [control],
+                "identities": [
+                    {
+                        "fact_family": "activity",
+                        "fact_index": 0,
+                        "subject_key": f"run:{run_id}",
+                        "source": "provider_runtime",
+                        "source_epoch": run_id,
+                        "source_seq": 1,
+                        "sequenced": True,
+                        "dedupe_key": hashlib.sha256(f"{run_id}:activity:1".encode()).hexdigest(),
+                        "evidence_hash": canonical_evidence_hash(activity),
+                    },
+                    {
+                        "fact_family": "control",
+                        "fact_index": 0,
+                        "subject_key": f"connection:{connection_id}:{lease_generation}",
+                        "source": "provider_control",
+                        "source_epoch": lease_generation,
+                        "source_seq": None,
+                        "sequenced": False,
+                        "dedupe_key": hashlib.sha256(f"{connection_id}:{lease_generation}".encode()).hexdigest(),
+                        "evidence_hash": canonical_evidence_hash(control),
+                    },
+                ],
+            }
+        }
+    )
+
+
+def _seed_live_catalog_session(
+    live: LiveCatalog,
+    *,
+    owner_id: int,
+    provider: str = "codex",
+    device_id: str = LIVE_DEVICE_ID,
+) -> str:
+    """Launch one Helm session in the live catalog and bring its control online."""
+
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    contract = contract_for_provider(provider)
+    assert contract is not None
+    session_id = str(uuid4())
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    created = live.rpc(
+        "session.launch.local.create.v2",
+        {
+            "launch": {
+                "owner_id": owner_id,
+                "git_repo": "cipher982/longhouse",
+                "git_branch": "main",
+                "started_at": now.isoformat(),
+                "expires_at": (now + timedelta(minutes=5)).isoformat(),
+                "plan": {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "provider_session_id": str(uuid4()),
+                    "source_name": device_id,
+                    "source_runner_id": None,
+                    "cwd": "/workspace/longhouse",
+                    "project": "hiring",
+                    "display_name": "Hiring",
+                    "managed_session_name": f"{provider}-managed-local-chat",
+                    "loop_mode": "assist",
+                    "permission_mode": "bypass",
+                    "launch_actor": "user",
+                    "launch_surface": "cli",
+                    "environment": "test",
+                    "origin_kind": None,
+                    "hidden_from_default_timeline": 0,
+                    "managed_transport": contract.managed_transport.value,
+                    "attach_command": "",
+                    "provider_config": {},
+                },
+            }
+        },
+    )
+    run_id = str(created["run_id"])
+    live.rpc(
+        "session.launch.local.finish.v2",
+        {
+            "outcome": {
+                "session_id": session_id,
+                "run_id": run_id,
+                "owner_id": owner_id,
+                "device_id": device_id,
+                "state": "adopted",
+                "error_code": None,
+                "error_message": None,
+                "observed_at": now.isoformat(),
+            }
+        },
+    )
+    live.rpc(
+        "machine.heartbeat.apply.v2",
+        {
+            "heartbeat": _machine_heartbeat(
+                device_id=device_id,
+                now=now,
+                raw_json=_machine_evidence_json(provider=provider, session_id=session_id, run_id=run_id, now=now),
+            ),
+            "managed_leases": [
+                {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "machine_id": device_id,
+                    "sequence": 1,
+                    "state": "attached",
+                    "bridge_status": "ready",
+                    "thread_subscription_status": "subscribed",
+                    "observed_at": now.isoformat(),
+                    "lease_ttl_ms": 300_000,
+                }
+            ],
+            "managed_leases_present": True,
+            "owner_id": owner_id,
+        },
+    )
+    return session_id
+
+
+class _AutoCompletingMachineWebSocket:
+    """A Machine Agent control channel that accepts every command."""
+
+    def __init__(self):
+        self.sent: list[dict[str, object]] = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await get_machine_control_channel_registry().complete_command(
+            {
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": True,
+                "result": {
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "turn_id": "machine-control-turn-1",
+                },
+            }
+        )
+
+
+class _RefusingMachineWebSocket:
+    """A Machine Agent control channel whose provider refuses the command."""
+
+    def __init__(self):
+        self.sent: list[dict[str, object]] = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await get_machine_control_channel_registry().complete_command(
+            {
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": False,
+                "error": "Runner send failed",
+            }
+        )
+
+
+async def _clear_machine_control_registry() -> None:
+    await get_machine_control_channel_registry().clear_for_tests()
+
+
+async def _register_fake_machine_control(
+    *,
+    owner_id: int,
+    supports: list[str],
+    device_id: str = LIVE_DEVICE_ID,
+    websocket=None,
+):
+    websocket = websocket or _AutoCompletingMachineWebSocket()
+    await get_machine_control_channel_registry().register(
+        owner_id=owner_id,
+        device_id=device_id,
+        machine_name=device_id,
+        engine_build="test-engine",
+        supports=supports,
+        websocket=websocket,
+    )
+    return websocket
+
+
+# ---------------------------------------------------------------------------
 # Unit tests for helper functions
 # ---------------------------------------------------------------------------
 
@@ -213,177 +474,81 @@ def test_managed_local_events_include_expected_turn_accepts_native_claude_channe
 # ---------------------------------------------------------------------------
 
 
-def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
-    """Managed-local Claude chat returns JSON {accepted: true} instead of SSE stream."""
-    session_local = _make_db(tmp_path)
-    calls: list[dict[str, object]] = []
-    lock_release_calls: list[dict[str, object]] = []
-
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
-        client, api_app_ref = _make_client(db, user)
-
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            request_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-            attachments=None,
-        ):
-            calls.append({
-                "owner_id": owner_id,
-                "session_id": str(session.id),
-                "runner_id": runner.id,
-                "text": text,
-                "verify_turn_started": verify_turn_started,
-                "verification_timeout_secs": verification_timeout_secs,
-            })
-            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
-
-        def fake_schedule_lock_release(**kwargs):
-            lock_release_calls.append(kwargs)
-
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", fake_schedule_lock_release)
-
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue"},
-            )
-            assert response.status_code == 200, response.text
-            data = response.json()
-            assert data["accepted"] is True
-            assert data["session_id"] == str(source_session.id)
-            assert "request_id" in data
-            assert "dispatch_ms" in data
-
-            # Verify turn was created
-            turn_rows = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == source_session.id)
-                .all()
-            )
-            assert len(turn_rows) == 1
-            assert turn_rows[0].send_accepted_at is not None
-            assert turn_rows[0].state == "send_accepted"
-
-            # Verify send was called with correct params
-            assert len(calls) == 1
-            assert calls[0]["runner_id"] == runner.id
-            assert calls[0]["owner_id"] == user.id
-            assert calls[0]["text"] == "continue"
-            assert calls[0]["verify_turn_started"] is True
-            assert calls[0]["verification_timeout_secs"] == 15.0
-            assert len(lock_release_calls) == 1
-            assert lock_release_calls[0]["lock_scope_id"] == str(source_session.id)
-        finally:
-            asyncio.run(session_lock_manager.release(str(source_session.id)))
-            api_app_ref.dependency_overrides = {}
+def _seed_owner(live_catalog: LiveCatalog, email: str) -> tuple[int, dict[str, str]]:
+    owner_id = live_catalog.create_user(email)
+    return owner_id, {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
 
 
-def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
+def test_managed_local_claude_dispatch_returns_json_ack(live_catalog, live_catalog_client, monkeypatch):
+    """Managed-local Claude chat returns a JSON ack the moment control acknowledges."""
+
+    owner_id, cookies = _seed_owner(live_catalog, "managed-local-claude@test.local")
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="claude")
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"]))
+    # The lock is released by a watcher that waits for terminal catalog facts;
+    # this test is about what the request itself returns.
+    monkeypatch.setattr(session_chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
+
+    try:
+        response = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "continue"},
+            cookies=cookies,
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["accepted"] is True
+        assert data["session_id"] == session_id
+        assert data["request_id"]
+        # The control ack is the acceptance proof; there is no archive turn to
+        # verify against and no second round trip to wait for.
+        assert data["verification"] == "live_control_ack"
+
+        assert len(websocket.sent) == 1
+        frame = websocket.sent[0]
+        assert frame["command_type"] == "session.send_text"
+        assert frame["session_id"] == session_id
+        assert frame["payload"]["provider"] == "claude"
+        assert frame["payload"]["text"] == "continue"
+        # The command carries the adapter identity the catalog granted, which is
+        # what the Machine Agent checks before touching the provider.
+        assert frame["payload"]["longhouse_control_grant"]["identity_source"] == "adapter_bound"
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+
+
+def test_managed_local_codex_dispatch_returns_json_ack(live_catalog, live_catalog_client, monkeypatch):
     """Managed-local Codex chat also returns JSON ack."""
-    session_local = _make_db(tmp_path)
 
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
-        client, api_app_ref = _make_client(db, user)
+    owner_id, cookies = _seed_owner(live_catalog, "managed-local-codex@test.local")
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="codex")
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["codex.send"]))
+    monkeypatch.setattr(session_chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
 
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            request_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-            attachments=None,
-        ):
-            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
-
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
-
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "what about germany"},
-            )
-            assert response.status_code == 200
-            data = response.json()
-            assert data["accepted"] is True
-            assert data["session_id"] == str(source_session.id)
-        finally:
-            asyncio.run(session_lock_manager.release(str(source_session.id)))
-            api_app_ref.dependency_overrides = {}
+    try:
+        response = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "what about germany"},
+            cookies=cookies,
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["accepted"] is True
+        assert data["session_id"] == session_id
+        assert websocket.sent[0]["payload"] == {
+            "provider": "codex",
+            "text": "what about germany",
+            "longhouse_control_grant": websocket.sent[0]["payload"]["longhouse_control_grant"],
+        }
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_managed_local_send_live_ack_survives_archive_turn_write_timeout(monkeypatch, tmp_path):
-    """send-live should ACK provider acceptance even if archive turn writes lag."""
-    session_local = _make_db(tmp_path)
-
-    class TimeoutTurnWriter:
-        is_configured = True
-
-        async def execute_with_session_factory(self, *_args, **_kwargs):
-            raise TimeoutError("archive turn writer saturated")
-
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
-        client, api_app_ref = _make_client(db, user)
-        calls: list[dict[str, object]] = []
-
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            request_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-            attachments=None,
-        ):
-            calls.append({"session_id": str(session.id), "text": text, "request_id": request_id})
-            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
-
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
-        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation", lambda **_kwargs: None)
-        monkeypatch.setattr("zerg.services.session_turns.get_write_serializer", lambda: TimeoutTurnWriter())
-
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue while archive is slow"},
-            )
-            assert response.status_code == 200, response.text
-            data = response.json()
-            assert data["accepted"] is True
-            assert data["session_id"] == str(source_session.id)
-            assert len(calls) == 1
-            assert calls[0]["text"] == "continue while archive is slow"
-            assert db.query(SessionTurn).filter(SessionTurn.session_id == source_session.id).count() == 0
-        finally:
-            asyncio.run(session_lock_manager.release(str(source_session.id)))
-            api_app_ref.dependency_overrides = {}
-
-
-def test_managed_local_draft_reply_returns_prefill(monkeypatch, tmp_path):
+def test_managed_local_draft_reply_returns_prefill(live_catalog, live_catalog_client, monkeypatch):
     """Draft reply generates a composer prefill without dispatching to the live session."""
-    session_local = _make_db(tmp_path)
+
     llm_calls: list[dict[str, object]] = []
 
     class FakeCompletions:
@@ -398,339 +563,177 @@ def test_managed_local_draft_reply_returns_prefill(monkeypatch, tmp_path):
             )
 
     class FakeClient:
-        chat = SimpleNamespace(completions=FakeCompletions())
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
 
         async def close(self):
             return None
 
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
-        db.add_all(
-            [
-                AgentEvent(
-                    session_id=source_session.id,
-                    role="user",
-                    content_text="Let's add iOS steering.",
-                    timestamp=datetime.now(timezone.utc),
-                ),
-                AgentEvent(
-                    session_id=source_session.id,
-                    role="assistant",
-                    content_text="I added the endpoint and need to run tests.",
-                    timestamp=datetime.now(timezone.utc),
-                ),
-            ]
+    owner_id, cookies = _seed_owner(live_catalog, "managed-local-draft@test.local")
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="codex")
+    live_catalog.commit_session(
+        owner_id=owner_id,
+        session_id=UUID(session_id),
+        device_id=LIVE_DEVICE_ID,
+        texts=("Let's add iOS steering.", "I added the endpoint and need to run tests."),
+    )
+
+    monkeypatch.setattr(
+        session_chat_impl,
+        "get_llm_client_for_use_case",
+        lambda use_case: (FakeClient(), "test-draft-model", "openai"),
+    )
+
+    try:
+        response = live_catalog_client.post(
+            f"/sessions/{session_id}/draft-reply",
+            json={"max_chars": 500},
+            cookies=cookies,
         )
-        db.commit()
-        client, api_app_ref = _make_client(db, user)
-
-        monkeypatch.setattr(
-            session_chat_impl,
-            "get_llm_client_for_use_case",
-            lambda use_case: (FakeClient(), "test-draft-model", "openai"),
-        )
-
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/draft-reply",
-                json={"max_chars": 500},
-            )
-            assert response.status_code == 200, response.text
-            data = response.json()
-            assert data["draft_text"] == "Please run the focused iOS tests and report the result."
-            assert data["model"] == "test-draft-model"
-            assert data["based_on_event_ids"]
-            assert len(llm_calls) == 1
-            assert llm_calls[0]["model"] == "test-draft-model"
-            assert "max_tokens" not in llm_calls[0]
-            prompt = llm_calls[0]["messages"][1]["content"]
-            assert "Let's add iOS steering." in prompt
-            assert "need to run tests" in prompt
-            assert asyncio.run(session_lock_manager.get_lock_info(str(source_session.id))) is None
-        finally:
-            asyncio.run(session_lock_manager.release(str(source_session.id)))
-            api_app_ref.dependency_overrides = {}
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["draft_text"] == "Please run the focused iOS tests and report the result."
+        assert data["model"] == "test-draft-model"
+        assert len(llm_calls) == 1
+        assert llm_calls[0]["model"] == "test-draft-model"
+        assert "max_tokens" not in llm_calls[0]
+        prompt = llm_calls[0]["messages"][1]["content"]
+        assert "Let's add iOS steering." in prompt
+        assert "need to run tests" in prompt
+        # Drafting reads the transcript; it never takes the dispatch lock.
+        assert asyncio.run(session_lock_manager.get_lock_info(session_id)) is None
+    finally:
+        asyncio.run(session_lock_manager.release(session_id))
 
 
-def test_managed_local_draft_reply_requires_live_control(tmp_path):
+def test_managed_local_draft_reply_requires_live_control(live_catalog, live_catalog_client):
     """Draft reply is not exposed for imported/unmanaged sessions."""
-    session_local = _make_db(tmp_path)
 
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
-        # Session-identity-kernel cleanup: live-control truth lives on
-        # session_connections + session_runs; clearing legacy attrs alone
-        # leaves the kernel row claiming the session is steerable. Drop the
-        # kernel rows so the capability projection collapses to observe-only.
-        from zerg.models.agents import SessionConnection, SessionRun, SessionThread
+    owner_id, cookies = _seed_owner(live_catalog, "managed-local-nodraft@test.local")
+    # A shipped transcript with no launch and no control lease: observable, not
+    # steerable, so the capability projection collapses to observe-only.
+    seeded = live_catalog.commit_session(owner_id=owner_id, texts=("imported transcript",))
 
-        for conn in (
-            db.query(SessionConnection)
-            .join(SessionRun, SessionConnection.run_id == SessionRun.id)
-            .join(SessionThread, SessionRun.thread_id == SessionThread.id)
-            .filter(SessionThread.session_id == source_session.id)
-            .all()
-        ):
-            db.delete(conn)
-        for run in (
-            db.query(SessionRun)
-            .join(SessionThread, SessionRun.thread_id == SessionThread.id)
-            .filter(SessionThread.session_id == source_session.id)
-            .all()
-        ):
-            db.delete(run)
-        db.commit()
-        client, api_app_ref = _make_client(db, user)
-
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/draft-reply",
-                json={"max_chars": 500},
-            )
-            assert response.status_code == 409
-        finally:
-            api_app_ref.dependency_overrides = {}
+    response = live_catalog_client.post(
+        f"/sessions/{seeded.session_id}/draft-reply",
+        json={"max_chars": 500},
+        cookies=cookies,
+    )
+    assert response.status_code == 409, response.text
 
 
-def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
+def test_managed_local_dispatch_send_failure_returns_502(live_catalog, live_catalog_client):
     """When live-session dispatch fails, returns {accepted: false} with 502."""
-    session_local = _make_db(tmp_path)
 
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
-        client, api_app_ref = _make_client(db, user)
+    owner_id, cookies = _seed_owner(live_catalog, "managed-local-502@test.local")
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="claude")
+    asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            supports=["claude.send"],
+            websocket=_RefusingMachineWebSocket(),
+        )
+    )
 
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            request_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-            attachments=None,
-        ):
-            return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed", verified_turn_started=False)
-
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue"},
-            )
-            assert response.status_code == 502
-            data = response.json()
-            assert data["accepted"] is False
-            assert "Runner send failed" in data["error"]
-            assert data["error_code"] == "send_failed"
-
-            # Verify turn was marked as failed
-            turn_rows = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == source_session.id)
-                .all()
-            )
-            assert len(turn_rows) == 1
-            assert turn_rows[0].state == "failed"
-            assert turn_rows[0].error_code == "send_failed"
-        finally:
-            api_app_ref.dependency_overrides = {}
+    try:
+        response = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "continue"},
+            cookies=cookies,
+        )
+        assert response.status_code == 502, response.text
+        data = response.json()
+        assert data["accepted"] is False
+        assert "Runner send failed" in data["error"]
+        assert data["error_code"] == "send_failed"
+    finally:
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_managed_local_dispatch_send_failure_releases_lock_for_retry(monkeypatch, tmp_path):
+def test_managed_local_dispatch_send_failure_releases_lock_for_retry(live_catalog, live_catalog_client):
     """Failed dispatches should release the lock so the next send can retry immediately."""
-    session_local = _make_db(tmp_path)
-    send_calls = 0
 
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
-        client, api_app_ref = _make_client(db, user)
+    owner_id, cookies = _seed_owner(live_catalog, "managed-local-retry@test.local")
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="claude")
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            supports=["claude.send"],
+            websocket=_RefusingMachineWebSocket(),
+        )
+    )
 
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            request_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-            attachments=None,
-        ):
-            nonlocal send_calls
-            send_calls += 1
-            return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed", verified_turn_started=False)
+    try:
+        first = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "continue"},
+            cookies=cookies,
+        )
+        assert first.status_code == 502, first.text
 
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-
-        try:
-            first = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue"},
-            )
-            assert first.status_code == 502
-
-            second = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "retry"},
-            )
-            assert second.status_code == 502
-            assert send_calls == 2
-
-            turn_rows = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == source_session.id)
-                .order_by(SessionTurn.id.asc())
-                .all()
-            )
-            assert len(turn_rows) == 2
-            assert [row.error_code for row in turn_rows] == ["send_failed", "send_failed"]
-        finally:
-            api_app_ref.dependency_overrides = {}
+        second = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "retry"},
+            cookies=cookies,
+        )
+        # A retained lock would answer 409 here without ever reaching the machine.
+        assert second.status_code == 502, second.text
+        assert [frame["payload"]["text"] for frame in websocket.sent] == ["continue", "retry"]
+    finally:
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_managed_local_dispatch_requires_verified_turn_start(monkeypatch, tmp_path):
-    """Fast send-live must fail closed if the transport cannot prove Claude/Codex accepted the turn."""
-    session_local = _make_db(tmp_path)
-
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
-        client, api_app_ref = _make_client(db, user)
-
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            request_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-            attachments=None,
-        ):
-            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=False)
-
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue"},
-            )
-            assert response.status_code == 502
-            data = response.json()
-            assert data["accepted"] is False
-            assert data["error"] == "Managed local session did not acknowledge the prompt after send"
-
-            assert data["error_code"] == "verification_timeout"
-
-            turn_rows = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == source_session.id)
-                .all()
-            )
-            assert len(turn_rows) == 1
-            assert turn_rows[0].state == "failed"
-            assert turn_rows[0].error_code == "verification_timeout"
-            assert turn_rows[0].send_accepted_at is not None
-        finally:
-            api_app_ref.dependency_overrides = {}
-
-
-def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path):
+def test_managed_local_dispatch_keeps_lock_until_terminal(live_catalog, live_catalog_client, monkeypatch):
     """Successful managed-local dispatch should keep the thread lock until terminal state."""
-    session_local = _make_db(tmp_path)
 
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
-        client, api_app_ref = _make_client(db, user)
+    owner_id, cookies = _seed_owner(live_catalog, "managed-local-lock@test.local")
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="claude")
+    asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"]))
+    monkeypatch.setattr(session_chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
 
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            request_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-            attachments=None,
-        ):
-            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
+    try:
+        first = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "continue"},
+            cookies=cookies,
+        )
+        assert first.status_code == 200, first.text
 
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
-
-        try:
-            first = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue"},
-            )
-            assert first.status_code == 200
-
-            second = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue again"},
-            )
-            assert second.status_code == 409
-            assert second.json()["detail"]["code"] == "SESSION_LOCKED"
-        finally:
-            asyncio.run(session_lock_manager.release(str(source_session.id)))
-            api_app_ref.dependency_overrides = {}
+        second = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "continue again"},
+            cookies=cookies,
+        )
+        assert second.status_code == 409
+        assert second.json()["detail"]["code"] == "SESSION_LOCKED"
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(monkeypatch, tmp_path):
+def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(live_catalog, live_catalog_client, monkeypatch):
     """Successful dispatch should surface the held lock via the lock-status endpoint."""
-    session_local = _make_db(tmp_path)
 
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
-        client, api_app_ref = _make_client(db, user)
+    owner_id, cookies = _seed_owner(live_catalog, "managed-local-lockstatus@test.local")
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="claude")
+    asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"]))
+    monkeypatch.setattr(session_chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
 
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            request_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-            attachments=None,
-        ):
-            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
+    try:
+        response = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "continue"},
+            cookies=cookies,
+        )
+        assert response.status_code == 200, response.text
 
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
-
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue"},
-            )
-            assert response.status_code == 200
-
-            lock_response = client.get(f"/api/sessions/{source_session.id}/lock")
-            assert lock_response.status_code == 200
-            assert lock_response.json()["locked"] is True
-            assert lock_response.json()["fork_available"] is True
-        finally:
-            asyncio.run(session_lock_manager.release(str(source_session.id)))
-            api_app_ref.dependency_overrides = {}
+        lock_response = live_catalog_client.get(f"/sessions/{session_id}/lock", cookies=cookies)
+        assert lock_response.status_code == 200, lock_response.text
+        assert lock_response.json()["locked"] is True
+        assert lock_response.json()["fork_available"] is True
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
 
 
 def test_managed_local_active_observer_marks_canonical_turn(monkeypatch, tmp_path):
@@ -905,45 +908,30 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
         assert row.active_phase_observed_at is None
 
 
-def test_managed_local_dispatch_send_crash_does_not_persist_orphan_canonical_turn(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
+def test_managed_local_dispatch_send_crash_releases_lock(live_catalog, live_catalog_client, monkeypatch):
+    """A crashed dispatch answers 500 and leaves the session free to retry."""
 
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
-        client, api_app_ref = _make_client(db, user)
+    from zerg.services import managed_control_dispatcher
 
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            request_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-            attachments=None,
-        ):
-            raise RuntimeError("dispatch crashed")
+    owner_id, cookies = _seed_owner(live_catalog, "managed-local-crash@test.local")
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="claude")
+    asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"]))
 
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
+    async def crash(**_kwargs):
+        raise RuntimeError("dispatch crashed")
 
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue"},
-            )
-            assert response.status_code == 500
+    monkeypatch.setattr(managed_control_dispatcher, "dispatch_managed_control_command", crash)
 
-            # Turn was committed before send, so it survives the crash in 'created' state
-            canonical_rows = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == source_session.id)
-                .all()
-            )
-            assert len(canonical_rows) == 1
-            assert canonical_rows[0].state == "created"
-            assert canonical_rows[0].send_accepted_at is None
-        finally:
-            api_app_ref.dependency_overrides = {}
+    try:
+        response = live_catalog_client.post(
+            f"/sessions/{session_id}/send-live",
+            json={"message": "continue"},
+            cookies=cookies,
+        )
+        assert response.status_code == 500, response.text
+
+        lock_response = live_catalog_client.get(f"/sessions/{session_id}/lock", cookies=cookies)
+        assert lock_response.status_code == 200, lock_response.text
+        assert lock_response.json()["locked"] is False
+    finally:
+        asyncio.run(_clear_machine_control_registry())

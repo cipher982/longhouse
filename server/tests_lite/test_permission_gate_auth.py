@@ -1,103 +1,58 @@
 """Auth-enabled tests for the permission-gate endpoints.
 
-These run WITHOUT AUTH_DISABLED so they exercise verify_agents_token + the
-session-scoped enforcement: a hook-scoped managed-session token must match its session,
-and a machine-wide durable device token must be rejected (it cannot be scoped to
-one session). This is the security boundary that keeps one managed session from
-registering/polling/resolving another session's permission requests.
+The live catalog is what turns authentication on here: the harness shapes the
+process the way a Runtime Host shapes it (no ``TESTING``, no ``AUTH_DISABLED``,
+a file-backed live database with catalogd in front of it), so
+``verify_agents_token`` really validates the hook token and the session-scoped
+enforcement really runs. A hook-scoped managed-session token must match its
+session, and a machine-wide durable device token must be rejected — it cannot
+be scoped to one session. This is the security boundary that keeps one managed
+session from registering/polling/resolving another session's permission
+requests.
+
+Registration is a catalogd write against a session catalogd knows, so the
+accepted case is seeded the way production seeds it: a managed local launch
+registers the session, and the hook token is minted for that session.
 """
 
 from __future__ import annotations
 
-import os
-from contextlib import contextmanager
-from datetime import datetime
-from datetime import timezone
-from unittest.mock import patch
+from uuid import UUID
 from uuid import uuid4
 
-from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
-os.environ.setdefault("DATABASE_URL", "sqlite://")
-os.environ.setdefault("TESTING", "1")
-os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
-# setdefault, NOT a hard set: hard-setting JWT_SECRET here clobbers the secret an
-# earlier-imported test module already signed cookies/tokens with, breaking those
-# tests in a full-suite run. Token mint + validate both happen in THIS module, so
-# any consistent secret works.
-os.environ.setdefault("JWT_SECRET", "test-jwt-secret-permission-auth")
-os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
-
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
 from zerg.auth.managed_session_tokens import issue_managed_session_token
-from zerg.database import get_db
-from zerg.database import initialize_database
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentSession
-from zerg.models.enums import UserRole
-from zerg.models.user import User
+
+DEVICE_ID = "cinder"
+OWNER_EMAIL = "perm-auth@example.test"
 
 
-def _settings_override():
-    # TESTING forces auth_disabled in real settings; this fake turns auth ON so
-    # verify_agents_token actually validates the hook token + session scope.
-    return type("S", (), {"auth_disabled": False, "testing": True, "single_tenant": True})()
+def _owner(live: LiveCatalog) -> int:
+    return live.create_user(OWNER_EMAIL)
 
 
-@contextmanager
-def _auth_enabled():
-    with patch("zerg.dependencies.agents_auth.get_settings", _settings_override):
-        yield
+def _launch_managed_session(live: LiveCatalog, client: TestClient, owner_id: int) -> UUID:
+    """Register a managed local session the way ``longhouse claude`` does."""
 
-
-def _make_db(tmp_path):
-    engine = make_engine(f"sqlite:///{tmp_path / 'perm_auth.db'}")
-    initialize_database(engine)
-    return make_sessionmaker(engine)
-
-
-def _make_client(session_local):
-    from zerg.main import api_app
-    from zerg.main import app
-
-    # This module tests the real auth boundary. Other route tests use the shared
-    # FastAPI app and may leave a token dependency override behind in this worker.
-    api_app.dependency_overrides.pop(verify_agents_token, None)
-
-    def override_get_db():
-        db = session_local()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    return TestClient(app, backend="asyncio"), api_app
-
-
-def _seed(session_local):
-    sid = uuid4()
-    with session_local() as db:
-        user = User(email=f"pa-{uuid4().hex[:6]}@t.local", role=UserRole.USER.value)
-        db.add(user)
-        db.flush()
-        owner_id = user.id
-        db.add(
-            AgentSession(
-                id=sid,
-                provider="claude",
-                environment="t",
-                project="perm-auth",
-                device_id="cinder",
-                cwd="/tmp/perm-auth",
-                started_at=datetime.now(timezone.utc),
-            )
-        )
-        db.commit()
-    return sid, owner_id
+    session_id = uuid4()
+    response = client.post(
+        "/sessions/managed-local/this-device",
+        json={
+            "cwd": "/tmp/perm-auth",
+            "provider": "claude",
+            "project": "perm-auth",
+            "session_id": str(session_id),
+            "native_claude_channels_available": True,
+        },
+        headers={"X-Agents-Token": live.create_device_token(owner_id=owner_id, device_id=DEVICE_ID)},
+    )
+    assert response.status_code == 200, response.text
+    return session_id
 
 
 def _hook_token(owner_id: int, session_id) -> str:
@@ -105,72 +60,76 @@ def _hook_token(owner_id: int, session_id) -> str:
         owner_id=owner_id,
         session_id=str(session_id),
         project="perm-auth",
-        device_id="cinder",
+        device_id=DEVICE_ID,
         scope=MANAGED_SESSION_SCOPE_HOOK,
     )
 
 
-def _register(client, session_id, token, tool_use_id="toolu_auth"):
+def _register(client: TestClient, session_id, token: str, tool_use_id: str = "toolu_auth"):
     return client.post(
-        "/api/agents/permission-requests",
+        "/agents/permission-requests",
         json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
         headers={"X-Agents-Token": token},
     )
 
 
-def test_session_scoped_hook_token_can_register(tmp_path):
-    session_local = _make_db(tmp_path)
-    sid, owner_id = _seed(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        with _auth_enabled():
-            resp = _register(client, sid, _hook_token(owner_id, sid))
-        assert resp.status_code == 200, resp.text
-    finally:
-        api_app.dependency_overrides.clear()
+def test_session_scoped_hook_token_can_register(live_catalog, live_catalog_client):
+    owner_id = _owner(live_catalog)
+    session_id = _launch_managed_session(live_catalog, live_catalog_client, owner_id)
+
+    resp = _register(live_catalog_client, session_id, _hook_token(owner_id, session_id))
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert body["pause_request_id"]
 
 
-def test_missing_token_is_401(tmp_path):
-    session_local = _make_db(tmp_path)
-    sid, _ = _seed(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        with _auth_enabled():
-            resp = client.post(
-                "/api/agents/permission-requests",
-                json={"session_id": str(sid), "tool_use_id": "x", "tool_name": "Bash"},
-            )
-        assert resp.status_code == 401, resp.text
-    finally:
-        api_app.dependency_overrides.clear()
+def test_missing_token_is_401(live_catalog, live_catalog_client):
+    owner_id = _owner(live_catalog)
+    session_id = _launch_managed_session(live_catalog, live_catalog_client, owner_id)
+
+    resp = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={"session_id": str(session_id), "tool_use_id": "x", "tool_name": "Bash"},
+    )
+
+    assert resp.status_code == 401, resp.text
 
 
-def test_hook_token_for_other_session_is_403_on_register(tmp_path):
-    session_local = _make_db(tmp_path)
-    sid_a, owner_id = _seed(session_local)
-    sid_b, _ = _seed(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        # Token bound to session A cannot register against session B.
-        with _auth_enabled():
-            resp = _register(client, sid_b, _hook_token(owner_id, sid_a))
-        assert resp.status_code == 403, resp.text
-    finally:
-        api_app.dependency_overrides.clear()
+def test_durable_device_token_cannot_register(live_catalog, live_catalog_client):
+    """A machine-wide token authorizes the machine, never one session."""
+
+    owner_id = _owner(live_catalog)
+    session_id = _launch_managed_session(live_catalog, live_catalog_client, owner_id)
+    device_token = live_catalog.create_device_token(owner_id=owner_id, device_id=DEVICE_ID)
+
+    resp = _register(live_catalog_client, session_id, device_token)
+
+    assert resp.status_code == 403, resp.text
 
 
-def test_hook_token_for_other_session_is_403_on_poll(tmp_path):
-    session_local = _make_db(tmp_path)
-    sid_a, owner_id = _seed(session_local)
-    sid_b, _ = _seed(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        with _auth_enabled():
-            resp = client.get(
-                "/api/agents/permission-decision",
-                params={"session_id": str(sid_b), "tool_use_id": "x"},
-                headers={"X-Agents-Token": _hook_token(owner_id, sid_a)},
-            )
-        assert resp.status_code == 403, resp.text
-    finally:
-        api_app.dependency_overrides.clear()
+def test_hook_token_for_other_session_is_403_on_register(live_catalog, live_catalog_client):
+    owner_id = _owner(live_catalog)
+    session_a = _launch_managed_session(live_catalog, live_catalog_client, owner_id)
+    session_b = _launch_managed_session(live_catalog, live_catalog_client, owner_id)
+
+    # Token bound to session A cannot register against session B, even though B
+    # exists and belongs to the same owner.
+    resp = _register(live_catalog_client, session_b, _hook_token(owner_id, session_a))
+
+    assert resp.status_code == 403, resp.text
+
+
+def test_hook_token_for_other_session_is_403_on_poll(live_catalog, live_catalog_client):
+    owner_id = _owner(live_catalog)
+    session_a = _launch_managed_session(live_catalog, live_catalog_client, owner_id)
+    session_b = _launch_managed_session(live_catalog, live_catalog_client, owner_id)
+
+    resp = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={"session_id": str(session_b), "tool_use_id": "x"},
+        headers={"X-Agents-Token": _hook_token(owner_id, session_a)},
+    )
+
+    assert resp.status_code == 403, resp.text

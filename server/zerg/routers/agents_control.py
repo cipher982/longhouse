@@ -11,13 +11,10 @@ from typing import Mapping
 from fastapi import APIRouter
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
-from sqlalchemy.orm import Session
 
-import zerg.database as database_module
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
-from zerg.database import get_catalog_session_factory
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
 from zerg.dependencies.agents_auth import _validate_device_token_for_request
@@ -25,10 +22,6 @@ from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.console_turns import reconcile_starting_console_turns_for_device
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.machine_control_operations import reconcile_live_machine_control_operation_from_command_result
-from zerg.services.machine_control_operations import reconcile_machine_control_operation_from_command_result
-from zerg.services.write_serializer import get_live_write_serializer
-from zerg.services.write_serializer import get_write_serializer
 
 logger = logging.getLogger(__name__)
 
@@ -71,62 +64,31 @@ def _control_identity(
 
 
 async def _reconcile_machine_control_operation_result(
-    db: Session | None,
     message: dict[str, Any],
     *,
     owner_id: int,
     device_id: str,
 ) -> bool:
-    if database_module.live_catalog_enabled():
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            raise CatalogUnavailable("catalogd is not supervised")
-        result = await catalogd.call(
-            "control.command_result.apply.v2",
-            {
-                "owner_id": owner_id,
-                "device_id": device_id,
-                "message": message,
-            },
-            timeout_seconds=2.0,
-        )
-        if (
-            type(result.get("matched")) is not bool
-            or result.get("match_kind") not in {None, "operation"}
-            or not isinstance(result.get("commit_seq"), str)
-            or not result["commit_seq"].isdecimal()
-        ):
-            raise CatalogUnavailable("catalog returned an invalid command result")
-        return result["matched"]
-    if database_module.live_store_configured():
-        live_ws = get_live_write_serializer()
-        if live_ws.is_configured:
-            matched = await live_ws.execute(
-                lambda live_db: reconcile_live_machine_control_operation_from_command_result(
-                    live_db,
-                    message,
-                    owner_id=owner_id,
-                    device_id=device_id,
-                ),
-                auto_commit=False,
-                label="live-machine-control-result",
-            )
-            if matched:
-                return True
-    if database_module.live_catalog_enabled():
-        return False
-    assert db is not None
-    return await get_write_serializer().execute_or_direct(
-        lambda write_db: reconcile_machine_control_operation_from_command_result(
-            write_db,
-            message,
-            owner_id=owner_id,
-            device_id=device_id,
-        ),
-        db,
-        auto_commit=False,
-        label="machine-control-result",
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise CatalogUnavailable("catalogd is not supervised")
+    result = await catalogd.call(
+        "control.command_result.apply.v2",
+        {
+            "owner_id": owner_id,
+            "device_id": device_id,
+            "message": message,
+        },
+        timeout_seconds=2.0,
     )
+    if (
+        type(result.get("matched")) is not bool
+        or result.get("match_kind") not in {None, "operation"}
+        or not isinstance(result.get("commit_seq"), str)
+        or not result["commit_seq"].isdecimal()
+    ):
+        raise CatalogUnavailable("catalog returned an invalid command result")
+    return result["matched"]
 
 
 async def _close_control_ws(websocket: WebSocket, *, code: int = 1008, reason: str) -> None:
@@ -137,10 +99,9 @@ async def _close_control_ws(websocket: WebSocket, *, code: int = 1008, reason: s
 
 
 async def _reconcile_console_turns_after_register(*, owner_id: int, device_id: str, registry) -> None:
-    db = None if database_module.live_catalog_enabled() else get_catalog_session_factory()()
     try:
         outcomes = await reconcile_starting_console_turns_for_device(
-            db,
+            None,
             owner_id=owner_id,
             device_id=device_id,
             registry=registry,
@@ -154,16 +115,11 @@ async def _reconcile_console_turns_after_register(*, owner_id: int, device_id: s
                 ",".join(outcome.state for outcome in outcomes),
             )
     except Exception:  # noqa: BLE001
-        if db is not None:
-            db.rollback()
         logger.exception(
             "Failed to reconcile starting Console turns after control reconnect owner=%s device=%s",
             owner_id,
             device_id,
         )
-    finally:
-        if db is not None:
-            db.close()
 
 
 @router.websocket("/ws")
@@ -171,7 +127,6 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
     settings = get_settings()
     worker_id = websocket.query_params.get("worker")
     worker_token = set_test_worker_id(worker_id) if worker_id else None
-    db: Session | None = None
     registry = get_machine_control_channel_registry()
     owner_id: int | None = None
     device_id: str | None = None
@@ -191,7 +146,6 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             await _close_control_ws(websocket, code=4401, reason="Invalid or missing device token")
             return
 
-        db = None if database_module.live_catalog_enabled() else get_catalog_session_factory()()
         await websocket.accept()
 
         try:
@@ -263,7 +217,6 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                 if not matched:
                     try:
                         matched = await _reconcile_machine_control_operation_result(
-                            db,
                             message,
                             owner_id=owner_id,
                             device_id=device_id,
@@ -274,8 +227,6 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                             message.get("command_id"),
                         )
                     except Exception:  # noqa: BLE001
-                        if db is not None:
-                            db.rollback()
                         logger.exception(
                             "Failed to reconcile machine operation result command_id=%s",
                             message.get("command_id"),
@@ -287,8 +238,6 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             console_reconcile_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await console_reconcile_task
-        if db is not None:
-            db.close()
         if owner_id is not None and device_id is not None:
             await registry.unregister(owner_id=owner_id, device_id=device_id, websocket=websocket)
         if worker_token is not None:

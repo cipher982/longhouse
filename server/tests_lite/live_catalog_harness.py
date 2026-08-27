@@ -84,6 +84,7 @@ from zerg.dependencies import auth as auth_deps  # noqa: E402
 # the db dependencies FastAPI captured are collected below.
 from zerg.main import api_app  # noqa: E402
 from zerg.searchd.server import SearchDaemon  # noqa: E402
+from zerg.services import catalog_read_gateway  # noqa: E402
 from zerg.services import catalogd_supervisor  # noqa: E402
 from zerg.services import raw_object_workers  # noqa: E402
 from zerg.services import render_object_workers  # noqa: E402
@@ -115,6 +116,14 @@ __all__ = [
 ]
 
 RPC_TIMEOUT_SECONDS = 15.0
+# Every catalog here is a daemon started milliseconds ago, sharing one machine
+# with the test process and, across a full suite run, with several thousand
+# other tests. The gateway's production budget (0.35s per attempt, 0.75s total)
+# is tuned for a long-lived daemon on its own host; under suite load it turns a
+# healthy `session.read.v2` into a timeout, and the route reports that as
+# "session not found". These tests assert behaviour, never latency, so the read
+# gets room. Production budgets are untouched.
+READ_BUDGET_SCALE = 20.0
 # The tenant a Runtime Host writes under is derived from INSTANCE_ID, so direct
 # catalog commits use the same one the HTTP ingest route computes.
 DEFAULT_INSTANCE_ID = "instance-a"
@@ -261,6 +270,34 @@ def _live_root() -> Path:
 def _reset_storage_worker_pools() -> None:
     raw_object_workers._pool = None
     render_object_workers._pool = None
+
+
+def _widen_catalog_read_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scale the bounded-read budgets for the life of one provisioned catalog.
+
+    ``_call`` reads the deadline and per-attempt budget from module globals on
+    every call, so scaling them here changes what this process allows without
+    editing the numbers production ships.
+    """
+
+    monkeypatch.setattr(
+        catalog_read_gateway,
+        "_DEFAULT_DEADLINE_SECONDS",
+        catalog_read_gateway._DEFAULT_DEADLINE_SECONDS * READ_BUDGET_SCALE,
+    )
+    monkeypatch.setattr(
+        catalog_read_gateway,
+        "_DEFAULT_ATTEMPT_SECONDS",
+        catalog_read_gateway._DEFAULT_ATTEMPT_SECONDS * READ_BUDGET_SCALE,
+    )
+    monkeypatch.setattr(
+        catalog_read_gateway,
+        "_READ_BUDGETS",
+        {
+            method: (deadline * READ_BUDGET_SCALE, attempt * READ_BUDGET_SCALE)
+            for method, (deadline, attempt) in catalog_read_gateway._READ_BUDGETS.items()
+        },
+    )
 
 
 def _remove_tree(path: Path) -> None:
@@ -680,7 +717,6 @@ def provision_live_catalog(
         monkeypatch.setattr(auth_deps, "_settings", settings)
         monkeypatch.setattr(auth_deps, "AUTH_DISABLED", False)
         monkeypatch.setattr(auth_deps, "_strategy_cache", {})
-        assert database_module.live_catalog_enabled() is True
 
         live_database_path, catalog_socket = catalogd_supervisor.catalogd_paths()
         search_socket = root / "searchd.sock"
@@ -693,6 +729,7 @@ def provision_live_catalog(
 
         monkeypatch.setattr(catalogd_supervisor, "_supervisor", _PerCallSupervisor(catalog_socket))
         monkeypatch.setattr(searchd_supervisor, "_supervisor", _PerCallSupervisor(search_socket))
+        _widen_catalog_read_budgets(monkeypatch)
         # The storage worker pools are process-wide and capture the object root
         # and an event loop when first built. Each catalog owns a different
         # root, so they are rebuilt per catalog and torn down with it.

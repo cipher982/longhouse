@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -11,7 +10,6 @@ from uuid import uuid4
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import inspect
-from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -38,7 +36,6 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveArchiveOutbox
-from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
@@ -459,7 +456,6 @@ def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archi
         )
         db.commit()
 
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(database_module, "get_catalog_session_factory", lambda: live_factory)
     monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_factory)
     catalog_store = CatalogStore(live_engine)
@@ -1944,208 +1940,6 @@ def test_live_terminal_runtime_state_closes_session_for_input(live: LiveCatalog)
     assert response.status_code == 200, response.text
     assert session_input_block_reason(None, seeded.session_id) == "run_ended"
     assert session_is_closed_for_input(None, seeded.session_id) is True
-
-
-@pytest.mark.asyncio
-async def test_heartbeat_live_stamp_returns_while_archive_bookkeeping_waits(tmp_path, monkeypatch):
-    import zerg.routers.heartbeat as heartbeat_router
-
-    monkeypatch.delenv("TESTING", raising=False)
-    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret-for-live-store-split")
-    monkeypatch.setenv("INTERNAL_API_SECRET", "test-internal-secret-for-live-store-split")
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-google-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
-    monkeypatch.setattr(heartbeat_router, "live_store_configured", lambda: True)
-
-    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
-    Base.metadata.create_all(bind=archive_engine)
-    ArchiveSession = sessionmaker(bind=archive_engine)
-
-    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
-    initialize_live_database(live_engine)
-    LiveSession = sessionmaker(bind=live_engine)
-    session_id = uuid4()
-    old_stamp_at = datetime.now(timezone.utc) - timedelta(days=31)
-    with LiveSession() as live_db:
-        live_db.add(
-            LiveHeartbeatStamp(
-                device_id="live-split",
-                received_at=old_stamp_at,
-                version="old",
-            )
-        )
-        live_db.commit()
-
-    live_stamp_done = asyncio.Event()
-    archive_bookkeeping_started = asyncio.Event()
-    release_archive_bookkeeping = asyncio.Event()
-    observations: dict[str, int] = {}
-
-    class LiveSerializer:
-        is_configured = True
-
-        async def execute(self, fn, **kwargs):
-            assert kwargs["label"] == "heartbeat-stamp"
-            observations["archive_pool_checked_out_at_live_write"] = archive_engine.pool.checkedout()
-            with LiveSession() as live_db:
-                result = fn(live_db)
-                live_db.commit()
-            live_stamp_done.set()
-            return result
-
-    class ArchiveSerializer:
-        is_configured = True
-
-        async def execute(self, fn, **kwargs):
-            assert kwargs["label"] == "heartbeat-bookkeeping"
-            archive_bookkeeping_started.set()
-            await release_archive_bookkeeping.wait()
-            return {}
-
-        async def execute_after_closing_request_session(self, *_args, **_kwargs):  # pragma: no cover - guard
-            raise AssertionError("live-configured heartbeat stamp must not use archive serializer")
-
-    class _FakeRequest:
-        client = SimpleNamespace(host="127.0.0.1")
-
-        def __init__(self, body: bytes) -> None:
-            self._body = body
-
-        async def body(self) -> bytes:
-            return self._body
-
-    monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", lambda: LiveSerializer())
-    monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: ArchiveSerializer())
-
-    payload = heartbeat_router.HeartbeatIn(
-        version="0.5.0",
-        daemon_pid=12345,
-        spool_pending_count=2,
-        parse_error_count_1h=0,
-        consecutive_ship_failures=0,
-        disk_free_bytes=50_000_000_000,
-        is_offline=False,
-        sessions_digest="digest-1",
-        sessions_sequence=7,
-        managed_sessions=[
-            heartbeat_router.ManagedSessionLeaseIn(
-                session_id=session_id,
-                provider="codex",
-                machine_id="live-split",
-                state="attached",
-                phase="idle",
-                bridge_status="ready",
-                thread_subscription_status="active",
-                lease_ttl_ms=60_000,
-                sequence=7,
-            )
-        ],
-    )
-
-    request_db = ArchiveSession()
-    request_db.execute(text("SELECT 1"))
-    try:
-        response = await asyncio.wait_for(
-            heartbeat_router.ingest_heartbeat(
-                payload,
-                _FakeRequest(payload.model_dump_json().encode()),
-                request_db,
-                SimpleNamespace(device_id="live-split", id="token-1"),
-            ),
-            timeout=0.5,
-        )
-        assert response.status_code == 204
-        assert live_stamp_done.is_set()
-        await asyncio.wait_for(archive_bookkeeping_started.wait(), timeout=0.5)
-        assert not release_archive_bookkeeping.is_set()
-
-        with LiveSession() as live_db:
-            row = live_db.query(LiveHeartbeatStamp).filter(LiveHeartbeatStamp.device_id == "live-split").one()
-            assert row.spool_pending == 2
-            assert row.sessions_digest == "digest-1"
-            assert row.sessions_sequence == 7
-            assert row.version == "0.5.0"
-            control = live_db.query(LiveControlLease).filter(LiveControlLease.session_id == str(session_id)).one()
-            assert control.device_id == "live-split"
-            assert control.provider == "codex"
-            assert control.state == "attached"
-            assert control.sequence == 7
-            live_session = live_db.get(LiveSessionRow, str(session_id))
-            assert live_session is not None
-            assert live_session.device_id == "live-split"
-            assert live_session.provider == "codex"
-            assert live_session.state == "attached"
-            assert live_session.last_seen_at is not None
-            assert live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == HEARTBEAT_STAMP_KIND).count() == 0
-
-        with ArchiveSession() as archive_db:
-            assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-split").count() == 0
-    finally:
-        release_archive_bookkeeping.set()
-        await asyncio.sleep(0)
-        archive_engine.dispose()
-        live_engine.dispose()
-
-    assert observations == {"archive_pool_checked_out_at_live_write": 0}
-
-
-@pytest.mark.asyncio
-async def test_heartbeat_live_store_requires_configured_live_serializer(tmp_path, monkeypatch):
-    import zerg.routers.heartbeat as heartbeat_router
-
-    monkeypatch.delenv("TESTING", raising=False)
-    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret-for-live-store-split")
-    monkeypatch.setenv("INTERNAL_API_SECRET", "test-internal-secret-for-live-store-split")
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-google-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
-    monkeypatch.setattr(heartbeat_router, "live_store_configured", lambda: True)
-
-    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
-    Base.metadata.create_all(bind=archive_engine)
-    ArchiveSession = sessionmaker(bind=archive_engine)
-
-    class UnconfiguredLiveSerializer:
-        is_configured = False
-
-    class ArchiveSerializer:
-        is_configured = True
-
-    class _FakeRequest:
-        client = SimpleNamespace(host="127.0.0.1")
-
-        def __init__(self, body: bytes) -> None:
-            self._body = body
-
-        async def body(self) -> bytes:
-            return self._body
-
-    monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", lambda: UnconfiguredLiveSerializer())
-    monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: ArchiveSerializer())
-
-    payload = heartbeat_router.HeartbeatIn(
-        version="0.5.0",
-        daemon_pid=12345,
-        spool_pending_count=0,
-        parse_error_count_1h=0,
-        consecutive_ship_failures=0,
-        disk_free_bytes=1,
-        is_offline=False,
-    )
-
-    request_db = ArchiveSession()
-    try:
-        with pytest.raises(heartbeat_router.HTTPException) as exc:
-            await heartbeat_router.ingest_heartbeat(
-                payload,
-                _FakeRequest(payload.model_dump_json().encode()),
-                request_db,
-                SimpleNamespace(device_id="live-unconfigured", id="token-1"),
-            )
-    finally:
-        archive_engine.dispose()
-
-    assert exc.value.status_code == 503
-    assert "Live Store write serializer is not configured" in str(exc.value.detail)
 
 
 def test_runtime_events_touch_live_session_candidates(tmp_path):

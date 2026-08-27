@@ -19,6 +19,8 @@ os.environ.setdefault("TESTING", "1")
 import zerg.services.agent_heartbeat_health as machine_health_service
 import zerg.services.observability_views as observability_views
 import zerg.services.session_turns as session_turns_service
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -39,6 +41,8 @@ from zerg.services.session_observations import SOURCE_DOMAIN_SERVER
 from zerg.services.session_observations import SOURCE_DOMAIN_TRANSCRIPT
 from zerg.services.session_observations import record_session_observation
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
+
+OWNER_EMAIL = "owner@observability.test"
 
 
 def _make_db(tmp_path):
@@ -193,6 +197,50 @@ def _seed_heartbeat(
     db.commit()
     db.refresh(heartbeat)
     return heartbeat
+
+
+def _apply_catalog_heartbeat(live_catalog, *, device_id: str, received_at: datetime, **overrides) -> None:
+    """One heartbeat stamp in the live catalog, via the RPC the ingest route calls."""
+
+    heartbeat = {
+        "device_id": device_id,
+        "received_at": received_at.isoformat(),
+        "version": "0.6.0",
+        "last_ship_at": None,
+        "last_ship_attempt_at": None,
+        "last_ship_result": None,
+        "last_ship_latency_ms": None,
+        "last_ship_http_status": None,
+        "spool_pending": 0,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 0,
+        "ship_successes_1h": 0,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "ship_latency_p50_ms_1h": None,
+        "ship_latency_p95_ms_1h": None,
+        "disk_free_bytes": 1_000,
+        "is_offline": 0,
+        "raw_json": None,
+        "sessions_digest": None,
+        "sessions_sequence": None,
+    }
+    heartbeat.update(overrides)
+    live_catalog.rpc(
+        "machine.heartbeat.apply.v2",
+        {
+            "heartbeat": heartbeat,
+            "managed_leases": [],
+            "managed_leases_present": False,
+            "owner_id": None,
+        },
+    )
 
 
 def _dt_from_ms(ms: int) -> datetime:
@@ -365,29 +413,74 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
         slow_payload = slow.json()
         assert slow_payload["total"] == 1
         assert slow_payload["turns"][0]["request_id"] == "req-slowest"
-
-        degraded = client.get("/observability/machines/health?status=degraded&stale_after_seconds=3600")
-        assert degraded.status_code == 200
-        degraded_payload = degraded.json()
-        assert degraded_payload["total"] == 1
-        assert degraded_payload["machines"][0]["device_id"] == "broken-machine"
-
-        recent_default = client.get("/observability/machines/health?stale_after_seconds=3600")
-        assert recent_default.status_code == 200
-        recent_default_payload = recent_default.json()
-        assert recent_default_payload["total"] == 2
-        assert {machine["device_id"] for machine in recent_default_payload["machines"]} == {
-            "broken-machine",
-            "healthy-machine",
-        }
-
-        widened = client.get("/observability/machines/health?stale_after_seconds=3600&recent_within_hours=720")
-        assert widened.status_code == 200
-        widened_payload = widened.json()
-        assert widened_payload["total"] == 3
-        assert "ancient-machine" in {machine["device_id"] for machine in widened_payload["machines"]}
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_machine_health_route_reads_the_live_catalog(live_catalog, live_catalog_client):
+    """`/observability/machines/health` is served from catalogd heartbeat stamps.
+
+    Everything else on this router still reads the archive; this one route reads
+    the live catalog, so it needs a real one behind it. Machines are owner-scoped
+    through their device tokens and windowed by the recency query.
+    """
+
+    owner_id = live_catalog.create_user(OWNER_EMAIL)
+    live_catalog_client.cookies.set("longhouse_session", live_catalog.browser_cookie(owner_id=owner_id, email=OWNER_EMAIL))
+    now = datetime.now(timezone.utc)
+    for device_id in ("broken-machine", "healthy-machine", "ancient-machine"):
+        live_catalog.create_device_token(owner_id=owner_id, device_id=device_id)
+
+    _apply_catalog_heartbeat(
+        live_catalog,
+        device_id="broken-machine",
+        received_at=now - timedelta(minutes=2),
+        spool_dead=1,
+        consecutive_failures=1,
+        ship_attempts_1h=4,
+        ship_successes_1h=2,
+    )
+    _apply_catalog_heartbeat(
+        live_catalog,
+        device_id="healthy-machine",
+        received_at=now - timedelta(minutes=1),
+        ship_attempts_1h=4,
+        ship_successes_1h=4,
+    )
+    _apply_catalog_heartbeat(
+        live_catalog,
+        device_id="ancient-machine",
+        received_at=now - timedelta(days=14),
+        ship_attempts_1h=4,
+        ship_successes_1h=4,
+    )
+
+    degraded = live_catalog_client.get(
+        "/observability/machines/health?status=degraded&stale_after_seconds=3600",
+    )
+    assert degraded.status_code == 200, degraded.text
+    degraded_payload = degraded.json()
+    assert degraded_payload["total"] == 1
+    assert degraded_payload["machines"][0]["device_id"] == "broken-machine"
+
+    recent_default = live_catalog_client.get(
+        "/observability/machines/health?stale_after_seconds=3600",
+    )
+    assert recent_default.status_code == 200, recent_default.text
+    recent_default_payload = recent_default.json()
+    assert recent_default_payload["total"] == 2
+    assert {machine["device_id"] for machine in recent_default_payload["machines"]} == {
+        "broken-machine",
+        "healthy-machine",
+    }
+
+    widened = live_catalog_client.get(
+        "/observability/machines/health?stale_after_seconds=3600&recent_within_hours=720",
+    )
+    assert widened.status_code == 200, widened.text
+    widened_payload = widened.json()
+    assert widened_payload["total"] == 3
+    assert "ancient-machine" in {machine["device_id"] for machine in widened_payload["machines"]}
 
 
 def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(tmp_path, monkeypatch):

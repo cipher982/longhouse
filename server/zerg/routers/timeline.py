@@ -4,7 +4,7 @@ This router is the cookie-auth presentation veneer for user-facing clients.
 Most per-session inspection routes intentionally delegate into the canonical
 ``/api/agents/*`` service layer so browser and machine reads do not drift.
 The browser-specific behavior that remains here is thread-card timeline
-listing/streaming plus short-lived UI caches.
+listing/streaming.
 """
 
 from __future__ import annotations
@@ -12,11 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from threading import Lock
 from time import monotonic
 from types import SimpleNamespace
 from typing import Literal
@@ -29,34 +27,23 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import Request
 from fastapi import Response
-from fastapi.responses import JSONResponse
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 from sse_starlette.sse import EventSourceResponse
 
-import zerg.database as database_module
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
-from zerg.database import catalog_db_dependency
-from zerg.database import get_catalog_session_factory
-from zerg.database import get_db
-from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
 from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
-from zerg.models.agents import AgentSession
-from zerg.models.device_token import DeviceToken
-from zerg.routers import agents_demo as _demo_router
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import WorkspaceSuggestion
 from zerg.schemas.machines import WorkspaceSuggestionsResponse
-from zerg.services.agents import AgentsStore
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import enrolled_machines
 from zerg.services.catalog_read_gateway import machine_workspaces
@@ -108,14 +95,10 @@ from zerg.services.storage_v2_workspace import build_storage_v2_workspace
 from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
-from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
-from zerg.services.timeline_session_stream import stream_timeline_sessions_for_browser
 from zerg.services.timeline_session_stream import validate_timeline_stream_contract
-from zerg.services.workspace_suggestions import build_workspace_suggestions
 from zerg.utils.server_timing import ServerTimingRecorder
 
 logger = logging.getLogger(__name__)
-_catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(
     prefix="/timeline",
@@ -128,41 +111,6 @@ timeline_stream_router = APIRouter(
     dependencies=[Depends(require_current_browser_user_short_lived), Depends(require_single_tenant)],
 )
 
-TIMELINE_FILTERS_CACHE_TTL_SECONDS = 60.0
-
-
-def _legacy_catalog_db():
-    if database_module.live_catalog_enabled():
-        yield None
-        return
-    with get_catalog_session_factory()() as db:
-        yield db
-
-
-_catalog_read_db_dependency = get_db if _catalog_db_dependency is get_db else _legacy_catalog_db
-
-
-def _legacy_machine_enrollments(db: Session, *, owner_id: int) -> list[dict[str, object]]:
-    rows = db.query(DeviceToken).filter(DeviceToken.owner_id == owner_id, DeviceToken.revoked_at.is_(None)).all()
-    return [
-        {
-            "device_id": row.device_id,
-            "machine_name": row.machine_name,
-            "last_used_at": row.last_used_at,
-            "created_at": row.created_at,
-        }
-        for row in rows
-    ]
-
-
-@dataclass(frozen=True)
-class _TimelineFiltersCacheEntry:
-    expires_at: float
-    response: FiltersResponse
-
-
-_timeline_filters_cache: dict[tuple[str, int, str | None], _TimelineFiltersCacheEntry] = {}
-_timeline_filters_cache_lock = Lock()
 _SEARCH_RESULT_HYDRATION_BATCH_SIZE = 20
 
 
@@ -262,28 +210,14 @@ def _browser_owner_id(user) -> int | None:
         return None
 
 
-def _timeline_filters_cache_key(db: Session, *, days_back: int) -> tuple[str, int, str | None]:
-    bind = db.get_bind()
-    bind_url = getattr(bind, "url", None)
-    bind_key = str(bind_url) if bind_url is not None else f"bind:{id(bind)}"
-    latest_session_update = db.query(func.max(AgentSession.updated_at)).scalar()
-    latest_update_key = latest_session_update.isoformat() if latest_session_update is not None else None
-    return bind_key, days_back, latest_update_key
-
-
 @router.get("/machines", response_model=MachineDirectoryResponse)
 def list_browser_machines(
-    db: Session | None = Depends(_catalog_read_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> MachineDirectoryResponse:
     """Browser machines directory. Same body shape as ``/api/agents/machines``."""
     owner_id = int(current_user.id)
     try:
-        if database_module.live_catalog_enabled():
-            enrollments = enrolled_machines(owner_id).get("enrollments", [])
-        else:
-            assert db is not None
-            enrollments = _legacy_machine_enrollments(db, owner_id=owner_id)
+        enrollments = enrolled_machines(owner_id).get("enrollments", [])
     except CatalogReadError as exc:
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     entries = build_machines_directory(owner_id=owner_id, enrollments=enrollments)
@@ -295,37 +229,22 @@ def list_browser_machine_workspaces(
     device_id: str,
     limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
     days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
-    db: Session | None = Depends(_catalog_read_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> WorkspaceSuggestionsResponse:
     """Browser launch-picker workspaces. Same body shape as ``/api/agents/machines/{id}/workspaces``."""
     owner_id = int(current_user.id)
-    if database_module.live_catalog_enabled():
-        try:
-            payload = machine_workspaces(
-                owner_id=owner_id,
-                device_id=device_id,
-                limit=limit,
-                days_back=days_back,
-            )
-        except CatalogReadError as exc:
-            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
-        return WorkspaceSuggestionsResponse(
+    try:
+        payload = machine_workspaces(
+            owner_id=owner_id,
             device_id=device_id,
-            workspaces=[WorkspaceSuggestion(**item) for item in payload.get("workspaces", [])],
+            limit=limit,
+            days_back=days_back,
         )
-
-    assert db is not None
-    entries = build_workspace_suggestions(
-        db,
-        owner_id=owner_id,
-        device_id=device_id,
-        limit=limit,
-        days_back=days_back,
-    )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     return WorkspaceSuggestionsResponse(
         device_id=device_id,
-        workspaces=[WorkspaceSuggestion(**entry.to_response()) for entry in entries],
+        workspaces=[WorkspaceSuggestion(**item) for item in payload.get("workspaces", [])],
     )
 
 
@@ -450,7 +369,6 @@ async def list_timeline_sessions(
     ),
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    db: Session | None = Depends(_catalog_read_db_dependency),
     current_user=Depends(get_current_browser_user),
 ):
     effective_limit = min(limit, 100)
@@ -472,51 +390,28 @@ async def list_timeline_sessions(
         mode=mode,
         context_mode=context_mode,
     )
-    if database_module.live_catalog_enabled():
-        try:
-            with timing.span("catalog_search" if query else "catalog_list"):
-                if query:
-                    result = await _search_storage_v2_timeline(
-                        owner_id=int(current_user.id),
-                        params=params,
-                    )
-                else:
-                    result = await asyncio.to_thread(
-                        list_live_catalog_timeline,
-                        params=params,
-                        owner_id=int(current_user.id),
-                    )
-            timing.apply(response)
-            return result
-        except CatalogReadError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": exc.code, "message": exc.message},
-            ) from exc
-        except ValueError:
-            raise
     try:
-        assert db is not None
-        result = await list_timeline_sessions_for_browser(
-            db=db,
-            params=params,
-            timing=timing,
-            owner_id=_browser_owner_id(current_user),
-        )
-    except SessionListingError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-    if result.compatibility_raw:
-        compat_response = JSONResponse(
-            content=result.response.model_dump(mode="json"),
-            headers=result.headers,
-        )
-        compat_response.headers["X-Limit-Cap"] = "100"
-        timing.apply(compat_response)
-        return compat_response
-
-    timing.apply(response)
-    return result.response
+        with timing.span("catalog_search" if query else "catalog_list"):
+            if query:
+                result = await _search_storage_v2_timeline(
+                    owner_id=int(current_user.id),
+                    params=params,
+                )
+            else:
+                result = await asyncio.to_thread(
+                    list_live_catalog_timeline,
+                    params=params,
+                    owner_id=int(current_user.id),
+                )
+        timing.apply(response)
+        return result
+    except CatalogReadError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except ValueError:
+        raise
 
 
 @timeline_stream_router.get("/sessions/stream")
@@ -574,21 +469,12 @@ async def stream_timeline_sessions(
         context_mode=context_mode,
     )
 
-    if database_module.live_catalog_enabled():
-        stream = stream_live_catalog_timeline(
-            request,
-            params=params,
-            skip_initial_replay=skip_initial_replay,
-            owner_id=current_user_id if isinstance(current_user_id, int) else None,
-        )
-    else:
-        stream = stream_timeline_sessions_for_browser(
-            request,
-            session_factory=get_session_factory(),
-            params=params,
-            skip_initial_replay=skip_initial_replay,
-            owner_id=current_user_id if isinstance(current_user_id, int) else None,
-        )
+    stream = stream_live_catalog_timeline(
+        request,
+        params=params,
+        skip_initial_replay=skip_initial_replay,
+        owner_id=current_user_id if isinstance(current_user_id, int) else None,
+    )
     sse_response = EventSourceResponse(stream)
     sse_response.headers["X-Limit-Cap"] = "100"
     return sse_response
@@ -614,199 +500,134 @@ async def list_timeline_session_summaries(
         False,
         description="Include Hatch automation sessions in otherwise default-hidden summaries",
     ),
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ):
     effective_limit = min(limit, 100)
     response.headers["X-Limit-Cap"] = "100"
-    if database_module.live_catalog_enabled():
-        params = TimelineSessionListParams(
-            project=project,
-            provider=provider,
-            environment=environment,
-            include_test=include_test,
-            hide_autonomous=hide_autonomous,
-            include_automation=include_automation,
-            device_id=device_id,
-            days_back=days_back,
-            query=query,
-            limit=effective_limit,
-            offset=offset,
-            sort=None,
-            mode="lexical",
-            context_mode="forensic",
-        )
-        if query:
-            searched = await _search_storage_v2_timeline(owner_id=int(current_user.id), params=params)
-            listed_sessions = [card.head for card in searched.sessions]
-            listed_total = searched.total
-        else:
-            listed = await asyncio.to_thread(
-                list_live_catalog_sessions,
-                params=params,
-                owner_id=int(current_user.id),
-            )
-            listed_sessions = listed.sessions
-            listed_total = listed.total
-        summaries = []
-        for session in listed_sessions:
-            ended_at = session.ended_at
-            duration_end = ended_at or session.last_activity_at or session.started_at
-            duration = int((duration_end - session.started_at).total_seconds() // 60)
-            summaries.append(
-                SessionSummaryResponse(
-                    id=session.id,
-                    project=session.project,
-                    provider=session.provider,
-                    cwd=session.cwd,
-                    git_branch=session.git_branch,
-                    started_at=session.started_at,
-                    ended_at=ended_at,
-                    duration_minutes=max(0, duration),
-                    turn_count=session.user_messages,
-                    last_user_message=session.first_user_message,
-                    last_ai_message=(session.transcript_preview.text if session.transcript_preview else None),
-                )
-            )
-        return SessionsSummaryResponse(sessions=summaries, total=listed_total)
-    assert db is not None
-    return _sessions_router.list_session_summaries(
+    params = TimelineSessionListParams(
         project=project,
         provider=provider,
         environment=environment,
         include_test=include_test,
+        hide_autonomous=hide_autonomous,
+        include_automation=include_automation,
         device_id=device_id,
         days_back=days_back,
         query=query,
         limit=effective_limit,
         offset=offset,
-        hide_autonomous=hide_autonomous,
-        include_automation=include_automation,
-        db=db,
-        _auth=None,
-        _single=None,
+        sort=None,
+        mode="lexical",
+        context_mode="forensic",
     )
+    if query:
+        searched = await _search_storage_v2_timeline(owner_id=int(current_user.id), params=params)
+        listed_sessions = [card.head for card in searched.sessions]
+        listed_total = searched.total
+    else:
+        listed = await asyncio.to_thread(
+            list_live_catalog_sessions,
+            params=params,
+            owner_id=int(current_user.id),
+        )
+        listed_sessions = listed.sessions
+        listed_total = listed.total
+    summaries = []
+    for session in listed_sessions:
+        ended_at = session.ended_at
+        duration_end = ended_at or session.last_activity_at or session.started_at
+        duration = int((duration_end - session.started_at).total_seconds() // 60)
+        summaries.append(
+            SessionSummaryResponse(
+                id=session.id,
+                project=session.project,
+                provider=session.provider,
+                cwd=session.cwd,
+                git_branch=session.git_branch,
+                started_at=session.started_at,
+                ended_at=ended_at,
+                duration_minutes=max(0, duration),
+                turn_count=session.user_messages,
+                last_user_message=session.first_user_message,
+                last_ai_message=(session.transcript_preview.text if session.transcript_preview else None),
+            )
+        )
+    return SessionsSummaryResponse(sessions=summaries, total=listed_total)
 
 
 @router.get("/sessions/{session_id}/preview", response_model=SessionPreviewResponse)
 async def preview_timeline_session(
     session_id: UUID,
     last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ):
-    if database_module.live_catalog_enabled():
-        workspace = await build_storage_v2_workspace(
-            session_id=session_id,
-            owner_id=int(current_user.id),
-            branch_mode="head",
-            limit=last_n,
-        )
-        if workspace is None:
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        projection = workspace["projection"]
-        messages = [
-            SessionPreviewMessage(
-                role=item["event"]["role"],
-                content=str(item["event"].get("content_text") or item["event"].get("tool_output_text") or ""),
-                timestamp=item["event"]["timestamp"],
-            )
-            for item in projection["items"]
-            if item.get("kind") == "event" and item.get("event") and item["event"].get("role") in {"user", "assistant"}
-        ]
-        return SessionPreviewResponse(id=str(session_id), messages=messages, total_messages=projection["total"])
-    assert db is not None
-    return _sessions_router.preview_session(
+    workspace = await build_storage_v2_workspace(
         session_id=session_id,
-        last_n=last_n,
-        db=db,
-        _auth=None,
-        _single=None,
+        owner_id=int(current_user.id),
+        branch_mode="head",
+        limit=last_n,
     )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    projection = workspace["projection"]
+    messages = [
+        SessionPreviewMessage(
+            role=item["event"]["role"],
+            content=str(item["event"].get("content_text") or item["event"].get("tool_output_text") or ""),
+            timestamp=item["event"]["timestamp"],
+        )
+        for item in projection["items"]
+        if item.get("kind") == "event" and item.get("event") and item["event"].get("role") in {"user", "assistant"}
+    ]
+    return SessionPreviewResponse(id=str(session_id), messages=messages, total_messages=projection["total"])
 
 
 @router.get("/filters", response_model=FiltersResponse)
 async def get_timeline_filters(
     response: Response,
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
 ):
-    timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "private, max-age=60"
 
-    if database_module.live_catalog_enabled():
-        projects: set[str] = set()
-        providers: set[str] = set()
-        machines: set[str] = set()
-        for offset in range(0, 1000, 100):
-            listed = await asyncio.to_thread(
-                list_live_catalog_sessions,
-                params=TimelineSessionListParams(
-                    project=None,
-                    provider=None,
-                    environment=None,
-                    include_test=False,
-                    hide_autonomous=False,
-                    include_automation=True,
-                    device_id=None,
-                    days_back=days_back,
-                    query=None,
-                    limit=100,
-                    offset=offset,
-                    sort=None,
-                    mode="lexical",
-                    context_mode="forensic",
-                ),
-            )
-            for session in listed.sessions:
-                if session.project:
-                    projects.add(session.project)
-                providers.add(session.provider)
-                if session.device_id:
-                    machines.add(session.device_id)
-            if offset + len(listed.sessions) >= listed.total or not listed.sessions:
-                break
-        return FiltersResponse(projects=sorted(projects), providers=sorted(providers), machines=sorted(machines))
-
-    assert db is not None
-
-    cache_key = _timeline_filters_cache_key(db, days_back=days_back)
-    now = monotonic()
-    with _timeline_filters_cache_lock:
-        cached = _timeline_filters_cache.get(cache_key)
-        if cached is not None and cached.expires_at > now:
-            timing.record("cache_hit", 0.1)
-            timing.apply(response)
-            return cached.response
-
-    with timing.span("distinct_filters"):
-        filters = _sessions_router.get_filters(
-            days_back=days_back,
-            response=response,
-            db=db,
-            _auth=None,
-            _single=None,
+    projects: set[str] = set()
+    providers: set[str] = set()
+    machines: set[str] = set()
+    for offset in range(0, 1000, 100):
+        listed = await asyncio.to_thread(
+            list_live_catalog_sessions,
+            params=TimelineSessionListParams(
+                project=None,
+                provider=None,
+                environment=None,
+                include_test=False,
+                hide_autonomous=False,
+                include_automation=True,
+                device_id=None,
+                days_back=days_back,
+                query=None,
+                limit=100,
+                offset=offset,
+                sort=None,
+                mode="lexical",
+                context_mode="forensic",
+            ),
         )
-
-    with _timeline_filters_cache_lock:
-        _timeline_filters_cache[cache_key] = _TimelineFiltersCacheEntry(
-            expires_at=now + TIMELINE_FILTERS_CACHE_TTL_SECONDS,
-            response=filters,
-        )
-
-    timing.apply(response)
-    return filters
+        for session in listed.sessions:
+            if session.project:
+                projects.add(session.project)
+            providers.add(session.provider)
+            if session.device_id:
+                machines.add(session.device_id)
+        if offset + len(listed.sessions) >= listed.total or not listed.sessions:
+            break
+    return FiltersResponse(projects=sorted(projects), providers=sorted(providers), machines=sorted(machines))
 
 
 @router.post("/demo", response_model=DemoSeedResponse)
 async def seed_timeline_demo_sessions(
     replace: bool = Query(False, description="Delete existing demo sessions before seeding fresh demo data"),
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
 ):
-    if database_module.live_catalog_enabled():
-        raise HTTPException(status_code=404, detail="Demo seeding is unavailable on storage-v2 Runtime Hosts")
-    assert db is not None
-    return await _demo_router.seed_demo_sessions(replace=replace, db=db, _auth=None, _single=None)
+    raise HTTPException(status_code=404, detail="Demo seeding is unavailable on storage-v2 Runtime Hosts")
 
 
 @router.post("/sessions/{session_id}/action", response_model=SessionActionResponse)
@@ -924,31 +745,20 @@ def create_timeline_session_resume_intent(
 async def get_timeline_session_thread(
     session_id: UUID,
     response: Response,
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ):
-    if database_module.live_catalog_enabled():
-        owner_id = _browser_owner_id(current_user)
-        session, _provider_alias, commit_seq = read_live_catalog_session(
-            session_id,
-            owner_id=owner_id,
-        )
-        if session is None:
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        response.headers["X-Catalog-Commit-Seq"] = commit_seq
-        return SessionThreadResponse(
-            root_session_id=str(session_id),
-            head_session_id=str(session_id),
-            sessions=[session],
-        )
-    assert db is not None
-    return await _sessions_router.get_session_thread(
-        session_id=session_id,
-        response=response,
-        db=db,
-        _auth=None,
-        _single=None,
-        owner_id=_browser_owner_id(current_user),
+    owner_id = _browser_owner_id(current_user)
+    session, _provider_alias, commit_seq = read_live_catalog_session(
+        session_id,
+        owner_id=owner_id,
+    )
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    response.headers["X-Catalog-Commit-Seq"] = commit_seq
+    return SessionThreadResponse(
+        root_session_id=str(session_id),
+        head_session_id=str(session_id),
+        sessions=[session],
     )
 
 
@@ -959,32 +769,18 @@ async def get_timeline_session_turns(
     limit: int = Query(50, ge=1, description="Max turns to return (server clamps to 100)"),
     offset: int = Query(0, ge=0, description="Offset within the stable per-session turn order"),
     order: str = Query("asc", description="Turn order: asc|desc"),
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
 ):
     normalized_order = str(order or "asc").strip().lower()
     if normalized_order not in {"asc", "desc"}:
         raise HTTPException(status_code=400, detail="order must be one of: asc, desc")
 
-    effective_limit = min(limit, 100)
     response.headers["X-Limit-Cap"] = "100"
-    if database_module.live_catalog_enabled():
-        return SessionTurnsListResponse(turns=[], total=0)
-    assert db is not None
-    return await _sessions_router.get_session_turns(
-        session_id=session_id,
-        limit=effective_limit,
-        offset=offset,
-        order=normalized_order,
-        db=db,
-        _auth=None,
-        _single=None,
-    )
+    return SessionTurnsListResponse(turns=[], total=0)
 
 
 @router.get("/sessions/{session_id}/workflows")
 def get_timeline_session_workflow_runs(
     session_id: UUID,
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> dict:
     """List dynamic-workflow runs whose subagent threads live under this session.
@@ -993,12 +789,7 @@ def get_timeline_session_workflow_runs(
     ``/agents/sessions/{id}/workflows``. Each entry is one collapsible workflow
     run node for the session detail UI.
     """
-    if database_module.live_catalog_enabled():
-        return {"session_id": str(session_id), "workflow_runs": []}
-    assert db is not None
-    store = AgentsStore(db)
-    runs = store.list_workflow_runs_for_session(session_id)
-    return {"session_id": str(session_id), "workflow_runs": runs}
+    return {"session_id": str(session_id), "workflow_runs": []}
 
 
 @router.get("/sessions/{session_id}/subagents")
@@ -1031,54 +822,27 @@ async def get_timeline_session_subagents(
 @router.get("/sessions/{session_id}/graph")
 def get_timeline_session_graph(
     session_id: UUID,
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> dict:
-    if database_module.live_catalog_enabled():
-        return {"session_id": str(session_id), "nodes": [], "edges": []}
-    assert db is not None
-    return _sessions_router.get_session_graph(
-        session_id=session_id,
-        db=db,
-        _auth=None,
-        _single=None,
-    )
+    return {"session_id": str(session_id), "nodes": [], "edges": []}
 
 
 @router.get("/workflows/{workflow_run_id}")
 def get_timeline_workflow_run(
     workflow_run_id: str,
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> dict:
     """Return one dynamic-workflow run's subagent threads (browser-auth mirror of
     ``/agents/workflows/{run_id}``)."""
-    if database_module.live_catalog_enabled():
-        raise HTTPException(status_code=404, detail=f"Unknown workflow run: {workflow_run_id}")
-    assert db is not None
-    store = AgentsStore(db)
-    run = store.get_workflow_run(workflow_run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Unknown workflow run: {workflow_run_id}")
-    return run
+    raise HTTPException(status_code=404, detail=f"Unknown workflow run: {workflow_run_id}")
 
 
 @router.get("/sessions/{session_id}/turns/{turn_id}", response_model=SessionTurnEnvelopeResponse)
 def get_timeline_session_turn(
     session_id: UUID,
     turn_id: int,
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
 ):
-    if database_module.live_catalog_enabled():
-        raise HTTPException(status_code=404, detail=f"Unknown turn: {turn_id}")
-    assert db is not None
-    return _sessions_router.get_session_turn_detail(
-        session_id=session_id,
-        turn_id=turn_id,
-        db=db,
-        _auth=None,
-        _single=None,
-    )
+    raise HTTPException(status_code=404, detail=f"Unknown turn: {turn_id}")
 
 
 @router.get("/sessions/{session_id}/events")
@@ -1355,22 +1119,12 @@ async def get_timeline_session_mobile_tail(
 async def export_timeline_session(
     session_id: UUID,
     branch_mode: str = Query("head", description="Branch projection mode for export: head|all"),
-    db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> Response:
-    if database_module.live_catalog_enabled():
-        return await build_storage_v2_raw_export(
-            session_id=session_id,
-            owner_id=int(current_user.id),
-            branch_mode=branch_mode,
-        )
-    assert db is not None
-    return await _sessions_router.export_session(
+    return await build_storage_v2_raw_export(
         session_id=session_id,
+        owner_id=int(current_user.id),
         branch_mode=branch_mode,
-        db=db,
-        _auth=None,
-        _single=None,
     )
 
 
@@ -1907,38 +1661,27 @@ async def stream_session_workspace(
         except ValueError:
             last_event_id = None
 
-    if database_module.live_catalog_enabled():
-        # The pubsub topic is keyed on session id alone, so subscribing is not
-        # an authorization decision. Resolve the session through the canonical
-        # owner-scoped read first and fail closed: a session the caller cannot
-        # open on detail must not stream its live transcript preview here.
-        try:
-            owned_session, _provider_alias, _commit_seq = await asyncio.to_thread(
-                read_live_catalog_session,
-                session_id,
-                owner_id=current_user_id,
-            )
-        except CatalogReadError as exc:
-            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
-        if owned_session is None:
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        return EventSourceResponse(
-            _live_catalog_workspace_stream(
-                request,
-                session_id=session_id,
-                skip_initial=skip_initial,
-                last_event_id=last_event_id,
-                known_workspace_fingerprint=known_workspace_fingerprint,
-                owner_id=current_user_id,
-            )
+    # The pubsub topic is keyed on session id alone, so subscribing is not
+    # an authorization decision. Resolve the session through the canonical
+    # owner-scoped read first and fail closed: a session the caller cannot
+    # open on detail must not stream its live transcript preview here.
+    try:
+        owned_session, _provider_alias, _commit_seq = await asyncio.to_thread(
+            read_live_catalog_session,
+            session_id,
+            owner_id=current_user_id,
         )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    if owned_session is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     return EventSourceResponse(
-        _session_workspace_stream(
+        _live_catalog_workspace_stream(
             request,
-            session_factory=get_session_factory(),
             session_id=session_id,
             skip_initial=skip_initial,
             last_event_id=last_event_id,
             known_workspace_fingerprint=known_workspace_fingerprint,
-        ),
+            owner_id=current_user_id,
+        )
     )

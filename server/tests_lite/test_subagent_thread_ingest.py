@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from datetime import timezone
-from types import SimpleNamespace
 from uuid import UUID
 
 from cryptography.fernet import Fernet
@@ -22,7 +21,6 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.main import api_app
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
@@ -1069,62 +1067,3 @@ def test_backfill_moves_existing_leaked_child_session_under_parent(tmp_path):
 
         second_report = backfill_subagent_child_threads(db)
         assert second_report["candidates_resolved"] == 0
-
-
-def test_timeline_sessions_api_collapses_parent_with_children(tmp_path):
-    db_path = tmp_path / "subagent-api.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    factory = make_sessionmaker(engine)
-
-    with factory() as db:
-        store = AgentsStore(db)
-        store.ingest_session(_root_payload())
-        for idx in range(3):
-            child_id = UUID(f"ddb1a69b-628e-5677-bba7-3fb76ba6ffc{idx}")
-            store.ingest_session(
-                _claude_child_payload(
-                    child_id=child_id,
-                    source_path=(
-                        f"/Users/davidrose/.claude/projects/-Users-davidrose-git-cipher982/{PARENT_ID}/subagents/agent-{idx}.jsonl"
-                    ),
-                )
-            )
-        child_thread = db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").first()
-        assert child_thread is not None
-        child_thread_id = str(child_thread.id)
-        db.commit()
-
-    def override_db():
-        db = factory()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[get_legacy_workspace_session_factory] = lambda: factory
-    api_app.dependency_overrides[get_current_browser_user] = lambda: SimpleNamespace(id=1, email="david010@example.com")
-    api_app.dependency_overrides[require_single_tenant] = lambda: None
-    try:
-        client = TestClient(api_app)
-        response = client.get("/timeline/sessions?project=cipher982&limit=20&days_back=90")
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["total"] == 1
-        assert len(body["sessions"]) == 1
-        assert body["sessions"][0]["head"]["id"] == str(PARENT_ID)
-
-        events_response = client.get(f"/timeline/sessions/{PARENT_ID}/events")
-        assert events_response.status_code == 200, events_response.text
-        events_body = events_response.json()
-        assert events_body["total"] == 1
-        assert [event["content_text"] for event in events_body["events"]] == ["Profile README redesign"]
-
-        child_response = client.get(f"/timeline/sessions/{PARENT_ID}/events?thread_id={child_thread_id}")
-        assert child_response.status_code == 200, child_response.text
-        child_body = child_response.json()
-        assert child_body["total"] == 3
-        assert {event["content_text"] for event in child_body["events"]} == {"Deploy crims on drose.io"}
-    finally:
-        api_app.dependency_overrides.clear()

@@ -537,121 +537,26 @@ def current_presence_state_for_session(
     return runtime_overlay.presence_state
 
 
-def _latest_applied_signal_at(state: Any) -> datetime | None:
-    """Latest signal-clock timestamp of any applied signal kind.
-
-    Mirrors the reducer's own recency composite (phase/progress/terminal) so
-    the cross-lane merge ranks rows the way a single reducer would.
-    """
-    return _latest_timestamp(
-        normalize_utc(getattr(state, "last_runtime_signal_at", None)),
-        normalize_utc(getattr(state, "last_progress_at", None)),
-        normalize_utc(getattr(state, "terminal_at", None)),
-    )
-
-
-def _runtime_state_newer_than(candidate: Any, existing: Any | None) -> bool:
-    """Pick the runtime row whose latest signal OCCURRED most recently.
-
-    The live and archive lanes run independent reducers, so `updated_at` is
-    write-clock, not signal-clock: transcript ingest can stamp an archive row
-    (progress-derived idle) in the same instant a fresher live phase_signal
-    lands, and a write-clock comparison would let the stale phase win. Compare
-    the composite signal clock first; fall back to write clock only when
-    neither row has an applied signal.
-    """
-    if existing is None:
-        return True
-    candidate_signal_at = _latest_applied_signal_at(candidate)
-    existing_signal_at = _latest_applied_signal_at(existing)
-    if candidate_signal_at != existing_signal_at:
-        if candidate_signal_at is None:
-            return False
-        if existing_signal_at is None:
-            return True
-        return candidate_signal_at > existing_signal_at
-    # Equal signal clocks: each lane may have applied a different subset of
-    # signals for the same instant. A row holding a semantic phase signal is
-    # richer truth than a progress-only row.
-    candidate_has_phase_signal = normalize_utc(getattr(candidate, "last_runtime_signal_at", None)) is not None
-    existing_has_phase_signal = normalize_utc(getattr(existing, "last_runtime_signal_at", None)) is not None
-    if candidate_has_phase_signal != existing_has_phase_signal:
-        return candidate_has_phase_signal
-    candidate_updated_at = normalize_utc(getattr(candidate, "updated_at", None))
-    existing_updated_at = normalize_utc(getattr(existing, "updated_at", None))
-    if candidate_updated_at != existing_updated_at:
-        if candidate_updated_at is None:
-            return False
-        if existing_updated_at is None:
-            return True
-        return candidate_updated_at > existing_updated_at
-    return int(getattr(candidate, "runtime_version", 0) or 0) > int(getattr(existing, "runtime_version", 0) or 0)
-
-
 def _load_live_runtime_state_map(session_ids: list[UUID]) -> dict[str, LiveRuntimeState]:
-    from zerg.database import live_catalog_enabled
     from zerg.database import live_store_configured
+    from zerg.services.catalog_facts import hydrate_catalog_row
+    from zerg.services.catalog_facts import session_facts_map
 
     if not live_store_configured():
         return {}
-    if live_catalog_enabled():
-        from zerg.services.catalog_facts import hydrate_catalog_row
-        from zerg.services.catalog_facts import session_facts_map
-
-        facts_by_session = session_facts_map([str(session_id) for session_id in session_ids])
-        result: dict[str, LiveRuntimeState] = {}
-        for session_id, facts in facts_by_session.items():
-            row = hydrate_catalog_row(LiveRuntimeState, facts.get("runtime"))
-            if row is not None:
-                result[session_id] = row
-        return result
-    from zerg.database import get_live_session_factory
-
-    live_session_factory = get_live_session_factory()
-    if live_session_factory is None:
-        return {}
-
-    with live_session_factory() as live_db:
-        rows = (
-            live_db.query(LiveRuntimeState)
-            .filter(LiveRuntimeState.session_id.in_(session_ids))
-            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-            .all()
-        )
-        state_by_session: dict[str, LiveRuntimeState] = {}
-        for row in rows:
-            if row.session_id is None:
-                continue
-            key = str(row.session_id)
-            state_by_session.setdefault(key, row)
-        return state_by_session
+    facts_by_session = session_facts_map([str(session_id) for session_id in session_ids])
+    result: dict[str, LiveRuntimeState] = {}
+    for session_id, facts in facts_by_session.items():
+        row = hydrate_catalog_row(LiveRuntimeState, facts.get("runtime"))
+        if row is not None:
+            result[session_id] = row
+    return result
 
 
 def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionRuntimeState | LiveRuntimeState]:
     if not session_ids:
         return {}
-    from zerg.database import live_catalog_enabled
-
-    if live_catalog_enabled():
-        return _load_live_runtime_state_map(session_ids)
-
-    rows = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.session_id.in_(session_ids))
-        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
-        .all()
-    )
-
-    state_by_session: dict[str, SessionRuntimeState | LiveRuntimeState] = {}
-    for row in rows:
-        if row.session_id is None:
-            continue
-        key = str(row.session_id)
-        state_by_session.setdefault(key, row)
-    for key, live_row in _load_live_runtime_state_map(session_ids).items():
-        if _runtime_state_newer_than(live_row, state_by_session.get(key)):
-            state_by_session[key] = live_row
-    return state_by_session
+    return _load_live_runtime_state_map(session_ids)
 
 
 def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:

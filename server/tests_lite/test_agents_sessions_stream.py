@@ -34,7 +34,6 @@ def test_machine_session_stream_uses_commit_driven_catalog_projection(monkeypatc
         captured["owner_id"] = owner_id
         yield {"event": "connected", "data": "{}"}
 
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(agents_sessions, "stream_live_catalog_machine_sessions", fake_stream)
     request = _Request()
 

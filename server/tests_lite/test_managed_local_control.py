@@ -10,20 +10,32 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
+from sqlalchemy.orm import Session as SqlSession
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg.catalogd.schema import create_catalog_engine
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionObservation
+from zerg.models.agents import SessionRun
+from zerg.models.agents import SessionThread
 from zerg.models.enums import UserRole
+from zerg.models.live_store import LiveSession
+from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.catalogd_supervisor import catalogd_paths
+from zerg.services.live_control_catalog import load_live_control_session_snapshot
 from zerg.services.managed_local_control import ManagedLocalPhaseUpdate
 from zerg.services.managed_local_control import await_managed_local_hook_phase_update
 from zerg.services.managed_local_control import await_managed_local_turn_events
@@ -38,6 +50,7 @@ from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_execution_home import ManagedSessionTransport
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 
 
 def _make_db(tmp_path):
@@ -70,8 +83,8 @@ def _control_plane_for_provider(provider: str) -> str:
     return "claude_channel_bridge"
 
 
-def _seed_user_runner_and_session(db, *, provider: str = "claude"):
-    user = User(email="managed-local-control@test.local", role=UserRole.USER.value)
+def _seed_user_runner_and_session(db, *, provider: str = "claude", owner_id: int | None = None):
+    user = User(id=owner_id, email="managed-local-control@test.local", role=UserRole.USER.value)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -114,6 +127,101 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude"):
     db.commit()
     db.refresh(session)
     return user, runner, session
+
+
+def _seed_managed_control_session(db, live_catalog, *, provider: str = "claude"):
+    """Seed one managed session in both stores and return production's control facts.
+
+    The archive keeps the kernel rows, transcript and observations the control
+    service reads through ``db``. The live catalog keeps the identity, run and
+    attached connection catalogd projects into ``catalog_facts`` -- the same
+    snapshot ``_load_session_for_continuation`` hands the service on a Runtime
+    Host, and the only shape from which the capability preflight answers.
+    """
+
+    owner_id = live_catalog.create_user("managed-local-control@test.local")
+    user, runner, session = _seed_user_runner_and_session(db, provider=provider, owner_id=owner_id)
+    thread = db.query(SessionThread).filter(SessionThread.session_id == session.id).one()
+    run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id).one()
+    connection = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
+
+    database_path, _socket_path = catalogd_paths()
+    engine = create_catalog_engine(database_path)
+    now = datetime.now(timezone.utc)
+    try:
+        with SqlSession(engine) as catalog_db:
+            catalog_db.add(
+                LiveSessionCatalog(
+                    session_id=str(session.id),
+                    provider=session.provider,
+                    environment=session.environment,
+                    project=session.project,
+                    device_id=session.device_id,
+                    cwd=session.cwd,
+                    started_at=session.started_at,
+                    primary_thread_id=str(thread.id),
+                    loop_mode=session.loop_mode,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            catalog_db.add(
+                LiveSession(
+                    session_id=str(session.id),
+                    owner_id=str(owner_id),
+                    provider=session.provider,
+                    device_id=session.device_id,
+                    state="attached",
+                    started_at=session.started_at,
+                    last_seen_at=now,
+                    updated_at=now,
+                )
+            )
+            catalog_db.add(
+                LiveSessionThread(
+                    id=str(thread.id),
+                    session_id=str(session.id),
+                    provider=thread.provider,
+                    branch_kind=thread.branch_kind,
+                    is_primary=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            catalog_db.add(
+                LiveSessionRun(
+                    id=str(run.id),
+                    thread_id=str(thread.id),
+                    provider=run.provider,
+                    host_id=run.host_id,
+                    cwd=run.cwd,
+                    launch_origin=run.launch_origin,
+                    started_at=run.started_at,
+                )
+            )
+            catalog_db.add(
+                LiveSessionConnection(
+                    run_id=str(run.id),
+                    control_plane=connection.control_plane,
+                    acquisition_kind=connection.acquisition_kind,
+                    state=connection.state,
+                    device_id=session.device_id,
+                    can_send_input=connection.can_send_input,
+                    can_interrupt=connection.can_interrupt,
+                    can_terminate=connection.can_terminate,
+                    can_tail_output=connection.can_tail_output,
+                    can_resume=connection.can_resume,
+                    acquired_at=now,
+                    last_health_at=now,
+                )
+            )
+            catalog_db.commit()
+    finally:
+        engine.dispose()
+
+    control_session = load_live_control_session_snapshot(session.id, owner_id=owner_id)
+    assert control_session is not None
+    return user, runner, session, control_session
 
 
 @dataclass(frozen=True)
@@ -238,12 +346,12 @@ def _install_fake_control_dispatch(
     return dispatcher
 
 
-def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
         existing_event = AgentEvent(
             session_id=session.id,
             role="assistant",
@@ -257,7 +365,7 @@ def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue",
                 request_id="managed-local-control-test",
             )
@@ -271,18 +379,18 @@ def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude
         assert dispatcher.calls[0]["payload"] == {"text": "continue"}
 
 
-def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path):
+def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
 
         result = asyncio.run(
             interrupt_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 request_id="managed-local-interrupt-test",
             )
         )
@@ -295,18 +403,18 @@ def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch
         assert dispatcher.calls[0]["payload"] == {}
 
 
-def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, tmp_path):
+def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
 
         result = asyncio.run(
             interrupt_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 request_id="managed-local-interrupt-test",
             )
         )
@@ -318,18 +426,18 @@ def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, 
         assert dispatcher.calls[0]["payload"] == {}
 
 
-def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path):
+def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
 
         result = asyncio.run(
             steer_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="redirect",
                 request_id="managed-local-steer-test",
             )
@@ -343,7 +451,7 @@ def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeyp
         assert dispatcher.calls[0]["payload"] == {"text": "redirect", "intent": "steer"}
 
 
-def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path):
+def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
     refs = [
@@ -356,13 +464,13 @@ def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(
     ]
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
 
         result = asyncio.run(
             steer_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="redirect",
                 request_id="managed-local-steer-test",
                 attachments=refs,
@@ -404,7 +512,7 @@ def test_unsupported_steer_rejects_before_control_write(monkeypatch, tmp_path):
     assert dispatcher.calls == []
 
 
-def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path):
+def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path, live_catalog):
     """The turn_ended race branch surfaces the sentinel so the router maps
     Codex/Claude steer races to a structured 409 (preserved by the fix)."""
 
@@ -422,14 +530,14 @@ def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
         from zerg.services.managed_local_control import MANAGED_LOCAL_STEER_TURN_ENDED
 
         result = asyncio.run(
             steer_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="redirect",
                 request_id="managed-local-steer-test",
             )
@@ -439,7 +547,7 @@ def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path
         assert result.error == MANAGED_LOCAL_STEER_TURN_ENDED
 
 
-def test_interrupt_managed_local_session_reports_nonzero_exit(monkeypatch, tmp_path):
+def test_interrupt_managed_local_session_reports_nonzero_exit(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(
         monkeypatch,
@@ -454,13 +562,13 @@ def test_interrupt_managed_local_session_reports_nonzero_exit(monkeypatch, tmp_p
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
 
         result = asyncio.run(
             interrupt_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
             )
         )
 
@@ -514,18 +622,18 @@ def test_await_managed_local_turn_events_returns_new_persisted_events(tmp_path):
         assert [event.content_text for event in events] == ["after"]
 
 
-def test_send_text_to_managed_local_session_uses_engine_payload_for_codex(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_uses_engine_payload_for_codex(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue",
             )
         )
@@ -536,7 +644,7 @@ def test_send_text_to_managed_local_session_uses_engine_payload_for_codex(monkey
         assert dispatcher.calls[0]["payload"] == {"text": "continue"}
 
 
-def test_send_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
     refs = [
@@ -549,13 +657,13 @@ def test_send_text_to_managed_local_session_passes_codex_attachments_to_engine(m
     ]
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue",
                 attachments=refs,
             )
@@ -565,18 +673,18 @@ def test_send_text_to_managed_local_session_passes_codex_attachments_to_engine(m
         assert dispatcher.calls[0]["payload"] == {"text": "continue", "attachments": refs}
 
 
-def test_send_text_to_managed_local_session_rejects_attachments_for_claude(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_rejects_attachments_for_claude(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue",
                 attachments=[
                     {
@@ -594,18 +702,18 @@ def test_send_text_to_managed_local_session_rejects_attachments_for_claude(monke
         assert dispatcher.calls == []
 
 
-def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
 
         first = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue alpha",
                 request_id="managed-local-control-first",
             )
@@ -614,7 +722,7 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="status? [ok]",
                 request_id="managed-local-control-second",
             )
@@ -763,19 +871,19 @@ def test_await_managed_local_hook_phase_update_accepts_opencode_event_phase_sour
         assert result.source == "opencode_event"
 
 
-def test_send_text_to_managed_local_session_uses_claude_channel_bridge_payload(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_uses_claude_channel_bridge_payload(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
         db.commit()
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue from loop",
                 request_id="managed-local-claude-channel",
             )
@@ -788,7 +896,7 @@ def test_send_text_to_managed_local_session_uses_claude_channel_bridge_payload(m
         assert dispatcher.calls[0]["payload"] == {"text": "continue from loop"}
 
 
-def test_send_text_to_managed_local_session_trusts_engine_turn_start_ack(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_trusts_engine_turn_start_ack(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     dispatch_calls: list[dict[str, object]] = []
 
@@ -824,13 +932,13 @@ def test_send_text_to_managed_local_session_trusts_engine_turn_start_ack(monkeyp
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue",
                 request_id="managed-local-engine-verified",
                 verify_turn_started=True,
@@ -899,7 +1007,7 @@ def test_validate_managed_local_chat_done_payload_rejects_nonzero_exit_code():
     assert error == "expected exit_code=0, got 3"
 
 
-def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_codex(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_codex(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
 
@@ -929,13 +1037,13 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue",
                 request_id="managed-local-control-verified",
                 verify_turn_started=True,
@@ -948,7 +1056,7 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
 
 
 def test_send_text_to_managed_local_session_reports_codex_verification_failure_without_runtime_signal(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, live_catalog
 ):
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
@@ -962,13 +1070,13 @@ def test_send_text_to_managed_local_session_reports_codex_verification_failure_w
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue",
                 request_id="managed-local-control-verify-fail",
                 verify_turn_started=True,
@@ -981,7 +1089,7 @@ def test_send_text_to_managed_local_session_reports_codex_verification_failure_w
         assert result.error == "Managed local session did not acknowledge the prompt after send"
 
 
-def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
 
@@ -1011,13 +1119,13 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue",
                 request_id="managed-local-codex-verified",
                 verify_turn_started=True,
@@ -1029,7 +1137,7 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
         assert result.verified_turn_started is True
 
 
-def test_send_text_to_managed_local_session_reports_codex_hook_verification_failure(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_reports_codex_hook_verification_failure(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
 
@@ -1042,13 +1150,13 @@ def test_send_text_to_managed_local_session_reports_codex_hook_verification_fail
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="continue",
                 request_id="managed-local-codex-verify-fail",
                 verify_turn_started=True,
@@ -1233,7 +1341,7 @@ def test_await_managed_local_turn_terminal_ignores_stale_terminal_inserted_after
         assert result is None
 
 
-def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_persisted_prompt(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_persisted_prompt(monkeypatch, tmp_path, live_catalog):
     """Native Claude channel sends verify against the persisted user prompt, not hook phases."""
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
@@ -1256,18 +1364,14 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
-        session.managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
-        # Session-identity-kernel cleanup: ``provider_session_id`` is no
-        # longer settable on AgentSession; it derives from session.id.
-        session.cwd = "/tmp/demo"
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
         db.commit()
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="hello channel",
                 request_id="channel-test",
                 verify_turn_started=True,
@@ -1280,7 +1384,7 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
     assert len(dispatcher.calls) == 1
 
 
-def test_send_text_to_managed_local_session_reports_claude_channel_verification_failure(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_reports_claude_channel_verification_failure(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
     monkeypatch.setattr(
@@ -1289,18 +1393,14 @@ def test_send_text_to_managed_local_session_reports_claude_channel_verification_
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
-        session.managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
-        # Session-identity-kernel cleanup: ``provider_session_id`` is no
-        # longer settable on AgentSession; it derives from session.id.
-        session.cwd = "/tmp/demo"
+        user, _runner, session, control_session = _seed_managed_control_session(db, live_catalog, provider="claude")
         db.commit()
 
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
                 owner_id=user.id,
-                session=session,
+                session=control_session,
                 text="hello channel",
                 request_id="channel-test",
                 verify_turn_started=True,

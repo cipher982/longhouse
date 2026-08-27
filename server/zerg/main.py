@@ -407,9 +407,6 @@ async def short_session_link(prefix: str):
     """
     from fastapi.responses import RedirectResponse
 
-    from zerg.database import catalog_db_session
-    from zerg.database import live_catalog_enabled
-    from zerg.models.agents import AgentSession
     from zerg.services.catalog_read_gateway import CatalogReadError
     from zerg.services.catalog_read_gateway import resolve_session_prefix
 
@@ -417,24 +414,13 @@ async def short_session_link(prefix: str):
     if len(cleaned) < SHORT_LINK_MIN_PREFIX or any(ch not in "0123456789abcdef-" for ch in cleaned):
         return RedirectResponse(url="/timeline", status_code=302)
 
-    if live_catalog_enabled():
-        try:
-            resolution = await asyncio.to_thread(resolve_session_prefix, cleaned)
-        except CatalogReadError as exc:
-            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
-        if resolution.get("status") == "unique":
-            session = resolution.get("session") or {}
-            return RedirectResponse(url=f"/timeline/{session.get('session_id')}", status_code=302)
-    else:
-        with catalog_db_session() as db:
-            matches = (
-                db.query(AgentSession.id)
-                .filter(AgentSession.id.like(f"{cleaned}%"))
-                .limit(2)
-                .all()
-            )
-        if len(matches) == 1:
-            return RedirectResponse(url=f"/timeline/{matches[0][0]}", status_code=302)
+    try:
+        resolution = await asyncio.to_thread(resolve_session_prefix, cleaned)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    if resolution.get("status") == "unique":
+        session = resolution.get("session") or {}
+        return RedirectResponse(url=f"/timeline/{session.get('session_id')}", status_code=302)
     # zero matches or an ambiguous prefix -> timeline home, no guessing
     return RedirectResponse(url="/timeline", status_code=302)
 
@@ -453,10 +439,6 @@ async def short_session_link_preview(prefix: str):
     """
     from fastapi.responses import JSONResponse
 
-    from zerg.database import catalog_db_session
-    from zerg.database import live_catalog_enabled
-    from zerg.models.agents import AgentSession
-    from zerg.models.user import User
     from zerg.services.catalog_read_gateway import CatalogReadError
     from zerg.services.catalog_read_gateway import resolve_session_prefix
 
@@ -464,50 +446,22 @@ async def short_session_link_preview(prefix: str):
     if len(cleaned) < SHORT_LINK_MIN_PREFIX or any(ch not in "0123456789abcdef-" for ch in cleaned):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if live_catalog_enabled():
-        try:
-            resolution = await asyncio.to_thread(resolve_session_prefix, cleaned)
-        except CatalogReadError as exc:
-            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
-        if resolution.get("status") != "unique":
-            raise HTTPException(status_code=404, detail="Session not found")
-        session = resolution.get("session") or {}
-        owner = resolution.get("owner") or {}
-        session_payload = {
-            "session_id": session.get("session_id"),
-            "provider": session.get("provider"),
-            "device_name": session.get("device_name"),
-            "started_at": session.get("started_at"),
-            "ended_at": session.get("ended_at"),
-            "owner_display_name": owner.get("display_name"),
-        }
-    else:
-        with catalog_db_session() as db:
-            row = (
-                db.query(
-                    AgentSession.id,
-                    AgentSession.provider,
-                    AgentSession.device_name,
-                    AgentSession.started_at,
-                    AgentSession.ended_at,
-                )
-                .filter(AgentSession.id.like(f"{cleaned}%"))
-                .limit(2)
-                .all()
-            )
-            if len(row) != 1:
-                raise HTTPException(status_code=404, detail="Session not found")
-            session_row = row[0]
-            owner_row = db.query(User.display_name, User.email).order_by(User.id.asc()).first()
-        owner_display_name = (owner_row[0] or "").strip() or None if owner_row is not None else None
-        session_payload = {
-            "session_id": str(session_row[0]),
-            "provider": session_row.provider,
-            "device_name": session_row.device_name,
-            "started_at": session_row.started_at.isoformat() if session_row.started_at else None,
-            "ended_at": session_row.ended_at.isoformat() if session_row.ended_at else None,
-            "owner_display_name": owner_display_name,
-        }
+    try:
+        resolution = await asyncio.to_thread(resolve_session_prefix, cleaned)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    if resolution.get("status") != "unique":
+        raise HTTPException(status_code=404, detail="Session not found")
+    session = resolution.get("session") or {}
+    owner = resolution.get("owner") or {}
+    session_payload = {
+        "session_id": session.get("session_id"),
+        "provider": session.get("provider"),
+        "device_name": session.get("device_name"),
+        "started_at": session.get("started_at"),
+        "ended_at": session.get("ended_at"),
+        "owner_display_name": owner.get("display_name"),
+    }
 
     return JSONResponse(
         content=session_payload,

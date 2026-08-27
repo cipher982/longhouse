@@ -29,7 +29,6 @@ from zerg.models.agents import SessionTurn
 from zerg.models.user import User
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import claim_next_live_queued_receipt
-from zerg.services.live_session_inputs import list_recent_live_input_receipts
 from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
 from zerg.services.live_session_inputs import mark_live_receipt_failed
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
@@ -354,23 +353,21 @@ async def _wake_live_session_input_queue(
 ) -> QueueWakeResult | None:
     if not database_module.live_store_configured():
         return None
-    if database_module.live_catalog_enabled():
-        from zerg.services.live_session_inputs import list_recent_live_input_receipts_catalog
+    from zerg.services.live_session_inputs import list_recent_live_input_receipts_catalog
 
-        state = await list_recent_live_input_receipts_catalog(session_id=session_id)
-        if state is None:
-            return None
-        receipts = state[0]
-    else:
-        live_session_factory = database_module.get_live_session_factory()
-        if live_session_factory is None:
-            return None
-        try:
-            with live_session_factory() as live_db:
-                receipts = list_recent_live_input_receipts(live_db, session_id=session_id)
-        except Exception:
-            logger.warning("Live queue wake could not read receipts for session %s", session_id, exc_info=True)
-            return None
+    state = await list_recent_live_input_receipts_catalog(session_id=session_id)
+    if state is None:
+        return None
+    receipts = state[0]
+
+    # Claiming and dispatching below still needs a Live Store ORM factory:
+    # `claim_next_live_queued_receipt` has no catalogd equivalent yet. Reading
+    # receipts through the catalog while claiming through SQLAlchemy is the
+    # shape this function has always had; without a factory there is nothing to
+    # claim against, so the caller falls through to the archive queue.
+    live_session_factory = database_module.get_live_session_factory()
+    if live_session_factory is None:
+        return None
 
     queued = next((receipt for receipt in receipts if receipt.status == INPUT_STATUS_QUEUED), None)
     if queued is None:

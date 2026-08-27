@@ -108,7 +108,6 @@ async def test_control_register_reconciles_starting_console_turns(monkeypatch):
         return []
 
     registry = object()
-    monkeypatch.setattr("zerg.routers.agents_control.database_module.live_catalog_enabled", lambda: True)
     monkeypatch.setattr("zerg.routers.agents_control.reconcile_starting_console_turns_for_device", fake_reconcile)
 
     await _reconcile_console_turns_after_register(owner_id=7, device_id="cube", registry=registry)
@@ -117,57 +116,17 @@ async def test_control_register_reconciles_starting_console_turns(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_machine_control_result_reconcile_uses_write_serializer(monkeypatch):
-    calls = []
-
-    class FakeSerializer:
-        async def execute_or_direct(self, fn, fallback_db, *, auto_commit, label):
-            calls.append(("execute", label, fallback_db, auto_commit))
-            return fn("serializer-db")
-
-    def fake_reconcile(db, message, *, owner_id, device_id):
-        calls.append(("reconcile", db, message["command_id"], owner_id, device_id))
-        return True
-
-    monkeypatch.setattr("zerg.routers.agents_control.get_write_serializer", lambda: FakeSerializer())
-    monkeypatch.setattr(
-        "zerg.routers.agents_control.reconcile_machine_control_operation_from_command_result",
-        fake_reconcile,
-    )
-
-    matched = await _reconcile_machine_control_operation_result(
-        "fallback-db",
-        {"command_id": "machine-op:test"},
-        owner_id=7,
-        device_id="cinder",
-    )
-
-    assert matched is True
-    assert calls == [
-        ("execute", "machine-control-result", "fallback-db", False),
-        ("reconcile", "serializer-db", "machine-op:test", 7, "cinder"),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_machine_control_result_finishes_the_operation_in_the_live_catalog(monkeypatch):
+async def test_machine_control_result_finishes_the_operation_in_the_live_catalog():
     """A Runtime Host finishes the operation over RPC, never over SQLite.
 
-    This replaces a test that pinned the live-write-serializer branch. A live
-    store is configured exactly when ``live_catalog_enabled()`` is true -- the
-    live URL is the file-backed archive's sibling -- so the only process that
-    reaches that branch is an archive-route child, which never serves a control
-    websocket. Production reaches catalogd or it reaches nothing, and pinning
-    the SQLite fallback let ``control.command_result.apply.v2`` regressions
-    through. Here the daemon is real: the method has to exist, accept these
-    parameters, and durably finish the operation.
+    This replaces a test that pinned the live-write-serializer branch. That
+    branch is gone: ``_reconcile_machine_control_operation_result`` no longer
+    takes a database at all, because a control websocket only ever runs on a
+    Runtime Host and a Runtime Host reaches catalogd or reaches nothing.
+    Pinning the SQLite fallback let ``control.command_result.apply.v2``
+    regressions through. Here the daemon is real: the method has to exist,
+    accept these parameters, and durably finish the operation.
     """
-
-    def serializer_must_not_run():  # pragma: no cover - assertion is the behavior
-        raise AssertionError("the live catalog reconciles control results over RPC, not over SQLite")
-
-    monkeypatch.setattr("zerg.routers.agents_control.get_live_write_serializer", serializer_must_not_run)
-    monkeypatch.setattr("zerg.routers.agents_control.get_write_serializer", serializer_must_not_run)
 
     with provision_live_catalog():
         command_id = f"managed-control:{uuid4()}:session.send_text"
@@ -176,13 +135,11 @@ async def test_machine_control_result_finishes_the_operation_in_the_live_catalog
         other_operation_id = _seed_running_control_operation(owner_id=8, device_id="cinder", command_id=other_command_id)
 
         matched = await _reconcile_machine_control_operation_result(
-            None,
             {"type": "command_result", "command_id": command_id, "ok": True, "result": {"stdout": "accepted"}},
             owner_id=7,
             device_id="cinder",
         )
         stray = await _reconcile_machine_control_operation_result(
-            None,
             {"type": "command_result", "command_id": f"managed-control:{uuid4()}:session.send_text", "ok": True, "result": {}},
             owner_id=7,
             device_id="cinder",
@@ -190,7 +147,6 @@ async def test_machine_control_result_finishes_the_operation_in_the_live_catalog
         # A control channel authenticates as exactly one owner, so a result
         # naming another owner's command must not finish that owner's operation.
         cross_owner = await _reconcile_machine_control_operation_result(
-            None,
             {"type": "command_result", "command_id": other_command_id, "ok": True, "result": {"stdout": "stolen"}},
             owner_id=7,
             device_id="cinder",
@@ -220,17 +176,10 @@ async def test_machine_control_result_reconcile_uses_catalogd_without_db(monkeyp
             calls.append((method, params, timeout_seconds))
             return {"matched": True, "match_kind": "operation", "commit_seq": "9"}
 
-    def fail_serializer():  # pragma: no cover - assertion is the behavior
-        raise AssertionError("catalog control reconciliation must not resolve a SQLite serializer")
-
-    monkeypatch.setattr("zerg.routers.agents_control.database_module.live_catalog_enabled", lambda: True)
     monkeypatch.setattr("zerg.routers.agents_control.get_catalogd_client", lambda: CatalogClient())
-    monkeypatch.setattr("zerg.routers.agents_control.get_live_write_serializer", fail_serializer)
-    monkeypatch.setattr("zerg.routers.agents_control.get_write_serializer", fail_serializer)
 
     message = {"type": "command_result", "command_id": "machine-op:test", "ok": True, "result": {}}
     matched = await _reconcile_machine_control_operation_result(
-        None,
         message,
         owner_id=7,
         device_id="cinder",

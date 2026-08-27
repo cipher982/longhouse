@@ -1,6 +1,4 @@
-import hmac
 import logging
-import os
 from datetime import datetime
 from datetime import timezone
 from enum import Enum
@@ -14,7 +12,6 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -22,10 +19,8 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 
 # Database helpers
-from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import get_session_factory
-from zerg.database import live_catalog_enabled
 
 # Auth dependency
 from zerg.dependencies.auth import get_current_user
@@ -95,126 +90,6 @@ async def get_super_admin_status(current_user=Depends(get_current_user)) -> Supe
     return SuperAdminStatusResponse(is_super_admin=is_super_admin, requires_password=is_production)
 
 
-def clear_user_data(engine) -> dict[str, any]:
-    """Clear user-generated data while preserving infrastructure.
-
-    Uses schema discovery to find tables to clear, avoiding hardcoded lists.
-    Includes timeouts and retry logic for lock contention under high concurrency.
-
-    Args:
-        engine: SQLAlchemy engine
-
-    Returns:
-        Dictionary with operation results
-    """
-    import time
-
-    from sqlalchemy import text
-    from sqlalchemy.exc import OperationalError
-
-    settings = get_settings()
-    # Counting rows for every table adds measurable latency under parallel E2E.
-    # It's useful in dev/prod for diagnostics, but unnecessary for tests.
-    should_count_rows = os.getenv("RESET_DB_COUNT_ROWS", "").strip() == "1" or not (settings.testing or os.getenv("NODE_ENV") == "test")
-
-    # Tables to preserve (infrastructure/auth)
-    # Preserve infrastructure/auth tables.
-    #
-    # In development, a `dev-runner` container may be running continuously.
-    # If we clear the `runners` table, the runner will immediately start a noisy
-    # reconnect loop ("Runner not found by name") until the backend is restarted
-    # and auto-seeding runs again. Keeping runners is the least surprising DX.
-    preserve_tables = {"users", "alembic_version", "runners"}
-
-    discovered_tables: list[tuple[str | None, str]] = [(table.schema, table.name) for table in Base.metadata.sorted_tables]
-
-    # Tables to clear (user-generated content)
-    clear_tables = [table_ref for table_ref in discovered_tables if table_ref[1] not in preserve_tables]
-
-    if not clear_tables:
-        return {"message": "No user data tables found to clear", "tables_cleared": [], "rows_cleared": 0}
-
-    start_time = time.perf_counter()
-    max_attempts = 1
-    last_err: Exception | None = None
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            with engine.connect() as conn:
-                total_before: int | None = None
-                if should_count_rows:
-                    # Count rows before clearing (best-effort; for diagnostics only)
-                    total_before = 0
-                    for schema, table in clear_tables:
-                        try:
-                            qualified_name = f'"{schema}"."{table}"' if schema else f'"{table}"'
-                            count = conn.execute(text(f"SELECT COUNT(*) FROM {qualified_name}")).scalar() or 0
-                            total_before += count
-                        except Exception:
-                            pass
-
-                # SQLite: Disable FK checks and DELETE
-                conn.execute(text("PRAGMA foreign_keys = OFF"))
-                for schema, table in sorted(clear_tables, key=lambda item: ((item[0] or ""), item[1])):
-                    try:
-                        qualified_name = f'"{schema}"."{table}"' if schema else f'"{table}"'
-                        conn.execute(text(f"DELETE FROM {qualified_name}"))
-                    except Exception as e:
-                        table_label = f"{schema}.{table}" if schema else table
-                        logger.warning(f"Failed to clear table {table_label}: {e}")
-                conn.execute(text("PRAGMA foreign_keys = ON"))
-
-                conn.commit()
-
-            # Success - break out of retry loop
-            duration_ms = int((time.perf_counter() - start_time) * 1000)
-
-            return {
-                "message": "User data cleared successfully",
-                "operation": "clear_data",
-                "tables_cleared": [
-                    f"{schema}.{table}" if schema else table
-                    for schema, table in sorted(clear_tables, key=lambda item: ((item[0] or ""), item[1]))
-                ],
-                "rows_cleared": total_before,
-                "counts_skipped": not should_count_rows,
-                "duration_ms": duration_ms,
-                "attempts": attempt,
-            }
-
-        except OperationalError as e:
-            last_err = e
-            err_str = str(e).lower()
-            # Retry on lock timeout or connection errors
-            if attempt < max_attempts and ("lock" in err_str or "timeout" in err_str or "connection" in err_str):
-                logger.warning(f"clear_user_data attempt {attempt} failed (retrying): {e}")
-                time.sleep(0.1 * attempt)  # Brief backoff: 100ms, 200ms
-                continue
-            raise
-
-    # Should not reach here, but safety net
-    if last_err:
-        raise last_err
-    raise RuntimeError("clear_user_data: unexpected exit from retry loop")
-
-
-def full_schema_rebuild(engine, settings, is_production, diagnostics) -> dict[str, any]:
-    """Perform full schema rebuild (existing full reset logic).
-
-    Args:
-        engine: SQLAlchemy engine
-        settings: Application settings
-        is_production: Whether running in production
-        diagnostics: Diagnostics dictionary to populate
-
-    Returns:
-        Dictionary with operation results
-    """
-    # This encapsulates the existing full reset logic
-    # (I'll move the existing logic here in the next step)
-    pass
-
-
 @router.post("/reset-database")
 async def reset_database(
     request: DatabaseResetRequest,
@@ -230,183 +105,7 @@ async def reset_database(
 
 
 def _reset_database_sync(request: DatabaseResetRequest, current_user):
-    settings = get_settings()
-    if live_catalog_enabled():
-        raise HTTPException(status_code=503, detail="Archive reset is unavailable while storage is isolated")
-
-    # Log the reset attempt for audit purposes
-    logger.warning(
-        f"Database reset ({request.reset_type.value}) requested by {getattr(current_user, 'email', 'unknown')} "
-        f"in environment: {settings.environment or 'development'}"
-    )
-
-    # Check if we're in production and require password confirmation
-    is_production = settings.environment and settings.environment.lower() == "production"
-    if is_production:
-        # Require password confirmation in production
-        if not settings.db_reset_password:
-            logger.error("DB_RESET_PASSWORD not configured for production environment")
-            raise HTTPException(status_code=500, detail="Database reset not properly configured for production environment")
-
-        if not request.confirmation_password:
-            raise HTTPException(status_code=400, detail="Password confirmation required for database reset in production")
-
-        if not hmac.compare_digest(request.confirmation_password.encode("utf-8"), settings.db_reset_password.encode("utf-8")):
-            logger.warning(f"Failed database reset attempt by {getattr(current_user, 'email', 'unknown')} - incorrect password")
-            raise HTTPException(status_code=403, detail="Incorrect confirmation password")
-
-    # Allow in development/testing environments without password
-    if not settings.testing and not is_production and (settings.environment or "") not in ["development", ""]:
-        logger.warning("Attempted to reset database in unsupported environment")
-        raise HTTPException(status_code=403, detail="Database reset is only available in development and production environments")
-
-    try:
-        # Obtain the *current* engine – respects Playwright worker isolation
-        session_factory = get_session_factory()
-
-        # SQLAlchemy 2.0 removed the ``bind`` attribute from ``sessionmaker``.
-        # We therefore open a *temporary* session and call ``get_bind()`` to
-        # retrieve the underlying Engine in a version-agnostic way.
-        with session_factory() as _tmp_session:  # type: ignore[arg-type]
-            engine = _tmp_session.get_bind()
-
-        if engine is None:  # pragma: no cover – safety guard
-            raise RuntimeError("Session factory returned no bound engine")
-
-        # Dispatch to the appropriate reset operation
-        if request.reset_type == ResetType.CLEAR_DATA:
-            # Simple user data clearing - no connection management needed
-            result = clear_user_data(engine)
-            return result
-
-        # Full schema rebuild - requires careful connection management
-        diagnostics: dict[str, object] = {
-            "environment": (settings.environment or "") or "development",
-            "dialect": getattr(engine.dialect, "name", "unknown"),
-        }
-
-        # Drop & recreate schema so **new columns** land automatically when
-        # models change during active dev work.
-        import time
-
-        start_counts_ts = time.perf_counter()
-
-        # Capture row counts before reset for a few key tables (best-effort)
-        def _safe_count(table: str) -> int:
-            try:
-                with engine.connect() as conn:
-                    from sqlalchemy import text as _t
-
-                    res = conn.execute(_t(f'SELECT COUNT(*) FROM "{table}"'))
-                    return int(res.scalar() or 0)
-            except Exception:
-                return 0
-
-        # Use schema discovery instead of hardcoded table list
-        key_tables = [table.name for table in Base.metadata.tables.values()]
-        tables_before: dict[str, int] = {t: _safe_count(t) for t in key_tables}
-        total_before = sum(tables_before.values())
-        diagnostics["tables_before_counts"] = tables_before
-        diagnostics["total_rows_before"] = total_before
-        diagnostics["pre_count_ms"] = int((time.perf_counter() - start_counts_ts) * 1000)
-
-        start_reset_ts = time.perf_counter()
-        max_attempts = 1  # SQLite doesn't need retries
-        last_err: Exception | None = None
-
-        for attempt in range(1, max_attempts + 1):
-            try:
-                logger.info(f"Dropping all tables … (attempt {attempt}/{max_attempts})")
-                # SQLite-only: simple drop and recreate (single declarative base)
-                Base.metadata.drop_all(bind=engine)
-
-                logger.info("Re-creating all tables …")
-                Base.metadata.create_all(bind=engine)
-
-                # Count tables immediately after recreation (should be 0)
-                def _safe_count_immediate(table: str) -> int:
-                    try:
-                        with engine.connect() as conn:
-                            from sqlalchemy import text as _t2
-
-                            res = conn.execute(_t2(f'SELECT COUNT(*) FROM "{table}"'))
-                            return int(res.scalar() or 0)
-                    except Exception:
-                        return 0
-
-                tables_after_immediate = {t: _safe_count_immediate(t) for t in key_tables}
-
-                last_err = None
-                break
-            except Exception as e:  # pragma: no cover – operational guardrail
-                last_err = e
-                logger.warning(f"Drop/create failed on attempt {attempt}: {e!s}")
-                time.sleep(1.0)
-
-        reset_ms = int((time.perf_counter() - start_reset_ts) * 1000)
-        diagnostics["drop_create_ms"] = reset_ms
-        diagnostics["attempts_used"] = attempt  # last attempt number executed
-
-        if last_err is not None:
-            raise last_err
-
-        # Create test user for foreign key constraints in test environment
-        if settings.testing or os.getenv("NODE_ENV") == "test":
-            from sqlalchemy import text
-
-            with engine.connect() as conn:
-                result = conn.execute(text("SELECT COUNT(*) FROM users WHERE id = 1"))
-                user_count = result.scalar()
-                if user_count == 0:
-                    logger.info("Creating test user for foreign key constraints...")
-                    conn.execute(
-                        text("""
-                        INSERT INTO users (id, email, role, is_active, provider, provider_user_id,
-                                          display_name, context, created_at, updated_at)
-                        VALUES (1, 'test@example.com', 'ADMIN', 1, 'dev', 'test-user-1',
-                                'Test User', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """)
-                    )
-                    conn.commit()
-                    logger.info("Test user created")
-
-        # Use the immediate count taken right after table creation (accurate reset verification)
-        total_after = sum(tables_after_immediate.values())
-        diagnostics["tables_after_counts"] = tables_after_immediate
-        diagnostics["total_rows_after"] = total_after
-        diagnostics["post_count_ms"] = 0  # Immediate count, no extra time
-
-        logger.info(
-            "Database schema reset complete | before=%s after=%s drop_create_ms=%s",
-            total_before,
-            total_after,
-            reset_ms,
-        )
-
-        # Dispose again after recreation to release references held by
-        # background threads.  However, **skip** this step when the backend
-        # runs inside the unit-test environment (``TESTING=1``) because
-        # test fixtures may still hold an *open* SQLAlchemy ``Session`` that
-        # shares the same Engine/connection.  Calling ``engine.dispose()``
-        # would invalidate those connections and subsequent calls like
-        # ``Session.close()`` trigger a *ProgrammingError: Cannot operate on
-        # a closed database* exception which breaks the tear-down phase.
-
-        if not settings.testing:  # avoid invalidating live connections in tests
-            engine.dispose()
-
-        # Include diagnostics in API response for UI/console display
-        return {
-            "message": "Database reset successfully",
-            **diagnostics,
-        }
-    except Exception as e:
-        logger.error(f"Error resetting database: {str(e)}")
-        # Still return success if it's a user constraint error
-        # (likely from parallel test runs)
-        if "UNIQUE constraint failed: users.email" in str(e):
-            return {"message": "Database reset successfully (existing user)"}
-        return JSONResponse(status_code=500, content={"detail": f"Failed to reset database: {str(e)}"})
+    raise HTTPException(status_code=503, detail="Archive reset is unavailable while storage is isolated")
 
 
 @router.get("/provider-capabilities")
@@ -437,58 +136,7 @@ async def get_migration_log():
 @router.post("/fix-database-schema")
 async def fix_database_schema():
     """Directly fix the missing updated_at column issue."""
-    # Check if we're in development mode
-    settings = get_settings()
-    if live_catalog_enabled():
-        raise HTTPException(status_code=503, detail="Archive schema repair is unavailable while storage is isolated")
-    if not settings.testing and (settings.environment or "") != "development":
-        logger.warning("Attempted to fix database schema in non-development environment")
-        raise HTTPException(status_code=403, detail="Database schema fix is only available in development environment")
-
-    try:
-        import sqlalchemy as sa
-        from sqlalchemy import text
-
-        session_factory = get_session_factory()
-
-        with session_factory() as session:
-            engine = session.get_bind()
-
-            # Check if updated_at column exists
-            inspector = sa.inspect(engine)
-            if not inspector.has_table("connectors"):
-                return {"message": "Connectors table does not exist"}
-
-            columns = [col["name"] for col in inspector.get_columns("connectors")]
-
-            if "updated_at" in columns:
-                return {"message": "updated_at column already exists"}
-
-            # Add the missing column (SQLite approach)
-            logger.info("Adding missing updated_at column to connectors table")
-
-            session.execute(
-                text("""
-                ALTER TABLE connectors
-                ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            """)
-            )
-
-            session.execute(
-                text("""
-                UPDATE connectors
-                SET updated_at = created_at
-                WHERE updated_at IS NULL
-            """)
-            )
-
-            session.commit()
-
-        return {"message": "Database schema fixed - added updated_at column to connectors table"}
-
-    except Exception as e:
-        logger.error(f"Error fixing database schema: {str(e)}")
-        return JSONResponse(status_code=500, content={"detail": f"Failed to fix database schema: {str(e)}"})
+    raise HTTPException(status_code=503, detail="Archive schema repair is unavailable while storage is isolated")
 
 
 # ---------------------------------------------------------------------------
@@ -538,7 +186,6 @@ async def debug_db_schema(
     if not settings.testing:
         raise HTTPException(status_code=403, detail="This endpoint is only available when TESTING=1.")
 
-    from zerg.database import get_session_factory
     from zerg.database import get_test_worker_id
 
     # Capture current DB url/path (use session factory bind to reflect worker routing)

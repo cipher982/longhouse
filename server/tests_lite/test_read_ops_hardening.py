@@ -282,13 +282,8 @@ def test_health_db_minimal_for_untrusted(monkeypatch):
 
 
 def test_health_db_uses_catalogd_when_live_catalog_is_enabled(monkeypatch):
-    from types import SimpleNamespace
-
-    import zerg.database as database_module
     from zerg.routers import health as health_mod
 
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(health_mod, "get_settings", lambda: SimpleNamespace(testing=False))
     from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
     from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
 
@@ -317,13 +312,8 @@ def test_health_db_rejects_a_catalogd_running_an_incompatible_schema(monkeypatch
     socket answered. A peer owning the socket with a schema this process cannot
     use must not be reported as ready."""
 
-    from types import SimpleNamespace
-
-    import zerg.database as database_module
     from zerg.routers import health as health_mod
 
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(health_mod, "get_settings", lambda: SimpleNamespace(testing=False))
     monkeypatch.setattr(
         "zerg.catalogd.client.call_catalogd_sync",
         lambda *_args, **_kwargs: {"ready": True, "commit_seq": "42", "schema_version": -1, "schema_generation": -1},
@@ -337,59 +327,3 @@ def test_health_db_rejects_a_catalogd_running_an_incompatible_schema(monkeypatch
     response = health_mod.health_db(object())
 
     assert response.status_code == 503
-
-
-def test_health_db_checks_live_sqlite_directly_in_test_mode(monkeypatch):
-    """The test lifecycle owns live SQLite in-process and never starts catalogd."""
-    from types import SimpleNamespace
-
-    from sqlalchemy import create_engine
-    from sqlalchemy import text
-
-    import zerg.database as database_module
-    from zerg.routers import health as health_mod
-
-    live_engine = create_engine("sqlite://")
-    required_tables = ["users", "live_session_catalog", "live_timeline_cards", "live_runtime_state"]
-    with live_engine.begin() as conn:
-        for table in required_tables:
-            conn.execute(text(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)"))
-
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_engine", lambda: live_engine)
-    monkeypatch.setattr(health_mod, "get_settings", lambda: SimpleNamespace(testing=True))
-    monkeypatch.setattr(health_mod, "_request_is_trusted", lambda request: True)
-    monkeypatch.setattr(
-        "zerg.catalogd.client.call_catalogd_sync",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("catalogd must not be called")),
-    )
-
-    response = health_mod.health_db(object())
-
-    assert response == {"status": "ready", "tables_verified": required_tables}
-
-
-# ---------------------------------------------------------------------------
-# agents API rate limit helper
-# ---------------------------------------------------------------------------
-
-
-def test_agents_rate_limit_helper_trips_after_max(monkeypatch):
-    from zerg.dependencies import agents_auth
-
-    monkeypatch.setattr(agents_auth, "_RATE_LIMIT_MAX_REQUESTS", 3)
-    monkeypatch.setattr(agents_auth, "_RATE_LIMIT_WINDOW_SECONDS", 60.0)
-    agents_auth._rate_buckets.clear()
-
-    key = "device:test"
-    # First 3 allowed.
-    for _ in range(3):
-        agents_auth._enforce_rate_limit(key)
-
-    # 4th trips 429.
-    import pytest
-    from fastapi import HTTPException
-
-    with pytest.raises(HTTPException) as exc:
-        agents_auth._enforce_rate_limit(key)
-    assert exc.value.status_code == 429

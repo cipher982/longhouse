@@ -18,6 +18,8 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import zerg.services.agent_heartbeat_health as machine_health_service
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -26,6 +28,19 @@ from zerg.models.live_store import LiveBase
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.routers.agents_machines import archive_backlog_control_command_type
 from zerg.schemas.machines import ArchiveBacklogControlRequest
+
+# One machine's archive backlog, read by the archive-backlog route out of the
+# archived heartbeat and by the health route out of the catalog heartbeat.
+ARCHIVE_BACKLOG_FIXTURE = {
+    "state": "pending",
+    "mode": "trickle",
+    "pending_ranges": 6375,
+    "pending_paths": 6374,
+    "pending_sessions": 6306,
+    "pending_bytes": 16_699_227_012,
+    "dead_ranges": 0,
+    "dead_bytes": 0,
+}
 
 
 def test_archive_control_requires_lease_aware_engine_to_start_work():
@@ -389,178 +404,206 @@ def _make_client(SessionLocal):
     return client, api_app
 
 
-def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(tmp_path, monkeypatch):
-    SessionLocal = _make_db(tmp_path)
+# The heartbeat stamp catalogd validates: every field is required, so the
+# defaults spell out a machine that has shipped nothing and is otherwise well.
+_HEARTBEAT_STAMP_DEFAULTS: dict[str, object] = {
+    "version": "0.6.0",
+    "last_ship_at": None,
+    "last_ship_attempt_at": None,
+    "last_ship_result": None,
+    "last_ship_latency_ms": None,
+    "last_ship_http_status": None,
+    "spool_pending": 0,
+    "spool_dead": 0,
+    "parse_errors_1h": 0,
+    "consecutive_failures": 0,
+    "ship_attempts_1h": 0,
+    "ship_successes_1h": 0,
+    "ship_rate_limited_1h": 0,
+    "ship_server_errors_1h": 0,
+    "ship_payload_rejections_1h": 0,
+    "ship_payload_too_large_1h": 0,
+    "ship_retryable_client_errors_1h": 0,
+    "ship_connect_errors_1h": 0,
+    "ship_latency_p50_ms_1h": None,
+    "ship_latency_p95_ms_1h": None,
+    "disk_free_bytes": 100,
+    "is_offline": 0,
+    "raw_json": None,
+    "sessions_digest": None,
+    "sessions_sequence": None,
+}
+
+
+def _enroll(live_catalog, *device_ids: str) -> tuple[int, dict[str, str]]:
+    """Own the machines, and hold the device token the route authenticates with.
+
+    A heartbeat is only visible to its owner through an unrevoked enrollment,
+    so every device the health route should list has to be enrolled first.
+    """
+
+    owner_id = live_catalog.create_user("owner@machine-health.test")
+    headers: dict[str, str] = {}
+    for device_id in device_ids:
+        token = live_catalog.create_device_token(owner_id=owner_id, device_id=device_id)
+        headers = headers or {"X-Agents-Token": token}
+    return owner_id, headers
+
+
+def _apply_heartbeat(live_catalog, *, owner_id: int, device_id: str, received_at: datetime, **fields) -> None:
+    """Commit one heartbeat stamp through the RPC the hosted route commits with."""
+
+    heartbeat = dict(_HEARTBEAT_STAMP_DEFAULTS)
+    heartbeat.update(fields)
+    heartbeat["device_id"] = device_id
+    heartbeat["received_at"] = received_at.isoformat()
+    live_catalog.rpc(
+        "machine.heartbeat.apply.v2",
+        {
+            "heartbeat": heartbeat,
+            "managed_leases": [],
+            "managed_leases_present": False,
+            "owner_id": owner_id,
+        },
+    )
+
+
+def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(live_catalog, live_catalog_client, monkeypatch):
     pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "broken-machine", "degraded-machine", "healthy-machine")
 
-    with SessionLocal() as db:
-        db.add(
-            AgentHeartbeat(
-                device_id="broken-machine",
-                received_at=pinned_now - timedelta(minutes=20),
-                version="0.5.0",
-                spool_pending=0,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                ship_attempts_1h=1,
-                ship_successes_1h=1,
-                disk_free_bytes=100,
-                is_offline=0,
-            )
-        )
-        db.add(
-            AgentHeartbeat(
-                device_id="broken-machine",
-                received_at=pinned_now - timedelta(minutes=1),
-                version="0.6.0",
-                last_ship_attempt_at=pinned_now - timedelta(minutes=1),
-                last_ship_result="connect_error",
-                last_ship_latency_ms=220,
-                spool_pending=3,
-                spool_dead=2,
-                parse_errors_1h=0,
-                consecutive_failures=1,
-                ship_attempts_1h=5,
-                ship_successes_1h=3,
-                ship_connect_errors_1h=1,
-                ship_latency_p50_ms_1h=120,
-                ship_latency_p95_ms_1h=220,
-                disk_free_bytes=100,
-                is_offline=0,
-            )
-        )
-        db.add(
-            AgentHeartbeat(
-                device_id="degraded-machine",
-                received_at=pinned_now - timedelta(minutes=2),
-                version="0.6.0",
-                spool_pending=0,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=2,
-                ship_attempts_1h=4,
-                ship_successes_1h=2,
-                ship_server_errors_1h=2,
-                disk_free_bytes=100,
-                is_offline=0,
-            )
-        )
-        db.add(
-            AgentHeartbeat(
-                device_id="healthy-machine",
-                received_at=pinned_now - timedelta(minutes=3),
-                version="0.6.0",
-                spool_pending=0,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                ship_attempts_1h=4,
-                ship_successes_1h=4,
-                disk_free_bytes=100,
-                is_offline=0,
-            )
-        )
-        db.commit()
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="broken-machine",
+        received_at=pinned_now - timedelta(minutes=20),
+        version="0.5.0",
+        ship_attempts_1h=1,
+        ship_successes_1h=1,
+    )
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="broken-machine",
+        received_at=pinned_now - timedelta(minutes=1),
+        last_ship_attempt_at=(pinned_now - timedelta(minutes=1)).isoformat(),
+        last_ship_result="connect_error",
+        last_ship_latency_ms=220,
+        spool_pending=3,
+        spool_dead=2,
+        consecutive_failures=1,
+        ship_attempts_1h=5,
+        ship_successes_1h=3,
+        ship_connect_errors_1h=1,
+        ship_latency_p50_ms_1h=120,
+        ship_latency_p95_ms_1h=220,
+    )
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="degraded-machine",
+        received_at=pinned_now - timedelta(minutes=2),
+        consecutive_failures=2,
+        ship_attempts_1h=4,
+        ship_successes_1h=2,
+        ship_server_errors_1h=2,
+    )
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="healthy-machine",
+        received_at=pinned_now - timedelta(minutes=3),
+        ship_attempts_1h=4,
+        ship_successes_1h=4,
+    )
 
-    client, api_app_ref = _make_client(SessionLocal)
+    response = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"stale_after_seconds": 3600, "limit": 2},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
 
-    try:
-        response = client.get("/api/agents/machines/health?stale_after_seconds=3600&limit=2")
-        assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 3
+    assert [item["device_id"] for item in payload["machines"]] == [
+        "broken-machine",
+        "degraded-machine",
+    ]
 
-        payload = response.json()
-        assert payload["total"] == 3
-        assert [item["device_id"] for item in payload["machines"]] == [
-            "broken-machine",
-            "degraded-machine",
-        ]
+    dead_lettered = payload["machines"][0]
+    assert dead_lettered["version"] == "0.6.0"
+    assert dead_lettered["status"] == "degraded"
+    assert dead_lettered["status_reason"] == "spool_dead"
+    assert dead_lettered["status_summary"] == "2 dead-letter archive range(s) need attention."
+    assert dead_lettered["heartbeat_age_seconds"] == 60
+    assert dead_lettered["ship_success_rate_1h"] == 0.6
+    assert dead_lettered["spool_dead"] == 2
+    assert dead_lettered["reasons"] == ["spool_dead"]
+    assert dead_lettered["last_ship_attempt_at"] == "2026-04-23T20:14:00Z"
 
-        dead_lettered = payload["machines"][0]
-        assert dead_lettered["version"] == "0.6.0"
-        assert dead_lettered["status"] == "degraded"
-        assert dead_lettered["status_reason"] == "spool_dead"
-        assert dead_lettered["status_summary"] == "2 dead-letter archive range(s) need attention."
-        assert dead_lettered["heartbeat_age_seconds"] == 60
-        assert dead_lettered["ship_success_rate_1h"] == 0.6
-        assert dead_lettered["spool_dead"] == 2
-        assert dead_lettered["reasons"] == ["spool_dead"]
-        assert dead_lettered["last_ship_attempt_at"] == "2026-04-23T20:14:00Z"
+    degraded = payload["machines"][1]
+    assert degraded["status"] == "degraded"
+    assert degraded["status_reason"] == "consecutive_failures"
+    assert degraded["heartbeat_age_seconds"] == 120
 
-        degraded = payload["machines"][1]
-        assert degraded["status"] == "degraded"
-        assert degraded["status_reason"] == "consecutive_failures"
-        assert degraded["heartbeat_age_seconds"] == 120
-
-        filtered = client.get("/api/agents/machines/health?status=broken&stale_after_seconds=3600")
-        assert filtered.status_code == 200
-        filtered_payload = filtered.json()
-        assert filtered_payload["total"] == 0
-        assert filtered_payload["machines"] == []
-    finally:
-        api_app_ref.dependency_overrides = {}
+    filtered = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"status": "broken", "stale_after_seconds": 3600},
+        headers=headers,
+    )
+    assert filtered.status_code == 200, filtered.text
+    filtered_payload = filtered.json()
+    assert filtered_payload["total"] == 0
+    assert filtered_payload["machines"] == []
 
 
-def test_machine_health_route_keeps_single_transient_connect_error_healthy(tmp_path, monkeypatch):
-    SessionLocal = _make_db(tmp_path)
+def test_machine_health_route_keeps_single_transient_connect_error_healthy(live_catalog, live_catalog_client, monkeypatch):
     pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "mostly-healthy-machine")
 
-    with SessionLocal() as db:
-        db.add(
-            AgentHeartbeat(
-                device_id="mostly-healthy-machine",
-                received_at=pinned_now - timedelta(minutes=1),
-                version="0.6.0",
-                spool_pending=0,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                ship_attempts_1h=65,
-                ship_successes_1h=64,
-                ship_connect_errors_1h=1,
-                ship_latency_p50_ms_1h=320,
-                ship_latency_p95_ms_1h=3400,
-                disk_free_bytes=100,
-                is_offline=0,
-            )
-        )
-        db.commit()
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="mostly-healthy-machine",
+        received_at=pinned_now - timedelta(minutes=1),
+        ship_attempts_1h=65,
+        ship_successes_1h=64,
+        ship_connect_errors_1h=1,
+        ship_latency_p50_ms_1h=320,
+        ship_latency_p95_ms_1h=3400,
+    )
 
-    client, api_app_ref = _make_client(SessionLocal)
+    response = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"device_id": "mostly-healthy-machine", "stale_after_seconds": 3600},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
 
-    try:
-        response = client.get("/api/agents/machines/health?device_id=mostly-healthy-machine&stale_after_seconds=3600")
-        assert response.status_code == 200
-
-        payload = response.json()
-        assert payload["total"] == 1
-        machine = payload["machines"][0]
-        assert machine["status"] == "healthy"
-        assert machine["status_reason"] == "healthy"
-        assert machine["status_summary"] == "Shipping healthy."
-        assert machine["ship_connect_errors_1h"] == 1
-        assert machine["reasons"] == []
-    finally:
-        api_app_ref.dependency_overrides = {}
+    payload = response.json()
+    assert payload["total"] == 1
+    machine = payload["machines"][0]
+    assert machine["status"] == "healthy"
+    assert machine["status_reason"] == "healthy"
+    assert machine["status_summary"] == "Shipping healthy."
+    assert machine["ship_connect_errors_1h"] == 1
+    assert machine["reasons"] == []
 
 
 def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(tmp_path, monkeypatch):
+    """The archive-backlog route reads the archived heartbeat, not the catalog.
+
+    Archive heartbeat rows are drained out of the live store by the archive
+    outbox, so this route keeps reading the archive session it always read.
+    """
+
     SessionLocal = _make_db(tmp_path)
     pinned_now = datetime(2026, 6, 2, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
 
-    archive_backlog = {
-        "state": "pending",
-        "mode": "trickle",
-        "pending_ranges": 6375,
-        "pending_paths": 6374,
-        "pending_sessions": 6306,
-        "pending_bytes": 16_699_227_012,
-        "dead_ranges": 0,
-        "dead_bytes": 0,
-    }
     with SessionLocal() as db:
         db.add(
             AgentHeartbeat(
@@ -575,37 +618,7 @@ def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(tm
                 ship_successes_1h=10,
                 disk_free_bytes=100,
                 is_offline=0,
-                raw_json=json.dumps(
-                    {
-                        "archive_backlog": archive_backlog,
-                        "history_import": {
-                            "state": "inventory_ready",
-                            "inventory": {
-                                "schema_version": 1,
-                                "generation": 3,
-                                "content_sha256": "b" * 64,
-                                "observed_at": "2026-06-02T20:14:29Z",
-                                "scan_duration_ms": 32,
-                                "scan_error_count": 0,
-                                "source_count": 3,
-                                "source_bytes": 4000,
-                                "wal_bytes": 96,
-                                "footprint_bytes": 4096,
-                                "providers": [
-                                    {
-                                        "provider": "codex",
-                                        "source_count": 3,
-                                        "source_bytes": 4000,
-                                        "wal_bytes": 96,
-                                        "footprint_bytes": 4096,
-                                        "oldest_modified_at_ms": 10,
-                                        "newest_modified_at_ms": 20,
-                                    }
-                                ],
-                            },
-                        },
-                    }
-                ),
+                raw_json=json.dumps({"archive_backlog": ARCHIVE_BACKLOG_FIXTURE}),
             )
         )
         db.commit()
@@ -620,278 +633,278 @@ def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(tm
         assert payload["archive_repair"]["state"] == "pending"
         assert payload["archive_repair"]["pending_ranges"] == 6375
         assert payload["archive_repair"]["pending_bytes"] == 16_699_227_012
-
-        health = client.get("/api/agents/machines/health?device_id=cinder&stale_after_seconds=3600")
-        assert health.status_code == 200
-        machine = health.json()["machines"][0]
-        assert machine["status"] == "healthy"
-        assert machine["status_reason"] == "healthy"
-        assert machine["archive_repair"]["pending_ranges"] == 6375
-        assert machine["history_import"]["state"] == "inventory_ready"
-        assert machine["history_import"]["inventory"]["source_count"] == 3
-        assert machine["history_import"]["inventory"]["footprint_bytes"] == 4096
     finally:
         api_app_ref.dependency_overrides = {}
 
 
-def test_machine_health_route_degrades_dead_archive_bytes_from_heartbeat_archive_state(tmp_path, monkeypatch):
-    SessionLocal = _make_db(tmp_path)
+def test_machine_health_route_projects_archive_backlog_and_history_import(live_catalog, live_catalog_client, monkeypatch):
     pinned_now = datetime(2026, 6, 2, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "cinder")
 
-    with SessionLocal() as db:
-        db.add(
-            AgentHeartbeat(
-                device_id="archive-dead-machine",
-                received_at=pinned_now - timedelta(seconds=30),
-                version="0.6.0",
-                spool_pending=0,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                ship_attempts_1h=10,
-                ship_successes_1h=10,
-                disk_free_bytes=100,
-                is_offline=0,
-                raw_json=json.dumps(
-                    {
-                        "archive_backlog": {
-                            "state": "draining",
-                            "mode": "drain",
-                            "pending_ranges": 0,
-                            "pending_bytes": 0,
-                            "dead_ranges": 0,
-                            "dead_bytes": 62_675,
-                        }
-                    }
-                ),
-            )
-        )
-        db.commit()
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="cinder",
+        received_at=pinned_now - timedelta(seconds=30),
+        spool_pending=6375,
+        ship_attempts_1h=10,
+        ship_successes_1h=10,
+        raw_json=json.dumps(
+            {
+                "archive_backlog": ARCHIVE_BACKLOG_FIXTURE,
+                "history_import": {
+                    "state": "inventory_ready",
+                    "inventory": {
+                        "schema_version": 1,
+                        "generation": 3,
+                        "content_sha256": "b" * 64,
+                        "observed_at": "2026-06-02T20:14:29Z",
+                        "scan_duration_ms": 32,
+                        "scan_error_count": 0,
+                        "source_count": 3,
+                        "source_bytes": 4000,
+                        "wal_bytes": 96,
+                        "footprint_bytes": 4096,
+                        "providers": [
+                            {
+                                "provider": "codex",
+                                "source_count": 3,
+                                "source_bytes": 4000,
+                                "wal_bytes": 96,
+                                "footprint_bytes": 4096,
+                                "oldest_modified_at_ms": 10,
+                                "newest_modified_at_ms": 20,
+                            }
+                        ],
+                    },
+                },
+            }
+        ),
+    )
 
-    client, api_app_ref = _make_client(SessionLocal)
-
-    try:
-        response = client.get("/api/agents/machines/health?device_id=archive-dead-machine&stale_after_seconds=3600")
-        assert response.status_code == 200
-
-        payload = response.json()
-        assert payload["total"] == 1
-        machine = payload["machines"][0]
-        assert machine["status"] == "degraded"
-        assert machine["status_reason"] == "archive_dead_lettered"
-        assert machine["status_summary"] == "62675 dead-letter archive byte(s) need attention."
-        assert machine["spool_dead"] == 0
-        assert machine["archive_repair"]["dead_ranges"] == 0
-        assert machine["archive_repair"]["dead_bytes"] == 62_675
-        assert machine["reasons"] == ["archive_dead_lettered"]
-    finally:
-        api_app_ref.dependency_overrides = {}
+    health = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"device_id": "cinder", "stale_after_seconds": 3600},
+        headers=headers,
+    )
+    assert health.status_code == 200, health.text
+    machine = health.json()["machines"][0]
+    assert machine["status"] == "healthy"
+    assert machine["status_reason"] == "healthy"
+    assert machine["archive_repair"]["pending_ranges"] == 6375
+    assert machine["history_import"]["state"] == "inventory_ready"
+    assert machine["history_import"]["inventory"]["source_count"] == 3
+    assert machine["history_import"]["inventory"]["footprint_bytes"] == 4096
 
 
-def test_machine_health_route_marks_transport_error_burst_degraded(tmp_path, monkeypatch):
-    SessionLocal = _make_db(tmp_path)
+def test_machine_health_route_degrades_dead_archive_bytes_from_heartbeat_archive_state(live_catalog, live_catalog_client, monkeypatch):
+    pinned_now = datetime(2026, 6, 2, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "archive-dead-machine")
+
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="archive-dead-machine",
+        received_at=pinned_now - timedelta(seconds=30),
+        ship_attempts_1h=10,
+        ship_successes_1h=10,
+        raw_json=json.dumps(
+            {
+                "archive_backlog": {
+                    "state": "draining",
+                    "mode": "drain",
+                    "pending_ranges": 0,
+                    "pending_bytes": 0,
+                    "dead_ranges": 0,
+                    "dead_bytes": 62_675,
+                }
+            }
+        ),
+    )
+
+    response = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"device_id": "archive-dead-machine", "stale_after_seconds": 3600},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    payload = response.json()
+    assert payload["total"] == 1
+    machine = payload["machines"][0]
+    assert machine["status"] == "degraded"
+    assert machine["status_reason"] == "archive_dead_lettered"
+    assert machine["status_summary"] == "62675 dead-letter archive byte(s) need attention."
+    assert machine["spool_dead"] == 0
+    assert machine["archive_repair"]["dead_ranges"] == 0
+    assert machine["archive_repair"]["dead_bytes"] == 62_675
+    assert machine["reasons"] == ["archive_dead_lettered"]
+
+
+def test_machine_health_route_marks_transport_error_burst_degraded(live_catalog, live_catalog_client, monkeypatch):
     pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "bursty-machine")
 
-    with SessionLocal() as db:
-        db.add(
-            AgentHeartbeat(
-                device_id="bursty-machine",
-                received_at=pinned_now - timedelta(minutes=1),
-                version="0.6.0",
-                spool_pending=0,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                ship_attempts_1h=20,
-                ship_successes_1h=18,
-                ship_connect_errors_1h=2,
-                ship_latency_p50_ms_1h=320,
-                ship_latency_p95_ms_1h=3400,
-                disk_free_bytes=100,
-                is_offline=0,
-                last_ship_result="connect_error",
-                raw_json=json.dumps(
-                    {
-                        "last_ship_result": "connect_error",
-                        "last_ship_error_kind": "connection_refused",
-                        "last_ship_error_message": "connection refused",
-                    }
-                ),
-            )
-        )
-        db.commit()
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="bursty-machine",
+        received_at=pinned_now - timedelta(minutes=1),
+        ship_attempts_1h=20,
+        ship_successes_1h=18,
+        ship_connect_errors_1h=2,
+        ship_latency_p50_ms_1h=320,
+        ship_latency_p95_ms_1h=3400,
+        last_ship_result="connect_error",
+        raw_json=json.dumps(
+            {
+                "last_ship_result": "connect_error",
+                "last_ship_error_kind": "connection_refused",
+                "last_ship_error_message": "connection refused",
+            }
+        ),
+    )
 
-    client, api_app_ref = _make_client(SessionLocal)
+    response = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"device_id": "bursty-machine", "stale_after_seconds": 3600},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
 
-    try:
-        response = client.get("/api/agents/machines/health?device_id=bursty-machine&stale_after_seconds=3600")
-        assert response.status_code == 200
-
-        payload = response.json()
-        assert payload["total"] == 1
-        machine = payload["machines"][0]
-        assert machine["status"] == "degraded"
-        assert machine["status_reason"] == "connect_errors"
-        assert machine["status_summary"] == "2 ship connect error(s) in the last hour. Last error: connection_refused."
-        assert machine["ship_connect_errors_1h"] == 2
-        assert machine["last_ship_error_kind"] == "connection_refused"
-        assert machine["last_ship_error_message"] == "connection refused"
-        assert machine["reasons"] == ["connect_errors"]
-    finally:
-        api_app_ref.dependency_overrides = {}
+    payload = response.json()
+    assert payload["total"] == 1
+    machine = payload["machines"][0]
+    assert machine["status"] == "degraded"
+    assert machine["status_reason"] == "connect_errors"
+    assert machine["status_summary"] == "2 ship connect error(s) in the last hour. Last error: connection_refused."
+    assert machine["ship_connect_errors_1h"] == 2
+    assert machine["last_ship_error_kind"] == "connection_refused"
+    assert machine["last_ship_error_message"] == "connection refused"
+    assert machine["reasons"] == ["connect_errors"]
 
 
-def test_machine_health_route_uses_active_transport_window_from_raw_json(tmp_path, monkeypatch):
-    SessionLocal = _make_db(tmp_path)
+def test_machine_health_route_uses_active_transport_window_from_raw_json(live_catalog, live_catalog_client, monkeypatch):
     pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "recovered-machine")
 
-    with SessionLocal() as db:
-        db.add(
-            AgentHeartbeat(
-                device_id="recovered-machine",
-                received_at=pinned_now - timedelta(minutes=1),
-                version="0.6.0",
-                spool_pending=0,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                ship_attempts_1h=32,
-                ship_successes_1h=20,
-                ship_connect_errors_1h=12,
-                ship_latency_p50_ms_1h=320,
-                ship_latency_p95_ms_1h=3400,
-                disk_free_bytes=100,
-                is_offline=0,
-                last_ship_result="ok",
-                raw_json=json.dumps(
-                    {
-                        "ship_attempts_10m": 4,
-                        "ship_successes_10m": 4,
-                        "ship_connect_errors_10m": 0,
-                        "last_ship_result": "ok",
-                    }
-                ),
-            )
-        )
-        db.commit()
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="recovered-machine",
+        received_at=pinned_now - timedelta(minutes=1),
+        ship_attempts_1h=32,
+        ship_successes_1h=20,
+        ship_connect_errors_1h=12,
+        ship_latency_p50_ms_1h=320,
+        ship_latency_p95_ms_1h=3400,
+        last_ship_result="ok",
+        raw_json=json.dumps(
+            {
+                "ship_attempts_10m": 4,
+                "ship_successes_10m": 4,
+                "ship_connect_errors_10m": 0,
+                "last_ship_result": "ok",
+            }
+        ),
+    )
 
-    client, api_app_ref = _make_client(SessionLocal)
+    response = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"device_id": "recovered-machine", "stale_after_seconds": 3600},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
 
-    try:
-        response = client.get("/api/agents/machines/health?device_id=recovered-machine&stale_after_seconds=3600")
-        assert response.status_code == 200
-
-        payload = response.json()
-        assert payload["total"] == 1
-        machine = payload["machines"][0]
-        assert machine["status"] == "healthy"
-        assert machine["status_reason"] == "healthy"
-        assert machine["status_summary"] == "Shipping healthy."
-        assert machine["ship_connect_errors_1h"] == 12
-        assert machine["ship_attempts_10m"] == 4
-        assert machine["ship_successes_10m"] == 4
-        assert machine["ship_connect_errors_10m"] == 0
-        assert machine["reasons"] == []
-    finally:
-        api_app_ref.dependency_overrides = {}
+    payload = response.json()
+    assert payload["total"] == 1
+    machine = payload["machines"][0]
+    assert machine["status"] == "healthy"
+    assert machine["status_reason"] == "healthy"
+    assert machine["status_summary"] == "Shipping healthy."
+    assert machine["ship_connect_errors_1h"] == 12
+    assert machine["ship_attempts_10m"] == 4
+    assert machine["ship_successes_10m"] == 4
+    assert machine["ship_connect_errors_10m"] == 0
+    assert machine["reasons"] == []
 
 
-def test_machine_health_route_filters_by_device_and_marks_stale_rows_offline(tmp_path, monkeypatch):
-    SessionLocal = _make_db(tmp_path)
+def test_machine_health_route_filters_by_device_and_marks_stale_rows_offline(live_catalog, live_catalog_client, monkeypatch):
     pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "sleepy-machine", "offline-machine")
 
-    with SessionLocal() as db:
-        db.add(
-            AgentHeartbeat(
-                device_id="sleepy-machine",
-                received_at=pinned_now - timedelta(minutes=20),
-                version="0.6.0",
-                spool_pending=0,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                disk_free_bytes=100,
-                is_offline=0,
-            )
-        )
-        db.add(
-            AgentHeartbeat(
-                device_id="offline-machine",
-                received_at=pinned_now - timedelta(minutes=1),
-                version="0.6.0",
-                spool_pending=0,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                disk_free_bytes=100,
-                is_offline=1,
-            )
-        )
-        db.commit()
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="sleepy-machine",
+        received_at=pinned_now - timedelta(minutes=20),
+    )
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="offline-machine",
+        received_at=pinned_now - timedelta(minutes=1),
+        is_offline=1,
+    )
 
-    client, api_app_ref = _make_client(SessionLocal)
+    response = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"device_id": "sleepy-machine", "stale_after_seconds": 600},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
 
-    try:
-        response = client.get("/api/agents/machines/health?device_id=sleepy-machine&stale_after_seconds=600")
-        assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    machine = payload["machines"][0]
+    assert machine["device_id"] == "sleepy-machine"
+    assert machine["status"] == "offline"
+    assert machine["status_reason"] == "heartbeat_stale"
+    assert machine["is_stale"] is True
+    assert machine["heartbeat_age_seconds"] == 1200
 
-        payload = response.json()
-        assert payload["total"] == 1
-        machine = payload["machines"][0]
-        assert machine["device_id"] == "sleepy-machine"
-        assert machine["status"] == "offline"
-        assert machine["status_reason"] == "heartbeat_stale"
-        assert machine["is_stale"] is True
-        assert machine["heartbeat_age_seconds"] == 1200
-
-        offline = client.get("/api/agents/machines/health?device_id=offline-machine&stale_after_seconds=600")
-        assert offline.status_code == 200
-        offline_machine = offline.json()["machines"][0]
-        assert offline_machine["status"] == "offline"
-        assert offline_machine["status_reason"] == "reported_offline"
-        assert offline_machine["is_offline"] is True
-        assert offline_machine["suggested_action_ids"] == ["inspect_transport"]
-    finally:
-        api_app_ref.dependency_overrides = {}
+    offline = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"device_id": "offline-machine", "stale_after_seconds": 600},
+        headers=headers,
+    )
+    assert offline.status_code == 200, offline.text
+    offline_machine = offline.json()["machines"][0]
+    assert offline_machine["status"] == "offline"
+    assert offline_machine["status_reason"] == "reported_offline"
+    assert offline_machine["is_offline"] is True
+    assert offline_machine["suggested_action_ids"] == ["inspect_transport"]
 
 
-def test_machine_health_route_lets_stale_heartbeat_outrank_dead_archive_ranges(tmp_path, monkeypatch):
-    SessionLocal = _make_db(tmp_path)
+def test_machine_health_route_lets_stale_heartbeat_outrank_dead_archive_ranges(live_catalog, live_catalog_client, monkeypatch):
     pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "stale-broken-machine")
 
-    with SessionLocal() as db:
-        db.add(
-            AgentHeartbeat(
-                device_id="stale-broken-machine",
-                received_at=pinned_now - timedelta(minutes=20),
-                version="0.6.0",
-                spool_pending=0,
-                spool_dead=1,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                disk_free_bytes=100,
-                is_offline=0,
-            )
-        )
-        db.commit()
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="stale-broken-machine",
+        received_at=pinned_now - timedelta(minutes=20),
+        spool_dead=1,
+    )
 
-    client, api_app_ref = _make_client(SessionLocal)
+    response = live_catalog_client.get(
+        "/agents/machines/health",
+        params={"device_id": "stale-broken-machine", "stale_after_seconds": 600},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
 
-    try:
-        response = client.get("/api/agents/machines/health?device_id=stale-broken-machine&stale_after_seconds=600")
-        assert response.status_code == 200
-
-        payload = response.json()
-        assert payload["total"] == 1
-        machine = payload["machines"][0]
-        assert machine["status"] == "offline"
-        assert machine["status_reason"] == "heartbeat_stale"
-        assert machine["is_stale"] is True
-        assert machine["reasons"] == ["heartbeat_stale", "spool_dead"]
-    finally:
-        api_app_ref.dependency_overrides = {}
+    payload = response.json()
+    assert payload["total"] == 1
+    machine = payload["machines"][0]
+    assert machine["status"] == "offline"
+    assert machine["status_reason"] == "heartbeat_stale"
+    assert machine["is_stale"] is True
+    assert machine["reasons"] == ["heartbeat_stale", "spool_dead"]

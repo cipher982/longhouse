@@ -10,7 +10,6 @@ from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
-from zerg.database import live_catalog_enabled
 from zerg.schemas.observability import ProductHealthCheckEvidenceRefResponse
 from zerg.schemas.observability import ProductHealthCheckListResponse
 from zerg.schemas.observability import ProductHealthCheckLivePreviewCellResponse
@@ -90,8 +89,7 @@ def build_product_health_checks(
         ),
         _summarize_live_preview_check(live_preview),
     ]
-    if live_catalog_enabled():
-        checks.append(_build_session_titles_summary(window=resolved_window, generated_at=generated_at))
+    checks.append(_build_session_titles_summary(window=resolved_window, generated_at=generated_at))
     return ProductHealthCheckListResponse(checks=checks)
 
 
@@ -179,15 +177,6 @@ def build_session_title_health_check(*, window: str = "15m") -> ProductHealthChe
 
     resolved_window = _parse_window(window)
     generated_at = utc_now()
-    if not live_catalog_enabled():
-        return ProductHealthCheckSummaryResponse(
-            check=SESSION_TITLES_CHECK_ID,
-            verdict="unknown",
-            coverage="none",
-            window=resolved_window.label,
-            generated_at=generated_at,
-            headline="Session title dependency health requires the live catalog.",
-        )
     return _build_session_titles_summary(window=resolved_window, generated_at=generated_at)
 
 

@@ -253,40 +253,10 @@ def refresh_device_gauges() -> None:
     but we also export the heartbeat's own offline flag for convenience.
     """
     try:
-        from zerg.database import live_catalog_enabled
-
-        if live_catalog_enabled():
-            _refresh_live_device_gauges()
-            return
-        from zerg.database import get_session_factory
-        from zerg.services.agent_heartbeat_health import load_machine_transport_health_map
-
-        session_factory = get_session_factory()
-        with session_factory() as db:
-            summary_map = load_machine_transport_health_map(db)
+        _refresh_live_device_gauges()
     except Exception:
         _mark_godview_failure()
         logger.exception("godview: failed to load machine transport health")
-        return
-
-    for device_id, s in summary_map.items():
-        device = device_id or "unknown"
-        metrics.device_last_heartbeat_timestamp_seconds.labels(device=device).set(s.last_heartbeat_at.timestamp())
-        if s.ship_latency_p50_ms_1h is not None:
-            metrics.device_ship_latency_ms.labels(device=device, quantile="p50").set(float(s.ship_latency_p50_ms_1h))
-        if s.ship_latency_p95_ms_1h is not None:
-            metrics.device_ship_latency_ms.labels(device=device, quantile="p95").set(float(s.ship_latency_p95_ms_1h))
-        metrics.device_spool_pending.labels(device=device).set(float(s.spool_pending))
-        metrics.device_spool_dead.labels(device=device).set(float(s.spool_dead))
-        metrics.device_consecutive_ship_failures.labels(device=device).set(float(s.consecutive_failures))
-        metrics.device_parse_errors_1h.labels(device=device).set(float(s.parse_errors_1h))
-        metrics.device_disk_free_bytes.labels(device=device).set(float(s.disk_free_bytes))
-        metrics.device_reported_offline.labels(device=device).set(1.0 if s.is_offline else 0.0)
-        archive = s.archive_repair or {}
-        pending_bytes = float(archive.get("pending_bytes", 0) or 0)
-        pending_ranges = float(archive.get("pending_ranges", 0) or 0)
-        metrics.device_archive_backlog_pending_bytes.labels(device=device).set(pending_bytes)
-        metrics.device_archive_backlog_pending_ranges.labels(device=device).set(pending_ranges)
 
 
 def _refresh_live_device_gauges() -> None:

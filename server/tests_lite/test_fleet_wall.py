@@ -1,99 +1,160 @@
-"""Tests for fleet wall and session tail endpoints.
+"""Fleet wall and session tail, asserted against a real live catalog.
 
 Covers:
 - GET /agents/sessions/wall — raw signal metadata with repo/project filters
 - GET /agents/sessions/{id}/tail — tail-biased recent events
-Uses in-memory SQLite. No shared conftest.
+
+Both routes read the live catalog and nothing else: the wall projects a
+catalogd timeline snapshot, and tail reads the storage-v2 render objects the
+Machine Agent sealed. This file used to seed ``AgentSession``/``AgentEvent``
+rows behind a ``get_db`` override, which is the branch a Runtime Host never
+takes, so the sessions here are shipped through the real ingest route and the
+control rows a bridge would leave behind are written into the catalog the
+daemon owns.
 """
 
 from __future__ import annotations
 
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
-from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session
 
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-from zerg.database import Base
-from zerg.database import get_db
-from zerg.database import make_engine
-from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
-from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from zerg.catalogd.schema import create_catalog_engine
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
+from zerg.services.catalogd_supervisor import catalogd_paths
+
+DEVICE_ID = "shipper-laptop"
 
 # ---------------------------------------------------------------------------
-# DB / client helpers
+# Seeding helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_db(tmp_path):
-    db_path = tmp_path / "test_fleet_wall.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    engine = engine.execution_options(schema_translate_map={"agents": None})
-    Base.metadata.create_all(bind=engine)
-    return sessionmaker(bind=engine)
+def _ship(
+    live_catalog: LiveCatalog,
+    client,
+    *,
+    owner_id: int,
+    device_id: str = DEVICE_ID,
+    texts: tuple[str, ...] = ("fix the bug",),
+    project: str = "zerg",
+    git_repo: str | None = None,
+    cwd: str | None = None,
+    roles: tuple[str, ...] | None = None,
+    tool_name: str | None = None,
+    now: datetime | None = None,
+) -> UUID:
+    """Ship one transcript the way a Machine Agent ships it.
 
+    The wire envelope carries the session facts, so repo, cwd and activity
+    window are set where a shipper sets them rather than written behind the
+    route's back. ``roles`` shapes the render records the same way, which is the
+    only place an event's role exists.
+    """
 
-def _make_client(SessionLocal):
-    from zerg.dependencies.agents_auth import require_single_tenant
-    from zerg.dependencies.agents_auth import verify_agents_token
-    from zerg.main import api_app
-    from zerg.main import app
-
-    def override_get_db():
-        with SessionLocal() as db:
-            yield db
-
-    def override_verify():
-        return SimpleNamespace(device_id="testclient", id="token-1")
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[verify_agents_token] = override_verify
-    api_app.dependency_overrides[require_single_tenant] = lambda: None
-
-    client = TestClient(app, backend="asyncio")
-    return client, api_app
-
-
-def _seed_session(db, **kwargs):
-    """Insert a session with sensible defaults, return it."""
-    defaults = {
-        "id": uuid4(),
-        "provider": "claude",
-        "environment": "development",
-        "started_at": datetime.now(timezone.utc) - timedelta(hours=1),
-        "user_messages": 5,
-        "assistant_messages": 10,
-        "tool_calls": 3,
-    }
-    defaults.update(kwargs)
-    s = AgentSession(**defaults)
-    db.add(s)
-    db.flush()
-    upsert_timeline_card_from_session(db, s)
-    db.commit()
-    db.refresh(s)
-    return s
-
-
-def _seed_event(db, session_id, role="assistant", content="hello", tool_name=None, minutes_ago=0):
-    """Insert an event, return it."""
-    e = AgentEvent(
+    session_id = uuid4()
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id=device_id)
+    body = live_catalog.envelope_body(
         session_id=session_id,
-        role=role,
-        content_text=content,
-        tool_name=tool_name,
-        timestamp=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago),
+        device_id=device_id,
+        texts=texts,
+        project=project,
+        now=now,
     )
-    db.add(e)
-    db.commit()
-    db.refresh(e)
-    return e
+    if git_repo is not None:
+        body["session"]["git_repo"] = git_repo
+    if cwd is not None:
+        body["session"]["cwd"] = cwd
+    for index, record in enumerate(body["render"]["records"]):
+        if roles is not None:
+            record["role"] = roles[index]
+        if record["role"] == "tool":
+            record["tool_name"] = tool_name
+            record["tool_output_text"] = record["content_text"]
+            record["content_text"] = None
+    response = client.post(
+        "/agents/storage/v2/envelopes",
+        json=body,
+        headers={"X-Agents-Token": token, "X-Longhouse-Storage-Lane": "live"},
+    )
+    assert response.status_code == 200, response.text
+    return session_id
+
+
+def _seed_control_connection(
+    session_id: UUID,
+    *,
+    device_id: str = DEVICE_ID,
+    provider: str = "codex",
+    control_plane: str,
+    state: str,
+    acquisition_kind: str = "spawned_control",
+    **capabilities: int,
+) -> None:
+    """Leave the thread, run and connection a control plane leaves behind.
+
+    Written straight into the catalog daemon's database because no route in
+    this test's surface acquires a control connection; the capability
+    projection the wall reads is what is under test, not how the rows arrive.
+    """
+
+    database_path, _socket_path = catalogd_paths()
+    engine = create_catalog_engine(database_path)
+    now = datetime.now(UTC).replace(microsecond=0)
+    thread_id, run_id = str(uuid4()), str(uuid4())
+    try:
+        with Session(engine) as db:
+            db.add(
+                LiveSessionThread(
+                    id=thread_id,
+                    session_id=str(session_id),
+                    provider=provider,
+                    branch_kind="root",
+                    is_primary=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.add(
+                LiveSessionRun(
+                    id=run_id,
+                    thread_id=thread_id,
+                    provider=provider,
+                    host_id=device_id,
+                    launch_origin="longhouse_spawned",
+                    started_at=now,
+                )
+            )
+            db.add(
+                LiveSessionConnection(
+                    run_id=run_id,
+                    adapter_connection_id=str(uuid4()),
+                    lease_generation=str(uuid4()),
+                    control_plane=control_plane,
+                    acquisition_kind=acquisition_kind,
+                    state=state,
+                    device_id=device_id,
+                    acquired_at=now,
+                    last_health_at=now,
+                    **capabilities,
+                )
+            )
+            db.commit()
+    finally:
+        engine.dispose()
+
+
+def _headers(live_catalog: LiveCatalog, owner_id: int, *, device_id: str = DEVICE_ID) -> dict[str, str]:
+    return {"X-Agents-Token": live_catalog.create_device_token(owner_id=owner_id, device_id=device_id)}
 
 
 # ---------------------------------------------------------------------------
@@ -101,245 +162,253 @@ def _seed_event(db, session_id, role="assistant", content="hello", tool_name=Non
 # ---------------------------------------------------------------------------
 
 
-def test_wall_returns_sessions(tmp_path):
+def test_wall_returns_sessions(live_catalog, live_catalog_client):
     """GET /agents/sessions/wall returns sessions with raw signal metadata."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s = _seed_session(
-            db,
-            device_id="shipper-laptop",
-            device_name="laptop",
-            cwd="/Users/dev/git/zerg",
-            git_repo="https://github.com/user/repo",
-            git_branch="main",
-            project="zerg",
-        )
-        _seed_event(db, s.id, role="user", content="fix the bug")
+    owner_id = live_catalog.create_user("owner@wall.test")
+    _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        device_id="shipper-laptop",
+        cwd="/Users/dev/git/zerg",
+        git_repo="https://github.com/user/repo",
+        project="zerg",
+        texts=("fix the bug", "and the other one", "and this one"),
+    )
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/sessions/wall")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] >= 1
-        session = next(s for s in data["sessions"] if s["device_name"] == "laptop")
-        assert session["cwd"] == "/Users/dev/git/zerg"
-        assert session["git_repo"] == "https://github.com/user/repo"
-        assert session["git_branch"] == "main"
-        assert session["project"] == "zerg"
-        assert session["provider"] == "claude"
-        assert session["user_messages"] == 5
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get("/agents/sessions/wall", headers=_headers(live_catalog, owner_id))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["total"] >= 1
+    session = next(s for s in data["sessions"] if s["device_name"] == "shipper-laptop")
+    assert session["cwd"] == "/Users/dev/git/zerg"
+    assert session["git_repo"] == "https://github.com/user/repo"
+    assert session["git_branch"] == "main"
+    assert session["project"] == "zerg"
+    assert session["provider"] == "codex"
+    assert session["user_messages"] == 3
 
 
-def test_wall_filters_by_repo(tmp_path):
+def test_wall_filters_by_repo(live_catalog, live_catalog_client):
     """Wall query repo filter does substring match."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        _seed_session(db, git_repo="https://github.com/user/zerg", project="zerg")
-        _seed_session(db, git_repo="https://github.com/user/other", project="other")
+    owner_id = live_catalog.create_user("owner@wall.test")
+    _ship(live_catalog, live_catalog_client, owner_id=owner_id, git_repo="https://github.com/user/zerg", project="zerg")
+    _ship(live_catalog, live_catalog_client, owner_id=owner_id, git_repo="https://github.com/user/other", project="other")
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/sessions/wall", params={"repo": "zerg"})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] == 1
-        assert "zerg" in data["sessions"][0]["git_repo"]
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get(
+        "/agents/sessions/wall",
+        params={"repo": "user/zerg"},
+        headers=_headers(live_catalog, owner_id),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["total"] == 1
+    assert "zerg" in data["sessions"][0]["git_repo"]
 
 
-def test_wall_repo_filter_matches_cwd(tmp_path):
+def test_wall_repo_filter_matches_cwd(live_catalog, live_catalog_client):
     """Wall repo filter also matches against cwd for non-git workspaces."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        _seed_session(db, cwd="/Users/dev/git/acme/project", git_repo=None, project="project")
-        _seed_session(db, cwd="/Users/dev/git/zerg", git_repo="https://github.com/user/other", project="zerg")
+    owner_id = live_catalog.create_user("owner@wall.test")
+    _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        cwd="/Users/dev/git/acme/project",
+        git_repo=None,
+        project="project",
+    )
+    _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        cwd="/Users/dev/git/zerg",
+        git_repo="https://github.com/user/other",
+        project="zerg",
+    )
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/sessions/wall", params={"repo": "acme"})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] == 1
-        assert data["sessions"][0]["cwd"] == "/Users/dev/git/acme/project"
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get(
+        "/agents/sessions/wall",
+        params={"repo": "acme"},
+        headers=_headers(live_catalog, owner_id),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["sessions"][0]["cwd"] == "/Users/dev/git/acme/project"
 
 
-def test_wall_filters_by_project(tmp_path):
+def test_wall_filters_by_project(live_catalog, live_catalog_client):
     """Wall query project filter returns only matching sessions."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        _seed_session(db, project="zerg", git_repo="a")
-        _seed_session(db, project="hdr", git_repo="b")
+    owner_id = live_catalog.create_user("owner@wall.test")
+    _ship(live_catalog, live_catalog_client, owner_id=owner_id, project="zerg", git_repo="a")
+    _ship(live_catalog, live_catalog_client, owner_id=owner_id, project="hdr", git_repo="b")
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/sessions/wall", params={"project": "zerg"})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] == 1
-        assert data["sessions"][0]["project"] == "zerg"
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get(
+        "/agents/sessions/wall",
+        params={"project": "zerg"},
+        headers=_headers(live_catalog, owner_id),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["sessions"][0]["project"] == "zerg"
 
 
-def test_wall_uses_runtime_state_for_live_presence_without_presence_row(tmp_path):
+def test_wall_uses_runtime_state_for_live_presence(live_catalog, live_catalog_client):
     """Wall uses live runtime state as the single source of presence truth."""
-    SessionLocal = _make_db(tmp_path)
-    now = datetime.now(timezone.utc)
+    owner_id = live_catalog.create_user("owner@wall.test")
+    headers = _headers(live_catalog, owner_id, device_id="shipper-demo")
+    _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        device_id="shipper-demo",
+        git_repo="runtime-only",
+        project="zerg",
+    )
+    session_id = _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        device_id="shipper-demo",
+        git_repo="runtime-only",
+        project="zerg",
+    )
+    presence = live_catalog_client.post(
+        "/agents/presence",
+        json={"session_id": str(session_id), "state": "needs_user", "cwd": "/tmp", "provider": "codex"},
+        headers=headers,
+    )
+    assert presence.status_code == 204, presence.text
 
-    with SessionLocal() as db:
-        session = _seed_session(
-            db,
-            provider="codex",
-            device_id="shipper-demo",
-            device_name="demo-machine",
-            git_repo="runtime-only",
-            project="zerg",
-            last_activity_at=now - timedelta(seconds=20),
-        )
-        db.add(
-            SessionRuntimeState(
-                runtime_key=f"codex:{session.id}",
-                session_id=session.id,
-                provider="codex",
-                device_id="shipper-demo",
-                phase="needs_user",
-                phase_source="semantic",
-                active_tool=None,
-                phase_started_at=now - timedelta(seconds=20),
-                last_runtime_signal_at=now - timedelta(seconds=20),
-                last_progress_at=now - timedelta(seconds=20),
-                last_live_at=now - timedelta(seconds=20),
-                timeline_anchor_at=now - timedelta(seconds=20),
-                freshness_expires_at=now + timedelta(minutes=5),
-                terminal_state=None,
-                terminal_at=None,
-                runtime_version=1,
-            )
-        )
-        db.commit()
-
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/sessions/wall")
-        assert resp.status_code == 200
-        data = resp.json()
-        row = next(s for s in data["sessions"] if s["device_name"] == "demo-machine")
-        assert row["has_live_presence"] is True
-        assert row["presence_state"] == "needs_user"
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get("/agents/sessions/wall", headers=headers)
+    assert resp.status_code == 200, resp.text
+    rows = {row["session_id"]: row for row in resp.json()["sessions"]}
+    signalled = rows[str(session_id)]
+    assert signalled["has_live_presence"] is True
+    assert signalled["presence_state"] == "needs_user"
+    # The session that never signalled stays quiet rather than inheriting it.
+    quiet = next(row for session_id_, row in rows.items() if session_id_ != str(session_id))
+    assert quiet["has_live_presence"] is False
+    assert quiet["presence_state"] is None
 
 
-def test_wall_includes_kernel_control_buckets(tmp_path):
+def test_wall_includes_kernel_control_buckets(live_catalog, live_catalog_client):
     """Wall exposes the same control bucket truth as timeline/detail."""
-    SessionLocal = _make_db(tmp_path)
+    owner_id = live_catalog.create_user("owner@wall.test")
 
-    with SessionLocal() as db:
-        live = _seed_session(db, provider="claude", device_name="live-machine", git_repo="control-live")
-        seed_managed_kernel_rows(
-            db,
-            live,
-            control_plane="claude_channel_bridge",
-            state="attached",
-            can_send_input=True,
-            can_tail_output=True,
-        )
-        reattach = _seed_session(db, provider="codex", device_name="reattach-machine", git_repo="control-reattach")
-        seed_managed_kernel_rows(
-            db,
-            reattach,
-            control_plane="codex_bridge",
-            state="detached",
-            can_send_input=True,
-            can_tail_output=True,
-            can_resume=True,
-        )
-        observe = _seed_session(db, provider="antigravity", device_name="observe-machine", git_repo="control-observe")
-        seed_managed_kernel_rows(
-            db,
-            observe,
-            control_plane="log_tail",
-            acquisition_kind="observe_only",
-            state="attached",
-            can_send_input=False,
-            can_interrupt=False,
-            can_tail_output=True,
-        )
-        _seed_session(db, provider="claude", device_name="imported-machine", git_repo="control-imported")
-        db.commit()
+    live_session = _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        device_id="shipper-live-machine",
+        git_repo="control-live",
+        project="live",
+    )
+    _seed_control_connection(
+        live_session,
+        device_id="shipper-live-machine",
+        control_plane="claude_channel_bridge",
+        state="attached",
+        can_send_input=1,
+        can_interrupt=1,
+        can_tail_output=1,
+    )
+    reattach_session = _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        device_id="shipper-reattach-machine",
+        git_repo="control-reattach",
+        project="reattach",
+    )
+    _seed_control_connection(
+        reattach_session,
+        device_id="shipper-reattach-machine",
+        control_plane="codex_bridge",
+        state="detached",
+        can_send_input=1,
+        can_tail_output=1,
+        can_resume=1,
+    )
+    observe_session = _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        device_id="shipper-observe-machine",
+        git_repo="control-observe",
+        project="observe",
+    )
+    _seed_control_connection(
+        observe_session,
+        device_id="shipper-observe-machine",
+        control_plane="log_tail",
+        acquisition_kind="observe_only",
+        state="attached",
+        can_send_input=0,
+        can_interrupt=0,
+        can_tail_output=1,
+    )
+    imported_session = _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        device_id="shipper-imported-machine",
+        git_repo="control-imported",
+        project="imported",
+    )
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/sessions/wall", params={"repo": "control-", "limit": 10})
-        assert resp.status_code == 200
-        rows = {row["device_name"]: row for row in resp.json()["sessions"]}
+    resp = live_catalog_client.get(
+        "/agents/sessions/wall",
+        params={"repo": "control-", "limit": 10},
+        headers=_headers(live_catalog, owner_id),
+    )
+    assert resp.status_code == 200, resp.text
+    rows = {row["session_id"]: row for row in resp.json()["sessions"]}
 
-        assert rows["live-machine"]["kernel_control_label"] == "live"
-        assert rows["live-machine"]["kernel_live_control_available"] is True
-        assert rows["live-machine"]["kernel_host_reattach_available"] is True
-        assert rows["live-machine"]["kernel_observe_only"] is False
-        assert rows["live-machine"]["kernel_search_only"] is False
+    assert rows[str(live_session)]["kernel_control_label"] == "live"
+    assert rows[str(live_session)]["kernel_live_control_available"] is True
+    assert rows[str(live_session)]["kernel_host_reattach_available"] is True
+    assert rows[str(live_session)]["kernel_observe_only"] is False
+    assert rows[str(live_session)]["kernel_search_only"] is False
 
-        assert rows["reattach-machine"]["kernel_control_label"] == "reattach"
-        assert rows["reattach-machine"]["kernel_live_control_available"] is False
-        assert rows["reattach-machine"]["kernel_host_reattach_available"] is True
-        assert rows["reattach-machine"]["kernel_staleness_reason"] == "connection_released"
+    assert rows[str(reattach_session)]["kernel_control_label"] == "reattach"
+    assert rows[str(reattach_session)]["kernel_live_control_available"] is False
+    assert rows[str(reattach_session)]["kernel_host_reattach_available"] is True
+    assert rows[str(reattach_session)]["kernel_staleness_reason"] == "connection_released"
 
-        assert rows["observe-machine"]["kernel_control_label"] == "search-only"
-        assert rows["observe-machine"]["kernel_observe_only"] is True
-        assert rows["observe-machine"]["kernel_search_only"] is False
+    assert rows[str(observe_session)]["kernel_control_label"] == "search-only"
+    assert rows[str(observe_session)]["kernel_observe_only"] is True
+    assert rows[str(observe_session)]["kernel_search_only"] is False
 
-        assert rows["imported-machine"]["kernel_control_label"] == "imported"
-        assert rows["imported-machine"]["kernel_live_control_available"] is False
-        assert rows["imported-machine"]["kernel_host_reattach_available"] is False
-        assert rows["imported-machine"]["kernel_search_only"] is True
-    finally:
-        api_ref.dependency_overrides = {}
-
-
-def test_wall_device_name_falls_back_from_device_id(tmp_path):
-    """If device_name is null, wall derives it by stripping 'shipper-' from device_id."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        _seed_session(db, device_id="shipper-demo", device_name=None, git_repo="r")
-
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/sessions/wall")
-        data = resp.json()
-        session = data["sessions"][0]
-        assert session["device_name"] == "demo"
-    finally:
-        api_ref.dependency_overrides = {}
+    assert rows[str(imported_session)]["kernel_control_label"] == "imported"
+    assert rows[str(imported_session)]["kernel_live_control_available"] is False
+    assert rows[str(imported_session)]["kernel_host_reattach_available"] is False
+    assert rows[str(imported_session)]["kernel_search_only"] is True
 
 
-def test_wall_excludes_old_sessions(tmp_path):
+def test_wall_excludes_old_sessions(live_catalog, live_catalog_client):
     """Sessions older than the days param are excluded."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        _seed_session(
-            db,
-            started_at=datetime.now(timezone.utc) - timedelta(days=10),
-            last_activity_at=datetime.now(timezone.utc) - timedelta(days=10),
-            git_repo="old",
-        )
-        _seed_session(db, git_repo="recent")
+    owner_id = live_catalog.create_user("owner@wall.test")
+    _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        git_repo="old",
+        project="old",
+        now=datetime.now(UTC).replace(microsecond=0) - timedelta(days=10),
+    )
+    _ship(live_catalog, live_catalog_client, owner_id=owner_id, git_repo="recent", project="recent")
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/sessions/wall", params={"days": 3})
-        data = resp.json()
-        repos = [s["git_repo"] for s in data["sessions"]]
-        assert "recent" in repos
-        assert "old" not in repos
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get(
+        "/agents/sessions/wall",
+        params={"days": 3},
+        headers=_headers(live_catalog, owner_id),
+    )
+    assert resp.status_code == 200, resp.text
+    repos = [s["git_repo"] for s in resp.json()["sessions"]]
+    assert "recent" in repos
+    assert "old" not in repos
 
 
 # ---------------------------------------------------------------------------
@@ -347,93 +416,93 @@ def test_wall_excludes_old_sessions(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_tail_returns_404_for_missing_session(tmp_path):
+def test_tail_returns_404_for_missing_session(live_catalog, live_catalog_client):
     """GET /agents/sessions/{id}/tail returns 404 for nonexistent session."""
-    SessionLocal = _make_db(tmp_path)
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        fake_id = str(uuid4())
-        resp = client.get(f"/api/agents/sessions/{fake_id}/tail")
-        assert resp.status_code == 404
-    finally:
-        api_ref.dependency_overrides = {}
+    owner_id = live_catalog.create_user("owner@tail.test")
+
+    resp = live_catalog_client.get(
+        f"/agents/sessions/{uuid4()}/tail",
+        headers=_headers(live_catalog, owner_id),
+    )
+
+    assert resp.status_code == 404, resp.text
 
 
-def test_tail_returns_recent_events(tmp_path):
+def test_tail_returns_recent_events(live_catalog, live_catalog_client):
     """GET /agents/sessions/{id}/tail returns last N events in chronological order."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s = _seed_session(db)
-        _seed_event(db, s.id, role="user", content="first message", minutes_ago=10)
-        _seed_event(db, s.id, role="assistant", content="second response", minutes_ago=5)
-        _seed_event(db, s.id, role="user", content="third message", minutes_ago=1)
-        sid = str(s.id)
+    owner_id = live_catalog.create_user("owner@tail.test")
+    session_id = _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        texts=("first message", "second response", "third message"),
+        roles=("user", "assistant", "user"),
+    )
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get(f"/api/agents/sessions/{sid}/tail", params={"limit": 2})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["session_id"] == sid
-        assert len(data["events"]) == 2
-        # Chronological order (oldest first)
-        assert data["events"][0]["content"] == "second response"
-        assert data["events"][1]["content"] == "third message"
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get(
+        f"/agents/sessions/{session_id}/tail",
+        params={"limit": 2},
+        headers=_headers(live_catalog, owner_id),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["session_id"] == str(session_id)
+    assert len(data["events"]) == 2
+    # Chronological order (oldest first)
+    assert data["events"][0]["content"] == "second response"
+    assert data["events"][1]["content"] == "third message"
 
 
-def test_tail_filters_to_user_assistant_tool(tmp_path):
+def test_tail_filters_to_user_assistant_tool(live_catalog, live_catalog_client):
     """Tail only returns user, assistant, and tool role events."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s = _seed_session(db)
-        _seed_event(db, s.id, role="user", content="visible")
-        _seed_event(db, s.id, role="system", content="hidden")
-        _seed_event(db, s.id, role="assistant", content="also visible")
-        sid = str(s.id)
+    owner_id = live_catalog.create_user("owner@tail.test")
+    session_id = _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        texts=("visible", "hidden", "also visible"),
+        roles=("user", "system", "assistant"),
+    )
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get(f"/api/agents/sessions/{sid}/tail")
-        data = resp.json()
-        roles = [e["role"] for e in data["events"]]
-        assert "system" not in roles
-        assert "user" in roles
-        assert "assistant" in roles
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get(
+        f"/agents/sessions/{session_id}/tail",
+        headers=_headers(live_catalog, owner_id),
+    )
+    assert resp.status_code == 200, resp.text
+    roles = [event["role"] for event in resp.json()["events"]]
+    assert "system" not in roles
+    assert "user" in roles
+    assert "assistant" in roles
 
 
-def test_tail_truncates_long_content(tmp_path):
+def test_tail_truncates_long_content(live_catalog, live_catalog_client):
     """Content longer than 4000 chars is truncated."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s = _seed_session(db)
-        _seed_event(db, s.id, role="user", content="x" * 8000)
-        sid = str(s.id)
+    owner_id = live_catalog.create_user("owner@tail.test")
+    session_id = _ship(live_catalog, live_catalog_client, owner_id=owner_id, texts=("x" * 8000,))
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get(f"/api/agents/sessions/{sid}/tail")
-        data = resp.json()
-        assert len(data["events"][0]["content"]) == 4000
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get(
+        f"/agents/sessions/{session_id}/tail",
+        headers=_headers(live_catalog, owner_id),
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["events"][0]["content"]) == 4000
 
 
-def test_tail_includes_tool_name(tmp_path):
+def test_tail_includes_tool_name(live_catalog, live_catalog_client):
     """Tool events include the tool_name field."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s = _seed_session(db)
-        _seed_event(db, s.id, role="tool", content="output", tool_name="Bash")
-        sid = str(s.id)
+    owner_id = live_catalog.create_user("owner@tail.test")
+    session_id = _ship(
+        live_catalog,
+        live_catalog_client,
+        owner_id=owner_id,
+        texts=("output",),
+        roles=("tool",),
+        tool_name="Bash",
+    )
 
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get(f"/api/agents/sessions/{sid}/tail")
-        data = resp.json()
-        assert data["events"][0]["tool_name"] == "Bash"
-    finally:
-        api_ref.dependency_overrides = {}
+    resp = live_catalog_client.get(
+        f"/agents/sessions/{session_id}/tail",
+        headers=_headers(live_catalog, owner_id),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["events"][0]["tool_name"] == "Bash"

@@ -29,9 +29,7 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
 from zerg.database import catalog_db_dependency
-from zerg.database import get_catalog_session_factory
 from zerg.database import get_db
-from zerg.database import live_catalog_enabled
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
 from zerg.dependencies.auth import get_current_user
@@ -71,10 +69,7 @@ _catalog_db_dependency = catalog_db_dependency()
 def _runner_db():
     """Runner rows are RPC-owned in catalog mode; retain ordinary DB overrides in tests."""
 
-    if live_catalog_enabled():
-        yield None
-        return
-    yield from _catalog_db_dependency()
+    yield None
 
 
 _runner_db_dependency = get_db if _catalog_db_dependency is get_db else _runner_db
@@ -82,7 +77,7 @@ _runner_db_dependency = get_db if _catalog_db_dependency is get_db else _runner_
 
 def _runner_write_serializer():
     live_serializer = get_live_write_serializer()
-    if live_catalog_enabled() and live_serializer.is_configured:
+    if live_serializer.is_configured:
         return live_serializer
     return get_write_serializer()
 
@@ -1223,12 +1218,9 @@ async def runner_websocket(
 ) -> None:
     worker_id = websocket.query_params.get("worker")
     worker_token = set_test_worker_id(worker_id) if worker_id else None
-    db = None if live_catalog_enabled() else get_catalog_session_factory()()
 
     try:
-        await _runner_websocket_with_db(websocket, db)
+        await _runner_websocket_with_db(websocket, None)
     finally:
-        if db is not None:
-            db.close()
         if worker_token is not None:
             reset_test_worker_id(worker_token)

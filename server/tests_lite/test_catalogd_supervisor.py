@@ -235,7 +235,6 @@ async def test_api_readiness_survives_catalogd_kill_and_recovers(supervisor_path
     monkeypatch.setattr(health_router, "get_settings", lambda: SimpleNamespace(testing=False))
     monkeypatch.setattr(database_module, "default_engine", engine)
     monkeypatch.setattr(database_module, "get_live_engine", lambda: engine)
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
     monkeypatch.setattr(

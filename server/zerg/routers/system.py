@@ -11,11 +11,8 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
-from sqlalchemy import text
 
 from zerg.config import get_settings
-from zerg.database import get_session_factory
-from zerg.database import live_catalog_enabled
 from zerg.dependencies.auth import require_admin
 from zerg.models_config import is_capability_available
 
@@ -65,17 +62,7 @@ async def reset_sessions(_admin=Depends(require_admin)) -> Dict[str, Any]:
     """
     if _settings.environment and _settings.environment.lower() == "production":
         return {"error": "Reset disabled in production"}
-    if live_catalog_enabled():
-        raise HTTPException(status_code=503, detail="Archive reset is unavailable while storage is isolated")
-
-    session_factory = get_session_factory()
-    with session_factory() as db:  # type: ignore[arg-type]
-        # Delete events first (FK constraint), then sessions
-        db.execute(text("DELETE FROM events"))
-        db.execute(text("DELETE FROM sessions"))
-        db.commit()
-
-    return {"status": "ok", "message": "All sessions cleared"}
+    raise HTTPException(status_code=503, detail="Archive reset is unavailable while storage is isolated")
 
 
 @router.post("/seed-demo-sessions")
@@ -89,19 +76,4 @@ async def seed_demo_sessions(_admin=Depends(require_admin)) -> Dict[str, Any]:
     """
     if _settings.environment and _settings.environment.lower() == "production" and not _settings.demo_mode:
         return {"error": "Demo seeding disabled in production"}
-    if live_catalog_enabled():
-        raise HTTPException(status_code=503, detail="Demo seeding is unavailable while storage is isolated")
-
-    from zerg.services.demo_seed import seed_missing_demo_sessions
-
-    session_factory = get_session_factory()
-
-    with session_factory() as db:  # type: ignore[arg-type]
-        seeded_count, failed_count = seed_missing_demo_sessions(db)
-
-    return {
-        "status": "ok",
-        "sessions_seeded": seeded_count,
-        "sessions_failed": failed_count,
-        "message": "Demo sessions seeded successfully",
-    }
+    raise HTTPException(status_code=503, detail="Demo seeding is unavailable while storage is isolated")

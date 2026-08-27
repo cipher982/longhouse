@@ -1,7 +1,6 @@
 """Agents API — session CRUD, listing, and export endpoints."""
 
 import asyncio
-import json
 import logging
 from datetime import date as date_type
 from datetime import datetime
@@ -21,7 +20,6 @@ from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
-from fastapi.responses import JSONResponse
 from pydantic import Field
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -34,12 +32,9 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
-from zerg.database import get_live_session_factory
-from zerg.database import get_session_factory
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.models.device_token import DeviceToken
 from zerg.routers.agents_search import read_search_coverage
@@ -48,7 +43,6 @@ from zerg.routers.agents_search import search_storage_v2_sessions
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.services.agents.session_graph_writes import ensure_primary_thread
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import resolve_session_alias
@@ -57,46 +51,31 @@ from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.console_turns import ConsoleTurnConflict
 from zerg.services.console_turns import ConsoleTurnUnavailable
-from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
-from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.directed_input_envelope import provider_supports_coordination_tools
 from zerg.services.directed_input_envelope import provider_supports_live_directed_input
 from zerg.services.directed_input_envelope import render_directed_input_envelope
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
-from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_archive import SessionArchiveBundleResponse
 from zerg.services.session_archive import SessionArchiveManifestResponse
-from zerg.services.session_archive import build_session_archive_bundle
-from zerg.services.session_archive import build_session_archive_manifest_item
 from zerg.services.session_archive import build_storage_v2_archive_bundle
 from zerg.services.session_archive import build_storage_v2_archive_manifest
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
-from zerg.services.session_coordination import load_session_tail
 from zerg.services.session_coordination import project_storage_v2_wall
-from zerg.services.session_coordination import query_wall_sessions
 from zerg.services.session_graph_projection import build_session_graph_projection
-from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-from zerg.services.session_kernel_projection import project_provider_session_id
-from zerg.services.session_kernel_projection import project_session_lineage_fields
-from zerg.services.session_kernel_projection import resolve_session_id_by_provider_session_id
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
-from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_listing import validate_managed_hook_scope
-from zerg.services.session_pause_requests import load_hot_session_projection_map
 from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import get_session_turn_by_id
 from zerg.services.session_turns import list_session_turns
-from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_turns import materialize_managed_transcript_turns
 from zerg.services.session_views import ActiveSessionResponse
 from zerg.services.session_views import ActiveSessionsResponse
@@ -114,7 +93,6 @@ from zerg.services.session_views import SessionNotificationWatchRequest
 from zerg.services.session_views import SessionNotificationWatchResponse
 from zerg.services.session_views import SessionPreviewMessage
 from zerg.services.session_views import SessionPreviewResponse
-from zerg.services.session_views import SessionProjectionItemResponse
 from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionReadRequest
 from zerg.services.session_views import SessionReadResponse
@@ -132,17 +110,8 @@ from zerg.services.session_views import StartupContextItemResponse
 from zerg.services.session_views import StartupContextResponse
 from zerg.services.session_views import WallResponse
 from zerg.services.session_views import build_active_session_response
-from zerg.services.session_views import build_event_input_origin_map
-from zerg.services.session_views import build_event_media_ref_map
-from zerg.services.session_views import build_event_response
-from zerg.services.session_views import build_live_launch_placeholder_response
-from zerg.services.session_views import build_session_action_response
-from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
-from zerg.services.session_views import build_tool_call_state_map
-from zerg.services.session_views import is_session_closed
 from zerg.services.session_views import latest_launch_attempts
-from zerg.services.session_views import latest_live_launch_readiness
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import project_machine_session
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
@@ -158,10 +127,8 @@ from zerg.services.startup_context import render_startup_context
 from zerg.services.storage_v2_export import build_storage_v2_raw_export
 from zerg.services.storage_v2_workspace import build_storage_v2_workspace
 from zerg.services.timeline_session_listing import TimelineSessionListParams
-from zerg.services.timeline_session_stream import stream_timeline_sessions_for_browser
 from zerg.services.worklog_day_export import WorklogDayExportResponse
 from zerg.services.worklog_day_export import WorklogV2Error
-from zerg.services.worklog_day_export import build_worklog_day_export
 from zerg.services.worklog_day_export import build_worklog_day_export_v2
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.utils.server_timing import ServerTimingRecorder
@@ -177,14 +144,14 @@ def _no_coordination_db():
     yield None
 
 
-coordination_db_dependency = _no_coordination_db if database_module.live_catalog_enabled() else get_db
+coordination_db_dependency = _no_coordination_db
 
 
 def _no_session_preferences_db():
     yield None
 
 
-session_preferences_db_dependency = _no_session_preferences_db if database_module.live_catalog_enabled() else get_db
+session_preferences_db_dependency = _no_session_preferences_db
 
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
@@ -226,44 +193,17 @@ def _no_viewer_owner_id() -> int | None:
 
 
 def _console_write_db():
-    if database_module.live_catalog_enabled():
-        yield None
-        return
-    yield from get_db()
+    yield None
 
 
 def _session_detail_db():
-    """Open the legacy archive DB only when the catalog read path is disabled."""
+    """The catalog read path owns session detail; no archive session is opened."""
 
-    if database_module.live_catalog_enabled():
-        yield None
-        return
-    with database_module.get_session_factory()() as db:
-        yield db
+    yield None
 
 
 session_detail_db_dependency = get_db if _catalog_db_dependency is get_db else _session_detail_db
 machine_session_read_db_dependency = get_db if get_settings().testing else _session_detail_db
-
-
-def _live_launch_placeholder_for_owner(
-    session_id: UUID,
-    *,
-    owner_id: int | None,
-    now: datetime | None = None,
-) -> SessionResponse | None:
-    live_launch_readiness = latest_live_launch_readiness([session_id], now=now).get(session_id)
-    if live_launch_readiness is None:
-        return None
-    if owner_id is not None and live_launch_readiness.owner_id != str(owner_id):
-        return None
-    return build_live_launch_placeholder_response(live_launch_readiness, now=now)
-
-
-def _owner_id_from_agents_auth(db: Session, auth: object) -> int | None:
-    if not isinstance(auth, DeviceToken):
-        return None
-    return _resolve_agents_owner_id(db, auth)
 
 
 @router.get("/sessions/stream")
@@ -298,61 +238,16 @@ async def stream_agent_sessions(
         include_automation=False,
         context_mode="forensic",
     )
-    if database_module.live_catalog_enabled():
-        owner_id = getattr(_auth, "owner_id", None)
-        stream = stream_live_catalog_machine_sessions(
-            request,
-            params=params,
-            skip_initial_replay=skip_initial_replay,
-            owner_id=owner_id if isinstance(owner_id, int) else None,
-        )
-    else:
-        owner_id = getattr(_auth, "owner_id", None)
-        browser_stream = stream_timeline_sessions_for_browser(
-            request,
-            session_factory=get_session_factory(),
-            params=params,
-            skip_initial_replay=skip_initial_replay,
-            owner_id=owner_id if isinstance(owner_id, int) else None,
-        )
-        stream = _slim_machine_stream(browser_stream)
+    owner_id = getattr(_auth, "owner_id", None)
+    stream = stream_live_catalog_machine_sessions(
+        request,
+        params=params,
+        skip_initial_replay=skip_initial_replay,
+        owner_id=owner_id if isinstance(owner_id, int) else None,
+    )
     response = EventSourceResponse(stream)
     response.headers["X-Limit-Cap"] = "100"
     return response
-
-
-async def _slim_machine_stream(browser_stream):
-    """Keep legacy/self-host storage on the same small wire contract."""
-
-    async for event in browser_stream:
-        if event.get("event") == "session_remove":
-            raw = json.loads(event["data"])
-            yield {
-                "event": "session_remove",
-                "data": json.dumps({"session_id": raw.get("session_id") or raw.get("thread_id"), "source": "runtime_host"}),
-            }
-            continue
-        if event.get("event") != "session_upsert":
-            yield event
-            continue
-        raw = json.loads(event["data"])
-        head = raw["session"]["head"]
-        payload = {
-            "session_id": head["id"],
-            "device_id": head.get("device_id"),
-            "timeline_title": head.get("timeline_title"),
-            "title_state": head.get("title_state"),
-            "title_source": head.get("title_source"),
-            "runtime_phase": head.get("runtime_phase"),
-            "display_phase": head.get("display_phase"),
-            "last_activity_at": head.get("last_activity_at"),
-            "runtime_version": head.get("runtime_version"),
-            "source": "runtime_host",
-        }
-        yield {
-            "event": "session_delta",
-            "data": json.dumps({key: value for key, value in payload.items() if value is not None}),
-        }
 
 
 @router.get("/worklog/day", response_model=WorklogDayExportResponse)
@@ -368,42 +263,30 @@ async def export_worklog_day(
     """Return one day of session messages for machine worklog consumers."""
     timing = ServerTimingRecorder(surface="worklog")
     try:
-        if database_module.live_catalog_enabled():
-            owner_id = getattr(_auth, "owner_id", None)
-            if owner_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "code": "owner_required",
-                        "message": "Worklog export requires an owner-bound device token.",
-                    },
-                )
-            catalog = get_catalogd_client()
-            search = get_searchd_client()
-            if catalog is None or search is None:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "code": "worklog_projection_unavailable",
-                        "message": "The derived worklog projection is temporarily unavailable.",
-                    },
-                )
-            with timing.span("worklog_projection"):
-                result = await build_worklog_day_export_v2(
-                    catalog=catalog,
-                    search=search,
-                    owner_id=str(owner_id),
-                    day=date,
-                    timezone_name=timezone_name,
-                    include_test=include_test,
-                )
-            timing.apply(response)
-            return result
-        if db is None:
-            raise RuntimeError("legacy worklog database dependency is unavailable")
+        owner_id = getattr(_auth, "owner_id", None)
+        if owner_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "owner_required",
+                    "message": "Worklog export requires an owner-bound device token.",
+                },
+            )
+        catalog = get_catalogd_client()
+        search = get_searchd_client()
+        if catalog is None or search is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "worklog_projection_unavailable",
+                    "message": "The derived worklog projection is temporarily unavailable.",
+                },
+            )
         with timing.span("worklog_projection"):
-            result = build_worklog_day_export(
-                db,
+            result = await build_worklog_day_export_v2(
+                catalog=catalog,
+                search=search,
+                owner_id=str(owner_id),
                 day=date,
                 timezone_name=timezone_name,
                 include_test=include_test,
@@ -432,32 +315,17 @@ async def export_worklog_day(
 def _active_live_session_candidates(*, limit: int, days_back: int, now: datetime) -> list[UUID] | None:
     if not live_store_configured():
         return None
-    if database_module.live_catalog_enabled():
-        from zerg.services.catalog_read_gateway import active_session_ids
+    from zerg.services.catalog_read_gateway import active_session_ids
 
-        result = active_session_ids(
-            limit=min(
-                _ACTIVE_LIVE_SESSION_CANDIDATE_MAX,
-                max(limit, limit * _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER),
-            ),
-            days_back=days_back,
-            observed_at=now.isoformat(),
-        )
-        return [UUID(value) for value in result.get("session_ids", [])]
-    LiveSessionFactory = get_live_session_factory()
-    if LiveSessionFactory is None:
-        return None
-    candidate_limit = min(
-        _ACTIVE_LIVE_SESSION_CANDIDATE_MAX,
-        max(limit, limit * _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER),
+    result = active_session_ids(
+        limit=min(
+            _ACTIVE_LIVE_SESSION_CANDIDATE_MAX,
+            max(limit, limit * _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER),
+        ),
+        days_back=days_back,
+        observed_at=now.isoformat(),
     )
-    with LiveSessionFactory() as live_db:
-        return list_active_live_session_ids(
-            live_db,
-            limit=candidate_limit,
-            days_back=days_back,
-            now=now,
-        )
+    return [UUID(value) for value in result.get("session_ids", [])]
 
 
 def _bounded_preview(value: str | None, *, max_len: int) -> str | None:
@@ -480,22 +348,6 @@ def _parse_current_session_header(request: Request) -> UUID | None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{_CURRENT_SESSION_HEADER} must be a valid UUID",
         ) from exc
-
-
-def _build_projection_seam_response(*, db: Session, item) -> SessionProjectionItemResponse:
-    item_lineage = project_session_lineage_fields(db, item.session)
-    parent_lineage = project_session_lineage_fields(db, item.parent_session) if item.parent_session else None
-    return SessionProjectionItemResponse(
-        kind="seam",
-        session_id=str(item.session.id),
-        timestamp=item.session.started_at,
-        continued_from_session_id=item_lineage.continued_from_session_id,
-        continuation_kind=item_lineage.continuation_kind,
-        origin_label=item_lineage.origin_label,
-        parent_origin_label=(parent_lineage.origin_label if parent_lineage else None),
-        parent_continuation_kind=(parent_lineage.continuation_kind if parent_lineage else None),
-        branched_from_event_id=item_lineage.branched_from_event_id,
-    )
 
 
 def _resolve_directed_input_actor(
@@ -523,16 +375,18 @@ def _resolve_directed_input_actor(
             detail="Authenticated session context does not match request header",
         )
 
-    if database_module.live_catalog_enabled() and db is None:
-        from zerg.services.live_control_catalog import load_live_control_session_snapshot
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
+    try:
         session = load_live_control_session_snapshot(
             resolved_session_id,
             owner_id=int(token.owner_id),
         )
-    else:
-        assert db is not None
-        session = db.query(AgentSession).filter(AgentSession.id == resolved_session_id).first()
+    except CatalogReadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -621,32 +475,51 @@ async def list_sessions(
             mode=mode,
             context_mode=context_mode,
         )
-        # Before choosing a read backend: the live-catalog branch below returns
-        # without reaching list_agent_sessions, so the hook-scope bound has to
-        # be applied here or it does not apply in production at all.
+        # Before the read: the catalog read paths below do not enforce the
+        # hook-scope bound themselves, so it has to be applied here or it does
+        # not apply in production at all.
         validate_managed_hook_scope(_auth, params)
-        if database_module.live_catalog_enabled():
-            if query is not None:
-                if context_mode != "forensic":
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail={
-                            "code": "search_mode_unsupported",
-                            "message": "Storage-v2 search does not yet project active-context boundaries.",
-                        },
-                    )
-                owner_id = getattr(_auth, "owner_id", None)
-                if owner_id is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail={
-                            "code": "owner_required",
-                            "message": "Storage-v2 search requires an owner-bound device token.",
-                        },
-                    )
-                degraded: list[MachineSearchLaneFailure] = []
+        if query is not None:
+            if context_mode != "forensic":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "search_mode_unsupported",
+                        "message": "Storage-v2 search does not yet project active-context boundaries.",
+                    },
+                )
+            owner_id = getattr(_auth, "owner_id", None)
+            if owner_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "code": "owner_required",
+                        "message": "Storage-v2 search requires an owner-bound device token.",
+                    },
+                )
+            degraded: list[MachineSearchLaneFailure] = []
+            try:
+                sessions = await search_storage_v2_sessions(
+                    owner_id=int(owner_id),
+                    query=query,
+                    project=project,
+                    provider=provider,
+                    environment=environment,
+                    days_back=days_back,
+                    limit=limit + offset,
+                    include_test=include_test,
+                    hide_autonomous=hide_autonomous,
+                    include_automation=include_automation,
+                    device_id=device_id,
+                    degraded=degraded,
+                )
+                lanes = ["lexical"]
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE or detail.get("code") != "search_unavailable":
+                    raise
                 try:
-                    sessions = await search_storage_v2_sessions(
+                    sessions = await search_storage_v2_semantic_sessions(
                         owner_id=int(owner_id),
                         query=query,
                         project=project,
@@ -655,85 +528,55 @@ async def list_sessions(
                         days_back=days_back,
                         limit=limit + offset,
                         include_test=include_test,
-                        hide_autonomous=hide_autonomous,
-                        include_automation=include_automation,
-                        device_id=device_id,
-                        degraded=degraded,
                     )
-                    lanes = ["lexical"]
-                except HTTPException as exc:
-                    detail = exc.detail if isinstance(exc.detail, dict) else {}
-                    if exc.status_code != status.HTTP_503_SERVICE_UNAVAILABLE or detail.get("code") != "search_unavailable":
-                        raise
+                except Exception:
+                    raise exc
+                degraded.append(
+                    MachineSearchLaneFailure(
+                        lane="lexical",
+                        status_code=exc.status_code,
+                        code=str(detail.get("code") or "search_unavailable"),
+                        message=str(detail.get("message") or "The lexical search lane is unavailable."),
+                        reason=str(detail["reason"]) if detail.get("reason") is not None else None,
+                    )
+                )
+                lanes = ["dense"]
+            page = sessions[offset : offset + limit]
+            machine_sessions = [
+                session if isinstance(session, MachineSessionResponse) else project_machine_session(session) for session in page
+            ]
+            # Only on zero hits. A result set speaks for itself; a bare
+            # "0 results" is the shape an agent misreads as "this provider
+            # is not indexed", so that case -- and only that case -- pays
+            # one extra read to say what was actually searched.
+            coverage_payload = None
+            if not sessions:
+                raw_coverage = await read_search_coverage(owner_id=int(owner_id))
+                if raw_coverage is not None:
                     try:
-                        sessions = await search_storage_v2_semantic_sessions(
-                            owner_id=int(owner_id),
-                            query=query,
-                            project=project,
-                            provider=provider,
-                            environment=environment,
-                            days_back=days_back,
-                            limit=limit + offset,
-                            include_test=include_test,
-                        )
-                    except Exception:
-                        raise exc
-                    degraded.append(
-                        MachineSearchLaneFailure(
-                            lane="lexical",
-                            status_code=exc.status_code,
-                            code=str(detail.get("code") or "search_unavailable"),
-                            message=str(detail.get("message") or "The lexical search lane is unavailable."),
-                            reason=str(detail["reason"]) if detail.get("reason") is not None else None,
-                        )
-                    )
-                    lanes = ["dense"]
-                page = sessions[offset : offset + limit]
-                machine_sessions = [
-                    session if isinstance(session, MachineSessionResponse) else project_machine_session(session) for session in page
-                ]
-                # Only on zero hits. A result set speaks for itself; a bare
-                # "0 results" is the shape an agent misreads as "this provider
-                # is not indexed", so that case -- and only that case -- pays
-                # one extra read to say what was actually searched.
-                coverage_payload = None
-                if not sessions:
-                    raw_coverage = await read_search_coverage(owner_id=int(owner_id))
-                    if raw_coverage is not None:
-                        try:
-                            coverage_payload = MachineSearchCoverage.model_validate(raw_coverage)
-                        except ValidationError:
-                            coverage_payload = None
-                return MachineSessionsListResponse(
-                    sessions=machine_sessions,
-                    total=len(sessions),
-                    has_real_sessions=bool(sessions),
-                    lanes=lanes,
-                    degraded=degraded,
-                    coverage=coverage_payload,
-                )
-            if (mode or "lexical") != "lexical":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"code": "search_query_required", "message": "Semantic and hybrid modes require a query."},
-                )
-            owner_id = getattr(_auth, "owner_id", None)
-            listing = await asyncio.to_thread(
-                list_live_catalog_sessions,
-                params=params,
-                owner_id=owner_id if isinstance(owner_id, int) else None,
+                        coverage_payload = MachineSearchCoverage.model_validate(raw_coverage)
+                    except ValidationError:
+                        coverage_payload = None
+            return MachineSessionsListResponse(
+                sessions=machine_sessions,
+                total=len(sessions),
+                has_real_sessions=bool(sessions),
+                lanes=lanes,
+                degraded=degraded,
+                coverage=coverage_payload,
             )
-            return _machine_sessions_list(listing)
-        assert db is not None
-        owner_id = _owner_id_from_agents_auth(db, _auth)
-        result = await list_agent_sessions(db=db, auth=_auth, params=params, owner_id=owner_id)
-        if result.headers:
-            return JSONResponse(
-                content=_machine_sessions_list(result.response).model_dump(mode="json"),
-                headers=result.headers,
+        if (mode or "lexical") != "lexical":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "search_query_required", "message": "Semantic and hybrid modes require a query."},
             )
-
-        return _machine_sessions_list(result.response)
+        owner_id = getattr(_auth, "owner_id", None)
+        listing = await asyncio.to_thread(
+            list_live_catalog_sessions,
+            params=params,
+            owner_id=owner_id if isinstance(owner_id, int) else None,
+        )
+        return _machine_sessions_list(listing)
     except SessionListingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except CatalogReadError as exc:
@@ -773,38 +616,21 @@ def list_archive_manifest(
     `hide_autonomous=false` explicitly.
     """
     try:
-        if database_module.live_catalog_enabled():
-            snapshot = timeline_snapshot(
-                {
-                    "project": None,
-                    "provider": None,
-                    "environment": None,
-                    "include_test": include_test,
-                    "hide_autonomous": hide_autonomous,
-                    "include_automation": include_automation,
-                    "device_id": None,
-                    "days_back": days_back,
-                    "limit": limit,
-                    "offset": offset,
-                }
-            )
-            return build_storage_v2_archive_manifest(snapshot)
-        assert db is not None
-        since = datetime.now(timezone.utc) - timedelta(days=days_back)
-        store = AgentsStore(db)
-        sessions, total = store.list_sessions(
-            include_test=include_test,
-            since=since,
-            limit=limit,
-            offset=offset,
-            hide_autonomous=hide_autonomous,
-            include_automation=include_automation,
-            anchor_on_activity=True,
+        snapshot = timeline_snapshot(
+            {
+                "project": None,
+                "provider": None,
+                "environment": None,
+                "include_test": include_test,
+                "hide_autonomous": hide_autonomous,
+                "include_automation": include_automation,
+                "device_id": None,
+                "days_back": days_back,
+                "limit": limit,
+                "offset": offset,
+            }
         )
-        return SessionArchiveManifestResponse(
-            sessions=[build_session_archive_manifest_item(db, session) for session in sessions],
-            total=total,
-        )
+        return build_storage_v2_archive_manifest(snapshot)
     except HTTPException:
         raise
     except CatalogReadError as exc:
@@ -978,36 +804,25 @@ async def wall_query(
     Schema-on-read: returns raw timestamps and facts. The consuming agent
     or UI decides what's relevant — no status bucketing, no pre-computed summaries.
     """
-    if database_module.live_catalog_enabled():
-        fetch_limit = min(200, limit * 4 if repo else limit)
-        snapshot = timeline_snapshot(
-            {
-                "project": project,
-                "provider": None,
-                "environment": None,
-                "include_test": False,
-                "hide_autonomous": not include_automation,
-                "include_automation": include_automation,
-                "device_id": None,
-                "days_back": days,
-                "limit": fetch_limit,
-                "offset": 0,
-            }
-        )
-        items = project_storage_v2_wall(
-            snapshot,
-            repo=repo,
-            limit=limit,
-        )
-        return WallResponse(sessions=items, total=len(items))
-    assert db is not None
-    items = query_wall_sessions(
-        db,
+    fetch_limit = min(200, limit * 4 if repo else limit)
+    snapshot = timeline_snapshot(
+        {
+            "project": project,
+            "provider": None,
+            "environment": None,
+            "include_test": False,
+            "hide_autonomous": not include_automation,
+            "include_automation": include_automation,
+            "device_id": None,
+            "days_back": days,
+            "limit": fetch_limit,
+            "offset": 0,
+        }
+    )
+    items = project_storage_v2_wall(
+        snapshot,
         repo=repo,
-        project=project,
-        days=days,
         limit=limit,
-        include_automation=include_automation,
     )
     return WallResponse(sessions=items, total=len(items))
 
@@ -1216,82 +1031,63 @@ async def session_tail(
     """
     requested_roles = _parse_tail_roles(roles)
     content_budget = _parse_tail_content_budget(max_content_chars)
-    if database_module.live_catalog_enabled():
-        owner_id = getattr(_auth, "owner_id", None)
-        if owner_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Storage-v2 reads require an owner-scoped token",
+    owner_id = getattr(_auth, "owner_id", None)
+    if owner_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Storage-v2 reads require an owner-scoped token",
+        )
+    # The workspace builder has no role predicate, so a narrowed request scans a
+    # bounded larger window and trims after filtering. Without this, roles= would
+    # return a handful of turns out of `limit` mostly-tool events.
+    scan_limit = limit if requested_roles == _TAIL_ALL_ROLES else min(limit * _FILTERED_SCAN_FACTOR, _FILTERED_SCAN_CEILING)
+    workspace = await build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=int(owner_id),
+        branch_mode="head",
+        limit=scan_limit,
+        anchor="tail",
+    )
+    if workspace is None:
+        resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id)
+        if resolved is not None:
+            session_id = resolved
+            workspace = await build_storage_v2_workspace(
+                session_id=session_id,
+                owner_id=int(owner_id),
+                branch_mode="head",
+                limit=scan_limit,
+                anchor="tail",
             )
-        # The workspace builder has no role predicate, so a narrowed request scans a
-        # bounded larger window and trims after filtering. Without this, roles= would
-        # return a handful of turns out of `limit` mostly-tool events.
-        scan_limit = limit if requested_roles == _TAIL_ALL_ROLES else min(limit * _FILTERED_SCAN_FACTOR, _FILTERED_SCAN_CEILING)
-        workspace = await build_storage_v2_workspace(
-            session_id=session_id,
-            owner_id=int(owner_id),
-            branch_mode="head",
-            limit=scan_limit,
-            anchor="tail",
-        )
-        if workspace is None:
-            resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id)
-            if resolved is not None:
-                session_id = resolved
-                workspace = await build_storage_v2_workspace(
-                    session_id=session_id,
-                    owner_id=int(owner_id),
-                    branch_mode="head",
-                    limit=scan_limit,
-                    anchor="tail",
-                )
-        if workspace is None:
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        projection = workspace["projection"]
-        # Count the raw page before any filtering. Exhaustion has to be keyed off
-        # what the store returned, not what survived content and role filters — a
-        # full page whose rows mostly lack content would otherwise look like a
-        # short scan and wrongly report that nothing older exists.
-        scanned = [event for item in projection["items"] if item.get("kind") == "event" and isinstance((event := item.get("event")), dict)]
-        events = [
-            {
-                "id": event["id"],
-                "role": event["role"],
-                "content": str(event.get("content_text") or event.get("tool_output_text") or ""),
-                "tool_name": event.get("tool_name"),
-                "timestamp": event["timestamp"],
-            }
-            for event in scanned
-            if event.get("role") in requested_roles and (event.get("content_text") is not None or event.get("tool_output_text") is not None)
-        ]
-        # Tail-biased: keep the newest events when the scan over-collected. Budget
-        # after trimming so dropped events cannot consume it.
-        events = _apply_tail_content_budget(events[-limit:], content_budget)
-        return _tail_response(
-            session_id,
-            events,
-            requested_roles,
-            scan_window=len(scanned),
-            window_exhausted=len(scanned) >= scan_limit,
-        )
-
-    assert db is not None
-    try:
-        events = load_session_tail(db, session_id=session_id, limit=limit, roles=requested_roles)
-    except ValueError as exc:
-        resolved = resolve_session_id_by_provider_session_id(db, session_id)
-        if resolved is None or resolved == session_id:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        session_id = resolved
-        try:
-            events = load_session_tail(db, session_id=session_id, limit=limit, roles=requested_roles)
-        except ValueError as retry_exc:
-            raise HTTPException(status_code=404, detail=str(retry_exc)) from retry_exc
-
-    # The legacy path filters by role in SQL over the whole session, so there is
-    # no scan window to report and no ambiguity about why results ran out.
-    events = _apply_tail_content_budget(events, content_budget)
-    return _tail_response(session_id, events, requested_roles, scan_window=None, window_exhausted=False)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    projection = workspace["projection"]
+    # Count the raw page before any filtering. Exhaustion has to be keyed off
+    # what the store returned, not what survived content and role filters — a
+    # full page whose rows mostly lack content would otherwise look like a
+    # short scan and wrongly report that nothing older exists.
+    scanned = [event for item in projection["items"] if item.get("kind") == "event" and isinstance((event := item.get("event")), dict)]
+    events = [
+        {
+            "id": event["id"],
+            "role": event["role"],
+            "content": str(event.get("content_text") or event.get("tool_output_text") or ""),
+            "tool_name": event.get("tool_name"),
+            "timestamp": event["timestamp"],
+        }
+        for event in scanned
+        if event.get("role") in requested_roles and (event.get("content_text") is not None or event.get("tool_output_text") is not None)
+    ]
+    # Tail-biased: keep the newest events when the scan over-collected. Budget
+    # after trimming so dropped events cannot consume it.
+    events = _apply_tail_content_budget(events[-limit:], content_budget)
+    return _tail_response(
+        session_id,
+        events,
+        requested_roles,
+        scan_window=len(scanned),
+        window_exhausted=len(scanned) >= scan_limit,
+    )
 
 
 @router.post("/sessions", response_model=ConsoleSessionCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -1351,53 +1147,13 @@ async def create_console_turn(
     """Accept one normal Console message and start or queue its turn."""
 
     owner_id = _resolve_agents_owner_id(db, auth)
-    if database_module.live_catalog_enabled():
-        try:
-            turn = await enqueue_catalog_console_turn(
-                owner_id=owner_id,
-                session_id=session_id,
-                message=body.message,
-                client_request_id=body.client_request_id,
-            )
-        except ConsoleTurnUnavailable as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-        except ConsoleTurnConflict as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        if turn.error:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={"code": turn.error_code or "provider_launch_failed", "message": turn.error},
-            )
-        return ConsoleTurnCreateResponse(
-            turn_id=turn.turn_id,
-            run_id=turn.run_id,
-            state=turn.state,
-            created=turn.created,
-        )
-
-    assert db is not None
-    session = AgentsStore(db).get_session(session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
     try:
-        queued = enqueue_console_turn(
-            db,
-            session=session,
+        turn = await enqueue_catalog_console_turn(
             owner_id=owner_id,
+            session_id=session_id,
             message=body.message,
             client_request_id=body.client_request_id,
         )
-        thread = ensure_primary_thread(db, session)
-        dispatched = await dispatch_next_console_turn(
-            db,
-            owner_id=owner_id,
-            thread_id=thread.id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ConsoleTurnUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1405,13 +1161,16 @@ async def create_console_turn(
         ) from exc
     except ConsoleTurnConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-    state = dispatched.state if dispatched.turn_id == queued.turn_id else queued.state
+    if turn.error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": turn.error_code or "provider_launch_failed", "message": turn.error},
+        )
     return ConsoleTurnCreateResponse(
-        turn_id=queued.turn_id,
-        run_id=dispatched.run_id if dispatched.turn_id == queued.turn_id else None,
-        state=state,
-        created=queued.created,
+        turn_id=turn.turn_id,
+        run_id=turn.run_id,
+        state=turn.state,
+        created=turn.created,
     )
 
 
@@ -1686,23 +1445,12 @@ async def set_session_action(
         )
 
     new_state = action_to_state[body.action]
-    if database_module.live_catalog_enabled():
-        from zerg.services.session_preferences import update_session_preferences
+    from zerg.services.session_preferences import update_session_preferences
 
-        preferences = await update_session_preferences(session_id, user_state=new_state)
-        if preferences is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        return SessionActionResponse(session_id=str(session_id), user_state=preferences.user_state)
-
-    assert db is not None
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if not session:
+    preferences = await update_session_preferences(session_id, user_state=new_state)
+    if preferences is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    session.user_state = new_state
-    session.user_state_at = datetime.now(timezone.utc)
-    db.commit()
-
-    return SessionActionResponse(session_id=str(session_id), user_state=new_state)
+    return SessionActionResponse(session_id=str(session_id), user_state=preferences.user_state)
 
 
 @router.post("/sessions/{session_id}/read", response_model=SessionReadResponse)
@@ -1725,36 +1473,18 @@ async def mark_session_read(
     if read_through is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="read_through must be a valid timestamp")
 
-    if database_module.live_catalog_enabled():
-        from zerg.services.session_preferences import update_session_preferences
+    from zerg.services.session_preferences import update_session_preferences
 
-        preferences = await update_session_preferences(session_id, last_read_at=read_through)
-        if preferences is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        if preferences.read_through_rejected:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="read_through must not be newer than the latest observed Console result",
-            )
-        publish_session_read_update(session_id=str(session_id))
-        return SessionReadResponse(session_id=str(session_id), last_read_at=preferences.last_read_at)
-
-    assert db is not None
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if not session:
+    preferences = await update_session_preferences(session_id, last_read_at=read_through)
+    if preferences is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    result_at = normalize_utc_datetime(session.last_console_result_at)
-    if result_at is not None and read_through > result_at:
+    if preferences.read_through_rejected:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="read_through must not be newer than the latest observed Console result",
         )
-    current = normalize_utc_datetime(session.last_read_at)
-    if current is None or read_through > current:
-        session.last_read_at = read_through
-        db.commit()
-        publish_session_read_update(session_id=str(session_id))
-    return SessionReadResponse(session_id=str(session_id), last_read_at=normalize_utc_datetime(session.last_read_at))
+    publish_session_read_update(session_id=str(session_id))
+    return SessionReadResponse(session_id=str(session_id), last_read_at=preferences.last_read_at)
 
 
 @router.patch("/sessions/{session_id}/loop-mode", response_model=SessionLoopModeResponse)
@@ -1766,22 +1496,12 @@ async def set_session_loop_mode(
     _single: None = Depends(require_single_tenant),
 ) -> SessionLoopModeResponse:
     """Set the explicit loop mode for a coding session."""
-    if database_module.live_catalog_enabled():
-        from zerg.services.session_preferences import update_session_preferences
+    from zerg.services.session_preferences import update_session_preferences
 
-        preferences = await update_session_preferences(session_id, loop_mode=body.loop_mode.value)
-        if preferences is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        return SessionLoopModeResponse(session_id=str(session_id), loop_mode=preferences.loop_mode)
-
-    assert db is not None
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if not session:
+    preferences = await update_session_preferences(session_id, loop_mode=body.loop_mode.value)
+    if preferences is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    session.loop_mode = body.loop_mode.value
-    db.commit()
-
-    return SessionLoopModeResponse(session_id=str(session_id), loop_mode=body.loop_mode)
+    return SessionLoopModeResponse(session_id=str(session_id), loop_mode=preferences.loop_mode)
 
 
 @router.patch("/sessions/{session_id}/notification-watch", response_model=SessionNotificationWatchResponse)
@@ -1793,30 +1513,17 @@ async def set_session_notification_watch(
     _single: None = Depends(require_single_tenant),
 ) -> SessionNotificationWatchResponse:
     """Mute or unmute session attention notifications."""
-    if database_module.live_catalog_enabled():
-        from zerg.services.session_preferences import update_session_preferences
+    from zerg.services.session_preferences import update_session_preferences
 
-        preferences = await update_session_preferences(
-            session_id,
-            notification_muted=bool(body.notification_muted),
-        )
-        if preferences is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        return SessionNotificationWatchResponse(
-            session_id=str(session_id),
-            notification_muted=preferences.notification_muted,
-        )
-
-    assert db is not None
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if not session:
+    preferences = await update_session_preferences(
+        session_id,
+        notification_muted=bool(body.notification_muted),
+    )
+    if preferences is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    session.notification_muted = bool(body.notification_muted)
-    db.commit()
-
     return SessionNotificationWatchResponse(
         session_id=str(session_id),
-        notification_muted=bool(session.notification_muted),
+        notification_muted=preferences.notification_muted,
     )
 
 
@@ -1829,23 +1536,12 @@ async def set_session_timeline_visibility(
     _single: None = Depends(require_single_tenant),
 ) -> SessionTimelineVisibilityResponse:
     """Hide or restore one session in the owner's default timeline."""
-    if database_module.live_catalog_enabled():
-        from zerg.services.session_preferences import update_session_preferences
+    from zerg.services.session_preferences import update_session_preferences
 
-        preferences = await update_session_preferences(session_id, user_hidden_from_timeline=bool(body.hidden))
-        if preferences is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        return SessionTimelineVisibilityResponse(session_id=str(session_id), hidden=preferences.user_hidden_from_timeline)
-
-    assert db is not None
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if not session:
+    preferences = await update_session_preferences(session_id, user_hidden_from_timeline=bool(body.hidden))
+    if preferences is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    session.user_hidden_from_timeline = int(body.hidden)
-    session.user_hidden_at = datetime.now(timezone.utc) if body.hidden else None
-    upsert_timeline_card_from_session(db, session)
-    db.commit()
-    return SessionTimelineVisibilityResponse(session_id=str(session_id), hidden=bool(session.user_hidden_from_timeline))
+    return SessionTimelineVisibilityResponse(session_id=str(session_id), hidden=preferences.user_hidden_from_timeline)
 
 
 @router.get("/sessions/{session_id}", response_model=MachineSessionResponse)
@@ -1970,117 +1666,39 @@ def session_detail_payload(
     browser shape; only the machine route narrows it. Collapsing the two would
     hand web and iOS an archival projection with no control state.
     """
-    if database_module.live_catalog_enabled():
-        effective_owner_id = owner_id
-        if effective_owner_id is None:
-            raw_owner_id = getattr(_auth, "owner_id", None)
-            effective_owner_id = int(raw_owner_id) if raw_owner_id is not None else None
+    effective_owner_id = owner_id
+    if effective_owner_id is None:
+        raw_owner_id = getattr(_auth, "owner_id", None)
+        effective_owner_id = int(raw_owner_id) if raw_owner_id is not None else None
 
-        def _read_live(sid: UUID):
-            try:
-                return read_live_catalog_session(sid, owner_id=effective_owner_id)
-            except CatalogReadError as exc:
-                response_status = {
-                    "canonical_owner_required": status.HTTP_401_UNAUTHORIZED,
-                    "shadow_fact_head_limit_exceeded": status.HTTP_409_CONFLICT,
-                }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
-                raise HTTPException(
-                    status_code=response_status,
-                    detail={"code": exc.code, "message": exc.message},
-                ) from exc
-
-        result, provider_session_id, commit_seq = _read_live(session_id)
-        if result is None:
-            resolved = _live_session_id_via_provider_alias(session_id)
-            if resolved is not None:
-                session_id = resolved
-                result, provider_session_id, commit_seq = _read_live(session_id)
-        if result is None:
+    def _read_live(sid: UUID):
+        try:
+            return read_live_catalog_session(sid, owner_id=effective_owner_id)
+        except CatalogReadError as exc:
+            response_status = {
+                "canonical_owner_required": status.HTTP_401_UNAUTHORIZED,
+                "shadow_fact_head_limit_exceeded": status.HTTP_409_CONFLICT,
+            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Session {session_id} not found",
-            )
-        response.headers["X-Catalog-Commit-Seq"] = commit_seq
-        response.headers["X-Session-State-Serve"] = "canonical_session_detail"
-        if provider_session_id:
-            response.headers["X-Provider-Session-ID"] = provider_session_id
-        return result
+                status_code=response_status,
+                detail={"code": exc.code, "message": exc.message},
+            ) from exc
 
-    assert db is not None
-    store = AgentsStore(db)
-    timing = ServerTimingRecorder(surface="session_detail")
-
-    with timing.span("load_session"):
-        session = store.get_session(session_id)
-
-    if not session:
-        resolved = resolve_session_id_by_provider_session_id(db, session_id)
-        if resolved is not None and resolved != session_id:
+    result, provider_session_id, commit_seq = _read_live(session_id)
+    if result is None:
+        resolved = _live_session_id_via_provider_alias(session_id)
+        if resolved is not None:
             session_id = resolved
-            with timing.span("load_session_by_alias"):
-                session = store.get_session(session_id)
-
-    if not session:
-        effective_owner_id = owner_id
-        if effective_owner_id is None:
-            effective_owner_id = _owner_id_from_agents_auth(db, _auth)
-        placeholder = _live_launch_placeholder_for_owner(
-            session_id,
-            owner_id=effective_owner_id,
-            now=datetime.now(timezone.utc),
-        )
-        if placeholder is not None:
-            timing.apply(response)
-            return placeholder
+            result, provider_session_id, commit_seq = _read_live(session_id)
+    if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found",
         )
-
-    with timing.span("load_activity"):
-        activity_map = store.get_last_activity_map([session.id])
-    with timing.span("load_first_user"):
-        first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
-    with timing.span("load_runtime"):
-        runtime_overlay = None
-        if str(getattr(session, "origin_kind", "") or "").strip() == "console":
-            from zerg.services.session_runtime import load_runtime_state_map
-            from zerg.services.session_runtime import resolve_runtime_overlay
-
-            runtime_state_map = load_runtime_state_map(db, [session.id])
-            runtime_overlay = resolve_runtime_overlay(
-                session,
-                last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-                runtime_state_map=runtime_state_map,
-                now=datetime.now(timezone.utc),
-            )
-        transcript_preview_map = load_active_provisional_preview_map(db, [session.id])
-        pending_response_turn_map = load_pending_response_turn_map(db, [session.id])
-        launch_attempt_map = latest_launch_attempts(db, [session.id])
-        hot_projection_map = load_hot_session_projection_map([session.id])
-    with timing.span("build_response"):
-        effective_owner_id = owner_id
-        if effective_owner_id is None:
-            effective_owner_id = _owner_id_from_agents_auth(db, _auth)
-        result = build_session_response(
-            store,
-            session,
-            last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-            runtime_overlay=runtime_overlay,
-            first_user_message=first_user_map.get(session.id),
-            transcript_preview=transcript_preview_map.get(str(session.id)),
-            owner_id=effective_owner_id,
-            has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
-            archive_state=(hot_projection_map[session.id][1] if session.id in hot_projection_map else "current"),
-            launch_attempt=launch_attempt_map.get(session.id),
-        )
-    # Expose the provider-native id (when bound) so binding-convergence tooling
-    # can group sessions by it; the list endpoint does not carry it. Mirrors the
-    # export path's X-Provider-Session-ID header.
-    provider_session_id = project_provider_session_id(db, session)
+    response.headers["X-Catalog-Commit-Seq"] = commit_seq
+    response.headers["X-Session-State-Serve"] = "canonical_session_detail"
     if provider_session_id:
         response.headers["X-Provider-Session-ID"] = provider_session_id
-    timing.apply(response)
     return result
 
 
@@ -2094,75 +1712,21 @@ async def get_session_thread(
     owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> SessionThreadResponse:
     """Get all concrete continuations in a logical thread."""
-    if database_module.live_catalog_enabled():
-        effective_owner_id = owner_id if owner_id is not None else getattr(_auth, "owner_id", None)
-        if effective_owner_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Storage-v2 reads require an owner-scoped token",
-            )
-        workspace = await build_storage_v2_workspace(
-            session_id=session_id,
-            owner_id=int(effective_owner_id),
-            branch_mode="head",
-            limit=1,
-        )
-        if workspace is None:
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        return workspace["thread"]
-
-    assert db is not None
-    store = AgentsStore(db)
-    timing = ServerTimingRecorder()
-
-    with timing.span("load_session"):
-        session = store.get_session(session_id)
-    if not session:
+    effective_owner_id = owner_id if owner_id is not None else getattr(_auth, "owner_id", None)
+    if effective_owner_id is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Storage-v2 reads require an owner-scoped token",
         )
-
-    with timing.span("load_thread"):
-        thread_sessions = store.list_thread_sessions(session)
-    with timing.span("load_head"):
-        head = store.get_thread_head(session)
-    thread_session_ids = [item.id for item in thread_sessions]
-    with timing.span("load_activity"):
-        activity_map = store.get_last_activity_map(thread_session_ids)
-    with timing.span("load_first_user"):
-        first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
-    thread_cache = store.batch_thread_meta(thread_sessions)
-    with timing.span("load_runtime"):
-        transcript_preview_map = load_active_provisional_preview_map(db, [item.id for item in thread_sessions])
-        pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
-        launch_attempt_map = latest_launch_attempts(db, thread_session_ids)
-
-    with timing.span("build_response"):
-        effective_owner_id = owner_id
-        if effective_owner_id is None:
-            effective_owner_id = _owner_id_from_agents_auth(db, _auth)
-        result = SessionThreadResponse(
-            root_session_id=project_session_lineage_fields(db, session).thread_root_session_id,
-            head_session_id=str(head.id if head else session.id),
-            sessions=[
-                build_session_response(
-                    store,
-                    item,
-                    thread_cache=thread_cache,
-                    last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
-                    runtime_overlay=None,
-                    first_user_message=first_user_map.get(item.id),
-                    transcript_preview=transcript_preview_map.get(str(item.id)),
-                    owner_id=effective_owner_id,
-                    has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
-                    launch_attempt=launch_attempt_map.get(item.id),
-                )
-                for item in thread_sessions
-            ],
-        )
-    timing.apply(response)
-    return result
+    workspace = await build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=int(effective_owner_id),
+        branch_mode="head",
+        limit=1,
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    return workspace["thread"]
 
 
 @router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
@@ -2186,158 +1750,63 @@ async def get_session_events(
     _single: None = Depends(require_single_tenant),
 ) -> EventsListResponse:
     """Get events for a session."""
-    if database_module.live_catalog_enabled():
-        if offset:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Storage-v2 event pagination uses cursor instead of offset",
-            )
-        owner_id = getattr(_auth, "owner_id", None)
-        if owner_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Storage-v2 reads require an owner-scoped token",
-            )
-        role_filter = {value.strip() for value in roles.split(",") if value.strip()} if roles else None
-        # The workspace builder has no filter predicate, so filtering a page-sized
-        # window drops matches that were never fetched. `max_events=3,
-        # roles=assistant` on a transcript that opens with user and system events
-        # returned zero events beside a total of 1286. Over-collect, filter, then
-        # trim — same shape as the tail endpoint.
-        filtered = role_filter is not None or tool_name is not None or query is not None
-        scan_limit = min(limit * _FILTERED_SCAN_FACTOR, _FILTERED_SCAN_CEILING) if filtered else limit
-        workspace = await build_storage_v2_workspace(
-            session_id=session_id,
-            owner_id=int(owner_id),
-            branch_mode=branch_mode,
-            limit=scan_limit,
-            cursor=cursor,
-            anchor=anchor,
-        )
-        if workspace is None:
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        projection = workspace["projection"]
-        events = [item["event"] for item in projection["items"] if item.get("kind") == "event" and item.get("event")]
-        if role_filter is not None:
-            events = [event for event in events if event.get("role") in role_filter]
-        if tool_name is not None:
-            events = [event for event in events if event.get("tool_name") == tool_name]
-        if query is not None:
-            needle = query.casefold()
-            events = [event for event in events if needle in str(event.get("content_text") or "").casefold()]
-
-        next_cursor = projection.get("next_cursor")
-        has_more = projection.get("has_more") is True
-        if filtered and len(events) > limit:
-            # Keep the end of the window when the caller anchored at the tail, the
-            # start otherwise. Resume from the last event actually returned so the
-            # next page cannot skip matches that this trim discarded.
-            events = events[-limit:] if anchor == "tail" else events[:limit]
-            has_more = True
-            if anchor != "tail":
-                next_cursor = events[-1].get("cursor") or next_cursor
-        return EventsListResponse(
-            events=events,
-            total=int(projection["total"]),
-            branch_mode=branch_mode,
-            abandoned_events=int(projection["abandoned_events"]),
-            generation_id=projection.get("generation_id"),
-            next_cursor=next_cursor,
-            has_more=has_more,
-        )
-
-    assert db is not None
-    store = AgentsStore(db)
-
-    session = store.get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
-
-    role_list = [r.strip() for r in roles.split(",")] if roles else None
-    if context_mode not in {"forensic", "active_context"}:
+    if offset:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="context_mode must be one of: forensic, active_context",
+            detail="Storage-v2 event pagination uses cursor instead of offset",
         )
-    if branch_mode not in {"head", "all"}:
+    owner_id = getattr(_auth, "owner_id", None)
+    if owner_id is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="branch_mode must be one of: head, all",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Storage-v2 reads require an owner-scoped token",
         )
-    if anchor not in {"start", "tail"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="anchor must be one of: start, tail",
-        )
-
-    events = store.get_session_events(
-        session_id,
-        thread_id=thread_id,
-        roles=role_list,
-        tool_name=tool_name,
-        query=query,
-        context_mode=context_mode,
+    role_filter = {value.strip() for value in roles.split(",") if value.strip()} if roles else None
+    # The workspace builder has no filter predicate, so filtering a page-sized
+    # window drops matches that were never fetched. `max_events=3,
+    # roles=assistant` on a transcript that opens with user and system events
+    # returned zero events beside a total of 1286. Over-collect, filter, then
+    # trim — same shape as the tail endpoint.
+    filtered = role_filter is not None or tool_name is not None or query is not None
+    scan_limit = min(limit * _FILTERED_SCAN_FACTOR, _FILTERED_SCAN_CEILING) if filtered else limit
+    workspace = await build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=int(owner_id),
         branch_mode=branch_mode,
-        limit=limit,
-        offset=offset,
-        load_from_end=anchor == "tail",
+        limit=scan_limit,
+        cursor=cursor,
+        anchor=anchor,
     )
-    boundary = store.get_active_context_boundary(session_id, branch_mode=branch_mode)
-    head_branch_id = store.get_head_branch_id(session_id)
-    input_origin_map = build_event_input_origin_map(store, events)
-    media_ref_map = build_event_media_ref_map(db, events)
-    tool_call_state_map = build_tool_call_state_map(
-        store.get_tool_call_pairing_events_for_page(
-            session_id,
-            events,
-            thread_id=thread_id,
-            branch_mode=branch_mode,
-        ),
-        session_closed=is_session_closed(session),
-    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    projection = workspace["projection"]
+    events = [item["event"] for item in projection["items"] if item.get("kind") == "event" and item.get("event")]
+    if role_filter is not None:
+        events = [event for event in events if event.get("role") in role_filter]
+    if tool_name is not None:
+        events = [event for event in events if event.get("tool_name") == tool_name]
+    if query is not None:
+        needle = query.casefold()
+        events = [event for event in events if needle in str(event.get("content_text") or "").casefold()]
 
-    total = store.count_session_events(
-        session_id,
-        thread_id=thread_id,
-        roles=role_list,
-        tool_name=tool_name,
-        query=query,
-        context_mode=context_mode,
-        branch_mode=branch_mode,
-    )
-    abandoned_events = 0
-    if branch_mode == "head":
-        forensic_total = store.count_session_events(
-            session_id,
-            thread_id=thread_id,
-            roles=role_list,
-            tool_name=tool_name,
-            query=query,
-            context_mode=context_mode,
-            branch_mode="all",
-        )
-        abandoned_events = max(0, forensic_total - total)
-
+    next_cursor = projection.get("next_cursor")
+    has_more = projection.get("has_more") is True
+    if filtered and len(events) > limit:
+        # Keep the end of the window when the caller anchored at the tail, the
+        # start otherwise. Resume from the last event actually returned so the
+        # next page cannot skip matches that this trim discarded.
+        events = events[-limit:] if anchor == "tail" else events[:limit]
+        has_more = True
+        if anchor != "tail":
+            next_cursor = events[-1].get("cursor") or next_cursor
     return EventsListResponse(
-        events=[
-            build_event_response(
-                store,
-                e,
-                boundary=boundary,
-                head_branch_id=head_branch_id,
-                input_origin_map=input_origin_map,
-                tool_call_state_map=tool_call_state_map,
-                media_ref_map=media_ref_map,
-                provider=session.provider,
-            )
-            for e in events
-        ],
-        total=total,
+        events=events,
+        total=int(projection["total"]),
         branch_mode=branch_mode,
-        abandoned_events=abandoned_events,
+        abandoned_events=int(projection["abandoned_events"]),
+        generation_id=projection.get("generation_id"),
+        next_cursor=next_cursor,
+        has_more=has_more,
     )
 
 
@@ -2359,158 +1828,28 @@ async def get_session_projection(
     _single: None = Depends(require_single_tenant),
 ) -> SessionProjectionResponse:
     """Get the stitched lineage-path projection for a focused session."""
-    if database_module.live_catalog_enabled():
-        if offset:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Storage-v2 projection pagination uses cursor instead of offset",
-            )
-        owner_id = getattr(_auth, "owner_id", None)
-        if owner_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Storage-v2 reads require an owner-scoped token",
-            )
-        workspace = await build_storage_v2_workspace(
-            session_id=session_id,
-            owner_id=int(owner_id),
-            branch_mode=branch_mode,
-            limit=limit,
-            cursor=cursor,
-            anchor=anchor,
-        )
-        if workspace is None:
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-        return workspace["projection"]
-
-    assert db is not None
-    store = AgentsStore(db)
-    timing = ServerTimingRecorder()
-
-    with timing.span("load_session"):
-        session = store.get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
-
-    if branch_mode not in {"head", "all"}:
+    if offset:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="branch_mode must be one of: head, all",
+            detail="Storage-v2 projection pagination uses cursor instead of offset",
         )
-    if anchor not in {"start", "tail"}:
+    owner_id = getattr(_auth, "owner_id", None)
+    if owner_id is None:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="anchor must be one of: start, tail",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Storage-v2 reads require an owner-scoped token",
         )
-
-    with timing.span("load_projection"):
-        projection = store.get_session_projection_page(
-            session,
-            thread_id=thread_id,
-            branch_mode=branch_mode,
-            limit=limit,
-            offset=offset,
-            load_from_end=anchor == "tail",
-        )
-    with timing.span("load_head"):
-        head = store.get_thread_head(session)
-    active_context_boundary_cache: dict[UUID, int | None] = {}
-    head_branch_id_cache: dict[UUID, int | None] = {}
-    input_origin_map = build_event_input_origin_map(
-        store,
-        [item.event for item in projection.items if item.kind == "event" and item.event is not None],
+    workspace = await build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=int(owner_id),
+        branch_mode=branch_mode,
+        limit=limit,
+        cursor=cursor,
+        anchor=anchor,
     )
-
-    sessions_by_id: dict[UUID, Any] = {}
-    for item in projection.items:
-        if item.kind == "event" and item.event is not None:
-            sessions_by_id.setdefault(item.session.id, item.session)
-    tool_call_state_map: dict[int, Any] = {}
-    for sid, path_session in sessions_by_id.items():
-        page_events = [
-            item.event for item in projection.items if item.kind == "event" and item.event is not None and item.session.id == sid
-        ]
-        tool_call_state_map.update(
-            build_tool_call_state_map(
-                store.get_tool_call_pairing_events_for_page(
-                    sid,
-                    page_events,
-                    thread_id=thread_id if sid == session.id else None,
-                    branch_mode=branch_mode,
-                ),
-                session_closed=is_session_closed(path_session),
-            )
-        )
-
-    def get_boundary(current_session_id: UUID) -> int | None:
-        if current_session_id not in active_context_boundary_cache:
-            active_context_boundary_cache[current_session_id] = store.get_active_context_boundary(
-                current_session_id,
-                branch_mode=branch_mode,
-            )
-        return active_context_boundary_cache[current_session_id]
-
-    def get_head_branch_id(current_session_id: UUID) -> int | None:
-        if current_session_id not in head_branch_id_cache:
-            head_branch_id_cache[current_session_id] = store.get_head_branch_id(current_session_id)
-        return head_branch_id_cache[current_session_id]
-
-    with timing.span("build_response"):
-        items: list[SessionProjectionItemResponse] = []
-        media_ref_map = build_event_media_ref_map(
-            db,
-            [item.event for item in projection.items if item.kind == "event" and item.event is not None],
-        )
-        for item in projection.items:
-            if item.kind == "event" and item.event is not None:
-                action = build_session_action_response(item.event)
-                if action is not None:
-                    items.append(
-                        SessionProjectionItemResponse(
-                            kind="action",
-                            session_id=str(item.session.id),
-                            timestamp=item.event.timestamp,
-                            action=action,
-                        )
-                    )
-                    continue
-                items.append(
-                    SessionProjectionItemResponse(
-                        kind="event",
-                        session_id=str(item.session.id),
-                        timestamp=item.event.timestamp,
-                        event=build_event_response(
-                            store,
-                            item.event,
-                            boundary=get_boundary(item.session.id),
-                            head_branch_id=get_head_branch_id(item.session.id),
-                            input_origin_map=input_origin_map,
-                            tool_call_state_map=tool_call_state_map,
-                            media_ref_map=media_ref_map,
-                            provider=item.session.provider,
-                        ),
-                    )
-                )
-                continue
-
-            items.append(_build_projection_seam_response(db=db, item=item))
-
-        result = SessionProjectionResponse(
-            root_session_id=project_session_lineage_fields(db, session).thread_root_session_id,
-            focus_session_id=str(session.id),
-            head_session_id=str(head.id if head else session.id),
-            path_session_ids=[str(path_session.id) for path_session in projection.path_sessions],
-            items=items,
-            total=projection.total,
-            page_offset=projection.page_offset,
-            branch_mode=projection.branch_mode,
-            abandoned_events=projection.abandoned_events,
-        )
-    timing.apply(response)
-    return result
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    return workspace["projection"]
 
 
 @router.get("/sessions/{session_id}/workspace")
@@ -2576,78 +1915,26 @@ async def export_session(
     _single: None = Depends(require_single_tenant),
 ) -> Response:
     """Export session as JSONL for Claude Code --resume."""
-    if database_module.live_catalog_enabled():
-        owner_id = getattr(_auth, "owner_id", None)
-        if owner_id is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner identity is required")
-        try:
-            return await build_storage_v2_raw_export(
-                session_id=session_id,
-                owner_id=int(owner_id),
-                branch_mode=branch_mode,
-            )
-        except HTTPException as exc:
-            if exc.status_code != status.HTTP_404_NOT_FOUND:
-                raise
-            resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id)
-            if resolved is None:
-                raise
-            return await build_storage_v2_raw_export(
-                session_id=resolved,
-                owner_id=int(owner_id),
-                branch_mode=branch_mode,
-            )
-    assert db is not None
-    store = AgentsStore(db)
-    if branch_mode not in {"head", "all"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="branch_mode must be one of: head, all",
+    owner_id = getattr(_auth, "owner_id", None)
+    if owner_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner identity is required")
+    try:
+        return await build_storage_v2_raw_export(
+            session_id=session_id,
+            owner_id=int(owner_id),
+            branch_mode=branch_mode,
         )
-
-    def _export_jsonl(sid: UUID):
-        try:
-            return store.export_session_jsonl(sid, branch_mode=branch_mode)
-        except ArchiveTranscriptUnavailable as exc:
-            # Fail closed: raw bytes for a known source line are missing from both the
-            # monolith and the archive. Surface 503 rather than a truncated transcript.
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Transcript raw bytes unavailable for session {sid}: {exc}",
-            )
-
-    result = _export_jsonl(session_id)
-    if not result:
-        resolved = resolve_session_id_by_provider_session_id(db, session_id)
-        if resolved is not None and resolved != session_id:
-            session_id = resolved
-            result = _export_jsonl(session_id)
-
-    if not result:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_404_NOT_FOUND:
+            raise
+        resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id)
+        if resolved is None:
+            raise
+        return await build_storage_v2_raw_export(
+            session_id=resolved,
+            owner_id=int(owner_id),
+            branch_mode=branch_mode,
         )
-
-    jsonl_bytes, session = result
-
-    provider_session_id = project_provider_session_id(db, session)
-
-    headers = {
-        "Content-Disposition": f"attachment; filename={session_id}.jsonl",
-        "X-Session-CWD": session.cwd or "",
-        "X-Session-Provider": session.provider,
-        "X-Session-Project": session.project or "",
-        "X-Session-Branch-Mode": branch_mode,
-    }
-    if provider_session_id:
-        headers["X-Provider-Session-ID"] = provider_session_id
-
-    return Response(
-        content=jsonl_bytes,
-        media_type="application/x-ndjson",
-        headers=headers,
-    )
 
 
 @router.get("/sessions/{session_id}/archive-bundle", response_model=SessionArchiveBundleResponse)
@@ -2666,18 +1953,14 @@ async def export_session_archive_bundle(
         )
 
     try:
-        if database_module.live_catalog_enabled():
-            owner_id = getattr(_auth, "owner_id", None)
-            if owner_id is None:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Archive bundle requires an owner-bound token")
-            result = await build_storage_v2_archive_bundle(
-                session_id=session_id,
-                owner_id=int(owner_id),
-                branch_mode=branch_mode,
-            )
-        else:
-            assert db is not None
-            result = build_session_archive_bundle(db, session_id, branch_mode=branch_mode)
+        owner_id = getattr(_auth, "owner_id", None)
+        if owner_id is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Archive bundle requires an owner-bound token")
+        result = await build_storage_v2_archive_bundle(
+            session_id=session_id,
+            owner_id=int(owner_id),
+            branch_mode=branch_mode,
+        )
     except (ArchiveTranscriptUnavailable, RawObjectWorkerError, RawObjectCorruptError) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2732,8 +2015,6 @@ async def record_managed_local_launch_outcome(
 
     if isinstance(_auth, ManagedSessionToken):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A device token is required")
-    if not database_module.live_catalog_enabled():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd")
     device_id = str(getattr(_auth, "device_id", "") or "").strip()
     if not device_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device token is missing device identity")
@@ -2794,14 +2075,18 @@ async def issue_session_coordination_token(
 
     if isinstance(_auth, ManagedSessionToken):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A device token is required")
-    if not database_module.live_catalog_enabled():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Coordination authority requires catalogd")
     from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
     from zerg.auth.managed_session_tokens import issue_managed_session_token
     from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
     owner_id = _directed_input_owner_id(_auth)
-    session = load_live_control_session_snapshot(session_id, owner_id=owner_id)
+    try:
+        session = load_live_control_session_snapshot(session_id, owner_id=owner_id)
+    except CatalogReadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     if not provider_supports_coordination_tools(getattr(session, "provider", None)):
@@ -2987,7 +2272,13 @@ async def _create_directed_input_for_actor(
 ) -> dict[str, Any]:
     from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
-    target_session = load_live_control_session_snapshot(target_session_id, owner_id=owner_id)
+    try:
+        target_session = load_live_control_session_snapshot(target_session_id, owner_id=owner_id)
+    except CatalogReadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     if target_session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target session not found")
     created = await _directed_input_call(
@@ -3025,8 +2316,6 @@ async def create_directed_input(
 ) -> dict[str, Any]:
     """Persist attributed input for another session, then deliver when safe."""
 
-    if not database_module.live_catalog_enabled():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input requires catalogd")
     source_session = _resolve_directed_input_actor(
         db=db,
         request=request,
@@ -3054,8 +2343,6 @@ async def list_directed_inputs(
 ) -> dict[str, Any]:
     """Recover durable directed input for the authenticated current session."""
 
-    if not database_module.live_catalog_enabled():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input requires catalogd")
     if direction not in {"inbound", "outbound", "all"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="direction must be inbound, outbound, or all")
     actor_session = _resolve_directed_input_actor(db=db, request=request, token=_auth)
@@ -3089,8 +2376,6 @@ async def reply_to_directed_input(
 ) -> dict[str, Any]:
     """Reply to an inbound directed input without copying a session id."""
 
-    if not database_module.live_catalog_enabled():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Directed input requires catalogd")
     source_session = _resolve_directed_input_actor(db=db, request=request, token=_auth)
     owner_id = _directed_input_owner_id(_auth)
     parent_result = await _directed_input_call(

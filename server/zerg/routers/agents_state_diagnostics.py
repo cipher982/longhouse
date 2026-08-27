@@ -13,7 +13,6 @@ from fastapi import status
 from pydantic import ConfigDict
 from pydantic import Field
 
-import zerg.database as database_module
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.catalog_facts import decode_catalog_datetime
@@ -178,14 +177,6 @@ def get_session_state_reducer_health(
 ) -> SessionStateReducerHealthResponse:
     """Expose bounded reducer health without claiming cutover readiness."""
 
-    if not database_module.live_catalog_enabled():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "canonical_catalog_required",
-                "message": "Session state reducer health requires the canonical live catalog.",
-            },
-        )
     try:
         snapshot = shadow_session_state_health(owner_id=_owner_id(auth))
     except CatalogReadError as exc:
@@ -237,14 +228,6 @@ def get_session_state_diagnostics(
 ) -> SessionStateDiagnosticsResponse:
     """Compare canonical reducer axes without changing served or authorized state."""
 
-    if not database_module.live_catalog_enabled():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "canonical_catalog_required",
-                "message": "Session state diagnostics require the canonical live catalog.",
-            },
-        )
     try:
         snapshot = shadow_session_state_snapshot(str(session_id), owner_id=_owner_id(auth))
     except CatalogReadError as exc:

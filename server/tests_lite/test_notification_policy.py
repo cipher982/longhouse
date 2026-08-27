@@ -5,11 +5,11 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
-from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.user import User
 from zerg.services.notification_policy import AttentionDeliveryAction
 from zerg.services.notification_policy import evaluate_tier1_delivery
@@ -24,7 +24,9 @@ def _make_db(tmp_path: Path):
     return make_sessionmaker(engine)()
 
 
-def test_tier2_suppressed_by_visible_web_presence(tmp_path: Path):
+def test_tier2_suppressed_by_visible_web_presence(tmp_path: Path, live_catalog):
+    """Browser visibility lives in the live catalog, so the policy must read it there."""
+
     db = _make_db(tmp_path)
     try:
         now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
@@ -39,19 +41,20 @@ def test_tier2_suppressed_by_visible_web_presence(tmp_path: Path):
             started_at=now,
         )
         db.add(session)
-        db.flush()
-        db.add(
-            NotificationClientPresence(
-                owner_id=user.id,
-                client_id="web-1",
-                client_type="web",
-                visible=True,
-                route="/timeline",
-                session_id=str(session.id),
-                last_seen_at=now,
-            )
-        )
         db.commit()
+
+        live_catalog.rpc(
+            "notification.presence.upsert.v2",
+            {
+                "owner_id": int(user.id),
+                "client_id": "web-client-1",
+                "client_type": "web",
+                "visible": True,
+                "route": "/timeline",
+                "session_id": str(session.id),
+                "observed_at": now.isoformat(),
+            },
+        )
 
         decision = evaluate_tier2_delivery(db, user=user, session=session, occurred_at=now)
         assert decision.action == AttentionDeliveryAction.SUPPRESS

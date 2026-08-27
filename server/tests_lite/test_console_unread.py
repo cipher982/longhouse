@@ -10,7 +10,6 @@ from datetime import timedelta
 from datetime import timezone
 from uuid import uuid4
 
-import pytest
 
 from zerg.database import Base
 from zerg.database import make_engine
@@ -124,79 +123,6 @@ def test_draining_turn_does_not_stamp(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Mark-read endpoint (cold/sqlite path)
-
-
-@pytest.mark.asyncio
-async def test_mark_read_is_a_max_write(tmp_path, monkeypatch):
-    import zerg.database as database_module
-    from zerg.routers.agents_sessions import mark_session_read
-    from zerg.services.session_views import SessionReadRequest
-
-    db = _db(tmp_path)
-    session = _session(db)
-    _run_console_turn_to(db, session, outcome="completed")
-    db.refresh(session)
-    result_at = session.last_console_result_at
-
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: False)
-
-    response = await mark_session_read(
-        session_id=session.id,
-        body=SessionReadRequest(read_through=result_at),
-        db=db,
-        _auth=None,
-        _single=None,
-    )
-    db.refresh(session)
-    assert session.last_read_at is not None
-    assert response.last_read_at == session.last_read_at.replace(tzinfo=timezone.utc)
-
-    # Older read_through never moves last_read_at backwards.
-    earlier = result_at - timedelta(minutes=10)
-    await mark_session_read(
-        session_id=session.id,
-        body=SessionReadRequest(read_through=earlier),
-        db=db,
-        _auth=None,
-        _single=None,
-    )
-    db.refresh(session)
-    assert session.last_read_at >= result_at
-
-
-@pytest.mark.asyncio
-async def test_mark_read_clears_unread_only_up_to_observed_result(tmp_path, monkeypatch):
-    import zerg.database as database_module
-    from zerg.routers.agents_sessions import mark_session_read
-    from zerg.services.session_views import SessionReadRequest
-
-    db = _db(tmp_path)
-    session = _session(db)
-    _run_console_turn_to(db, session, outcome="completed")
-    db.refresh(session)
-    observed = session.last_console_result_at
-
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: False)
-    await mark_session_read(
-        session_id=session.id,
-        body=SessionReadRequest(read_through=observed),
-        db=db,
-        _auth=None,
-        _single=None,
-    )
-    db.refresh(session)
-    assert _unread(last_console_result_at=session.last_console_result_at, last_read_at=session.last_read_at) is False
-
-    # A newer result the client never saw re-derives unread; the earlier
-    # acknowledgement cannot clear it (the Sol race).
-    session.last_console_result_at = observed + timedelta(minutes=1)
-    db.commit()
-    db.refresh(session)
-    assert _unread(last_console_result_at=session.last_console_result_at, last_read_at=session.last_read_at) is True
-
-
-# ---------------------------------------------------------------------------
-# Listing union
 
 
 def test_unread_sessions_union_into_listing_past_days_back(tmp_path):

@@ -1,11 +1,13 @@
 """HTTP-level tests for the ``roles`` filter on GET /api/agents/sessions/{id}/tail.
 
-Overrides dependencies on ``api_app`` (not ``app``) per the tests_lite convention.
-
 Why this exists: a tool-heavy transcript is mostly tool output, so an unfiltered
 tail of the last N events can be almost entirely command spam with the decisions
 scrolled out of reach. ``roles`` must filter *before* the limit so a caller asking
 for N turns gets N turns.
+
+The route reads the storage-v2 projection, so the tool-heavy transcript is
+shipped the way the Machine Agent ships one -- a real envelope into a real
+catalog -- rather than seeded as archive rows.
 """
 
 from __future__ import annotations
@@ -17,11 +19,12 @@ from datetime import timezone
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -34,6 +37,8 @@ from zerg.models.agents import AgentSession
 from zerg.services.agents.store import AgentsStore
 
 _TS = datetime(2026, 7, 21, 18, 0, 0, tzinfo=timezone.utc)
+DEVICE_ID = "cinder"
+BURIED_TURN = "the tablet is already paired for wireless adb"
 
 
 def _setup_app(tmp_path):
@@ -61,93 +66,92 @@ def _setup_app(tmp_path):
     return factory, _cleanup
 
 
-def _add_tool_heavy_session(factory):
-    """Build a session shaped like the g55 incident: turns buried in tool spam."""
-    with factory() as db:
-        sess = AgentSession(id=uuid4(), provider="codex", environment="test", started_at=_TS)
-        db.add(sess)
-        db.flush()
-        # One real turn first, then 60 tool events. An unfiltered tail of 10
-        # cannot see the turn; a roles-filtered tail of 10 must.
-        db.add(
-            AgentEvent(
-                session_id=sess.id,
-                role="user",
-                content_text="the tablet is already paired for wireless adb",
-                timestamp=_TS,
-                raw_json='{"role":"user"}',
-            )
-        )
-        for index in range(60):
-            db.add(
-                AgentEvent(
-                    session_id=sess.id,
-                    role="tool",
-                    content_text=f"Script completed\nWall time 0.{index} seconds",
-                    timestamp=_TS + timedelta(seconds=index + 1),
-                    raw_json='{"role":"tool"}',
-                )
-            )
-        db.commit()
-        return sess.id
+def _owner_headers(live_catalog) -> dict[str, str]:
+    owner_id = live_catalog.create_user("owner@tail-roles.test")
+    return {"X-Agents-Token": live_catalog.create_device_token(owner_id=owner_id, device_id=DEVICE_ID)}
 
 
-def test_tail_without_roles_returns_tool_spam(tmp_path):
-    factory, cleanup = _setup_app(tmp_path)
-    session_id = _add_tool_heavy_session(factory)
-    client = TestClient(api_app)
-    try:
-        resp = client.get(f"/agents/sessions/{session_id}/tail", params={"limit": 10})
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert {event["role"] for event in payload["events"]} == {"tool"}
-        assert payload["roles"] == ["assistant", "tool", "user"]
-    finally:
-        cleanup()
+def _ship_tool_heavy_session(live_catalog, client, headers, *, conversation_reset: bool = False):
+    """Ship a session shaped like the g55 incident: one turn buried in tool spam.
+
+    One real turn first, then 60 tool records. An unfiltered tail of 10 cannot
+    see the turn; a roles-filtered tail of 10 must.
+    """
+    session_id = uuid4()
+    texts = (BURIED_TURN,) + tuple(f"Script completed\nWall time 0.{index} seconds" for index in range(60))
+    if conversation_reset:
+        texts += ("Conversation reset",)
+    body = live_catalog.envelope_body(session_id=session_id, device_id=DEVICE_ID, texts=texts)
+    records = body["render"]["records"]
+    for record in records[1:]:
+        record["role"] = "tool"
+        record["tool_name"] = "Bash"
+    if conversation_reset:
+        records[-1]["role"] = "system"
+        records[-1]["tool_name"] = None
+        records[-1]["branch_kind"] = "conversation_reset"
+
+    response = client.post(
+        "/agents/storage/v2/envelopes",
+        json=body,
+        headers={**headers, "X-Longhouse-Storage-Lane": "live"},
+    )
+    assert response.status_code == 200, response.text
+    return session_id
 
 
-def test_tail_roles_filter_surfaces_buried_turns(tmp_path):
-    factory, cleanup = _setup_app(tmp_path)
-    session_id = _add_tool_heavy_session(factory)
-    client = TestClient(api_app)
-    try:
-        resp = client.get(
-            f"/agents/sessions/{session_id}/tail",
-            params={"limit": 10, "roles": "user,assistant"},
-        )
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload["roles"] == ["assistant", "user"]
-        assert [event["role"] for event in payload["events"]] == ["user"]
-        assert "wireless adb" in payload["events"][0]["content"]
-        # This path filters in SQL across the whole session, so a short result
-        # means there are genuinely no more turns, not an exhausted window.
-        assert payload["scan_window"] is None
-    finally:
-        cleanup()
+def test_tail_without_roles_returns_tool_spam(live_catalog, live_catalog_client):
+    headers = _owner_headers(live_catalog)
+    session_id = _ship_tool_heavy_session(live_catalog, live_catalog_client, headers)
+
+    resp = live_catalog_client.get(f"/agents/sessions/{session_id}/tail", params={"limit": 10}, headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert {event["role"] for event in payload["events"]} == {"tool"}
+    assert payload["roles"] == ["assistant", "tool", "user"]
 
 
-def test_tail_roles_filter_reaches_past_the_limit_window(tmp_path):
+def test_tail_roles_filter_surfaces_buried_turns(live_catalog, live_catalog_client):
+    headers = _owner_headers(live_catalog)
+    session_id = _ship_tool_heavy_session(live_catalog, live_catalog_client, headers)
+
+    resp = live_catalog_client.get(
+        f"/agents/sessions/{session_id}/tail",
+        params={"limit": 10, "roles": "user,assistant"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["roles"] == ["assistant", "user"]
+    assert [event["role"] for event in payload["events"]] == ["user"]
+    assert "wireless adb" in payload["events"][0]["content"]
+    # The narrowed scan reached past every tool record without filling, so the
+    # short result means there are genuinely no more turns.
+    assert payload["window_exhausted"] is False
+
+
+def test_tail_roles_filter_reaches_past_the_limit_window(live_catalog, live_catalog_client):
     """The filter must apply before the limit, not after.
 
     A post-limit filter would take the last 10 events (all tool) and then drop
     the non-matching ones, returning nothing. This is the assertion that fails
     if the ordering ever regresses.
     """
-    factory, cleanup = _setup_app(tmp_path)
-    session_id = _add_tool_heavy_session(factory)
-    client = TestClient(api_app)
-    try:
-        resp = client.get(
-            f"/agents/sessions/{session_id}/tail",
-            params={"limit": 3, "roles": "user"},
-        )
-        assert resp.status_code == 200
-        payload = resp.json()
-        assert payload["total"] == 1, "the buried user turn must survive the limit window"
-        assert payload["events"][0]["role"] == "user"
-    finally:
-        cleanup()
+    headers = _owner_headers(live_catalog)
+    session_id = _ship_tool_heavy_session(live_catalog, live_catalog_client, headers)
+
+    resp = live_catalog_client.get(
+        f"/agents/sessions/{session_id}/tail",
+        params={"limit": 3, "roles": "user"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["total"] == 1, "the buried user turn must survive the limit window"
+    assert payload["events"][0]["role"] == "user"
 
 
 def test_session_preview_skips_provider_controls_before_limit(tmp_path):
@@ -224,8 +228,8 @@ async def _storage_v2_tail(
 ):
     """Drive the storage-v2 tail path with a synthetic projection.
 
-    tests_lite runs on the legacy path, so the bounded-window behaviour has to be
-    exercised by standing in for catalogd.
+    The window arithmetic needs hundreds of events at exact positions, so these
+    stand in for catalogd rather than shipping a transcript that size.
     """
     from zerg.routers import agents_sessions
 
@@ -247,7 +251,6 @@ async def _storage_v2_tail(
         # catalogd returns at most `limit` newest events.
         return {"projection": {"items": items[-limit:]}}
 
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(agents_sessions, "build_storage_v2_workspace", _fake_workspace)
 
     class _Auth:
@@ -297,57 +300,45 @@ async def test_tail_storage_v2_returns_newest_matches(monkeypatch):
     assert [event["content"] for event in payload["events"]] == ["event 80", "event 90"]
 
 
-def test_tail_rejects_unknown_role(tmp_path):
-    factory, cleanup = _setup_app(tmp_path)
-    session_id = _add_tool_heavy_session(factory)
-    client = TestClient(api_app)
-    try:
-        resp = client.get(
-            f"/agents/sessions/{session_id}/tail",
-            params={"roles": "user,narrator"},
-        )
-        assert resp.status_code == 400
-        assert "narrator" in resp.json()["detail"]
-    finally:
-        cleanup()
+def test_tail_rejects_unknown_role(live_catalog, live_catalog_client):
+    """Role validation happens before the session lookup, so no transcript is needed."""
+    headers = _owner_headers(live_catalog)
+
+    resp = live_catalog_client.get(
+        f"/agents/sessions/{uuid4()}/tail",
+        params={"roles": "user,narrator"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "narrator" in resp.json()["detail"]
 
 
-def test_tail_system_role_surfaces_conversation_boundaries(tmp_path):
-    factory, cleanup = _setup_app(tmp_path)
-    session_id = _add_tool_heavy_session(factory)
-    with factory() as db:
-        db.add(
-            AgentEvent(
-                session_id=session_id,
-                role="system",
-                content_text="Conversation reset",
-                timestamp=_TS + timedelta(seconds=100),
-                raw_json='{"role":"system","branch_kind":"conversation_reset"}',
-            )
-        )
-        db.commit()
-    client = TestClient(api_app)
-    try:
-        resp = client.get(f"/agents/sessions/{session_id}/tail", params={"roles": "system"})
-        assert resp.status_code == 200
-        events = resp.json()["events"]
-        assert len(events) == 1
-        assert events[0]["role"] == "system"
-        assert events[0]["content"] == "Conversation reset"
-    finally:
-        cleanup()
+def test_tail_system_role_surfaces_conversation_boundaries(live_catalog, live_catalog_client):
+    headers = _owner_headers(live_catalog)
+    session_id = _ship_tool_heavy_session(live_catalog, live_catalog_client, headers, conversation_reset=True)
+
+    resp = live_catalog_client.get(
+        f"/agents/sessions/{session_id}/tail",
+        params={"roles": "system"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    events = resp.json()["events"]
+    assert len(events) == 1
+    assert events[0]["role"] == "system"
+    assert events[0]["content"] == "Conversation reset"
 
 
-def test_tail_blank_roles_falls_back_to_all(tmp_path):
-    factory, cleanup = _setup_app(tmp_path)
-    session_id = _add_tool_heavy_session(factory)
-    client = TestClient(api_app)
-    try:
-        resp = client.get(f"/agents/sessions/{session_id}/tail", params={"roles": " "})
-        assert resp.status_code == 200
-        assert resp.json()["roles"] == ["assistant", "tool", "user"]
-    finally:
-        cleanup()
+def test_tail_blank_roles_falls_back_to_all(live_catalog, live_catalog_client):
+    headers = _owner_headers(live_catalog)
+    session_id = _ship_tool_heavy_session(live_catalog, live_catalog_client, headers)
+
+    resp = live_catalog_client.get(f"/agents/sessions/{session_id}/tail", params={"roles": " "}, headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["roles"] == ["assistant", "tool", "user"]
 
 
 @pytest.mark.asyncio

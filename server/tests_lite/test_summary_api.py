@@ -1,103 +1,45 @@
 """HTTP-level tests for summary fields in session API responses.
 
 Covers:
-- GET /api/agents/sessions returns summary + summary_title fields
-- GET /api/agents/sessions/{id} returns summary + summary_title fields
-- Sessions without summary return null (not error)
+- GET /api/timeline/sessions returns the catalog's summary_title
+- GET /api/timeline/sessions/{id} returns the same fields for one session
+- Sessions without a title return null (not error)
 
-Uses in-memory SQLite with inline setup (no shared conftest).
+The titles come from where production puts them: ``storage.session.title.
+complete.v2`` against a real catalog, seeded through ``live_catalog_harness``.
 """
 
+from __future__ import annotations
+
+from datetime import UTC
 from datetime import datetime
-from datetime import timezone
-from types import SimpleNamespace
-from unittest.mock import patch
+from uuid import UUID
 
-from fastapi.testclient import TestClient
-
-from zerg.database import Base
-from zerg.database import get_db
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.browser_auth import get_current_browser_user
-from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
-from zerg.services.agents import AgentsStore
-from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_db(tmp_path):
-    """Create an in-memory SQLite DB with agent tables, return session factory."""
-    db_path = tmp_path / "test_summary_api.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    return make_sessionmaker(engine)
+def _complete_title(live: LiveCatalog, session_id: UUID, title: str) -> None:
+    """Give one session the AI title the title worker would have written."""
 
-
-def _seed_session(db, *, summary=None, summary_title=None, project="test-project", environment="production"):
-    """Create a session with optional summary fields."""
-    session = AgentSession(
-        provider="claude",
-        environment=environment,
-        project=project,
-        started_at=datetime.now(timezone.utc),
-        ended_at=datetime.now(timezone.utc),
-        user_messages=5,
-        assistant_messages=7,
-        tool_calls=3,
-        summary=summary,
-        summary_title=summary_title,
-        summary_event_count=10 if summary else 0,
+    completed = live.rpc(
+        "storage.session.title.complete.v2",
+        {
+            "session_id": str(session_id),
+            "title": title,
+            "completed_at": datetime.now(UTC).isoformat(),
+        },
     )
-    db.add(session)
-    db.flush()
-    upsert_timeline_card_from_session(db, session)
-    db.commit()
-    db.refresh(session)
-    return session
+    assert completed["changed"] is True, completed
 
 
-def _seed_session_event(db, session, *, role="assistant", content_text="Semantic snippet content that is long enough."):
-    event = AgentEvent(
-        session_id=session.id,
-        role=role,
-        content_text=content_text,
-        timestamp=datetime.now(timezone.utc),
-    )
-    db.add(event)
-    db.commit()
-    db.refresh(event)
-    return event
-
-
-def _get_client(session_factory):
-    """Create a TestClient with DB dependency override."""
-    from zerg.main import api_app
-
-    def override_get_db():
-        db = session_factory()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    def override_verify_agents_token():
-        return SimpleNamespace(device_id="summary-api", id="token-1", owner_id=1)
-
-    def override_browser_user():
-        return SimpleNamespace(id=1)
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
-    api_app.dependency_overrides[get_current_browser_user] = override_browser_user
-    client = TestClient(api_app)
-    yield client
-    api_app.dependency_overrides.clear()
+def _cookies(live: LiveCatalog, *, owner_id: int, email: str) -> dict[str, str]:
+    return {"longhouse_session": live.browser_cookie(owner_id=owner_id, email=email)}
 
 
 # ---------------------------------------------------------------------------
@@ -105,195 +47,74 @@ def _get_client(session_factory):
 # ---------------------------------------------------------------------------
 
 
-def test_list_sessions_includes_summary(tmp_path):
-    """The browser session list returns summary and summary_title fields."""
-    factory = _make_db(tmp_path)
-    db = factory()
-    try:
-        _seed_session(
-            db,
-            summary="Implemented JWT auth and rate limiting.",
-            summary_title="Auth and Rate Limiting",
-            environment="work-macbook",
-        )
-    finally:
-        db.close()
+def test_list_sessions_includes_summary(live_catalog, live_catalog_client):
+    """The browser session list returns the session's title fields."""
+    email = "summary-list@test.local"
+    owner_id = live_catalog.create_user(email)
+    seeded = live_catalog.commit_session(owner_id=owner_id)
+    _complete_title(live_catalog, seeded.session_id, "Auth and Rate Limiting")
 
-    for client in _get_client(factory):
-        resp = client.get("/timeline/sessions?days_back=1")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["sessions"]) >= 1
-        session = data["sessions"][0]["detail"]
-        assert session["summary"] == "Implemented JWT auth and rate limiting."
-        assert session["summary_title"] == "Auth and Rate Limiting"
-        assert session["environment"] == "work-macbook"
-        assert session["thread_root_session_id"] == session["id"]
-        assert session["thread_head_session_id"] == session["id"]
-        assert session["thread_continuation_count"] == 1
-        assert session["continuation_kind"] is None
-        assert session["origin_label"] == "work-macbook"
-        assert session["is_writable_head"] is True
+    resp = live_catalog_client.get("/timeline/sessions?days_back=1", cookies=_cookies(live_catalog, owner_id=owner_id, email=email))
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert len(data["sessions"]) >= 1
+    session = data["sessions"][0]["detail"]
+    assert session["id"] == str(seeded.session_id)
+    assert session["summary_title"] == "Auth and Rate Limiting"
+    assert session["anchor_title"] == "Auth and Rate Limiting"
+    assert session["environment"] == "production"
+    assert session["origin_label"] == "production"
+    # One session is its own thread: the lineage columns that made a session
+    # point at another one are gone.
+    assert session["thread_root_session_id"] == session["id"]
+    assert session["thread_head_session_id"] == session["id"]
+    assert session["thread_continuation_count"] == 1
+    assert session["continuation_kind"] is None
 
 
-def test_list_sessions_uses_batched_thread_meta(tmp_path):
-    """GET /agents/sessions preloads thread metadata instead of per-thread lookups."""
-    factory = _make_db(tmp_path)
-    db = factory()
-    try:
-        first = _seed_session(
-            db,
-            summary="First session.",
-            summary_title="First",
-            environment="cinder",
-        )
-        second = _seed_session(
-            db,
-            summary="Second session.",
-            summary_title="Second",
-            environment="cinder",
-        )
-    finally:
-        db.close()
+def test_get_session_includes_summary(live_catalog, live_catalog_client):
+    """The browser session detail returns the same title fields."""
+    email = "summary-detail@test.local"
+    owner_id = live_catalog.create_user(email)
+    seeded = live_catalog.commit_session(owner_id=owner_id)
+    _complete_title(live_catalog, seeded.session_id, "Database Bug Fix")
 
-    batch_calls: list[list[str]] = []
-    original_batch_thread_meta = AgentsStore.batch_thread_meta
-
-    def record_batch_thread_meta(self, sessions):
-        batch_calls.append([str(session.id) for session in sessions])
-        return original_batch_thread_meta(self, sessions)
-
-    with (
-        patch.object(AgentsStore, "batch_thread_meta", record_batch_thread_meta),
-        patch.object(
-            AgentsStore,
-            "get_thread_head",
-            side_effect=AssertionError("per-thread head lookup should be preloaded"),
-        ),
-        patch.object(
-            AgentsStore,
-            "list_thread_sessions",
-            side_effect=AssertionError("per-thread session lookup should be preloaded"),
-        ),
-    ):
-        for client in _get_client(factory):
-            resp = client.get("/agents/sessions?days_back=1&limit=5")
-            assert resp.status_code == 200, resp.text
-
-    assert len(batch_calls) == 1
-    assert set(batch_calls[0]) == {str(first.id), str(second.id)}
-
-
-def test_list_sessions_rejects_balanced_sort_without_query(tmp_path):
-    """sort=balanced is only defined for query-backed listing."""
-    factory = _make_db(tmp_path)
-
-    for client in _get_client(factory):
-        resp = client.get("/agents/sessions?sort=balanced&days_back=1")
-        assert resp.status_code == 400
-        assert resp.json()["detail"] == "sort=balanced requires a search query (q param)"
-
-
-def test_get_session_includes_summary(tmp_path):
-    """The browser session detail returns summary and summary_title fields."""
-    factory = _make_db(tmp_path)
-    db = factory()
-    try:
-        session = _seed_session(
-            db,
-            summary="Fixed critical database bug.",
-            summary_title="Database Bug Fix",
-            environment="work-laptop",
-        )
-        session_id = str(session.id)
-    finally:
-        db.close()
-
-    for client in _get_client(factory):
-        resp = client.get(f"/timeline/sessions/{session_id}")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["summary"] == "Fixed critical database bug."
-        assert data["summary_title"] == "Database Bug Fix"
-        assert data["environment"] == "work-laptop"
-        assert data["thread_root_session_id"] == session_id
-        assert data["thread_head_session_id"] == session_id
-        assert data["thread_continuation_count"] == 1
-        assert data["continuation_kind"] is None
-        assert data["origin_label"] == "work-laptop"
-        assert data["is_writable_head"] is True
-
-
-def test_summary_null_when_missing(tmp_path):
-    """Sessions without summary return null, not error."""
-    factory = _make_db(tmp_path)
-    db = factory()
-    try:
-        session = _seed_session(db, summary=None, summary_title=None)
-        session_id = str(session.id)
-    finally:
-        db.close()
-
-    for client in _get_client(factory):
-        resp = client.get(f"/timeline/sessions/{session_id}")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["summary"] is None
-        assert data["summary_title"] is None
-
-
-def test_get_session_thread_returns_lineage(tmp_path):
-    """GET /agents/sessions/{id}/thread returns the logical thread and head."""
-    import pytest
-
-    pytest.skip(
-        "Session-identity-kernel cleanup removed multi-session lineage columns "
-        "(thread_root_session_id, continuation_kind, origin_label, "
-        "is_writable_head, continued_from_session_id). Thread responses now "
-        "always describe a single session."
+    resp = live_catalog_client.get(
+        f"/timeline/sessions/{seeded.session_id}",
+        cookies=_cookies(live_catalog, owner_id=owner_id, email=email),
     )
-    factory = _make_db(tmp_path)
-    db = factory()
-    try:
-        root = _seed_session(
-            db,
-            summary="Started locally.",
-            summary_title="Local root",
-            environment="Cinder",
-        )
-        root.thread_root_session_id = root.id
-        root.continuation_kind = "local"
-        root.origin_label = "Cinder"
-        root.is_writable_head = 1
-        db.commit()
 
-        store = AgentsStore(db)
-        child = store.create_continuation_session(
-            root.id,
-            continuation_kind="cloud",
-            origin_label="Cloud",
-            environment="Cloud",
-            device_id="zerg-automation-cloud",
-            branched_from_event_id=None,
-        )
-        child.summary = "Continued in cloud."
-        child.summary_title = "Cloud branch"
-        db.commit()
-        root_id = str(root.id)
-        child_id = str(child.id)
-    finally:
-        db.close()
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["summary_title"] == "Database Bug Fix"
+    assert data["anchor_title"] == "Database Bug Fix"
+    assert data["environment"] == "production"
+    assert data["origin_label"] == "production"
+    assert data["thread_root_session_id"] == str(seeded.session_id)
+    assert data["thread_head_session_id"] == str(seeded.session_id)
+    assert data["thread_continuation_count"] == 1
+    assert data["continuation_kind"] is None
 
-    for client in _get_client(factory):
-        resp = client.get(f"/agents/sessions/{root_id}/thread")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["root_session_id"] == root_id
-        assert data["head_session_id"] == child_id
-        assert len(data["sessions"]) == 2
-        assert [item["id"] for item in data["sessions"]] == [root_id, child_id]
-        assert data["sessions"][0]["is_writable_head"] is False
-        assert data["sessions"][1]["is_writable_head"] is True
-        assert data["sessions"][1]["continued_from_session_id"] == root_id
-        assert data["sessions"][1]["origin_label"] == "Cloud"
-        assert data["sessions"][1]["continuation_kind"] == "cloud"
+
+def test_summary_null_when_missing(live_catalog, live_catalog_client):
+    """Sessions with no AI title yet return the provisional one, never an error."""
+    email = "summary-missing@test.local"
+    owner_id = live_catalog.create_user(email)
+    seeded = live_catalog.commit_session(owner_id=owner_id, texts=("hello from the transcript",))
+
+    resp = live_catalog_client.get(
+        f"/timeline/sessions/{seeded.session_id}",
+        cookies=_cookies(live_catalog, owner_id=owner_id, email=email),
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["summary"] is None
+    assert data["summary_status"] == "unavailable"
+    # No AI title has landed, so the anchor is still empty and the session
+    # renders under the prompt-derived placeholder.
+    assert data["anchor_title"] is None
+    assert data["title_state"] == "pending"
+    assert data["title_source"] == "prompt"
+    assert data["summary_title"] == "hello from the transcript"

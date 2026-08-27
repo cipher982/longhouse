@@ -22,12 +22,9 @@ from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import RECENT_FAILED_WINDOW_SECS
-from zerg.services.write_serializer import get_live_write_serializer
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
-
-LIVE_INPUT_RECEIPT_WRITE_TIMEOUT_SECS = 0.25
 
 
 @dataclass(frozen=True)
@@ -469,71 +466,39 @@ async def record_live_input_receipt_best_effort(
 
     if not database_module.live_store_configured():
         return None
-    if database_module.live_catalog_enabled():
-        from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.services.catalogd_supervisor import get_catalogd_client
 
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            return None
-        try:
-            result = await catalogd.call(
-                "session.input.receipt.upsert.v2",
-                {
-                    "receipt": {
-                        "owner_id": owner_id,
-                        "session_id": str(session_id),
-                        "provider": provider,
-                        "text": text,
-                        "intent": intent,
-                        "status": status,
-                        "client_request_id": client_request_id,
-                        "device_id": device_id,
-                        "thread_id": str(thread_id) if thread_id is not None else None,
-                        "archive_session_input_id": archive_session_input_id,
-                        "control_command_id": control_command_id,
-                        "delivery_request_id": delivery_request_id,
-                        "enqueue_archive_projection": enqueue_archive_projection,
-                        "error": error,
-                        "expires_at": expires_at.isoformat() if expires_at is not None else None,
-                    }
-                },
-                timeout_seconds=1.0,
-            )
-            receipt = result.get("receipt")
-            return str(receipt["id"]) if isinstance(receipt, dict) else None
-        except Exception:
-            logger.warning("Failed to record catalog input receipt for session %s", session_id, exc_info=True)
-            return None
-    live_ws = get_live_write_serializer()
-    if not live_ws.is_configured:
+    catalogd = get_catalogd_client()
+    if catalogd is None:
         return None
     try:
-        row_id = await live_ws.execute(
-            lambda live_db: _record_live_input_receipt(
-                live_db,
-                owner_id=owner_id,
-                session_id=session_id,
-                provider=provider,
-                text=text,
-                intent=intent,
-                status=status,
-                client_request_id=client_request_id,
-                device_id=device_id,
-                thread_id=thread_id,
-                archive_session_input_id=archive_session_input_id,
-                control_command_id=control_command_id,
-                delivery_request_id=delivery_request_id,
-                enqueue_archive_projection=enqueue_archive_projection,
-                error=error,
-                expires_at=expires_at,
-            ),
-            auto_commit=True,
-            label="live-session-input-receipt",
-            timeout_seconds=LIVE_INPUT_RECEIPT_WRITE_TIMEOUT_SECS,
+        result = await catalogd.call(
+            "session.input.receipt.upsert.v2",
+            {
+                "receipt": {
+                    "owner_id": owner_id,
+                    "session_id": str(session_id),
+                    "provider": provider,
+                    "text": text,
+                    "intent": intent,
+                    "status": status,
+                    "client_request_id": client_request_id,
+                    "device_id": device_id,
+                    "thread_id": str(thread_id) if thread_id is not None else None,
+                    "archive_session_input_id": archive_session_input_id,
+                    "control_command_id": control_command_id,
+                    "delivery_request_id": delivery_request_id,
+                    "enqueue_archive_projection": enqueue_archive_projection,
+                    "error": error,
+                    "expires_at": expires_at.isoformat() if expires_at is not None else None,
+                }
+            },
+            timeout_seconds=1.0,
         )
-        return str(row_id)
+        receipt = result.get("receipt")
+        return str(receipt["id"]) if isinstance(receipt, dict) else None
     except Exception:
-        logger.warning("Failed to record live input receipt for session %s", session_id, exc_info=True)
+        logger.warning("Failed to record catalog input receipt for session %s", session_id, exc_info=True)
         return None
 
 
@@ -585,42 +550,27 @@ async def load_live_input_receipt_by_client_request_best_effort(
 ) -> LiveInputReceiptSnapshot | None:
     if not database_module.live_store_configured():
         return None
-    if database_module.live_catalog_enabled():
-        if not _clean_str(client_request_id):
-            return None
-        from zerg.services.catalogd_supervisor import get_catalogd_client
+    if not _clean_str(client_request_id):
+        return None
+    from zerg.services.catalogd_supervisor import get_catalogd_client
 
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            return None
-        try:
-            result = await catalogd.call(
-                "session.input.receipt.read.v2",
-                {
-                    "owner_id": owner_id,
-                    "session_id": str(session_id),
-                    "client_request_id": str(client_request_id).strip(),
-                },
-                timeout_seconds=1.0,
-            )
-            receipt = result.get("receipt")
-            return _snapshot_from_rpc(receipt) if result.get("found") is True and isinstance(receipt, dict) else None
-        except Exception:
-            logger.warning("Failed to read catalog input receipt for session %s", session_id, exc_info=True)
-            return None
-    session_factory = database_module.get_live_session_factory()
-    if session_factory is None:
+    catalogd = get_catalogd_client()
+    if catalogd is None:
         return None
     try:
-        with session_factory() as live_db:
-            return get_live_input_receipt_by_client_request(
-                live_db,
-                owner_id=owner_id,
-                session_id=session_id,
-                client_request_id=client_request_id,
-            )
+        result = await catalogd.call(
+            "session.input.receipt.read.v2",
+            {
+                "owner_id": owner_id,
+                "session_id": str(session_id),
+                "client_request_id": str(client_request_id).strip(),
+            },
+            timeout_seconds=1.0,
+        )
+        receipt = result.get("receipt")
+        return _snapshot_from_rpc(receipt) if result.get("found") is True and isinstance(receipt, dict) else None
     except Exception:
-        logger.warning("Failed to load live input receipt for session %s", session_id, exc_info=True)
+        logger.warning("Failed to read catalog input receipt for session %s", session_id, exc_info=True)
         return None
 
 

@@ -117,7 +117,6 @@ async def test_role_filter_reaches_past_the_page_window(monkeypatch):
     """The reported failure: three-event window, no assistant events in it."""
     session_id = uuid4()
     roles = ["user", "system", "user"] + ["assistant"] * 10
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(agents_sessions, "build_storage_v2_workspace", _workspace_factory(session_id, roles))
 
     result = await _get_events(session_id, roles="assistant", limit=3)
@@ -131,7 +130,6 @@ async def test_unfiltered_reads_do_not_over_collect(monkeypatch):
     """Without a filter there is nothing to over-collect for."""
     session_id = uuid4()
     seen = []
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
 
     inner = _workspace_factory(session_id, ["user"] + ["assistant"] * 20)
 
@@ -152,7 +150,6 @@ async def test_trimmed_page_resumes_after_the_last_returned_event(monkeypatch):
     """A cursor pointing past the scan would skip matches the trim discarded."""
     session_id = uuid4()
     roles = ["user"] + ["assistant"] * 20
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(agents_sessions, "build_storage_v2_workspace", _workspace_factory(session_id, roles))
 
     result = await _get_events(session_id, roles="assistant", limit=2)
@@ -166,7 +163,6 @@ async def test_trimmed_page_resumes_after_the_last_returned_event(monkeypatch):
 async def test_tail_anchor_keeps_the_newest_matches(monkeypatch):
     session_id = uuid4()
     roles = ["user"] + ["assistant"] * 20
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(agents_sessions, "build_storage_v2_workspace", _workspace_factory(session_id, roles))
 
     result = await _get_events(session_id, roles="assistant", limit=2, anchor="tail")
@@ -236,7 +232,6 @@ async def test_search_branch_projects_instead_of_relying_on_response_model(monke
         },
     )
 
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
 
     async def fake_search(**_kwargs):
         return [session]

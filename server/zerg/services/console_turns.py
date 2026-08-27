@@ -137,49 +137,20 @@ async def interrupt_console_turn(
 ) -> ConsoleTurnInterrupt:
     """Interrupt the exact active Console invocation, never a Helm control path."""
 
-    from zerg import database as database_module
     from zerg.services.catalogd_supervisor import get_catalogd_client
     from zerg.services.machine_control_channel import get_machine_control_channel_registry
 
     turn: dict[str, object] | None
-    if database_module.live_catalog_enabled():
-        client = get_catalogd_client()
-        if client is None:
-            raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
-        result = await client.call(
-            "session.console.turn.current.v2",
-            {"session_id": str(session_id), "owner_id": owner_id},
-        )
-        if result.get("found") is not True:
-            raise ConsoleTurnUnavailable("session_not_found", "Console session was not found")
-        turn = result.get("turn") if isinstance(result.get("turn"), dict) else None
-    else:
-        if db is None:
-            raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn store is unavailable")
-        row = (
-            db.query(SessionTurn, SessionThread)
-            .join(SessionThread, SessionThread.id == SessionTurn.thread_id)
-            .join(SessionInput, SessionInput.id == SessionTurn.session_input_id)
-            .filter(
-                SessionTurn.session_id == session_id,
-                SessionTurn.source_kind == SESSION_TURN_SOURCE_CONSOLE,
-                SessionTurn.state.in_(tuple(CONSOLE_EXECUTION_OWNER_STATES)),
-                SessionInput.owner_id == owner_id,
-            )
-            .order_by(SessionTurn.created_at.asc(), SessionTurn.id.asc())
-            .first()
-        )
-        turn = (
-            {
-                "turn_id": row[0].id,
-                "run_id": str(row[0].run_id) if row[0].run_id else None,
-                "provider": row[1].provider,
-                "device_id": row[1].device_id,
-                "thread_id": str(row[1].id),
-            }
-            if row is not None
-            else None
-        )
+    client = get_catalogd_client()
+    if client is None:
+        raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
+    result = await client.call(
+        "session.console.turn.current.v2",
+        {"session_id": str(session_id), "owner_id": owner_id},
+    )
+    if result.get("found") is not True:
+        raise ConsoleTurnUnavailable("session_not_found", "Console session was not found")
+    turn = result.get("turn") if isinstance(result.get("turn"), dict) else None
     if turn is None or not turn.get("run_id"):
         raise ConsoleTurnUnavailable("no_active_turn", "Session has no active Console turn")
 
@@ -212,7 +183,7 @@ async def interrupt_console_turn(
         detail = message.get("error") if isinstance(message.get("error"), dict) else {}
         error = str(detail.get("message") or response.error or "Console turn interrupt failed")
     return ConsoleTurnInterrupt(
-        turn_id=UUID(str(turn["turn_id"])) if database_module.live_catalog_enabled() else int(turn["turn_id"]),
+        turn_id=UUID(str(turn["turn_id"])),
         run_id=run_id,
         dispatched=error is None,
         error=error,
@@ -632,33 +603,6 @@ def _current_cold_dispatch(db: Session, claimed: ClaimedConsoleTurn) -> ConsoleT
     )
 
 
-def _starting_cold_console_turns_for_device(
-    db: Session,
-    *,
-    owner_id: int,
-    device_id: str,
-) -> list[ClaimedConsoleTurn]:
-    rows = (
-        db.query(SessionTurn, SessionThread, SessionInput)
-        .join(SessionThread, SessionThread.id == SessionTurn.thread_id)
-        .join(SessionInput, SessionInput.id == SessionTurn.session_input_id)
-        .filter(
-            SessionTurn.source_kind == SESSION_TURN_SOURCE_CONSOLE,
-            SessionTurn.state == SESSION_TURN_STATE_STARTING,
-            SessionThread.device_id == device_id,
-            SessionInput.owner_id == owner_id,
-        )
-        .order_by(SessionTurn.created_at.asc(), SessionTurn.id.asc())
-        .limit(100)
-        .all()
-    )
-    return [
-        claimed
-        for turn, thread, input_row in rows
-        if (claimed := _claimed_cold_console_turn(db, turn=turn, thread=thread, input_row=input_row)) is not None
-    ]
-
-
 def _starting_cold_console_turn_for_thread(
     db: Session,
     *,
@@ -1046,93 +990,55 @@ async def reconcile_starting_console_turns_for_device(
     instead of spawning a second provider invocation.
     """
 
-    from zerg import database as database_module
     from zerg.services.catalogd_supervisor import get_catalogd_client
     from zerg.services.machine_control_channel import get_machine_control_channel_registry
 
     control = registry or get_machine_control_channel_registry()
-    if database_module.live_catalog_enabled():
-        catalog = get_catalogd_client()
-        if catalog is None:
-            raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
-        result = await catalog.call(
-            "session.console.turn.starting_for_device.v2",
-            {"owner_id": owner_id, "device_id": device_id},
-        )
-        turns = result.get("turns") if isinstance(result.get("turns"), list) else []
-        reconciled: list[CatalogConsoleTurn | ConsoleTurnDispatch] = []
-        for turn in turns:
-            if not isinstance(turn, dict):
-                continue
-            capability = f"{turn.get('provider')}.turn_start"
-            if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
-                error = f"Machine Agent reconnected without advertising {capability}; launch outcome remains unknown"
-                update_result = await _mark_catalog_start_outcome_unknown(
-                    catalog,
-                    owner_id=owner_id,
-                    turn_id=UUID(str(turn["turn_id"])),
-                    run_id=UUID(str(turn["run_id"])),
-                    session_id=UUID(str(turn["session_id"])),
-                    thread_id=UUID(str(turn["thread_id"])),
-                    provider=str(turn["provider"]),
-                    device_id=str(turn["device_id"]),
-                    error=error,
-                )
-                persisted_turn = dict(update_result.get("turn") or {})
-                applied = update_result.get("applied") is not False
-                reconciled.append(
-                    CatalogConsoleTurn(
-                        turn_id=UUID(str(turn["turn_id"])),
-                        run_id=UUID(str(turn["run_id"])),
-                        state=str(persisted_turn.get("state") or SESSION_TURN_STATE_STARTING),
-                        created=False,
-                        error_code="turn_start_outcome_unknown" if applied else None,
-                        error=error if applied else (str(persisted_turn.get("error") or "") or None),
-                    )
-                )
-                continue
-            reconciled.append(
-                await dispatch_catalog_claimed_turn(
-                    owner_id=owner_id,
-                    turn=turn,
-                    client=catalog,
-                    registry=control,
-                )
-            )
-        return reconciled
-
-    if db is None:
-        raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn store is unavailable")
-    reconciled = []
-    for claimed in _starting_cold_console_turns_for_device(
-        db,
-        owner_id=owner_id,
-        device_id=device_id,
-    ):
-        capability = f"{claimed.provider}.turn_start"
+    catalog = get_catalogd_client()
+    if catalog is None:
+        raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
+    result = await catalog.call(
+        "session.console.turn.starting_for_device.v2",
+        {"owner_id": owner_id, "device_id": device_id},
+    )
+    turns = result.get("turns") if isinstance(result.get("turns"), list) else []
+    reconciled: list[CatalogConsoleTurn | ConsoleTurnDispatch] = []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        capability = f"{turn.get('provider')}.turn_start"
         if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
             error = f"Machine Agent reconnected without advertising {capability}; launch outcome remains unknown"
-            try:
-                _mark_starting_console_turn_unknown(db, turn_id=claimed.turn_id, error=error)
-            except ConsoleTurnConflict:
-                reconciled.append(_current_cold_dispatch(db, claimed))
-            else:
-                reconciled.append(
-                    ConsoleTurnDispatch(
-                        turn_id=claimed.turn_id,
-                        run_id=claimed.run_id,
-                        state=SESSION_TURN_STATE_STARTING,
-                        error_code="turn_start_outcome_unknown",
-                        error=error,
-                    )
+            update_result = await _mark_catalog_start_outcome_unknown(
+                catalog,
+                owner_id=owner_id,
+                turn_id=UUID(str(turn["turn_id"])),
+                run_id=UUID(str(turn["run_id"])),
+                session_id=UUID(str(turn["session_id"])),
+                thread_id=UUID(str(turn["thread_id"])),
+                provider=str(turn["provider"]),
+                device_id=str(turn["device_id"]),
+                error=error,
+            )
+            persisted_turn = dict(update_result.get("turn") or {})
+            applied = update_result.get("applied") is not False
+            reconciled.append(
+                CatalogConsoleTurn(
+                    turn_id=UUID(str(turn["turn_id"])),
+                    run_id=UUID(str(turn["run_id"])),
+                    state=str(persisted_turn.get("state") or SESSION_TURN_STATE_STARTING),
+                    created=False,
+                    error_code="turn_start_outcome_unknown" if applied else None,
+                    error=error if applied else (str(persisted_turn.get("error") or "") or None),
                 )
+            )
             continue
         reconciled.append(
-            await _dispatch_claimed_console_turn(
-                db,
+            await dispatch_catalog_claimed_turn(
                 owner_id=owner_id,
-                claimed=claimed,
-                control=control,
+                turn=turn,
+                client=catalog,
+                registry=control,
             )
         )
     return reconciled

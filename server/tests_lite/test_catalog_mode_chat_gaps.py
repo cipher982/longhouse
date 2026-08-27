@@ -67,7 +67,6 @@ def test_catalog_draft_reply_uses_storage_v2_render_tail(monkeypatch):
         async def close(self):
             return None
 
-    monkeypatch.setattr(session_chat_impl.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(session_chat_impl, "_assert_live_session_send_available", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(agents_storage_v2, "read_storage_v2_session_events_page", fake_events_page)
     monkeypatch.setattr(
@@ -127,7 +126,6 @@ def test_catalog_legacy_input_id_cancels_matching_live_receipt(monkeypatch):
         cancelled.append((session_id, receipt_id))
         return SimpleNamespace(id=receipt_id, archive_session_input_id=91)
 
-    monkeypatch.setattr(session_chat.database_module, "live_catalog_enabled", lambda: True)
     def fake_load(db, sid, *, owner_id):
         # Session lookup is owner-scoped now; the endpoint must pass the caller.
         assert owner_id == 7

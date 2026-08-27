@@ -8,7 +8,6 @@ Authentication: same X-Agents-Token / device token as the ingest endpoint.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -37,13 +36,11 @@ from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
-from zerg.database import live_catalog_enabled
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_requests_total
-from zerg.metrics import agents_heartbeat_snapshot_skipped_total
 from zerg.metrics import agents_heartbeat_write_seconds
 from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
@@ -56,22 +53,10 @@ from zerg.observability import set_span_attributes
 from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.catalogd_supervisor import get_catalogd_client
-from zerg.services.live_session_state import mark_missing_live_sessions
-from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
-from zerg.services.managed_control_state import mark_missing_live_control_leases
-from zerg.services.managed_control_state import mark_missing_managed_control_leases
-from zerg.services.managed_control_state import refresh_managed_control_lease_health
-from zerg.services.managed_control_state import upsert_live_control_leases
-from zerg.services.managed_control_state import upsert_managed_control_leases
 from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_runtime import RuntimeEventIngest
-from zerg.services.session_runtime import ingest_runtime_events
-from zerg.services.write_backpressure import raise_hot_write_backpressure
 from zerg.services.write_serializer import WriteQueueTimeoutError
-from zerg.services.write_serializer import execute_post_write
-from zerg.services.write_serializer import get_live_write_serializer
-from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
 
@@ -949,234 +934,50 @@ async def ingest_heartbeat(
                 "sessions_sequence": payload.sessions_sequence,
             }
 
-            def _insert_heartbeat_stamp(write_db: Session) -> str | None:
-                previous_sessions_digest = (
-                    _latest_heartbeat_sessions_digest(write_db, _device_id)
-                    if _managed_leases_present and incoming_sessions_digest is not None
-                    else None
-                )
-                hb = AgentHeartbeat(**heartbeat_stamp_kwargs)
-                write_db.add(hb)
-                return previous_sessions_digest
-
-            def _insert_live_heartbeat_stamp(write_db: Session) -> str | None:
-                previous_sessions_digest = (
-                    _latest_live_heartbeat_sessions_digest(write_db, _device_id)
-                    if _managed_leases_present and incoming_sessions_digest is not None
-                    else None
-                )
-                cutoff = _now - timedelta(days=30)
-                write_db.query(LiveHeartbeatStamp).filter(
-                    LiveHeartbeatStamp.device_id == _device_id,
-                    LiveHeartbeatStamp.received_at < cutoff,
-                ).delete()
-                hb = LiveHeartbeatStamp(**heartbeat_stamp_kwargs)
-                write_db.add(hb)
-                if _managed_leases:
-                    upsert_live_control_leases(
-                        write_db,
-                        _managed_leases,
-                        device_id=_device_id,
-                        received_at=_now,
-                    )
-                    upsert_live_sessions_from_managed_leases(
-                        write_db,
-                        _managed_leases,
-                        device_id=_device_id,
-                        owner_id=getattr(_token, "owner_id", None),
-                        received_at=_now,
-                    )
-                if _managed_leases_present:
-                    mark_missing_live_control_leases(
-                        write_db,
-                        _managed_leases,
-                        device_id=_device_id,
-                        received_at=_now,
-                    )
-                    mark_missing_live_sessions(
-                        write_db,
-                        _managed_lease_session_ids(_managed_leases),
-                        device_id=_device_id,
-                        received_at=_now,
-                    )
-                return previous_sessions_digest
-
-            def _do_heartbeat_bookkeeping(
-                write_db: Session,
-                *,
-                previous_sessions_digest: str | None,
-            ) -> dict[UUID, tuple[str | None, str]]:
-                publish_sessions: dict[UUID, tuple[str | None, str]] = {}
-                managed_snapshot_skip = False
-                if _managed_leases_present and incoming_sessions_digest is not None:
-                    managed_snapshot_skip = previous_sessions_digest == incoming_sessions_digest
-                cutoff = _now - timedelta(days=30)
-                write_db.query(AgentHeartbeat).filter(
-                    AgentHeartbeat.device_id == _device_id,
-                    AgentHeartbeat.received_at < cutoff,
-                ).delete()
-                managed_snapshot_refreshed_ids: set[UUID] = set()
-                if managed_snapshot_skip:
-                    managed_snapshot_refreshed_ids = refresh_managed_control_lease_health(
-                        write_db,
-                        _managed_leases,
-                        device_id=_device_id,
-                        received_at=_now,
-                    )
-                    seen_ids = _managed_lease_session_ids(_managed_leases)
-                    if not seen_ids or seen_ids.issubset(managed_snapshot_refreshed_ids):
-                        agents_heartbeat_snapshot_skipped_total.labels(
-                            reason="unchanged_sessions_digest",
-                        ).inc()
-                    else:
-                        managed_snapshot_skip = False
-                        managed_snapshot_refreshed_ids.clear()
-                for session_id in managed_snapshot_refreshed_ids:
-                    publish_sessions.setdefault(
-                        session_id,
-                        (None, MANAGED_SESSION_LEASE_SOURCE),
-                    )
-                if _managed_leases and not managed_snapshot_skip:
-                    for session_id in upsert_managed_control_leases(
-                        write_db,
-                        _managed_leases,
-                        device_id=_device_id,
-                        received_at=_now,
-                    ):
-                        publish_sessions.setdefault(
-                            session_id,
-                            (None, MANAGED_SESSION_LEASE_SOURCE),
-                        )
-                if _managed_leases_present and not managed_snapshot_skip:
-                    for session_id in mark_missing_managed_control_leases(
-                        write_db,
-                        _managed_leases,
-                        device_id=_device_id,
-                        received_at=_now,
-                    ):
-                        publish_sessions.setdefault(
-                            session_id,
-                            (None, MANAGED_SESSION_LEASE_SOURCE),
-                        )
-                runtime_events = _runtime_events_for_managed_leases(
-                    _managed_leases,
-                    device_id=_device_id,
-                    received_at=_now,
-                )
-                if _unmanaged_bindings_present:
-                    runtime_events.extend(
-                        _runtime_events_for_missing_unbound_unmanaged_sessions(
-                            write_db,
-                            _unmanaged_bindings,
-                            device_id=_device_id,
-                            received_at=_now,
-                        )
-                    )
-                if runtime_events:
-                    ingest_result = ingest_runtime_events(write_db, runtime_events)
-                    updated_runtime_keys = set(ingest_result.updated_runtime_keys)
-                    for event in runtime_events:
-                        if event.session_id is not None and event.runtime_key in updated_runtime_keys:
-                            # Runtime state is the more specific signal when both runtime and binding snapshots touch
-                            # the same session in one heartbeat.
-                            publish_sessions[event.session_id] = (event.provider, event.source)
-                for lease in _managed_leases:
-                    if (lease.state or "").strip().lower() != "attached":
-                        continue
-                    session = write_db.query(AgentSession).filter(AgentSession.id == lease.session_id).first()
-                    if (
-                        _is_managed_codex_session(write_db, session)
-                        and session.ended_at is not None
-                        and not _has_final_managed_codex_terminal(write_db, lease.session_id)
-                    ):
-                        session.ended_at = None
-                        if lease.session_id is not None:
-                            publish_sessions.setdefault(
-                                lease.session_id,
-                                (lease.provider, MANAGED_SESSION_LEASE_SOURCE),
-                            )
-                return publish_sessions
-
-            catalog_mode = live_catalog_enabled()
-            ws = None if catalog_mode else get_write_serializer()
-            live_ws = get_live_write_serializer() if live_store_configured() and not catalog_mode else None
             with tracer.start_as_current_span("longhouse.heartbeat.write") as write_span:
                 write_started = time.monotonic()
                 try:
-                    if catalog_mode:
-                        catalogd = get_catalogd_client()
-                        if catalogd is None:
-                            raise HTTPException(
-                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail={
-                                    "code": "catalog_unavailable",
-                                    "message": "Catalog mutation is temporarily unavailable.",
-                                },
-                            )
-                        result = await catalogd.call(
-                            "machine.heartbeat.apply.v2",
-                            {
-                                "heartbeat": {
-                                    key: (value.isoformat() if isinstance(value, datetime) else value)
-                                    for key, value in heartbeat_stamp_kwargs.items()
-                                },
-                                "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
-                                "managed_leases_present": _managed_leases_present,
-                                "owner_id": getattr(_token, "owner_id", None),
+                    catalogd = get_catalogd_client()
+                    if catalogd is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail={
+                                "code": "catalog_unavailable",
+                                "message": "Catalog mutation is temporarily unavailable.",
                             },
-                            timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
                         )
-                        previous_sessions_digest = result.get("previous_sessions_digest")
-                        commit_seq = result.get("commit_seq")
-                        exact_replay = result.get("exact_replay")
-                        if (
-                            (previous_sessions_digest is not None and not isinstance(previous_sessions_digest, str))
-                            or not isinstance(commit_seq, str)
-                            or not commit_seq.isdecimal()
-                            or type(exact_replay) is not bool
-                        ):
-                            raise HTTPException(
-                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail={
-                                    "code": "catalog_protocol_error",
-                                    "message": "Catalog returned an invalid heartbeat result.",
-                                },
-                            )
-                    elif live_ws is not None:
-                        if not live_ws.is_configured:
-                            raise HTTPException(
-                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail="Live Store write serializer is not configured",
-                            )
-                        if os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV:
-                            if db is not None:
-                                db.close()
-                        previous_sessions_digest = await live_ws.execute(
-                            _insert_live_heartbeat_stamp,
-                            label="heartbeat-stamp",
-                            queue_timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
-                        )
-                    else:
-                        if db is None:
-                            raise HTTPException(
-                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail={
-                                    "code": "catalog_unavailable",
-                                    "message": "Heartbeat storage is temporarily unavailable.",
-                                },
-                            )
-                        previous_sessions_digest = await ws.execute_after_closing_request_session(
-                            _insert_heartbeat_stamp,
-                            db,
-                            label="heartbeat-stamp",
-                            queue_timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
+                    result = await catalogd.call(
+                        "machine.heartbeat.apply.v2",
+                        {
+                            "heartbeat": {
+                                key: (value.isoformat() if isinstance(value, datetime) else value)
+                                for key, value in heartbeat_stamp_kwargs.items()
+                            },
+                            "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
+                            "managed_leases_present": _managed_leases_present,
+                            "owner_id": getattr(_token, "owner_id", None),
+                        },
+                        timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
+                    )
+                    previous_sessions_digest = result.get("previous_sessions_digest")
+                    commit_seq = result.get("commit_seq")
+                    exact_replay = result.get("exact_replay")
+                    if (
+                        (previous_sessions_digest is not None and not isinstance(previous_sessions_digest, str))
+                        or not isinstance(commit_seq, str)
+                        or not commit_seq.isdecimal()
+                        or type(exact_replay) is not bool
+                    ):
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail={
+                                "code": "catalog_protocol_error",
+                                "message": "Catalog returned an invalid heartbeat result.",
+                            },
                         )
                 except WriteQueueTimeoutError:
                     request_status_label = "write_backpressure"
-                    serializer = live_ws or ws
-                    if serializer is None:  # pragma: no cover - catalogd does not raise this legacy exception
-                        raise
-                    raise_hot_write_backpressure(serializer, admission_state="heartbeat_queue_timeout")
+                    raise
                 except CatalogUnavailable as exc:
                     request_status_label = "write_backpressure"
                     raise HTTPException(
@@ -1206,54 +1007,6 @@ async def ingest_heartbeat(
                         "longhouse.heartbeat.write_ms": write_ms,
                     },
                 )
-
-            async def _run_heartbeat_bookkeeping() -> None:
-                try:
-
-                    def write_fn(write_db: Session) -> dict[UUID, tuple[str | None, str]]:
-                        return _do_heartbeat_bookkeeping(
-                            write_db,
-                            previous_sessions_digest=previous_sessions_digest,
-                        )
-
-                    if os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV:
-                        assert ws is not None
-                        publish_sessions = await execute_post_write(
-                            ws,
-                            write_fn,
-                            db,
-                            label="heartbeat-bookkeeping",
-                            timeout_seconds=_HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS,
-                        )
-                    else:
-                        assert ws is not None
-                        publish_sessions = await ws.execute(
-                            write_fn,
-                            label="heartbeat-bookkeeping",
-                            timeout_seconds=_HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS,
-                        )
-                    if publish_sessions:
-                        from zerg.services.session_pubsub import publish_session_runtime_update
-
-                        for session_id, (provider, source) in sorted(
-                            publish_sessions.items(),
-                            key=lambda item: str(item[0]),
-                        ):
-                            publish_session_runtime_update(
-                                session_id=str(session_id),
-                                provider=provider,
-                                source=source,
-                            )
-                except Exception:
-                    logger.exception("Failed to run heartbeat bookkeeping for device %s", _device_id)
-
-            if catalog_mode:
-                pass
-            elif os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV:
-                await _run_heartbeat_bookkeeping()
-            else:
-                task = asyncio.create_task(_run_heartbeat_bookkeeping())
-                task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
 
             request_status_label = "ok"
             return Response(status_code=status.HTTP_204_NO_CONTENT)

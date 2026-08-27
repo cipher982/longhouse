@@ -25,6 +25,7 @@ from types import SimpleNamespace
 from typing import Any
 from typing import Protocol
 from uuid import NAMESPACE_URL
+from uuid import uuid4
 from uuid import uuid5
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
@@ -57,7 +58,40 @@ def _subprocess_runtime_env() -> dict[str, str]:
     return {key: value for key in _SUBPROCESS_RUNTIME_ENV_KEYS if (value := os.environ.get(key))}
 
 
+def _initialize_managed_control_database(engine: Any) -> None:
+    """Create both lanes on one harness engine.
+
+    A Runtime Host keeps the archive and the live store in two files. The
+    harness keeps one, because everything it seeds and reads belongs to a
+    single disposable evidence package. Managed-control preflight reads the
+    live lane's control lease while capability projection still reads the
+    archive lane, so an engine that only carries archive tables cannot answer
+    the question ``_managed_local_action_available`` asks. Both calls are
+    idempotent, and the tables the two lanes share are declared identically.
+
+    Schema creation belongs here rather than in ``_seed_managed_kernel_rows``:
+    the seed runs inside an open write transaction, and SQLite will not take
+    DDL on a second connection while that transaction holds the write lock.
+    """
+
+    from zerg.database import initialize_database
+    from zerg.database import initialize_live_database
+
+    initialize_database(engine)
+    initialize_live_database(engine)
+
+
 def _seed_managed_kernel_rows(db: Any, session: Any, *, control_plane: str) -> None:
+    """Seed the identity kernel for one managed session on both lanes.
+
+    The archive rows are what ``project_session_capabilities`` reads; the live
+    rows are what the managed-control preflight reads. A Runtime Host writes
+    the live lane and projects the archive from it, so both describe the same
+    session, thread and run -- and the harness gives them the same identities
+    for the same reason. The engine must have been prepared by
+    ``_initialize_managed_control_database``.
+    """
+
     from zerg.services.agents.kernel_writes import ensure_primary_thread
     from zerg.services.agents.kernel_writes import record_run
     from zerg.services.agents.kernel_writes import upsert_connection_for_run
@@ -85,6 +119,74 @@ def _seed_managed_kernel_rows(db: Any, session: Any, *, control_plane: str) -> N
         can_tail_output=1,
         can_resume=0,
     )
+    _seed_live_control_lease(db, session, thread=thread, run=run, control_plane=control_plane)
+
+
+def _seed_live_control_lease(db: Any, session: Any, *, thread: Any, run: Any, control_plane: str) -> None:
+    """Mirror the kernel rows onto the live lane as an attached control lease.
+
+    ``get_live_control_grant`` answers from the latest open run on the primary
+    thread, and only for a connection that is attached, unreleased, and health
+    stamped inside the lease TTL. Anything less is not a grant, so the harness
+    writes exactly that state rather than a row that merely exists.
+    """
+
+    from zerg.models.live_store import LiveSessionConnection
+    from zerg.models.live_store import LiveSessionRun
+    from zerg.models.live_store import LiveSessionThread
+
+    now = datetime.now(UTC)
+    thread_id = str(thread.id)
+    run_id = str(run.id)
+    device_id = getattr(session, "device_id", None)
+    if db.get(LiveSessionThread, thread_id) is None:
+        db.add(
+            LiveSessionThread(
+                id=thread_id,
+                session_id=str(session.id),
+                provider=session.provider,
+                device_id=device_id,
+                cwd=getattr(session, "cwd", None),
+                branch_kind="root",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    if db.get(LiveSessionRun, run_id) is None:
+        db.add(
+            LiveSessionRun(
+                id=run_id,
+                thread_id=thread_id,
+                provider=session.provider,
+                host_id=device_id,
+                cwd=getattr(session, "cwd", None),
+                launch_origin="longhouse_spawned",
+                started_at=now,
+            )
+        )
+    existing = db.query(LiveSessionConnection).filter(LiveSessionConnection.run_id == run_id).one_or_none()
+    if existing is None:
+        db.add(
+            LiveSessionConnection(
+                run_id=run_id,
+                adapter_connection_id=str(uuid4()),
+                lease_generation=str(uuid4()),
+                control_plane=control_plane,
+                acquisition_kind="spawned_control",
+                state="attached",
+                external_name=device_id,
+                device_id=device_id,
+                can_send_input=1,
+                can_interrupt=1,
+                can_terminate=1,
+                can_tail_output=1,
+                can_resume=0,
+                acquired_at=now,
+                last_health_at=now,
+            )
+        )
+    db.flush()
 
 
 def _project_managed_transport(db: Any, session: Any) -> str | None:
@@ -2788,7 +2890,6 @@ class UniversalProviderAdapter:
         os.environ.setdefault("TESTING", "1")
         os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
 
-        from zerg.database import initialize_database
         from zerg.database import make_engine
         from zerg.database import make_sessionmaker
         from zerg.models.agents import AgentSession
@@ -2810,7 +2911,7 @@ class UniversalProviderAdapter:
         db_path = package.path("longhouse", "pause-request-service.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
         engine = make_engine(f"sqlite:///{db_path}")
-        initialize_database(engine)
+        _initialize_managed_control_database(engine)
         session_factory = make_sessionmaker(engine)
 
         with session_factory() as db:

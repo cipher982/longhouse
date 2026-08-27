@@ -21,7 +21,6 @@ from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import get_db
-from zerg.database import live_catalog_enabled
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -304,36 +303,28 @@ async def get_ingest_health(
     _single: None = Depends(require_single_tenant),
 ) -> IngestHealthResponse:
     """Check ingest freshness -- detects if sessions have stopped shipping."""
-    from zerg.services.ingest_health import compute_ingest_health
     from zerg.services.ingest_health import compute_ingest_health_from_catalog_facts
-    from zerg.services.media_backfill import compute_media_repair_health
 
-    if live_catalog_enabled():
-        owner_id = getattr(_auth, "owner_id", None)
-        if owner_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"code": "owner_required", "message": "A device token is required for ingest health."},
-            )
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"code": "catalog_unavailable", "message": "Catalog health is temporarily unavailable."},
-            )
-        try:
-            facts = await catalogd.call("storage.health.v2", {"owner_id": str(owner_id)})
-        except (CatalogUnavailable, CatalogRemoteError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"code": "catalog_unavailable", "message": "Catalog health is temporarily unavailable."},
-            ) from exc
-        return IngestHealthResponse(**compute_ingest_health_from_catalog_facts(facts))
-
-    assert db is not None
-    result = compute_ingest_health(db)
-    result.update(compute_media_repair_health(db))
-    return IngestHealthResponse(**result)
+    owner_id = getattr(_auth, "owner_id", None)
+    if owner_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "owner_required", "message": "A device token is required for ingest health."},
+        )
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "catalog_unavailable", "message": "Catalog health is temporarily unavailable."},
+        )
+    try:
+        facts = await catalogd.call("storage.health.v2", {"owner_id": str(owner_id)})
+    except (CatalogUnavailable, CatalogRemoteError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "catalog_unavailable", "message": "Catalog health is temporarily unavailable."},
+        ) from exc
+    return IngestHealthResponse(**compute_ingest_health_from_catalog_facts(facts))
 
 
 @router.get("/usage-stats", response_model=UsageStatsResponse)

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -14,8 +19,10 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.device_token import DeviceToken
-from zerg.models.machine_presence import MachinePresence
 from zerg.models.user import User
+from zerg.services.catalogd_supervisor import catalogd_paths
+
+DEVICE_ID = "work-macbook"
 
 
 def _make_db(tmp_path, name: str = "machine_presence.db"):
@@ -29,7 +36,7 @@ def _cleanup_overrides():
     api_app.dependency_overrides.pop(verify_agents_token, None)
 
 
-def _device_token(*, owner_id: int = 1, device_id: str = "work-macbook") -> DeviceToken:
+def _device_token(*, owner_id: int = 1, device_id: str = DEVICE_ID) -> DeviceToken:
     return DeviceToken(
         id=uuid4(),
         owner_id=owner_id,
@@ -38,131 +45,106 @@ def _device_token(*, owner_id: int = 1, device_id: str = "work-macbook") -> Devi
     )
 
 
-def test_machine_presence_upserts_device_token_owned_state(tmp_path):
-    engine, SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        db.add(User(id=1, email="user@example.com", role="ADMIN"))
-        db.commit()
+def _presence_rows(owner_id: int) -> list[dict[str, Any]]:
+    """Rows the live catalog actually wrote, read straight off its database."""
 
-    def override_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+    database_path, _socket_path = catalogd_paths()
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT owner_id, device_id, state, source, idle_seconds FROM machine_presence WHERE owner_id = ?",
+            (owner_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [dict(row) for row in rows]
 
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: _device_token()
+
+def _seed_owner(live_catalog: LiveCatalog, *, device_id: str = DEVICE_ID) -> tuple[int, str]:
+    owner_id = live_catalog.create_user("user@example.com")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id=device_id)
+    return owner_id, token
+
+
+def test_machine_presence_upserts_device_token_owned_state(live_catalog, live_catalog_client):
+    owner_id, token = _seed_owner(live_catalog)
 
     measured_at = datetime(2026, 6, 4, 20, 15, tzinfo=timezone.utc)
-    with TestClient(api_app) as client:
-        first = client.post(
-            "/agents/machine-presence",
-            json={
-                "state": "idle_5m",
-                "source": "macos_hid_idle",
-                "idle_seconds": 360,
-                "measured_at": measured_at.isoformat(),
-            },
-            headers={"X-Agents-Token": "zdt_test"},
-        )
-        assert first.status_code == 200, first.text
-        first_body = first.json()
-        assert first_body["owner_id"] == 1
-        assert first_body["device_id"] == "work-macbook"
-        assert first_body["state"] == "idle_5m"
-        assert first_body["source"] == "macos_hid_idle"
-        assert first_body["idle_seconds"] == 300
+    first = live_catalog_client.post(
+        "/agents/machine-presence",
+        json={
+            "state": "idle_5m",
+            "source": "macos_hid_idle",
+            "idle_seconds": 360,
+            "measured_at": measured_at.isoformat(),
+        },
+        headers={"X-Agents-Token": token},
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body["owner_id"] == owner_id
+    assert first_body["device_id"] == DEVICE_ID
+    assert first_body["state"] == "idle_5m"
+    assert first_body["source"] == "macos_hid_idle"
+    assert first_body["idle_seconds"] == 300
 
-        second = client.post(
-            "/agents/machine-presence",
-            json={
-                "state": "active",
-                "source": "macos_hid_idle",
-                "idle_seconds": 3,
-                "measured_at": measured_at.isoformat(),
-            },
-            headers={"X-Agents-Token": "zdt_test"},
-        )
-        assert second.status_code == 200, second.text
-        assert second.json()["state"] == "active"
+    second = live_catalog_client.post(
+        "/agents/machine-presence",
+        json={
+            "state": "active",
+            "source": "macos_hid_idle",
+            "idle_seconds": 3,
+            "measured_at": measured_at.isoformat(),
+        },
+        headers={"X-Agents-Token": token},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["state"] == "active"
 
-    with SessionLocal() as db:
-        rows = db.query(MachinePresence).all()
-        assert len(rows) == 1
-        row = rows[0]
-        assert row.owner_id == 1
-        assert row.device_id == "work-macbook"
-        assert row.state == "active"
-        assert row.source == "macos_hid_idle"
-        assert row.idle_seconds == 0
-
-    _cleanup_overrides()
-    engine.dispose()
+    rows = _presence_rows(owner_id)
+    assert len(rows) == 1
+    assert rows[0] == {
+        "owner_id": owner_id,
+        "device_id": DEVICE_ID,
+        "state": "active",
+        "source": "macos_hid_idle",
+        "idle_seconds": 0,
+    }
 
 
-def test_machine_presence_policy_defaults_enabled(tmp_path):
-    engine, SessionLocal = _make_db(tmp_path, "machine_presence_policy.db")
-    with SessionLocal() as db:
-        db.add(User(id=1, email="user@example.com", role="ADMIN"))
-        db.commit()
+def test_machine_presence_policy_defaults_enabled(live_catalog, live_catalog_client):
+    _owner_id, token = _seed_owner(live_catalog)
 
-    def override_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: _device_token()
-
-    with TestClient(api_app) as client:
-        response = client.get("/agents/machine-presence/policy", headers={"X-Agents-Token": "zdt_test"})
-        assert response.status_code == 200, response.text
-        assert response.json() == {"enabled": True, "min_interval_seconds": 60}
-
-    _cleanup_overrides()
-    engine.dispose()
+    response = live_catalog_client.get("/agents/machine-presence/policy", headers={"X-Agents-Token": token})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"enabled": True, "min_interval_seconds": 60}
 
 
-def test_machine_presence_policy_and_post_respect_user_disable(tmp_path):
-    engine, SessionLocal = _make_db(tmp_path, "machine_presence_disabled.db")
-    with SessionLocal() as db:
-        db.add(
-            User(
-                id=1,
-                email="user@example.com",
-                role="ADMIN",
-                prefs={"machine_presence_enabled": False},
-            )
-        )
-        db.commit()
+def test_machine_presence_policy_and_post_respect_user_disable(live_catalog, live_catalog_client):
+    owner_id, token = _seed_owner(live_catalog)
+    live_catalog.rpc(
+        "auth.user.update.v2",
+        {
+            "user_id": owner_id,
+            "display_name": None,
+            "avatar_url": None,
+            "prefs": {"machine_presence_enabled": False},
+            "update_mask": ["prefs"],
+        },
+    )
 
-    def override_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+    policy = live_catalog_client.get("/agents/machine-presence/policy", headers={"X-Agents-Token": token})
+    assert policy.status_code == 200, policy.text
+    assert policy.json()["enabled"] is False
 
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: _device_token()
-
-    with TestClient(api_app) as client:
-        policy = client.get("/agents/machine-presence/policy", headers={"X-Agents-Token": "zdt_test"})
-        assert policy.status_code == 200, policy.text
-        assert policy.json()["enabled"] is False
-
-        update = client.post(
-            "/agents/machine-presence",
-            json={"state": "active", "source": "macos_hid_idle", "idle_seconds": 1},
-            headers={"X-Agents-Token": "zdt_test"},
-        )
-        assert update.status_code == 403
-
-    _cleanup_overrides()
-    engine.dispose()
+    update = live_catalog_client.post(
+        "/agents/machine-presence",
+        json={"state": "active", "source": "macos_hid_idle", "idle_seconds": 1},
+        headers={"X-Agents-Token": token},
+    )
+    assert update.status_code == 403
+    assert _presence_rows(owner_id) == []
 
 
 def test_machine_presence_rejects_invalid_state_and_idle_range(tmp_path):
@@ -200,65 +182,38 @@ def test_machine_presence_rejects_invalid_state_and_idle_range(tmp_path):
     engine.dispose()
 
 
-def test_machine_presence_rebuckets_idle_seconds_server_side(tmp_path):
-    engine, SessionLocal = _make_db(tmp_path, "machine_presence_rebucket.db")
-    with SessionLocal() as db:
-        db.add(User(id=1, email="user@example.com", role="ADMIN"))
-        db.commit()
+def test_machine_presence_rebuckets_idle_seconds_server_side(live_catalog, live_catalog_client):
+    owner_id, token = _seed_owner(live_catalog)
 
-    def override_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+    response = live_catalog_client.post(
+        "/agents/machine-presence",
+        json={"state": "active", "source": "macos_hid_idle", "idle_seconds": 999},
+        headers={"X-Agents-Token": token},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == "idle_10m"
+    assert body["idle_seconds"] == 600
 
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: _device_token()
-
-    with TestClient(api_app) as client:
-        response = client.post(
-            "/agents/machine-presence",
-            json={"state": "active", "source": "macos_hid_idle", "idle_seconds": 999},
-            headers={"X-Agents-Token": "zdt_test"},
-        )
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["state"] == "idle_10m"
-        assert body["idle_seconds"] == 600
-
-    _cleanup_overrides()
-    engine.dispose()
+    assert _presence_rows(owner_id)[0]["idle_seconds"] == 600
 
 
-def test_machine_presence_auth_disabled_uses_single_tenant_owner(tmp_path):
-    engine, SessionLocal = _make_db(tmp_path, "machine_presence_auth_disabled.db")
-    with SessionLocal() as db:
-        db.add(User(id=7, email="user@example.com", role="ADMIN"))
-        db.commit()
+def test_machine_presence_auth_disabled_uses_single_tenant_owner(live_catalog):
+    """No device token: identity falls back to the catalog's single owner."""
 
-    def override_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+    owner_id = live_catalog.create_user("user@example.com")
 
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: None
-
-    with TestClient(api_app) as client:
+    with live_catalog.http_client(extra_overrides={verify_agents_token: lambda: None}) as client:
         response = client.post(
             "/agents/machine-presence",
             json={"state": "active", "source": "macos_hid_idle", "idle_seconds": 2},
         )
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["owner_id"] == 7
-        assert body["device_id"] == "auth-disabled-local"
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["owner_id"] == owner_id
+    assert body["device_id"] == "auth-disabled-local"
 
-    _cleanup_overrides()
-    engine.dispose()
+    assert _presence_rows(owner_id)[0]["device_id"] == "auth-disabled-local"
 
 
 def test_machine_presence_requires_device_token_identity(tmp_path):

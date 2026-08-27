@@ -2,111 +2,49 @@
 
 Verifies that actual API endpoints return datetime fields with "Z" suffix
 so that JavaScript clients parse them correctly as UTC.
+
+The sessions the browser reads come out of the live catalog, so the payloads
+checked here are assembled by the projection a Runtime Host runs -- not by a
+SQLAlchemy row read that production no longer performs.
 """
 
+from __future__ import annotations
+
+import os
+from datetime import UTC
 from datetime import datetime
-from pathlib import Path
-from types import SimpleNamespace
+from datetime import timedelta
 
-from fastapi.testclient import TestClient
+from cryptography.fernet import Fernet
 
-from zerg.database import Base
-from zerg.database import get_db
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
-from zerg.models.models import User
-from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
+
+OWNER_EMAIL = "owner@datetime.test"
+DEVICE_ID = "cinder"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_db(tmp_path: Path):
-    """Create an in-memory SQLite DB with agents and user tables."""
-    db_path = tmp_path / "test_datetime_e2e.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = make_sessionmaker(engine)
-    return SessionLocal
+def _seed(live_catalog):
+    """One recent session in the live catalog, plus the token that reads it."""
 
-
-def _seed_session(db):
-    """Seed a test session with naive UTC datetimes (simulating SQLite storage)."""
-    import uuid
-    from datetime import timedelta
-
-    session_id = str(uuid.uuid4())
-
-    # Use recent timestamps so days_back filter doesn't exclude them
-    now = datetime.utcnow()
-    started_at = now - timedelta(hours=1)
-    ended_at = now - timedelta(minutes=30)
-
-    session = AgentSession(
-        id=session_id,
-        provider="claude",
-        environment="test",
-        project="test-project",
-        started_at=started_at,  # Naive datetime (recent)
-        ended_at=ended_at,  # Naive datetime
-        user_messages=2,
-        assistant_messages=3,
-        tool_calls=1,
+    owner_id = live_catalog.create_user(OWNER_EMAIL)
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id=DEVICE_ID)
+    seeded = live_catalog.commit_session(
+        owner_id=owner_id,
+        texts=("Test message",),
+        device_id=DEVICE_ID,
+        now=datetime.now(UTC).replace(microsecond=0) - timedelta(hours=1),
     )
-    db.add(session)
-    db.flush()
-    upsert_timeline_card_from_session(db, session)
-
-    # Add an event with naive datetime
-    event = AgentEvent(
-        session_id=session_id,
-        timestamp=started_at + timedelta(minutes=5),  # Naive datetime
-        role="user",
-        content_text="Test message",
-    )
-    db.add(event)
-    db.commit()
-    return session
-
-
-def _seed_user(db):
-    """Seed an admin user for auth bypass."""
-    user = User(id=1, email="test@local", role="ADMIN")
-    db.add(user)
-    db.commit()
-    return user
-
-
-def _make_client(db_session):
-    """Create a TestClient with DB override."""
-    from zerg.dependencies.auth import require_admin
-    from zerg.main import api_app
-    from zerg.main import app
-
-    _seed_user(db_session)
-
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
-
-    def override_require_admin():
-        return User(id=1, email="test@local", role="ADMIN")
-
-    def override_verify_agents_token():
-        return SimpleNamespace(device_id="datetime-e2e", id="token-1", owner_id=1)
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[require_admin] = override_require_admin
-    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
-
-    client = TestClient(app, backend="asyncio")
-    return client, api_app
+    return seeded, {"X-Agents-Token": token}
 
 
 def _find_datetime_strings(obj, path=""):
@@ -130,75 +68,40 @@ def _find_datetime_strings(obj, path=""):
     return datetime_fields
 
 
+def _assert_all_utc_suffixed(data) -> None:
+    datetime_fields = _find_datetime_strings(data)
+
+    # Sanity check: a payload with no datetimes proves nothing.
+    assert datetime_fields, f"Expected to find datetime fields in response. Got: {data}"
+
+    failures = [f"{path} = {value} (missing Z suffix)" for path, value in datetime_fields if not value.endswith("Z")]
+    assert not failures, "Found datetime fields without Z suffix:\n" + "\n".join(failures)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
 
-def test_sessions_endpoint_datetime_has_z_suffix(tmp_path):
+def test_sessions_endpoint_datetime_has_z_suffix(live_catalog, live_catalog_client):
     """GET /api/agents/sessions should return all datetimes with Z suffix."""
-    SessionLocal = _make_db(tmp_path)
 
-    with SessionLocal() as db:
-        session = _seed_session(db)
+    _seeded, headers = _seed(live_catalog)
 
-        # Verify session exists in DB
-        db_session = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-        assert db_session is not None, "Session not found in DB after seeding"
+    response = live_catalog_client.get("/agents/sessions", headers=headers)
+    assert response.status_code == 200, response.text
 
-        client, api_app_ref = _make_client(db)
-
-        try:
-            response = client.get("/api/agents/sessions?include_test=true&include_automation=true")
-            assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
-
-            data = response.json()
-
-            # Find all datetime-like string fields in the response
-            datetime_fields = _find_datetime_strings(data)
-
-            # Assert we found some datetimes (sanity check)
-            assert len(datetime_fields) > 0, f"Expected to find datetime fields in response. Got: {data}"
-
-            # Assert all datetime strings end with "Z"
-            failures = []
-            for path, value in datetime_fields:
-                if not value.endswith("Z"):
-                    failures.append(f"{path} = {value} (missing Z suffix)")
-
-            assert not failures, "Found datetime fields without Z suffix:\n" + "\n".join(failures)
-
-        finally:
-            api_app_ref.dependency_overrides = {}
+    payload = response.json()
+    assert payload["total"] == 1, payload
+    _assert_all_utc_suffixed(payload)
 
 
-def test_session_detail_endpoint_datetime_has_z_suffix(tmp_path):
+def test_session_detail_endpoint_datetime_has_z_suffix(live_catalog, live_catalog_client):
     """GET /api/agents/sessions/:id should return all datetimes with Z suffix."""
-    SessionLocal = _make_db(tmp_path)
 
-    with SessionLocal() as db:
-        session = _seed_session(db)
-        client, api_app_ref = _make_client(db)
+    seeded, headers = _seed(live_catalog)
 
-        try:
-            response = client.get(f"/api/agents/sessions/{session.id}")
-            assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+    response = live_catalog_client.get(f"/agents/sessions/{seeded.session_id}", headers=headers)
+    assert response.status_code == 200, response.text
 
-            data = response.json()
-
-            # Find all datetime-like string fields
-            datetime_fields = _find_datetime_strings(data)
-
-            # Should find datetimes in session metadata and events
-            assert len(datetime_fields) > 0, "Expected to find datetime fields in response"
-
-            # Assert all end with Z
-            failures = []
-            for path, value in datetime_fields:
-                if not value.endswith("Z"):
-                    failures.append(f"{path} = {value} (missing Z suffix)")
-
-            assert not failures, "Found datetime fields without Z suffix:\n" + "\n".join(failures)
-
-        finally:
-            api_app_ref.dependency_overrides = {}
+    _assert_all_utc_suffixed(response.json())

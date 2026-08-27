@@ -1257,6 +1257,4 @@ def get_live_write_serializer() -> WriteSerializer:
 def get_catalog_write_serializer() -> WriteSerializer:
     """Return the serializer owning the active bounded catalog database."""
 
-    from zerg.database import live_catalog_enabled
-
-    return _live_serializer if live_catalog_enabled() else _serializer
+    return _live_serializer

@@ -1,14 +1,23 @@
+"""Permission-gate routes against a real live catalog.
+
+Held permission prompts are catalog interactions now: the PreToolUse hook
+registers one through ``interaction.register.v2``, the browser answers it
+through ``interaction.resolve.v2``, and the hook long-polls
+``interaction.decision.read.v2``. Nothing here writes a ``SessionPauseRequest``
+row, because no Runtime Host does either -- these tests drive the routes over
+HTTP against the daemons ``live_catalog_harness`` provisions.
+"""
+
 from __future__ import annotations
 
 import os
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 from uuid import UUID
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -17,250 +26,263 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
 os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 
-from types import SimpleNamespace
-
-from zerg.database import get_db
-from zerg.database import initialize_database
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.dependencies.browser_route_auth import get_current_browser_route_user
-from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPauseRequest
-from zerg.models.enums import UserRole
-from zerg.models.user import User
-from zerg.routers import session_chat
-from zerg.services.session_pause_requests import is_user_facing_pause_request
-from zerg.services.session_pause_requests import resolve_pause_request
+from tests_lite.live_catalog_harness import LiveCatalog  # noqa: E402
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
+from zerg.auth import managed_session_tokens as managed_tokens  # noqa: E402
+from zerg.routers import session_chat  # noqa: E402
 
 
-def _make_db(tmp_path):
-    db_path = tmp_path / "test_permission_gate_routes.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    initialize_database(engine)
-    return make_sessionmaker(engine)
+def _console_session(live: LiveCatalog, *, owner_id: int, provider: str = "claude") -> UUID:
+    """Create the managed session a permission prompt can be held against."""
 
-
-def _make_client(session_local):
-    from zerg.main import api_app
-    from zerg.main import app
-
-    def override_get_db():
-        db = session_local()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    return TestClient(app, backend="asyncio"), api_app
-
-
-def _make_client_with_user(session_local, user_id):
-    client, api_app = _make_client(session_local)
-    api_app.dependency_overrides[get_current_browser_route_user] = lambda: SimpleNamespace(
-        id=user_id, email="perm@test.local", role=UserRole.USER.value
-    )
-    return client, api_app
-
-
-def _seed_session(session_local):
     session_id = uuid4()
-    with session_local() as db:
-        user = User(email=f"perm-{uuid4().hex[:6]}@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.flush()
-        user_id = user.id
-        db.add(
-            AgentSession(
-                id=session_id,
-                provider="claude",
-                environment="Cinder",
-                project="perm-gate",
-                device_id="cinder",
-                cwd="/tmp/perm-gate",
-                started_at=datetime.now(timezone.utc),
-            )
-        )
-        db.commit()
-    return session_id, user_id
-
-
-def test_register_then_poll_returns_decision_after_resolve(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, _user_id = _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        tool_use_id = "toolu_abc123"
-        resp = client.post(
-            "/api/agents/permission-requests",
-            json={
+    created = live.rpc(
+        "session.console.create.v2",
+        {
+            "session": {
                 "session_id": str(session_id),
-                "tool_use_id": tool_use_id,
-                "tool_name": "Bash",
-                "tool_input": {"command": "ls"},
-            },
-        )
-        assert resp.status_code == 200, resp.text
-        ack = resp.json()
-        assert ack["status"] == "pending"
-        request_key = ack["request_key"]
-
-        # Before an answer, the hook poll sees pending (no decision yet).
-        poll = client.get(
-            "/api/agents/permission-decision",
-            params={"session_id": str(session_id), "tool_use_id": tool_use_id},
-        )
-        assert poll.status_code == 200, poll.text
-        assert poll.json() == {"decision": None, "reason": None, "resolved": False}
-
-        # The held request is stored as an answerable permission_prompt pause request.
-        with session_local() as db:
-            row = db.query(SessionPauseRequest).filter(SessionPauseRequest.request_key == request_key).one()
-            assert row.kind == "permission_prompt"
-            assert row.can_respond is True
-            assert row.provider_request_id == tool_use_id
-            resolve_pause_request(
-                db,
-                request_key=request_key,
-                status="resolved",
-                response_payload={"permissionDecision": "allow", "permissionDecisionReason": "approved in test"},
-                response_text="approved in test",
-            )
-            db.commit()
-
-        # Now the hook poll returns the decision.
-        poll2 = client.get(
-            "/api/agents/permission-decision",
-            params={"session_id": str(session_id), "tool_use_id": tool_use_id},
-        )
-        assert poll2.status_code == 200, poll2.text
-        assert poll2.json() == {"decision": "allow", "reason": "approved in test", "resolved": True}
-    finally:
-        api_app.dependency_overrides.clear()
+                "thread_id": str(uuid4()),
+                "owner_id": owner_id,
+                "provider": provider,
+                "device_id": "cinder",
+                "cwd": "/workspace/perm-gate",
+                "started_at": datetime.now(UTC).isoformat(),
+            }
+        },
+    )
+    assert created["created"] is True, created
+    return session_id
 
 
-def test_cursor_permission_request_has_provider_copy_and_deadline_then_expires(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, _user_id = _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        before = datetime.now(timezone.utc)
-        ack = client.post(
-            "/api/agents/permission-requests",
-            json={
-                "session_id": str(session_id),
-                "tool_use_id": "cursor-shell-1",
-                "tool_name": "Shell",
-                "provider": "cursor",
-                "wait_timeout_seconds": 7,
-            },
-        )
-        assert ack.status_code == 200, ack.text
-        with session_local() as db:
-            row = db.get(SessionPauseRequest, UUID(ack.json()["pause_request_id"]))
-            assert row.summary == "Cursor wants to use Shell."
-            assert row.provider_ref_json["source"] == "cursor_permission_gate"
-            expires_at = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
-            assert before + timedelta(seconds=6) <= expires_at <= before + timedelta(seconds=9)
+def _hook_headers(*, owner_id: int, session_id: UUID) -> dict[str, str]:
+    """The hook-scoped session token a managed provider hook actually carries."""
 
-        expired = client.post(
-            f"/api/agents/permission-requests/{ack.json()['pause_request_id']}/expire",
-            json={"session_id": str(session_id), "reason": "human did not answer"},
-        )
-        assert expired.status_code == 200, expired.text
-        assert expired.json() == {"decision": "deny", "reason": "human did not answer", "resolved": True}
-        poll = client.get(
-            "/api/agents/permission-decision",
-            params={"session_id": str(session_id), "tool_use_id": "cursor-shell-1", "provider": "cursor"},
-        )
-        assert poll.json() == {"decision": "deny", "reason": "human did not answer", "resolved": True}
-    finally:
-        api_app.dependency_overrides.clear()
+    token = managed_tokens.issue_managed_session_token(
+        owner_id=owner_id,
+        session_id=str(session_id),
+        project="perm-gate",
+        device_id="cinder",
+        scope=managed_tokens.MANAGED_SESSION_SCOPE_HOOK,
+    )
+    return {"X-Agents-Token": token}
 
 
-def test_permission_deadline_cannot_be_late_approved(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, _user_id = _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        ack = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(session_id), "tool_use_id": "expired", "wait_timeout_seconds": 1},
-        ).json()
-        with session_local() as db:
-            row = db.get(SessionPauseRequest, UUID(ack["pause_request_id"]))
-            row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-            db.commit()
-            resolved = resolve_pause_request(
-                db,
-                pause_request_id=row.id,
-                status="resolved",
-                response_payload={"permissionDecision": "allow"},
-            )
-            db.commit()
-            assert resolved.status == "expired"
-            assert resolved.response_payload_json["permissionDecision"] == "deny"
-    finally:
-        api_app.dependency_overrides.clear()
+def _seed(live: LiveCatalog, *, email: str, provider: str = "claude") -> tuple[int, UUID, dict[str, str], dict[str, str]]:
+    owner_id = live.create_user(email)
+    session_id = _console_session(live, owner_id=owner_id, provider=provider)
+    return (
+        owner_id,
+        session_id,
+        _hook_headers(owner_id=owner_id, session_id=session_id),
+        {"longhouse_session": live.browser_cookie(owner_id=owner_id, email=email)},
+    )
 
 
-def test_poll_unknown_tool_use_id_is_pending(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, _user_id = _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        poll = client.get(
-            "/api/agents/permission-decision",
-            params={"session_id": str(session_id), "tool_use_id": "toolu_never_registered"},
-        )
-        assert poll.status_code == 200, poll.text
-        assert poll.json() == {"decision": None, "reason": None, "resolved": False}
-    finally:
-        api_app.dependency_overrides.clear()
+def _interactions(live: LiveCatalog, session_id: UUID, *, status: str | None = None) -> list[dict]:
+    return list(
+        live.rpc(
+            "interaction.list.v2",
+            {"session_id": str(session_id), "status": status, "limit": 20},
+        )["interactions"]
+    )
 
 
-def test_register_unknown_session_is_404(tmp_path):
-    session_local = _make_db(tmp_path)
-    _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        resp = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(uuid4()), "tool_use_id": "toolu_x", "tool_name": "Bash"},
-        )
-        assert resp.status_code == 404, resp.text
-    finally:
-        api_app.dependency_overrides.clear()
+def _resolve(live: LiveCatalog, session_id: UUID, interaction_id: str, *, status: str, payload: dict) -> dict:
+    return live.rpc(
+        "interaction.resolve.v2",
+        {
+            "session_id": str(session_id),
+            "interaction_id": interaction_id,
+            "status": status,
+            "response_payload": payload,
+            "response_text": payload.get("permissionDecisionReason"),
+            "resolved_at": datetime.now(UTC).isoformat(),
+        },
+    )
 
 
-def test_deny_resolution_maps_to_deny_decision(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, _user_id = _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        tool_use_id = "toolu_deny"
-        ack = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
-        ).json()
-        with session_local() as db:
-            resolve_pause_request(db, request_key=ack["request_key"], status="rejected")
-            db.commit()
-        poll = client.get(
-            "/api/agents/permission-decision",
-            params={"session_id": str(session_id), "tool_use_id": tool_use_id},
-        )
-        assert poll.json()["decision"] == "deny"
-        assert poll.json()["resolved"] is True
-    finally:
-        api_app.dependency_overrides.clear()
+def test_register_then_poll_returns_decision_after_resolve(live_catalog, live_catalog_client):
+    _owner_id, session_id, headers, _cookies = _seed(live_catalog, email="perm-poll@test.local")
+    tool_use_id = "toolu_abc123"
+
+    resp = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={
+            "session_id": str(session_id),
+            "tool_use_id": tool_use_id,
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    ack = resp.json()
+    assert ack["status"] == "pending"
+
+    # Before an answer, the hook poll sees pending (no decision yet).
+    poll = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={"session_id": str(session_id), "tool_use_id": tool_use_id},
+        headers=headers,
+    )
+    assert poll.status_code == 200, poll.text
+    assert poll.json() == {"decision": None, "reason": None, "resolved": False}
+
+    # The held request is an answerable permission_prompt interaction.
+    held = _interactions(live_catalog, session_id)
+    assert len(held) == 1
+    assert held[0]["id"] == ack["pause_request_id"]
+    assert held[0]["request_key"] == ack["request_key"]
+    assert held[0]["kind"] == "permission_prompt"
+    assert held[0]["can_respond"] is True
+    assert held[0]["provider_request_id"] == tool_use_id
+
+    _resolve(
+        live_catalog,
+        session_id,
+        held[0]["id"],
+        status="resolved",
+        payload={"permissionDecision": "allow", "permissionDecisionReason": "approved in test"},
+    )
+
+    # Now the hook poll returns the decision.
+    poll2 = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={"session_id": str(session_id), "tool_use_id": tool_use_id},
+        headers=headers,
+    )
+    assert poll2.status_code == 200, poll2.text
+    assert poll2.json() == {"decision": "allow", "reason": "approved in test", "resolved": True}
 
 
-def test_answer_via_pause_route_resolves_in_place_without_push(monkeypatch, tmp_path):
+def test_cursor_permission_request_has_provider_copy_and_deadline(live_catalog, live_catalog_client):
+    _owner_id, session_id, headers, _cookies = _seed(live_catalog, email="perm-cursor@test.local", provider="cursor")
+
+    before = datetime.now(UTC)
+    ack = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={
+            "session_id": str(session_id),
+            "tool_use_id": "cursor-shell-1",
+            "tool_name": "Shell",
+            "provider": "cursor",
+            "wait_timeout_seconds": 7,
+        },
+        headers=headers,
+    )
+    assert ack.status_code == 200, ack.text
+    held = _interactions(live_catalog, session_id)[0]
+    assert held["projection"]["summary"] == "Cursor wants to use Shell."
+    # The catalog enforces the provider's closed contract, so Cursor's prompt
+    # can only be held under Cursor's own source and poll transport.
+    assert held["source"] == "cursor_permission_gate"
+    assert held["reply_transport"] == "cursor_permission_poll"
+    expires_at = datetime.fromisoformat(held["expires_at"])
+    assert before + timedelta(seconds=6) <= expires_at <= before + timedelta(seconds=9)
+
+    poll = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={"session_id": str(session_id), "tool_use_id": "cursor-shell-1", "provider": "cursor"},
+        headers=headers,
+    )
+    assert poll.json() == {"decision": None, "reason": None, "resolved": False}
+
+
+def test_permission_deadline_cannot_be_late_approved(live_catalog, live_catalog_client):
+    _owner_id, session_id, headers, cookies = _seed(live_catalog, email="perm-deadline@test.local")
+
+    ack = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={
+            "session_id": str(session_id),
+            "tool_use_id": "expired",
+            # Registered with a deadline that has already passed, which is what
+            # a hook retry after a long stall looks like.
+            "occurred_at": (datetime.now(UTC) - timedelta(seconds=30)).isoformat(),
+            "wait_timeout_seconds": 1,
+        },
+        headers=headers,
+    ).json()
+
+    # The deadline decides before anyone answers, and no late answer can move it.
+    poll = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={"session_id": str(session_id), "tool_use_id": "expired"},
+        headers=headers,
+    )
+    assert poll.json() == {"decision": "deny", "reason": "Approval deadline expired", "resolved": True}
+
+    late = _resolve(
+        live_catalog,
+        session_id,
+        ack["pause_request_id"],
+        status="resolved",
+        payload={"permissionDecision": "allow", "permissionDecisionReason": "too late"},
+    )
+    assert late["resolved"] is False
+    assert late["interaction"]["status"] == "expired"
+
+    refused = live_catalog_client.post(
+        f"/sessions/{session_id}/pause-requests/{ack['pause_request_id']}/response",
+        json={"decision": "answer"},
+        cookies=cookies,
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["code"] == "pause_request_not_pending"
+
+
+def test_poll_unknown_tool_use_id_is_pending(live_catalog, live_catalog_client):
+    _owner_id, session_id, headers, _cookies = _seed(live_catalog, email="perm-unknown-tool@test.local")
+
+    poll = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={"session_id": str(session_id), "tool_use_id": "toolu_never_registered"},
+        headers=headers,
+    )
+
+    assert poll.status_code == 200, poll.text
+    assert poll.json() == {"decision": None, "reason": None, "resolved": False}
+
+
+def test_register_unknown_session_is_404(live_catalog, live_catalog_client):
+    owner_id = live_catalog.create_user("perm-unknown-session@test.local")
+    unknown_session_id = uuid4()
+
+    resp = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={"session_id": str(unknown_session_id), "tool_use_id": "toolu_x", "tool_name": "Bash"},
+        headers=_hook_headers(owner_id=owner_id, session_id=unknown_session_id),
+    )
+
+    assert resp.status_code == 404, resp.text
+
+
+def test_deny_resolution_maps_to_deny_decision(live_catalog, live_catalog_client):
+    _owner_id, session_id, headers, _cookies = _seed(live_catalog, email="perm-deny@test.local")
+    tool_use_id = "toolu_deny"
+
+    ack = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
+        headers=headers,
+    ).json()
+    _resolve(live_catalog, session_id, ack["pause_request_id"], status="rejected", payload={})
+
+    poll = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={"session_id": str(session_id), "tool_use_id": tool_use_id},
+        headers=headers,
+    )
+
+    assert poll.json()["decision"] == "deny"
+    assert poll.json()["resolved"] is True
+
+
+def test_answer_via_pause_route_resolves_in_place_without_push(live_catalog, live_catalog_client, monkeypatch):
     """The full loop: register -> answer via the pause-response route (pull-mode,
     no managed-control websocket push) -> hook poll returns allow."""
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_session(session_local)
+    _owner_id, session_id, headers, cookies = _seed(live_catalog, email="perm-answer@test.local")
 
     pushed: list[dict] = []
 
@@ -270,118 +292,67 @@ def test_answer_via_pause_route_resolves_in_place_without_push(monkeypatch, tmp_
 
     monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fail_if_pushed)
 
-    client, api_app = _make_client_with_user(session_local, user_id)
-    try:
-        tool_use_id = "toolu_loop"
-        ack = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
-        ).json()
-        pause_id = ack["pause_request_id"]
+    tool_use_id = "toolu_loop"
+    ack = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
+        headers=headers,
+    ).json()
 
-        # Answer through the real browser pause-response route.
-        resp = client.post(
-            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
-            json={"decision": "answer"},
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == "resolved"
-        assert not pushed  # never dispatched a websocket command
+    # Answer through the real browser pause-response route.
+    resp = live_catalog_client.post(
+        f"/sessions/{session_id}/pause-requests/{ack['pause_request_id']}/response",
+        json={"decision": "answer"},
+        cookies=cookies,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "resolved"
+    assert not pushed  # never dispatched a websocket command
 
-        # The hook poll now reads allow.
-        poll = client.get(
-            "/api/agents/permission-decision",
-            params={"session_id": str(session_id), "tool_use_id": tool_use_id},
-        )
-        assert poll.json() == {"decision": "allow", "reason": "Longhouse allow", "resolved": True}
-    finally:
-        api_app.dependency_overrides.clear()
+    # The hook poll now reads allow.
+    poll = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={"session_id": str(session_id), "tool_use_id": tool_use_id},
+        headers=headers,
+    )
+    assert poll.json() == {"decision": "allow", "reason": "Longhouse allow", "resolved": True}
 
 
-def test_reject_via_pause_route_maps_to_deny(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_session(session_local)
+def test_reject_via_pause_route_maps_to_deny(live_catalog, live_catalog_client, monkeypatch):
+    _owner_id, session_id, headers, cookies = _seed(live_catalog, email="perm-reject@test.local")
 
     async def _fail_if_pushed(**kwargs):
         raise AssertionError("permission prompts must not push over managed-control")
 
     monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fail_if_pushed)
 
-    client, api_app = _make_client_with_user(session_local, user_id)
-    try:
-        tool_use_id = "toolu_loop_deny"
-        ack = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
-        ).json()
-        resp = client.post(
-            f"/api/sessions/{session_id}/pause-requests/{ack['pause_request_id']}/response",
-            json={"decision": "reject"},
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == "rejected"
-        poll = client.get(
-            "/api/agents/permission-decision",
-            params={"session_id": str(session_id), "tool_use_id": tool_use_id},
-        )
-        assert poll.json()["decision"] == "deny"
-    finally:
-        api_app.dependency_overrides.clear()
+    tool_use_id = "toolu_loop_deny"
+    ack = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
+        headers=headers,
+    ).json()
+
+    resp = live_catalog_client.post(
+        f"/sessions/{session_id}/pause-requests/{ack['pause_request_id']}/response",
+        json={"decision": "reject"},
+        cookies=cookies,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "rejected"
+
+    poll = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={"session_id": str(session_id), "tool_use_id": tool_use_id},
+        headers=headers,
+    )
+    assert poll.json()["decision"] == "deny"
 
 
-def test_legacy_permission_gate_row_without_transport_resolves_in_place(monkeypatch, tmp_path):
-    """Backward-compat: a claude_permission_gate permission_prompt row written
-    before reply_transport existed must still resolve in place (pull), NOT push
-    over managed control (which would 502 on a claude session)."""
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_session(session_local)
-
-    async def _fail_if_pushed(**kwargs):
-        raise AssertionError("legacy permission_prompt row must not push")
-
-    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fail_if_pushed)
-
-    client, api_app = _make_client_with_user(session_local, user_id)
-    try:
-        from datetime import datetime
-        from datetime import timezone
-
-        from zerg.services.session_pause_requests import upsert_pause_request
-        from zerg.services.session_runtime import runtime_key_for_session
-
-        runtime_key = runtime_key_for_session("claude", str(session_id))
-        with session_local() as db:
-            row, _ = upsert_pause_request(
-                db,
-                session_id=session_id,
-                runtime_key=runtime_key,
-                provider="claude",
-                request_key=f"claude:{runtime_key}:legacy",
-                occurred_at=datetime.now(timezone.utc),
-                provider_request_id="legacy",
-                # NOTE: source set, but NO reply_transport (pre-Phase-1 row).
-                provider_ref={"source": "claude_permission_gate"},
-                kind="permission_prompt",
-                can_respond=True,
-            )
-            db.commit()
-            pause_id = str(row.id)
-
-        resp = client.post(
-            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
-            json={"decision": "answer"},
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == "resolved"
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_dispatch_keys_on_transport_not_kind(monkeypatch, tmp_path):
-    """A permission_prompt row WITHOUT a pull reply_transport must route to the
-    managed-control PUSH path, proving dispatch keys on transport, not kind."""
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_session(session_local)
+def test_dispatch_keys_on_transport_not_kind(live_catalog, live_catalog_client, monkeypatch):
+    """A held request whose reply_transport is not a pull transport must route to
+    the managed-control PUSH path, proving dispatch keys on transport, not kind."""
+    owner_id, session_id, _headers, cookies = _seed(live_catalog, email="perm-push@test.local", provider="codex")
 
     pushed: list[dict] = []
 
@@ -393,139 +364,138 @@ def test_dispatch_keys_on_transport_not_kind(monkeypatch, tmp_path):
 
     monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fake_push)
 
-    client, api_app = _make_client_with_user(session_local, user_id)
-    try:
-        # Seed a permission_prompt row but with a NON-pull (push) reply_transport.
-        from datetime import datetime
-        from datetime import timezone
+    now = datetime.now(UTC)
+    runtime_key = f"codex:{session_id}"
+    registered = live_catalog.rpc(
+        "interaction.register.v2",
+        {
+            "interaction": {
+                "session_id": str(session_id),
+                "runtime_key": runtime_key,
+                "provider": "codex",
+                "device_id": "cinder",
+                "source": "codex_app_server",
+                "reply_transport": "managed_push",
+                "provider_request_id": "perm-push",
+                "request_key": f"codex:{runtime_key}:perm-push",
+                "kind": "structured_question",
+                "tool_name": None,
+                "title": "Approve edit",
+                "summary": "Codex is asking to apply a patch.",
+                "request_payload": {},
+                "can_respond": True,
+                "occurred_at": now.isoformat(),
+                "expires_at": None,
+                "single_active": True,
+            }
+        },
+    )
+    assert registered["found_session"] is True, registered
 
-        from zerg.services.session_pause_requests import upsert_pause_request
-        from zerg.services.session_runtime import runtime_key_for_session
+    resp = live_catalog_client.post(
+        f"/sessions/{session_id}/pause-requests/{registered['interaction']['id']}/response",
+        json={"decision": "answer"},
+        cookies=cookies,
+    )
 
-        runtime_key = runtime_key_for_session("codex", str(session_id))
-        with session_local() as db:
-            row, _ = upsert_pause_request(
-                db,
-                session_id=session_id,
-                runtime_key=runtime_key,
-                provider="codex",
-                request_key=f"codex:{runtime_key}:perm-push",
-                occurred_at=datetime.now(timezone.utc),
-                provider_request_id="perm-push",
-                provider_ref={"source": "codex_app_server", "reply_transport": "managed_push"},
-                kind="permission_prompt",
-                can_respond=True,
-            )
-            db.commit()
-            pause_id = str(row.id)
-
-        resp = client.post(
-            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
-            json={"decision": "answer"},
-        )
-        assert resp.status_code == 200, resp.text
-        # Even though kind==permission_prompt, the non-pull transport pushed.
-        assert pushed, "non-pull permission_prompt must dispatch over managed control"
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_permission_prompt_request_is_user_facing(tmp_path):
-    """Answerable permission-gate requests must NOT be hidden by the legacy
-    claude_hook placeholder filter."""
-    session_local = _make_db(tmp_path)
-    session_id, _user_id = _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        ack = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(session_id), "tool_use_id": "toolu_vis", "tool_name": "Bash"},
-        ).json()
-        with session_local() as db:
-            row = db.query(SessionPauseRequest).filter(SessionPauseRequest.request_key == ack["request_key"]).one()
-            assert is_user_facing_pause_request(row) is True
-            # provider_ref carries the reply_transport so Phase 2 can dispatch by
-            # transport instead of special-casing kind in the router.
-            assert (row.provider_ref_json or {}).get("reply_transport") == "claude_pretooluse_pull"
-    finally:
-        api_app.dependency_overrides.clear()
+    assert resp.status_code == 200, resp.text
+    assert pushed, "a non-pull transport must dispatch over managed control"
+    assert pushed[0]["owner_id"] == owner_id
 
 
-def test_same_tool_use_id_register_is_idempotent(tmp_path):
+def test_permission_prompt_request_is_user_facing(live_catalog, live_catalog_client):
+    """Answerable permission-gate requests must reach the browser's pending list
+    instead of being filtered out as provider bookkeeping."""
+    _owner_id, session_id, headers, cookies = _seed(live_catalog, email="perm-visible@test.local")
+
+    ack = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={"session_id": str(session_id), "tool_use_id": "toolu_vis", "tool_name": "Bash"},
+        headers=headers,
+    ).json()
+
+    listed = live_catalog_client.get(f"/sessions/{session_id}/pause-requests", cookies=cookies)
+
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert body["total"] == 1
+    request = body["requests"][0]
+    assert request["id"] == ack["pause_request_id"]
+    assert request["kind"] == "permission_prompt"
+    assert request["can_respond"] is True
+    assert request["summary"] == "Claude wants to use Bash."
+    # The catalog carries the transport the answer path dispatches on.
+    assert _interactions(live_catalog, session_id)[0]["reply_transport"] == "claude_pretooluse_pull"
+
+
+def test_same_tool_use_id_register_is_idempotent(live_catalog, live_catalog_client):
     """A tool_use_id is unique per Claude tool invocation, so re-registering it
     (a hook network retry) must return the SAME row, not orphan the first poll.
     The poll-by-pause_request_id handle is what the hook uses to read its row."""
-    session_local = _make_db(tmp_path)
-    session_id, _user_id = _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        tool_use_id = "toolu_dup"
-        ack1 = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
-        ).json()
-        ack2 = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
-        ).json()
-        # Idempotent: same invocation -> same pause request row.
-        assert ack1["pause_request_id"] == ack2["pause_request_id"]
+    _owner_id, session_id, headers, _cookies = _seed(live_catalog, email="perm-idempotent@test.local")
+    tool_use_id = "toolu_dup"
+    body = {"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"}
 
-        with session_local() as db:
-            resolve_pause_request(
-                db,
-                pause_request_id=UUID(ack1["pause_request_id"]),
-                status="rejected",
-                response_payload={"permissionDecision": "deny", "permissionDecisionReason": "no"},
-            )
-            db.commit()
-        poll = client.get(
-            "/api/agents/permission-decision",
-            params={
-                "session_id": str(session_id),
-                "tool_use_id": tool_use_id,
-                "pause_request_id": ack1["pause_request_id"],
-            },
-        )
-        assert poll.json() == {"decision": "deny", "reason": "no", "resolved": True}
-    finally:
-        api_app.dependency_overrides.clear()
+    ack1 = live_catalog_client.post("/agents/permission-requests", json=body, headers=headers).json()
+    ack2 = live_catalog_client.post("/agents/permission-requests", json=body, headers=headers).json()
+
+    # Idempotent: same invocation -> same held interaction.
+    assert ack1["pause_request_id"] == ack2["pause_request_id"]
+    assert len(_interactions(live_catalog, session_id)) == 1
+
+    _resolve(
+        live_catalog,
+        session_id,
+        ack1["pause_request_id"],
+        status="rejected",
+        payload={"permissionDecision": "deny", "permissionDecisionReason": "no"},
+    )
+    poll = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={
+            "session_id": str(session_id),
+            "tool_use_id": tool_use_id,
+            "pause_request_id": ack1["pause_request_id"],
+        },
+        headers=headers,
+    )
+
+    assert poll.json() == {"decision": "deny", "reason": "no", "resolved": True}
 
 
-def test_register_rejects_empty_tool_use_id(tmp_path):
-    session_local = _make_db(tmp_path)
-    session_id, _user_id = _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        resp = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(session_id), "tool_use_id": "", "tool_name": "Bash"},
-        )
-        assert resp.status_code == 400, resp.text
-    finally:
-        api_app.dependency_overrides.clear()
+def test_register_rejects_empty_tool_use_id(live_catalog, live_catalog_client):
+    _owner_id, session_id, headers, _cookies = _seed(live_catalog, email="perm-empty-tool@test.local")
+
+    resp = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={"session_id": str(session_id), "tool_use_id": "", "tool_name": "Bash"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 400, resp.text
 
 
-def test_resolved_without_decision_payload_maps_to_deny(tmp_path):
+def test_resolved_without_decision_payload_maps_to_deny(live_catalog, live_catalog_client):
     """A row resolved WITHOUT an explicit permissionDecision (e.g. superseded)
     must read as deny, never a silent allow."""
-    session_local = _make_db(tmp_path)
-    session_id, _user_id = _seed_session(session_local)
-    client, api_app = _make_client(session_local)
-    try:
-        ack = client.post(
-            "/api/agents/permission-requests",
-            json={"session_id": str(session_id), "tool_use_id": "toolu_nopayload", "tool_name": "Bash"},
-        ).json()
-        with session_local() as db:
-            # resolve with NO response_payload at all
-            resolve_pause_request(db, pause_request_id=UUID(ack["pause_request_id"]), status="resolved")
-            db.commit()
-        poll = client.get(
-            "/api/agents/permission-decision",
-            params={"session_id": str(session_id), "tool_use_id": "toolu_nopayload", "pause_request_id": ack["pause_request_id"]},
-        )
-        assert poll.json()["decision"] == "deny"
-        assert poll.json()["resolved"] is True
-    finally:
-        api_app.dependency_overrides.clear()
+    _owner_id, session_id, headers, _cookies = _seed(live_catalog, email="perm-no-payload@test.local")
+
+    ack = live_catalog_client.post(
+        "/agents/permission-requests",
+        json={"session_id": str(session_id), "tool_use_id": "toolu_nopayload", "tool_name": "Bash"},
+        headers=headers,
+    ).json()
+    _resolve(live_catalog, session_id, ack["pause_request_id"], status="resolved", payload={})
+
+    poll = live_catalog_client.get(
+        "/agents/permission-decision",
+        params={
+            "session_id": str(session_id),
+            "tool_use_id": "toolu_nopayload",
+            "pause_request_id": ack["pause_request_id"],
+        },
+        headers=headers,
+    )
+
+    assert poll.json()["decision"] == "deny"
+    assert poll.json()["resolved"] is True

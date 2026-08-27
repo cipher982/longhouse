@@ -4,8 +4,6 @@ import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from types import SimpleNamespace
-from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
@@ -13,10 +11,11 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import TimelineCard
@@ -88,73 +87,34 @@ def _seed_event(factory, session_id, *, role="user", content="hello"):
 # ---------------------------------------------------------------------------
 
 
-def test_sessions_list_includes_first_user_message(tmp_path):
-    """GET /api/agents/sessions returns first_user_message for each session."""
-    from fastapi.testclient import TestClient
+def test_sessions_list_includes_first_user_message(live_catalog, live_catalog_client):
+    """GET /api/agents/sessions returns first_user_message for each session.
 
-    from zerg.database import Base
-    from zerg.database import get_db
-    from zerg.database import make_engine
-    from zerg.database import make_sessionmaker
-    from zerg.main import api_app
+    The preview is the one the render manifest carried into the catalog when the
+    transcript was sealed; the listing never re-reads the transcript for it.
+    """
 
-    db_path = tmp_path / "test_first_msg.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    factory = make_sessionmaker(engine)
-
-    session = _seed_session(
-        factory,
+    owner_id = live_catalog.create_user("owner@example.test")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="structured-title")
+    live_catalog.commit_session(
+        owner_id=owner_id,
+        device_id="structured-title",
         project="proj",
-        git_branch="feat",
-        first_user_message_preview="First question here",
+        texts=("First question here", "Second question"),
     )
-    _seed_event(factory, session.id, role="user", content="First question here")
-    _seed_event(factory, session.id, role="assistant", content="Answer")
-    _seed_event(factory, session.id, role="user", content="Second question")
 
-    def override():
-        d = factory()
-        try:
-            yield d
-        finally:
-            d.close()
-
-    def override_verify_agents_token():
-        return SimpleNamespace(device_id="structured-title", id="token-1", owner_id=1)
-
-    api_app.dependency_overrides[get_db] = override
-    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
-    try:
-        client = TestClient(api_app)
-        with patch(
-            "zerg.services.agents.store.AgentsStore.get_first_message_map",
-            side_effect=AssertionError("session list must use hot preview columns"),
-        ):
-            resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
-        assert resp.status_code == 200
-        sessions = resp.json()["sessions"]
-        assert len(sessions) == 1
-        assert sessions[0]["first_user_message"] == "First question here"
-    finally:
-        api_app.dependency_overrides.clear()
+    resp = live_catalog_client.get("/agents/sessions", headers={"X-Agents-Token": token})
+    assert resp.status_code == 200, resp.text
+    sessions = resp.json()["sessions"]
+    assert len(sessions) == 1
+    assert sessions[0]["first_user_message"] == "First question here"
 
 
-def test_sessions_list_uses_preview_backfill_for_existing_rows(tmp_path):
-    """Legacy rows need an explicit backfill; request-time lists stay hot-only."""
-    from fastapi.testclient import TestClient
-
-    from zerg.database import Base
-    from zerg.database import get_db
-    from zerg.database import make_engine
-    from zerg.database import make_sessionmaker
-    from zerg.main import api_app
+def test_preview_backfill_fills_missing_previews_from_archive_events(tmp_path):
+    """Archive rows predating the preview columns are repaired from their events."""
     from zerg.services.session_preview_backfill import backfill_missing_session_previews
 
-    db_path = tmp_path / "test_first_msg_legacy.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    factory = make_sessionmaker(engine)
+    factory = _make_db(tmp_path, "test_first_msg_legacy.db")
 
     session = _seed_session(
         factory,
@@ -165,66 +125,32 @@ def test_sessions_list_uses_preview_backfill_for_existing_rows(tmp_path):
     _seed_event(factory, session.id, role="user", content="Legacy first question")
     _seed_event(factory, session.id, role="assistant", content="Legacy answer")
 
-    def override():
-        d = factory()
-        try:
-            yield d
-        finally:
-            d.close()
-
-    def override_verify_agents_token():
-        return SimpleNamespace(device_id="structured-title", id="token-1", owner_id=1)
-
-    api_app.dependency_overrides[get_db] = override
-    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    db = factory()
     try:
-        client = TestClient(api_app)
-        with patch(
-            "zerg.services.agents.store.AgentsStore.get_first_message_map",
-            side_effect=AssertionError("session list must not query legacy events for missing previews"),
-        ):
-            resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
-        assert resp.status_code == 200
-        sessions = resp.json()["sessions"]
-        assert len(sessions) == 1
-        assert sessions[0]["first_user_message"] is None
-
-        db = factory()
-        try:
-            result = backfill_missing_session_previews(db, limit=10)
-            db.commit()
-        finally:
-            db.close()
-
-        assert result.selected_sessions == 1
-        assert result.updated_sessions == 1
-        assert result.first_user_filled == 1
-        assert result.last_visible_filled == 1
-        assert result.last_user_filled == 1
-        assert result.last_assistant_filled == 1
-
-        db = factory()
-        try:
-            repaired = db.query(AgentSession).filter(AgentSession.id == session.id).one()
-            card = db.query(TimelineCard).filter(TimelineCard.session_id == session.id).one()
-        finally:
-            db.close()
-        assert repaired.last_user_message_preview == "Legacy first question"
-        assert repaired.last_assistant_message_preview == "Legacy answer"
-        assert card.last_user_message_preview == "Legacy first question"
-        assert card.last_assistant_message_preview == "Legacy answer"
-
-        with patch(
-            "zerg.services.agents.store.AgentsStore.get_first_message_map",
-            side_effect=AssertionError("session list must use backfilled hot preview columns"),
-        ):
-            resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
-        assert resp.status_code == 200
-        sessions = resp.json()["sessions"]
-        assert len(sessions) == 1
-        assert sessions[0]["first_user_message"] == "Legacy first question"
+        result = backfill_missing_session_previews(db, limit=10)
+        db.commit()
     finally:
-        api_app.dependency_overrides.clear()
+        db.close()
+
+    assert result.selected_sessions == 1
+    assert result.updated_sessions == 1
+    assert result.first_user_filled == 1
+    assert result.last_visible_filled == 1
+    assert result.last_user_filled == 1
+    assert result.last_assistant_filled == 1
+
+    db = factory()
+    try:
+        repaired = db.query(AgentSession).filter(AgentSession.id == session.id).one()
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session.id).one()
+    finally:
+        db.close()
+    assert repaired.first_user_message_preview == "Legacy first question"
+    assert repaired.last_user_message_preview == "Legacy first question"
+    assert repaired.last_assistant_message_preview == "Legacy answer"
+    assert card.first_user_message_preview == "Legacy first question"
+    assert card.last_user_message_preview == "Legacy first question"
+    assert card.last_assistant_message_preview == "Legacy answer"
 
 
 def test_preview_backfill_creates_missing_timeline_card_for_hot_legacy_row(tmp_path):

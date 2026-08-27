@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -10,36 +12,26 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.database import get_db
-from zerg.database import initialize_database
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.browser_route_auth import get_current_browser_route_user
-from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionInput
-from zerg.models.agents import SessionRuntimeState
-from zerg.models.device_token import DeviceToken
-from zerg.models.enums import UserRole
-from zerg.models.models import Runner
-from zerg.models.user import User
-from zerg.routers import session_chat
-from zerg.services.agents import AgentsStore
-from zerg.services.agents import EventIngest
-from zerg.services.agents import SessionIngest
-from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.runner_connection_manager import get_runner_connection_manager
-from zerg.services.session_chat_impl import _managed_local_launch_response
-from zerg.services.session_chat_impl import _session_is_closed_for_input
-from zerg.services.session_runtime import phase_freshness_ms
-from zerg.services.session_runtime import runtime_key_for_session
+from tests_lite.live_catalog_harness import LiveCatalog  # noqa: E402
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402,F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402,F401
+from zerg.database import initialize_database  # noqa: E402
+from zerg.database import make_engine  # noqa: E402
+from zerg.database import make_sessionmaker  # noqa: E402
+from zerg.models.enums import UserRole  # noqa: E402
+from zerg.models.user import User  # noqa: E402
+from zerg.routers import session_chat  # noqa: E402
+from zerg.services.machine_control_channel import get_machine_control_channel_registry  # noqa: E402
+from zerg.services.session_chat_impl import _managed_local_launch_response  # noqa: E402
+
+# Every route below is one a Runtime Host serves, so each of them declares a
+# live catalog. The archive-only helpers left here belong to the two launch
+# response tests, which never touch a route.
 
 
 def _make_db(tmp_path):
@@ -47,45 +39,6 @@ def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
     return make_sessionmaker(engine)
-
-
-def _make_client(session_local, current_user):
-    from zerg.main import api_app
-    from zerg.main import app
-
-    def override_get_db():
-        db = session_local()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    def override_current_user():
-        return current_user
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
-    return TestClient(app, backend="asyncio"), api_app
-
-
-def _make_machine_client(session_local, device_token):
-    from zerg.main import api_app
-    from zerg.main import app
-
-    def override_get_db():
-        db = session_local()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    def override_verify():
-        return device_token
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[verify_agents_token] = override_verify
-    api_app.dependency_overrides[require_single_tenant] = lambda: None
-    return TestClient(app, backend="asyncio"), api_app
 
 
 def test_remote_helm_continue_routes_are_not_registered():
@@ -97,34 +50,18 @@ def test_remote_helm_continue_routes_are_not_registered():
     assert ("/api/agents/sessions/{session_id}/continue", "POST") not in routes
 
 
-def _mark_session_live(db, session, *, owner_id: int, phase: str = "idle") -> None:
-    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-
-    runner_id = int(session.source_runner_id)
-    runner = Runner(
-        id=runner_id,
-        owner_id=owner_id,
-        name=session.source_runner_name or f"runner-{runner_id}",
-        status="online",
-        auth_secret_hash="test",
-    )
-    db.merge(runner)
-    get_runner_connection_manager().register(owner_id, runner_id, SimpleNamespace())
-    provider = (session.provider or "claude").strip().lower()
-    if provider == "codex":
-        plane = "codex_bridge"
-    elif provider == "opencode":
-        plane = "opencode_process"
-    else:
-        plane = "claude_channel_bridge"
-    seed_managed_kernel_rows(db, session, control_plane=plane, can_terminate=True)
-    db.commit()
-    _mark_runtime_live(db, session, phase=phase)
+# ---------------------------------------------------------------------------
+# One managed-local session, launched the way a Runtime Host launches it
+# ---------------------------------------------------------------------------
 
 
 class _AutoCompletingMachineWebSocket:
-    def __init__(self):
+    """A Machine Agent control channel that answers every command with success."""
+
+    def __init__(self, *, exit_code: int = 0, stderr: str = ""):
         self.sent: list[dict[str, object]] = []
+        self._exit_code = exit_code
+        self._stderr = stderr
 
     async def send_json(self, message):
         self.sent.append(message)
@@ -134,9 +71,10 @@ class _AutoCompletingMachineWebSocket:
                 "command_id": message["command_id"],
                 "ok": True,
                 "result": {
-                    "exit_code": 0,
+                    "exit_code": self._exit_code,
                     "stdout": "",
-                    "stderr": "",
+                    "stderr": self._stderr,
+                    "turn_id": "machine-control-turn-1",
                 },
             }
         )
@@ -151,8 +89,10 @@ async def _register_fake_machine_control(
     owner_id: int,
     device_id: str,
     supports: list[str],
+    exit_code: int = 0,
+    stderr: str = "",
 ) -> _AutoCompletingMachineWebSocket:
-    websocket = _AutoCompletingMachineWebSocket()
+    websocket = _AutoCompletingMachineWebSocket(exit_code=exit_code, stderr=stderr)
     await get_machine_control_channel_registry().register(
         owner_id=owner_id,
         device_id=device_id,
@@ -164,96 +104,316 @@ async def _register_fake_machine_control(
     return websocket
 
 
-def _seed_machine_control_interrupt_session(
-    session_local,
-    *,
-    provider: str,
-    control_plane: str,
-    managed_transport: str | None = None,
-):
-    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+def _machine_heartbeat(*, device_id: str, now: datetime, raw_json: str | None) -> dict:
+    """The heartbeat stamp the Machine Agent ships on every tick."""
 
-    source_session_id = uuid4()
-    provider_session_id = f"{provider}-interrupt-{uuid4().hex[:8]}"
-    device_id = f"{provider}-interrupt-machine"
-    with session_local() as db:
-        user = User(email=f"{provider}-interrupt@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    return {
+        "device_id": device_id,
+        "received_at": now.isoformat(),
+        "version": "test-engine",
+        "last_ship_at": now.isoformat(),
+        "last_ship_attempt_at": now.isoformat(),
+        "last_ship_result": "ok",
+        "last_ship_latency_ms": 5,
+        "last_ship_http_status": 200,
+        "spool_pending": 0,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "ship_latency_p50_ms_1h": 5,
+        "ship_latency_p95_ms_1h": 5,
+        "disk_free_bytes": 1_000_000,
+        "is_offline": 0,
+        "raw_json": raw_json,
+        "sessions_digest": None,
+        "sessions_sequence": None,
+    }
 
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider=provider,
-                environment="Cinder",
-                project=f"{provider}-interrupt-live",
-                device_id=device_id,
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text=f"Started {provider} before interrupt",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
+
+def _machine_evidence_json(*, provider: str, session_id: str, run_id: str, now: datetime) -> str:
+    """The typed facts the provider adapter reports through the heartbeat.
+
+    The control fact binds an adapter connection identity to the catalog
+    connection and carries the operations the adapter actually grants; without
+    it every capability check answers "no live control channel", because the
+    connection a launch creates is born detached for every lease-observed
+    provider. The activity fact is what reports the session idle.
+    """
+
+    from zerg.machine_evidence import canonical_evidence_hash
+
+    connection_id = str(uuid4())
+    lease_generation = str(uuid4())
+    activity = {
+        "authority_class": "provider_runtime",
+        "provider": provider,
+        "session_id": session_id,
+        "run_id": run_id,
+        "kind": "idle",
+        "raw_kind": "idle",
+        "tool_name": None,
+        "source": "provider_runtime",
+        "observed_at": now.isoformat(),
+        "valid_until": (now + timedelta(minutes=5)).isoformat(),
+    }
+    control = {
+        "authority_class": "provider_control",
+        "provider": provider,
+        "session_id": session_id,
+        "run_id": run_id,
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "granted_operations": ["interrupt", "resume", "send_input", "tail_output", "terminate"],
+        "ownership": "managed",
+        "state": "attached",
+        "lease_ttl_ms": 300_000,
+        "source": "provider_control",
+        "observed_at": now.isoformat(),
+    }
+    return json.dumps(
+        {
+            "machine_evidence": {
+                "schema_version": 3,
+                "activity": [activity],
+                "control": [control],
+                "identities": [
+                    {
+                        "fact_family": "activity",
+                        "fact_index": 0,
+                        "subject_key": f"run:{run_id}",
+                        "source": "provider_runtime",
+                        "source_epoch": run_id,
+                        "source_seq": 1,
+                        "sequenced": True,
+                        "dedupe_key": hashlib.sha256(f"{run_id}:activity:1".encode()).hexdigest(),
+                        "evidence_hash": canonical_evidence_hash(activity),
+                    },
+                    {
+                        "fact_family": "control",
+                        "fact_index": 0,
+                        "subject_key": f"connection:{connection_id}:{lease_generation}",
+                        "source": "provider_control",
+                        "source_epoch": lease_generation,
+                        "source_seq": None,
+                        "sequenced": False,
+                        "dedupe_key": hashlib.sha256(f"{connection_id}:{lease_generation}".encode()).hexdigest(),
+                        "evidence_hash": canonical_evidence_hash(control),
+                    },
                 ],
-            )
-        )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = managed_transport or control_plane
-        source_session.source_runner_id = None
-        source_session.source_runner_name = None
-        source_session.managed_session_name = f"lh-{provider}-interrupt-live"
-        seed_managed_kernel_rows(
-            db,
-            source_session,
-            control_plane=control_plane,
-            can_send_input=True,
-            can_interrupt=True,
-        )
-        db.commit()
-        _mark_runtime_live(db, source_session, phase="running")
-        user_id = user.id
-
-    return source_session_id, user_id, device_id
+            }
+        }
+    )
 
 
-def _mark_runtime_live(db, session, *, phase: str = "idle") -> None:
-    now = datetime.now(timezone.utc)
-    freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
-    key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
-    state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == key).first()
-    if state is None:
-        state = SessionRuntimeState(
-            runtime_key=key,
-            session_id=session.id,
-            provider=str(session.provider or "claude"),
-            device_id=session.device_id,
+def _launch_managed_local_session(
+    live: LiveCatalog,
+    *,
+    owner_id: int,
+    provider: str = "claude",
+    device_id: str = "cinder",
+    project: str = "session-chat",
+    attach: bool = True,
+) -> tuple[str, str]:
+    """Launch one Helm session in the live catalog; return ``(session_id, run_id)``.
+
+    The production sequence: the launch RPC creates the session, thread, run
+    and control connection; the launch outcome adopts it; and one Machine Agent
+    heartbeat carries the control lease that attaches the connection. Every
+    capability the control routes check is derived from those rows.
+
+    ``attach=False`` stops after the launch outcome, which is the reattachable
+    session the UI shows as needing host attach: a real connection row in state
+    ``detached``, granting nothing.
+    """
+
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    contract = contract_for_provider(provider)
+    assert contract is not None
+    session_id = str(uuid4())
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    created = live.rpc(
+        "session.launch.local.create.v2",
+        {
+            "launch": {
+                "owner_id": owner_id,
+                "git_repo": "cipher982/longhouse",
+                "git_branch": "main",
+                "started_at": now.isoformat(),
+                "expires_at": (now + timedelta(minutes=5)).isoformat(),
+                "plan": {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "provider_session_id": str(uuid4()),
+                    "source_name": device_id,
+                    "source_runner_id": None,
+                    "cwd": "/workspace/longhouse",
+                    "project": project,
+                    "display_name": project,
+                    "managed_session_name": f"lh-{provider}-{project}",
+                    "loop_mode": "assist",
+                    "permission_mode": "bypass",
+                    "launch_actor": "user",
+                    "launch_surface": "cli",
+                    "environment": "test",
+                    "origin_kind": None,
+                    "hidden_from_default_timeline": 0,
+                    "managed_transport": contract.managed_transport.value,
+                    "attach_command": "",
+                    "provider_config": {},
+                },
+            }
+        },
+    )
+    run_id = str(created["run_id"])
+    live.rpc(
+        "session.launch.local.finish.v2",
+        {
+            "outcome": {
+                "session_id": session_id,
+                "run_id": run_id,
+                "owner_id": owner_id,
+                "device_id": device_id,
+                "state": "adopted",
+                "error_code": None,
+                "error_message": None,
+                "observed_at": now.isoformat(),
+            }
+        },
+    )
+    if attach:
+        live.rpc(
+            "machine.heartbeat.apply.v2",
+            {
+                "heartbeat": _machine_heartbeat(
+                    device_id=device_id,
+                    now=now,
+                    raw_json=_machine_evidence_json(
+                        provider=provider,
+                        session_id=session_id,
+                        run_id=run_id,
+                        now=now,
+                    ),
+                ),
+                "managed_leases": [
+                    {
+                        "session_id": session_id,
+                        "provider": provider,
+                        "machine_id": device_id,
+                        "sequence": 1,
+                        "state": "attached",
+                        "bridge_status": "ready",
+                        "thread_subscription_status": "subscribed",
+                        "observed_at": now.isoformat(),
+                        "lease_ttl_ms": 300_000,
+                    }
+                ],
+                "managed_leases_present": True,
+                "owner_id": owner_id,
+            },
         )
-        db.add(state)
-    state.phase = phase
-    state.phase_source = "semantic"
-    state.phase_started_at = now
-    state.last_runtime_signal_at = now
-    state.last_progress_at = now
-    state.last_live_at = now
-    state.timeline_anchor_at = now
-    state.freshness_expires_at = now + timedelta(milliseconds=freshness_ms)
-    state.terminal_state = None
-    state.terminal_at = None
-    state.runtime_version = int(getattr(state, "runtime_version", 0) or 0) + 1
-    db.commit()
+    return session_id, run_id
+
+
+def _apply_terminal_signal(
+    live: LiveCatalog,
+    *,
+    session_id: str,
+    run_id: str,
+    provider: str,
+    terminal_state: str,
+    device_id: str = "cinder",
+) -> None:
+    """Report the run's end the way the provider adapter reports it."""
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    live.rpc(
+        "session.runtime.apply.v2",
+        {
+            "events": [
+                {
+                    "runtime_key": f"{provider}:{session_id}",
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "provider": provider,
+                    "device_id": device_id,
+                    "source": f"{provider}_bridge",
+                    "kind": "terminal_signal",
+                    "occurred_at": now.isoformat(),
+                    "dedupe_key": f"{session_id}:{terminal_state}",
+                    "payload": {"terminal_state": terminal_state},
+                }
+            ]
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Run disposition: which terminal states close a run to new input
+# ---------------------------------------------------------------------------
+#
+# ``session_input_block_reason`` is the gate the queue drainer consults before
+# it delivers a queued message. It used to read the archive
+# ``session_runtime_state`` table, and these tests used to seed one; it reads
+# catalogd runtime facts now, so the terminal state has to arrive the way the
+# provider adapter reports it.
+
+
+@pytest.mark.parametrize("terminal_state", ["finished", "host_expired"])
+def test_turn_or_unverified_terminal_state_does_not_block_session_input(live_catalog, terminal_state):  # noqa: F811
+    from zerg.services.session_runtime import session_input_block_reason
+
+    owner_id = live_catalog.create_user(f"block-open-{terminal_state}@test.local")
+    session_id, run_id = _launch_managed_local_session(live_catalog, owner_id=owner_id, provider="claude")
+    _apply_terminal_signal(
+        live_catalog,
+        session_id=session_id,
+        run_id=run_id,
+        provider="claude",
+        terminal_state=terminal_state,
+    )
+
+    # A finished turn and an unverified host both leave the run addressable.
+    assert session_input_block_reason(None, session_id) is None
+
+
+@pytest.mark.parametrize(
+    ("terminal_state", "reason"),
+    [
+        ("session_ended", "run_ended"),
+        ("process_gone", "run_ended"),
+        ("user_closed", "session_closed"),
+    ],
+)
+def test_irreversible_terminal_state_blocks_session_input(live_catalog, terminal_state, reason):  # noqa: F811
+    from zerg.services.session_runtime import session_input_block_reason
+
+    owner_id = live_catalog.create_user(f"block-closed-{terminal_state}@test.local")
+    session_id, run_id = _launch_managed_local_session(live_catalog, owner_id=owner_id, provider="claude")
+    _apply_terminal_signal(
+        live_catalog,
+        session_id=session_id,
+        run_id=run_id,
+        provider="claude",
+        terminal_state=terminal_state,
+    )
+
+    # Disposition and run end are separate answers: only explicit closure
+    # closes the durable session, and provider exit only ends the run.
+    assert session_input_block_reason(None, session_id) == reason
+
+
+# ---------------------------------------------------------------------------
+# Managed-local launch response (no route, archive session)
+# ---------------------------------------------------------------------------
 
 
 def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool, control_plane: str | None = None):
@@ -279,11 +439,11 @@ def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool
             environment="dev",
             project="zerg",
             started_at=datetime.now(timezone.utc),
-                                    user_messages=0,
+            user_messages=0,
             assistant_messages=0,
             tool_calls=0,
             loop_mode="assist",
-                                            )
+        )
         db.add(session)
         db.commit()
         db.refresh(session)
@@ -296,133 +456,6 @@ def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool
             db.commit()
             db.refresh(session)
     return sid
-
-
-def _seed_live_input_session(session_local, *, provider: str = "claude", phase: str = "idle"):
-    source_session_id = uuid4()
-    provider_session_id = f"{provider}-input-{uuid4().hex[:8]}"
-    with session_local() as db:
-        user = User(email=f"{provider}-input-{uuid4().hex[:6]}@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider=provider,
-                environment="Cinder",
-                project="session-input",
-                device_id="agent-device",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="Started before Longhouse input test",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
-                ],
-            )
-        )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "claude_channel_bridge" if provider == "claude" else "codex_app_server"
-        source_session.source_runner_id = 1
-        source_session.source_runner_name = "agent-device"
-        source_session.managed_session_name = f"lh-{provider}-input"
-        db.commit()
-        _mark_session_live(db, source_session, owner_id=user.id, phase=phase)
-        return source_session_id, user.id
-
-
-@pytest.mark.parametrize("terminal_state", ["finished", "host_expired"])
-def test_turn_or_unverified_terminal_state_does_not_block_session_input(tmp_path, terminal_state):
-    session_local = _make_db(tmp_path)
-    now = datetime.now(timezone.utc)
-
-    with session_local() as db:
-        source_session = AgentSession(
-            provider="claude",
-            environment="test",
-            project="zerg",
-            started_at=now - timedelta(minutes=5),
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        db.add(source_session)
-        db.flush()
-        db.add(
-            SessionRuntimeState(
-                runtime_key=f"claude:{source_session.id}",
-                session_id=source_session.id,
-                provider="claude",
-                device_id="cinder",
-                phase="finished",
-                phase_source="semantic",
-                phase_started_at=now,
-                last_runtime_signal_at=now,
-                last_live_at=now,
-                timeline_anchor_at=now,
-                freshness_expires_at=now,
-                terminal_state=terminal_state,
-                terminal_at=now,
-                runtime_version=1,
-            )
-        )
-        db.commit()
-
-        assert not _session_is_closed_for_input(db, source_session)
-
-
-@pytest.mark.parametrize("terminal_state", ["session_ended", "process_gone", "user_closed"])
-def test_irreversible_terminal_state_blocks_session_input(tmp_path, terminal_state):
-    session_local = _make_db(tmp_path)
-    now = datetime.now(timezone.utc)
-
-    with session_local() as db:
-        source_session = AgentSession(
-            provider="claude",
-            environment="test",
-            project="zerg",
-            started_at=now - timedelta(minutes=5),
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        db.add(source_session)
-        db.flush()
-        db.add(
-            SessionRuntimeState(
-                runtime_key=f"claude:{source_session.id}",
-                session_id=source_session.id,
-                provider="claude",
-                device_id="cinder",
-                phase="finished",
-                phase_source="semantic",
-                phase_started_at=now,
-                last_runtime_signal_at=now,
-                last_live_at=now,
-                timeline_anchor_at=now,
-                freshness_expires_at=now,
-                terminal_state=terminal_state,
-                terminal_at=now,
-                runtime_version=1,
-            )
-        )
-        db.commit()
-
-        assert _session_is_closed_for_input(db, source_session)
 
 
 def test_managed_local_launch_response_requires_managed_local_execution_home(tmp_path):
@@ -462,414 +495,186 @@ def test_managed_local_launch_response_requires_managed_transport(tmp_path):
             _managed_local_launch_response(db, result)
 
 
-def test_managed_local_claude_live_send_requires_live_control(tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id = uuid4()
-    provider_session_id = f"resume-send-{uuid4().hex[:8]}"
+# ---------------------------------------------------------------------------
+# Live send
+# ---------------------------------------------------------------------------
 
-    with session_local() as db:
-        user = User(email="session-chat-managed-local@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
 
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider="claude",
-                environment="Cinder",
-                project="managed-local-offline",
-                device_id="cinder",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="Started on laptop before Longhouse lost the live channel",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
-                ],
-            )
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_live_send_refuses_a_session_whose_control_is_not_attached(live_catalog, live_catalog_client, provider):  # noqa: F811
+    """A launched-but-detached session cannot be continued from Longhouse.
+
+    This used to assert a second, softer message for the reattachable case --
+    "needs host attach before Longhouse can continue it" -- chosen from
+    ``host_reattach_available``. That branch is gone: a capability is granted
+    by an attached connection or it is not, and the answer is one message.
+    """
+
+    email = f"detached-{provider}@test.local"
+    owner_id = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="cinder")
+    session_id, _run_id = _launch_managed_local_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider=provider,
+        project="managed-local-detached",
+        attach=False,
+    )
+
+    response = live_catalog_client.post(
+        f"/agents/sessions/{session_id}/send-live",
+        json={"message": "continue from Longhouse"},
+        headers={"X-Agents-Token": token},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "This session does not have a live Longhouse control channel."
+
+
+def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(live_catalog, live_catalog_client):  # noqa: F811
+    """The token names the owner, not the machine the session runs on.
+
+    A device token minted on one laptop must still be able to steer a session
+    running on another machine the same owner enrolled, so the send routes on
+    the session's own device and not on the token's label.
+    """
+
+    owner_id = live_catalog.create_user("agents-send-live@test.local")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="different-machine-label")
+    session_id, _run_id = _launch_managed_local_session(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="agent-device",
+        project="agents-send-live",
+    )
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            device_id="agent-device",
+            supports=["claude.send"],
         )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "claude_channel_bridge"
-        source_session.source_runner_id = None
-        source_session.source_runner_name = "cinder"
-        source_session.managed_session_name = "lh-claude-no-runner"
-        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-
-        seed_managed_kernel_rows(
-            db,
-            source_session,
-            control_plane="claude_channel_bridge",
-            state="detached",  # reattachable bucket: no live control, but host attach is possible
-        )
-        db.commit()
-        user_id = user.id
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="session-chat-managed-local@test.local", role=UserRole.USER.value),
     )
 
     try:
-        response = client.post(
-            f"/api/sessions/{source_session_id}/send-live",
-            json={"message": "continue from Longhouse"},
-        )
-        assert response.status_code == 409, response.text
-        assert response.json()["detail"] == "This live session needs host attach before Longhouse can continue it."
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_managed_local_codex_live_send_requires_host_attach(tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id = uuid4()
-    provider_session_id = f"codex-managed-local-{uuid4().hex[:8]}"
-
-    with session_local() as db:
-        user = User(email="session-chat-managed-local-codex@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider="codex",
-                environment="Cinder",
-                project="managed-local-codex-host-attach",
-                device_id="cinder",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="Started on laptop before Longhouse lost the Codex channel",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
-                ],
-            )
-        )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "codex_app_server"
-        source_session.source_runner_id = None
-        source_session.source_runner_name = "cinder"
-        source_session.managed_session_name = "lh-codex-no-runner"
-        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-
-        seed_managed_kernel_rows(db, source_session, control_plane="codex_bridge", state="detached")
-        db.commit()
-        user_id = user.id
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="session-chat-managed-local-codex@test.local", role=UserRole.USER.value),
-    )
-
-    try:
-        response = client.post(
-            f"/api/sessions/{source_session_id}/send-live",
-            json={"message": "continue from Longhouse"},
-        )
-        assert response.status_code == 409, response.text
-        assert response.json()["detail"] == "This live session needs host attach before Longhouse can continue it."
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_explicit_claude_steer_rejects_idle_turn_without_dispatch(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id, user_id = _seed_live_input_session(session_local, provider="claude", phase="idle")
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="claude-steer-idle@test.local", role=UserRole.USER.value),
-    )
-
-    async def fail_steer(**_kwargs):
-        pytest.fail("idle intent=steer must be rejected before dispatch")
-
-    monkeypatch.setattr("zerg.services.managed_local_control.steer_text_to_managed_local_session", fail_steer)
-
-    try:
-        response = client.post(
-            f"/api/sessions/{source_session_id}/input",
-            json={"text": "correct the active turn", "intent": "steer"},
-        )
-        assert response.status_code == 409, response.text
-        assert response.json()["detail"]["error_code"] == "turn_not_active"
-        with session_local() as db:
-            assert db.query(SessionInput).filter(SessionInput.session_id == source_session_id).count() == 0
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_explicit_claude_steer_dispatches_during_active_turn(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id, user_id = _seed_live_input_session(session_local, provider="claude", phase="running")
-    calls: list[dict[str, object]] = []
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="claude-steer-active@test.local", role=UserRole.USER.value),
-    )
-
-    async def fake_steer(*, db, owner_id, session, text, request_id=None):
-        calls.append(
-            {
-                "owner_id": owner_id,
-                "session_id": str(session.id),
-                "text": text,
-                "request_id": request_id,
-            }
-        )
-        return SimpleNamespace(ok=True, exit_code=0, error=None)
-
-    monkeypatch.setattr("zerg.services.managed_local_control.steer_text_to_managed_local_session", fake_steer)
-
-    try:
-        response = client.post(
-            f"/api/sessions/{source_session_id}/input",
-            json={"text": "correct the active turn", "intent": "steer"},
-        )
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["outcome"] == "sent"
-        assert payload["intent"] == "steer"
-        assert len(calls) == 1
-        assert calls[0]["owner_id"] == user_id
-        assert calls[0]["session_id"] == str(source_session_id)
-        assert calls[0]["text"] == "correct the active turn"
-        assert calls[0]["request_id"]
-    finally:
-        api_app_ref.dependency_overrides = {}
-
-
-def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id = uuid4()
-    provider_session_id = f"managed-live-{uuid4().hex[:8]}"
-    calls: list[dict[str, object]] = []
-
-    with session_local() as db:
-        user = User(email="agents-send-live@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider="claude",
-                environment="Cinder",
-                project="agents-send-live",
-                device_id="agent-device",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="Started on agent-device before live send",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
-                ],
-            )
-        )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "claude_channel_bridge"
-        source_session.source_runner_id = 1
-        source_session.source_runner_name = "agent-device"
-        source_session.managed_session_name = "lh-agent-send-live"
-        db.commit()
-        _mark_session_live(db, source_session, owner_id=user.id)
-        token = DeviceToken(owner_id=user.id, device_id="different-machine-label", token_hash="test")
-
-    client, api_app_ref = _make_machine_client(session_local, token)
-
-    async def fake_send_text(
-        *,
-        db,
-        owner_id,
-        session,
-        text,
-        request_id=None,
-        timeout_secs=15,
-        verify_turn_started=False,
-        verification_timeout_secs=None,
-        attachments=None,
-    ):
-        calls.append(
-            {
-                "owner_id": owner_id,
-                "session_id": str(session.id),
-                "text": text,
-                "request_id": request_id,
-                "verify_turn_started": verify_turn_started,
-                "verification_timeout_secs": verification_timeout_secs,
-            }
-        )
-        return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
-
-    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
-
-    try:
-        response = client.post(
-            f"/api/agents/sessions/{source_session_id}/send-live",
+        response = live_catalog_client.post(
+            f"/agents/sessions/{session_id}/send-live",
             json={"message": "continue locally from the API"},
+            headers={"X-Agents-Token": token},
         )
         assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["accepted"] is True
-        assert payload["session_id"] == str(source_session_id)
-        assert len(calls) == 1
-        assert calls[0]["owner_id"] == token.owner_id
-        assert calls[0]["text"] == "continue locally from the API"
-        assert calls[0]["verify_turn_started"] is True
-        assert calls[0]["verification_timeout_secs"] == 15.0
+        assert payload["session_id"] == session_id
+        assert payload["verification"] == "live_control_ack"
+
+        assert len(websocket.sent) == 1
+        frame = websocket.sent[0]
+        assert frame["command_type"] == "session.send_text"
+        assert frame["session_id"] == session_id
+        assert frame["payload"]["text"] == "continue locally from the API"
+        assert frame["payload"]["provider"] == "claude"
+        # The grant is minted from the attached connection, not from the token.
+        assert frame["payload"]["longhouse_control_grant"]["identity_source"] == "adapter_bound"
     finally:
-        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
-        api_app_ref.dependency_overrides = {}
-
-
-@pytest.mark.parametrize("terminal_state", ["session_ended", "provider_disconnected"])
-def test_agents_send_live_rejects_ended_runtime_run(monkeypatch, tmp_path, terminal_state):
-    session_local = _make_db(tmp_path)
-    source_session_id = uuid4()
-    provider_session_id = f"managed-closed-{uuid4().hex[:8]}"
-
-    with session_local() as db:
-        user = User(email="agents-send-closed@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider="codex",
-                environment="Cinder",
-                project="agents-send-closed",
-                device_id="agent-device",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[],
-            )
-        )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "codex_app_server"
-        source_session.source_runner_id = 1
-        source_session.source_runner_name = "agent-device"
-        db.commit()
-        _mark_session_live(db, source_session, owner_id=user.id)
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).one()
-        state.phase = "finished"
-        state.terminal_state = terminal_state
-        state.terminal_at = datetime.now(timezone.utc)
-        db.commit()
-        token = DeviceToken(owner_id=user.id, device_id="agent-device", token_hash="test")
-
-    client, api_app_ref = _make_machine_client(session_local, token)
-    monkeypatch.setattr(
-        "zerg.services.live_session_dispatch.send_text_to_live_session",
-        lambda **_kwargs: pytest.fail("closed session should not dispatch"),
-    )
-
-    try:
-        response = client.post(
-            f"/api/agents/sessions/{source_session_id}/send-live",
-            json={"message": "this should not send"},
-        )
-        assert response.status_code == 409, response.text
-        assert response.json()["detail"] == {
-            "error_code": "run_ended",
-            "message": "This run has ended.",
-        }
-    finally:
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(session_chat.session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
 
 
 @pytest.mark.parametrize(
-    ("provider", "control_plane", "managed_transport", "support"),
+    ("terminal_state", "error_code", "message"),
     [
-        ("claude", "claude_channel_bridge", None, "claude.interrupt"),
-        ("opencode", "opencode_server_bridge", None, "opencode.interrupt"),
-        ("codex", "codex_bridge", "codex_app_server", "codex.interrupt"),
+        ("session_ended", "run_ended", "This run has ended."),
+        ("process_gone", "run_ended", "This run has ended."),
+        ("user_closed", "session_closed", "This session is closed."),
     ],
 )
-def test_browser_interrupt_live_route_uses_machine_control(
-    monkeypatch,
-    tmp_path,
-    provider,
-    control_plane,
-    managed_transport,
-    support,
+def test_agents_send_live_rejects_ended_runtime_run(
+    live_catalog,  # noqa: F811
+    live_catalog_client,  # noqa: F811
+    terminal_state,
+    error_code,
+    message,
 ):
-    session_local = _make_db(tmp_path)
-    source_session_id, user_id, device_id = _seed_machine_control_interrupt_session(
-        session_local,
-        provider=provider,
-        control_plane=control_plane,
-        managed_transport=managed_transport,
+    """A run that ended refuses input even while its control channel is up.
+
+    The third parameter used to be ``provider_disconnected``, a terminal state
+    no adapter emits: it existed to reach the archive predicate's catch-all
+    ``run_ended``. The catalog answer is derived from the run's own end and
+    from explicit closure, so the states worth naming here are the ones a
+    provider actually reports.
+    """
+
+    owner_id = live_catalog.create_user(f"agents-send-closed-{terminal_state}@test.local")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="agent-device")
+    session_id, run_id = _launch_managed_local_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="codex",
+        device_id="agent-device",
+        project="agents-send-closed",
+    )
+    _apply_terminal_signal(
+        live_catalog,
+        session_id=session_id,
+        run_id=run_id,
+        provider="codex",
+        terminal_state=terminal_state,
+        device_id="agent-device",
     )
     websocket = asyncio.run(
         _register_fake_machine_control(
-            owner_id=user_id,
-            device_id=device_id,
-            supports=[support],
+            owner_id=owner_id,
+            device_id="agent-device",
+            supports=["codex.send"],
         )
     )
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email=f"{provider}-interrupt@test.local", role=UserRole.USER.value),
-    )
-    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
     try:
-        response = client.post(f"/api/sessions/{source_session_id}/interrupt-live")
+        response = live_catalog_client.post(
+            f"/agents/sessions/{session_id}/send-live",
+            json={"message": "this should not send"},
+            headers={"X-Agents-Token": token},
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == {"error_code": error_code, "message": message}
+        assert websocket.sent == []
+    finally:
+        asyncio.run(_clear_machine_control_registry())
+
+
+# ---------------------------------------------------------------------------
+# Interrupt and terminate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("provider", ["claude", "opencode", "codex"])
+def test_browser_interrupt_live_route_uses_machine_control(live_catalog, live_catalog_client, provider):  # noqa: F811
+    email = f"{provider}-interrupt@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    device_id = f"{provider}-interrupt-machine"
+    session_id, _run_id = _launch_managed_local_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider=provider,
+        device_id=device_id,
+        project=f"{provider}-interrupt-live",
+    )
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            device_id=device_id,
+            supports=[f"{provider}.interrupt"],
+        )
+    )
+    asyncio.run(session_chat.session_lock_manager.acquire(str(session_id), holder="stalled-turn"))
+
+    try:
+        response = live_catalog_client.post(f"/sessions/{session_id}/interrupt-live", cookies=cookies)
         assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["interrupt_dispatched"] is True
         assert payload["confirmed_stopped"] is False
-        assert payload["session_id"] == str(source_session_id)
+        assert payload["session_id"] == session_id
         assert payload["released_lock"] is True
         assert payload["exit_code"] == 0
 
@@ -877,397 +682,162 @@ def test_browser_interrupt_live_route_uses_machine_control(
         frame = websocket.sent[0]
         assert frame["type"] == "command"
         assert frame["command_type"] == "session.interrupt"
-        assert frame["session_id"] == str(source_session_id)
-        assert str(frame["command_id"]).startswith(f"managed-control:{source_session_id}:session.interrupt:")
-        assert frame["payload"] == {"provider": provider}
+        assert frame["session_id"] == session_id
+        assert str(frame["command_id"]).startswith(f"managed-control:{session_id}:session.interrupt:")
+        assert frame["payload"]["provider"] == provider
     finally:
-        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
+        asyncio.run(session_chat.session_lock_manager.release(str(session_id)))
         asyncio.run(_clear_machine_control_registry())
-        api_app_ref.dependency_overrides = {}
 
 
-def test_agents_interrupt_live_route_dispatches_and_releases_lock(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id = uuid4()
-    provider_session_id = f"managed-interrupt-{uuid4().hex[:8]}"
-    calls: list[dict[str, object]] = []
-
-    with session_local() as db:
-        user = User(email="agents-interrupt-live@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider="claude",
-                environment="Cinder",
-                project="agents-interrupt-live",
-                device_id="agent-device",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="Started on agent-device before interrupt",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
-                ],
-            )
-        )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "claude_channel_bridge"
-        source_session.source_runner_id = 1
-        source_session.source_runner_name = "agent-device"
-        source_session.managed_session_name = "lh-agent-interrupt-live"
-        db.commit()
-        _mark_session_live(db, source_session, owner_id=user.id)
-        token = DeviceToken(owner_id=user.id, device_id="different-machine-label", token_hash="test")
-
-    client, api_app_ref = _make_machine_client(session_local, token)
-
-    async def fake_interrupt(*, db, owner_id, session, request_id=None, timeout_secs=15):
-        calls.append(
-            {
-                "owner_id": owner_id,
-                "session_id": str(session.id),
-                "request_id": request_id,
-                "timeout_secs": timeout_secs,
-            }
-        )
-        return SimpleNamespace(ok=True, exit_code=0, error=None)
-
-    monkeypatch.setattr("zerg.services.managed_local_control.interrupt_managed_local_session", fake_interrupt)
-    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
-
-    try:
-        response = client.post(f"/api/agents/sessions/{source_session_id}/interrupt-live")
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["interrupt_dispatched"] is True
-        assert payload["confirmed_stopped"] is False
-        assert payload["session_id"] == str(source_session_id)
-        assert payload["released_lock"] is True
-        assert len(calls) == 1
-        assert calls[0]["owner_id"] == token.owner_id
-        assert calls[0]["session_id"] == str(source_session_id)
-    finally:
-        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
-        api_app_ref.dependency_overrides = {}
-
-
-def test_browser_interrupt_live_route_dispatches_and_releases_lock(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id = uuid4()
-    provider_session_id = f"browser-managed-interrupt-{uuid4().hex[:8]}"
-    calls: list[dict[str, object]] = []
-
-    with session_local() as db:
-        user = User(email="browser-interrupt-live@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider="claude",
-                environment="Cinder",
-                project="browser-interrupt-live",
-                device_id="agent-device",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="Started on agent-device before browser interrupt",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
-                ],
-            )
-        )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "claude_channel_bridge"
-        source_session.source_runner_id = 1
-        source_session.source_runner_name = "agent-device"
-        source_session.managed_session_name = "lh-browser-interrupt-live"
-        db.commit()
-        _mark_session_live(db, source_session, owner_id=user.id)
-        user_id = user.id
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="browser-interrupt-live@test.local", role=UserRole.USER.value),
+def test_agents_interrupt_live_route_dispatches_and_releases_lock(live_catalog, live_catalog_client):  # noqa: F811
+    owner_id = live_catalog.create_user("agents-interrupt-live@test.local")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="different-machine-label")
+    session_id, _run_id = _launch_managed_local_session(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="agent-device",
+        project="agents-interrupt-live",
     )
-
-    async def fake_interrupt(*, db, owner_id, session, request_id=None, timeout_secs=15):
-        calls.append(
-            {
-                "owner_id": owner_id,
-                "session_id": str(session.id),
-                "request_id": request_id,
-                "timeout_secs": timeout_secs,
-            }
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            device_id="agent-device",
+            supports=["claude.interrupt"],
         )
-        return SimpleNamespace(ok=True, exit_code=0, error=None)
-
-    monkeypatch.setattr("zerg.services.managed_local_control.interrupt_managed_local_session", fake_interrupt)
-    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
+    )
+    asyncio.run(session_chat.session_lock_manager.acquire(str(session_id), holder="stalled-turn"))
 
     try:
-        response = client.post(f"/api/sessions/{source_session_id}/interrupt-live")
+        response = live_catalog_client.post(
+            f"/agents/sessions/{session_id}/interrupt-live",
+            headers={"X-Agents-Token": token},
+        )
         assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["interrupt_dispatched"] is True
         assert payload["confirmed_stopped"] is False
-        assert payload["session_id"] == str(source_session_id)
+        assert payload["session_id"] == session_id
         assert payload["released_lock"] is True
-        assert len(calls) == 1
-        assert calls[0]["owner_id"] == user_id
-        assert calls[0]["session_id"] == str(source_session_id)
+        assert [frame["command_type"] for frame in websocket.sent] == ["session.interrupt"]
     finally:
-        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(session_chat.session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_agents_interrupt_live_route_releases_lock_on_dispatch_failure(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id = uuid4()
-    provider_session_id = f"managed-interrupt-fail-{uuid4().hex[:8]}"
-
-    with session_local() as db:
-        user = User(email="agents-interrupt-fail@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider="claude",
-                environment="Cinder",
-                project="agents-interrupt-fail",
-                device_id="agent-device",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="Started on agent-device before failed interrupt",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
-                ],
-            )
+def test_agents_interrupt_live_route_releases_lock_on_dispatch_failure(live_catalog, live_catalog_client):  # noqa: F811
+    owner_id = live_catalog.create_user("agents-interrupt-fail@test.local")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="different-machine-label")
+    session_id, _run_id = _launch_managed_local_session(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="agent-device",
+        project="agents-interrupt-fail",
+    )
+    asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            device_id="agent-device",
+            supports=["claude.interrupt"],
+            exit_code=7,
+            stderr="interrupt failed",
         )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "claude_channel_bridge"
-        source_session.source_runner_id = 1
-        source_session.source_runner_name = "agent-device"
-        source_session.managed_session_name = "lh-agent-interrupt-fail"
-        db.commit()
-        _mark_session_live(db, source_session, owner_id=user.id)
-        token = DeviceToken(owner_id=user.id, device_id="different-machine-label", token_hash="test")
-
-    client, api_app_ref = _make_machine_client(session_local, token)
-
-    async def fake_interrupt(*, db, owner_id, session, request_id=None, timeout_secs=15):
-        return SimpleNamespace(ok=False, exit_code=7, error="interrupt failed")
-
-    monkeypatch.setattr("zerg.services.managed_local_control.interrupt_managed_local_session", fake_interrupt)
-    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
+    )
+    asyncio.run(session_chat.session_lock_manager.acquire(str(session_id), holder="stalled-turn"))
 
     try:
-        response = client.post(f"/api/agents/sessions/{source_session_id}/interrupt-live")
+        response = live_catalog_client.post(
+            f"/agents/sessions/{session_id}/interrupt-live",
+            headers={"X-Agents-Token": token},
+        )
         assert response.status_code == 502, response.text
         detail = response.json()["detail"]
         assert detail["error_code"] == "interrupt_failed"
         assert detail["exit_code"] == 7
         assert detail["released_lock"] is True
         assert detail["confirmed_stopped"] is False
-        assert asyncio.run(session_chat.session_lock_manager.get_lock_info(str(source_session_id))) is None
+        # A failed interrupt still leaves the session unlocked, or the stalled
+        # turn stays wedged behind a lock nobody holds.
+        assert asyncio.run(session_chat.session_lock_manager.get_lock_info(str(session_id))) is None
     finally:
-        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(session_chat.session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_browser_terminate_live_route_dispatches_and_releases_lock(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id = uuid4()
-    provider_session_id = f"browser-managed-terminate-{uuid4().hex[:8]}"
-    calls: list[dict[str, object]] = []
+def test_browser_terminate_live_route_dispatches_and_releases_lock(live_catalog, live_catalog_client):  # noqa: F811
+    """Terminate runs against OpenCode because it is the provider that grants it.
 
-    with session_local() as db:
-        user = User(email="browser-terminate-live@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    This used to run against Claude with the dispatch function replaced, which
+    hid the fact that ``can_terminate`` is derived from the machine-control
+    supports a provider actually advertises. Claude and Codex declare the
+    contract operation and carry no ``<provider>.terminate`` support, so a
+    Claude terminate is refused before the engine is contacted.
+    """
 
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider="claude",
-                environment="Cinder",
-                project="browser-terminate-live",
-                device_id="agent-device",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="Started on agent-device before browser terminate",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
-                ],
-            )
-        )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "claude_channel_bridge"
-        source_session.source_runner_id = 1
-        source_session.source_runner_name = "agent-device"
-        source_session.managed_session_name = "lh-browser-terminate-live"
-        db.commit()
-        _mark_session_live(db, source_session, owner_id=user.id)
-        user_id = user.id
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="browser-terminate-live@test.local", role=UserRole.USER.value),
+    email = "browser-terminate-live@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id, _run_id = _launch_managed_local_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="opencode",
+        device_id="agent-device",
+        project="browser-terminate-live",
     )
-
-    async def fake_terminate(*, db, owner_id, session, request_id=None, timeout_secs=15):
-        calls.append(
-            {
-                "owner_id": owner_id,
-                "session_id": str(session.id),
-                "request_id": request_id,
-                "timeout_secs": timeout_secs,
-            }
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            device_id="agent-device",
+            supports=["opencode.terminate"],
         )
-        return SimpleNamespace(ok=True, exit_code=0, error=None)
-
-    monkeypatch.setattr("zerg.services.managed_local_control.terminate_managed_local_session", fake_terminate)
-    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
+    )
+    asyncio.run(session_chat.session_lock_manager.acquire(str(session_id), holder="stalled-turn"))
 
     try:
-        response = client.post(f"/api/sessions/{source_session_id}/terminate-live")
+        response = live_catalog_client.post(f"/sessions/{session_id}/terminate-live", cookies=cookies)
         assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["terminate_dispatched"] is True
-        assert payload["session_id"] == str(source_session_id)
+        assert payload["session_id"] == session_id
         assert payload["released_lock"] is True
-        assert len(calls) == 1
-        assert calls[0]["owner_id"] == user_id
-        assert calls[0]["session_id"] == str(source_session_id)
+        assert [frame["command_type"] for frame in websocket.sent] == ["session.terminate"]
     finally:
-        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(session_chat.session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_agents_terminate_live_route_releases_lock_on_dispatch_failure(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    source_session_id = uuid4()
-    provider_session_id = f"managed-terminate-fail-{uuid4().hex[:8]}"
-
-    with session_local() as db:
-        user = User(email="agents-terminate-fail@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=source_session_id,
-                provider="claude",
-                environment="Cinder",
-                project="agents-terminate-fail",
-                device_id="agent-device",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="Started on agent-device before failed terminate",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
-                ],
-            )
+def test_agents_terminate_live_route_releases_lock_on_dispatch_failure(live_catalog, live_catalog_client):  # noqa: F811
+    owner_id = live_catalog.create_user("agents-terminate-fail@test.local")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="different-machine-label")
+    session_id, _run_id = _launch_managed_local_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="opencode",
+        device_id="agent-device",
+        project="agents-terminate-fail",
+    )
+    asyncio.run(
+        _register_fake_machine_control(
+            owner_id=owner_id,
+            device_id="agent-device",
+            supports=["opencode.terminate"],
+            exit_code=7,
+            stderr="terminate failed",
         )
-        source_session = store.get_session(source_session_id)
-        assert source_session is not None
-        source_session.execution_home = "managed_local"
-        source_session.managed_transport = "claude_channel_bridge"
-        source_session.source_runner_id = 1
-        source_session.source_runner_name = "agent-device"
-        source_session.managed_session_name = "lh-agent-terminate-fail"
-        db.commit()
-        _mark_session_live(db, source_session, owner_id=user.id)
-        token = DeviceToken(owner_id=user.id, device_id="different-machine-label", token_hash="test")
-
-    client, api_app_ref = _make_machine_client(session_local, token)
-
-    async def fake_terminate(*, db, owner_id, session, request_id=None, timeout_secs=15):
-        return SimpleNamespace(ok=False, exit_code=7, error="terminate failed")
-
-    monkeypatch.setattr("zerg.services.managed_local_control.terminate_managed_local_session", fake_terminate)
-    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
+    )
+    asyncio.run(session_chat.session_lock_manager.acquire(str(session_id), holder="stalled-turn"))
 
     try:
-        response = client.post(f"/api/agents/sessions/{source_session_id}/terminate-live")
+        response = live_catalog_client.post(
+            f"/agents/sessions/{session_id}/terminate-live",
+            headers={"X-Agents-Token": token},
+        )
         assert response.status_code == 502, response.text
         detail = response.json()["detail"]
         assert detail["error_code"] == "terminate_failed"
         assert detail["exit_code"] == 7
         assert detail["released_lock"] is True
-        assert asyncio.run(session_chat.session_lock_manager.get_lock_info(str(source_session_id))) is None
+        assert asyncio.run(session_chat.session_lock_manager.get_lock_info(str(session_id))) is None
     finally:
-        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(session_chat.session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())

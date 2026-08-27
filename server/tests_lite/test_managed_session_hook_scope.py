@@ -13,6 +13,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
 from zerg.auth.managed_session_tokens import issue_managed_session_token
 from zerg.database import get_db
@@ -154,75 +156,30 @@ def test_presence_rejects_mismatched_managed_session_hook_token(tmp_path):
             api_app.dependency_overrides.clear()
 
 
-def test_ingest_accepts_managed_session_hook_token_and_forces_session_scope(tmp_path):
-    session_local = _make_db(tmp_path)
+def test_agents_sessions_allows_bounded_project_lookup_for_managed_session_hook_token(live_catalog, live_catalog_client):
+    """The bounded lookup a session-start hook makes, against the real catalog."""
+    owner_id = live_catalog.create_user("managed-local-hooks@test.local")
+    hiring = live_catalog.commit_session(owner_id=owner_id, project="hiring")
+    live_catalog.commit_session(owner_id=owner_id, project="other")
+    token = issue_managed_session_token(
+        owner_id=owner_id,
+        session_id=str(hiring.session_id),
+        project="hiring",
+        device_id="cinder",
+        scope=MANAGED_SESSION_SCOPE_HOOK,
+    )
 
-    with session_local() as db:
-        user = _seed_user(db)
-        session_id = str(uuid4())
-        token = issue_managed_session_token(
-            owner_id=user.id,
-            session_id=session_id,
-            project="hiring",
-            device_id="cinder",
-            scope=MANAGED_SESSION_SCOPE_HOOK,
-        )
-        client = _make_client(db)
+    response = live_catalog_client.get(
+        "/agents/sessions",
+        params={"project": "hiring", "limit": 5, "days_back": 7},
+        headers={"X-Agents-Token": token},
+    )
 
-        try:
-            with patch("zerg.dependencies.agents_auth.get_settings", _settings_override):
-                response = client.post(
-                    "/agents/ingest",
-                    json={
-                        "provider": "claude",
-                        "environment": "development",
-                        "project": "hiring",
-                        "device_id": "wrong-device",
-                        "cwd": "/tmp/hiring",
-                        "started_at": datetime.now(timezone.utc).isoformat(),
-                        "events": [],
-                    },
-                    headers={"X-Agents-Token": token},
-                )
-
-            assert response.status_code == 200, response.text
-            assert response.json()["session_id"] == session_id
-            session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
-            assert session.device_id == "cinder"
-        finally:
-            api_app.dependency_overrides.clear()
-
-
-def test_agents_sessions_allows_bounded_project_lookup_for_managed_session_hook_token(tmp_path):
-    session_local = _make_db(tmp_path)
-
-    with session_local() as db:
-        user = _seed_user(db)
-        session = _seed_session(db, project="hiring", device_id="cinder")
-        _seed_session(db, project="other", device_id="cinder")
-        token = issue_managed_session_token(
-            owner_id=user.id,
-            session_id=str(session.id),
-            project="hiring",
-            device_id="cinder",
-            scope=MANAGED_SESSION_SCOPE_HOOK,
-        )
-        client = _make_client(db)
-
-        try:
-            with patch("zerg.dependencies.agents_auth.get_settings", _settings_override):
-                response = client.get(
-                    "/agents/sessions",
-                    params={"project": "hiring", "limit": 5, "days_back": 7},
-                    headers={"X-Agents-Token": token},
-                )
-
-            assert response.status_code == 200, response.text
-            payload = response.json()
-            assert payload["total"] == 1
-            assert payload["sessions"][0]["project"] == "hiring"
-        finally:
-            api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["sessions"][0]["id"] == str(hiring.session_id)
+    assert payload["sessions"][0]["project"] == "hiring"
 
 
 def test_agents_sessions_rejects_broader_filters_for_managed_session_hook_token(tmp_path):

@@ -48,7 +48,6 @@ _worker_session_factories: dict[str, sessionmaker] = {}
 _live_worker_session_factories: dict[str, sessionmaker] = {}
 _live_worker_write_session_factories: dict[str, sessionmaker] = {}
 _worker_factories_lock = Lock()
-_archive_route_process = False
 
 
 @contextmanager
@@ -487,10 +486,6 @@ def _ensure_default_engines_from_env() -> Engine | None:
     global default_session_factory
     global _write_engine
     global _write_session_factory
-    global live_engine
-    global live_session_factory
-    global live_write_engine
-    global live_write_session_factory
 
     from zerg.config import get_settings_unchecked
 
@@ -499,7 +494,9 @@ def _ensure_default_engines_from_env() -> Engine | None:
     if default_engine is not None:
         return default_engine
 
-    if live_catalog_enabled():
+    # A configured live catalog is catalogd-owned; this process builds no
+    # archive engines for it.
+    if live_store_configured():
         return None
 
     if not refreshed.database_url:
@@ -510,12 +507,6 @@ def _ensure_default_engines_from_env() -> Engine | None:
     default_session_factory = make_sessionmaker(default_engine)
     _write_engine = make_write_engine(refreshed.database_url)
     _write_session_factory = make_sessionmaker(_write_engine)
-
-    if refreshed.live_database_url and live_engine is None and _live_database_enabled_for_process(refreshed):
-        live_engine = make_live_engine(refreshed.live_database_url)
-        live_session_factory = make_sessionmaker(live_engine)
-        live_write_engine = make_live_write_engine(refreshed.live_database_url)
-        live_write_session_factory = make_sessionmaker(live_write_engine)
 
     return default_engine
 
@@ -531,18 +522,6 @@ def configure_write_serializer() -> None:
     ws = get_write_serializer()
     if not ws.is_configured:
         ws.configure_resolver(_resolve_write_session_factory)
-
-
-def configure_live_write_serializer() -> None:
-    """Configure the independent Live Store write serializer if enabled."""
-    if not live_store_configured() or live_catalog_enabled():
-        return
-
-    from zerg.services.write_serializer import get_live_write_serializer
-
-    ws = get_live_write_serializer()
-    if not ws.is_configured:
-        ws.configure_resolver(_resolve_live_write_session_factory)
 
 
 def get_write_session_factory() -> sessionmaker | None:
@@ -601,13 +580,6 @@ def get_live_write_session_factory() -> sessionmaker | None:
     return live_write_session_factory
 
 
-def _resolve_live_write_session_factory() -> sessionmaker:
-    session_factory = get_live_write_session_factory()
-    if session_factory is None:
-        raise RuntimeError("Live Store write session factory unavailable")
-    return session_factory
-
-
 def live_store_configured() -> bool:
     return bool(_settings.live_database_url)
 
@@ -621,31 +593,14 @@ def archive_database_is_read_only(database_url: str | None = None) -> bool:
     return parsed.drivername.startswith("sqlite") and parsed.query.get("mode") == "ro"
 
 
-def use_archive_database_for_process() -> None:
-    """Route legacy archive dependencies to the cold database in this helper."""
-
-    global _archive_route_process
-    _archive_route_process = True
-
-
-def live_catalog_enabled() -> bool:
-    """Return whether this process owns the canonical live catalog.
-
-    Normal Runtime Hosts always use the live catalog. Disposable archive-route
-    children explicitly execute their one request against the cold database.
-    """
-
-    return bool(live_store_configured() and not (_archive_route_process or archive_database_is_read_only()))
-
-
 def get_catalog_session_factory() -> sessionmaker:
     """Return the active bounded-catalog session factory.
 
-    The live catalog remains authoritative inside archive-route helpers so
-    authentication and bounded control state never fall back to cold copies.
+    A configured live catalog is authoritative, so authentication and bounded
+    control state never fall back to a cold archive copy.
     """
 
-    if live_catalog_enabled() or (_archive_route_process and live_store_configured()):
+    if live_store_configured():
         factory = get_live_session_factory()
         if factory is None:
             raise RuntimeError("Live catalog is catalogd-owned; the API process has no SQLite session factory")
@@ -761,14 +716,16 @@ def _get_db_from_factory(session_factory: Any = None) -> Iterator[Session]:
 
 
 def get_db() -> Iterator[Session]:
-    """FastAPI dependency provider for database sessions."""
+    """FastAPI dependency provider for archive-backed database sessions.
 
-    # Unit and E2E tests deliberately retain this exact dependency callable so
-    # FastAPI dependency overrides and per-worker SQLite routing keep working.
-    # Only a real Runtime Host must refuse an in-process archive route while
-    # catalogd owns the live catalog.
-    testing = _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}
-    if live_catalog_enabled() and not testing:
+    When a live catalog is configured it owns every served read and write, so
+    nothing may open an archive SQLAlchemy session through the request path and
+    routes still declaring this dependency fail closed with 503 before their
+    handler body runs. Without a live catalog this process owns its own
+    database and the dependency resolves normally.
+    """
+
+    if live_store_configured():
         from fastapi import HTTPException
         from fastapi import status
 
@@ -791,8 +748,6 @@ def get_catalog_db() -> Iterator[Session]:
 def catalog_db_dependency():
     """Select the canonical catalog dependency for this process role."""
 
-    if _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}:
-        return get_db
     return get_catalog_db if live_store_configured() else get_db
 
 

@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -33,12 +35,13 @@ os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionInput
@@ -51,9 +54,11 @@ from zerg.models.user import User
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_input_attachments import StoredAttachment
 from zerg.services.session_input_attachments import cleanup_stale_blobs
+from zerg.services.session_input_attachments import get_catalog_attachment
 from zerg.services.session_input_attachments import store_attachment_blob
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
@@ -97,7 +102,6 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
     )
     calls: dict[str, object] = {}
 
-    monkeypatch.setattr(route.database_module, "live_catalog_enabled", lambda: True)
     def load_scoped(db, sid, *, owner_id):
         # The load is owner-scoped: the route must pass the authenticated
         # caller, never an ambient "probably the only user" identity.
@@ -201,7 +205,6 @@ async def test_catalog_attachment_blob_fetch_uses_catalog_metadata_without_legac
             original_byte_size=len(_PNG_BYTES),
         )
 
-    monkeypatch.setattr(route.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(route, "get_catalog_attachment", get_catalog)
     response = await route.fetch_attachment_blob(
         session_id=str(session_id),
@@ -330,104 +333,272 @@ def _seed_codex_session(session_local):
     return session_id, user_id
 
 
-def _seed_claude_session(session_local):
-    """Seed a Claude channel session — attach_images gate should reject."""
-    session_id = uuid4()
-    provider_session_id = f"claude-noattach-{uuid4().hex[:8]}"
-    with session_local() as db:
-        user = User(email=f"noattach-{uuid4().hex[:6]}@test.local", role=UserRole.USER.value)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+# ---------------------------------------------------------------------------
+# Live catalog: a Helm session whose control path is real
+#
+# The multipart route is catalog-only now -- a receipt through catalogd, blob
+# metadata through catalogd, and a dispatch over the machine control channel.
+# Nothing below is seeded directly: the launch RPCs create the session, thread,
+# run and connection, and one Machine Agent heartbeat carries the control lease
+# and the typed facts that bind the adapter identity and report the session
+# idle. The capability gates the route checks are derived from those rows.
+# ---------------------------------------------------------------------------
 
-        store = AgentsStore(db)
-        started_at = datetime.now(timezone.utc)
-        store.ingest_session(
-            SessionIngest(
-                id=session_id,
-                provider="claude",
-                environment="Cinder",
-                project="claude-attach",
-                device_id="cinder",
-                cwd="/tmp",
-                git_repo=None,
-                git_branch=None,
-                provider_session_id=provider_session_id,
-                started_at=started_at,
-                ended_at=started_at,
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="seed",
-                        timestamp=started_at,
-                        source_path="/tmp/session.jsonl",
-                        source_offset=0,
-                    )
+LIVE_DEVICE_ID = "cinder"
+
+
+def _machine_heartbeat(*, device_id: str, now: datetime, raw_json: str | None = None) -> dict:
+    """The heartbeat stamp the Machine Agent ships on every tick."""
+
+    return {
+        "device_id": device_id,
+        "received_at": now.isoformat(),
+        "version": "test-engine",
+        "last_ship_at": now.isoformat(),
+        "last_ship_attempt_at": now.isoformat(),
+        "last_ship_result": "ok",
+        "last_ship_latency_ms": 5,
+        "last_ship_http_status": 200,
+        "spool_pending": 0,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "ship_latency_p50_ms_1h": 5,
+        "ship_latency_p95_ms_1h": 5,
+        "disk_free_bytes": 1_000_000,
+        "is_offline": 0,
+        "raw_json": raw_json,
+        "sessions_digest": None,
+        "sessions_sequence": None,
+    }
+
+
+def _machine_evidence_json(*, provider: str, session_id: str, run_id: str, now: datetime) -> str:
+    """The typed facts the provider adapter reports through the heartbeat.
+
+    The control fact binds an adapter connection identity to the catalog
+    connection; without it every command is refused with ``identity_unbound``.
+    The activity fact is what makes the session quiescent.
+    """
+
+    from zerg.machine_evidence import canonical_evidence_hash
+
+    connection_id = str(uuid4())
+    lease_generation = str(uuid4())
+    activity = {
+        "authority_class": "provider_runtime",
+        "provider": provider,
+        "session_id": session_id,
+        "run_id": run_id,
+        "kind": "idle",
+        "raw_kind": "idle",
+        "tool_name": None,
+        "source": "provider_runtime",
+        "observed_at": now.isoformat(),
+        "valid_until": (now + timedelta(minutes=5)).isoformat(),
+    }
+    control = {
+        "authority_class": "provider_control",
+        "provider": provider,
+        "session_id": session_id,
+        "run_id": run_id,
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "granted_operations": ["interrupt", "send_input"],
+        "ownership": "managed",
+        "state": "attached",
+        "lease_ttl_ms": 300_000,
+        "source": "provider_control",
+        "observed_at": now.isoformat(),
+    }
+    return json.dumps(
+        {
+            "machine_evidence": {
+                "schema_version": 3,
+                "activity": [activity],
+                "control": [control],
+                "identities": [
+                    {
+                        "fact_family": "activity",
+                        "fact_index": 0,
+                        "subject_key": f"run:{run_id}",
+                        "source": "provider_runtime",
+                        "source_epoch": run_id,
+                        "source_seq": 1,
+                        "sequenced": True,
+                        "dedupe_key": hashlib.sha256(f"{run_id}:activity:1".encode()).hexdigest(),
+                        "evidence_hash": canonical_evidence_hash(activity),
+                    },
+                    {
+                        "fact_family": "control",
+                        "fact_index": 0,
+                        "subject_key": f"connection:{connection_id}:{lease_generation}",
+                        "source": "provider_control",
+                        "source_epoch": lease_generation,
+                        "source_seq": None,
+                        "sequenced": False,
+                        "dedupe_key": hashlib.sha256(f"{connection_id}:{lease_generation}".encode()).hexdigest(),
+                        "evidence_hash": canonical_evidence_hash(control),
+                    },
                 ],
-            )
-        )
-        session = store.get_session(session_id)
-        assert session is not None
-        session.execution_home = "managed_local"
-        session.managed_transport = "claude_channel_bridge"
-        session.source_runner_id = 1
-        session.source_runner_name = "cinder"
-        session.managed_session_name = "lh-noattach"
-        seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge")
-        runner = Runner(
-            id=1,
-            owner_id=user.id,
-            name="cinder",
-            status="online",
-            auth_secret_hash="test",
-        )
-        db.merge(runner)
-        db.commit()
-        get_runner_connection_manager().register(user.id, 1, SimpleNamespace())
-        _seed_live_runtime_state(db, session, phase="idle")
-        user_id = user.id
-
-    return session_id, user_id
+            }
+        }
+    )
 
 
-def _stub_dispatch(monkeypatch):
-    calls: list[dict] = []
+def _seed_live_catalog_session(
+    live: LiveCatalog,
+    *,
+    owner_id: int,
+    provider: str = "codex",
+    device_id: str = LIVE_DEVICE_ID,
+) -> str:
+    """Launch one Helm session in the live catalog and bring its control online."""
 
-    async def fake_send_text(
-        *,
-        db,
-        owner_id,
-        session,
-        text,
-        request_id=None,
-        timeout_secs=15,
-        verify_turn_started=False,
-        verification_timeout_secs=None,
-        attachments=None,
-    ):
-        calls.append(
+    from zerg.services.managed_provider_contracts import contract_for_provider
+
+    contract = contract_for_provider(provider)
+    assert contract is not None
+    session_id = str(uuid4())
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    created = live.rpc(
+        "session.launch.local.create.v2",
+        {
+            "launch": {
+                "owner_id": owner_id,
+                "git_repo": "cipher982/longhouse",
+                "git_branch": "main",
+                "started_at": now.isoformat(),
+                "expires_at": (now + timedelta(minutes=5)).isoformat(),
+                "plan": {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "provider_session_id": str(uuid4()),
+                    "source_name": device_id,
+                    "source_runner_id": None,
+                    "cwd": "/workspace/longhouse",
+                    "project": "session-input-attachments",
+                    "display_name": "Session input attachments",
+                    "managed_session_name": f"{provider}-attachments",
+                    "loop_mode": "assist",
+                    "permission_mode": "bypass",
+                    "launch_actor": "user",
+                    "launch_surface": "cli",
+                    "environment": "test",
+                    "origin_kind": None,
+                    "hidden_from_default_timeline": 0,
+                    "managed_transport": contract.managed_transport.value,
+                    "attach_command": "",
+                    "provider_config": {},
+                },
+            }
+        },
+    )
+    run_id = str(created["run_id"])
+    live.rpc(
+        "session.launch.local.finish.v2",
+        {
+            "outcome": {
+                "session_id": session_id,
+                "run_id": run_id,
+                "owner_id": owner_id,
+                "device_id": device_id,
+                "state": "adopted",
+                "error_code": None,
+                "error_message": None,
+                "observed_at": now.isoformat(),
+            }
+        },
+    )
+    live.rpc(
+        "machine.heartbeat.apply.v2",
+        {
+            "heartbeat": _machine_heartbeat(
+                device_id=device_id,
+                now=now,
+                raw_json=_machine_evidence_json(provider=provider, session_id=session_id, run_id=run_id, now=now),
+            ),
+            "managed_leases": [
+                {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "machine_id": device_id,
+                    "sequence": 1,
+                    "state": "attached",
+                    "bridge_status": "ready",
+                    "thread_subscription_status": "subscribed",
+                    "observed_at": now.isoformat(),
+                    "lease_ttl_ms": 300_000,
+                }
+            ],
+            "managed_leases_present": True,
+            "owner_id": owner_id,
+        },
+    )
+    return session_id
+
+
+def _live_catalog_receipt(live: LiveCatalog, *, owner_id: int, session_id: str, client_request_id: str) -> dict | None:
+    """Read one input receipt back through catalogd, the way production reads it."""
+
+    result = live.rpc(
+        "session.input.receipt.read.v2",
+        {"owner_id": owner_id, "session_id": session_id, "client_request_id": client_request_id},
+    )
+    return result["receipt"] if result.get("found") else None
+
+
+class _AutoCompletingMachineWebSocket:
+    """A Machine Agent control channel that accepts every command."""
+
+    def __init__(self):
+        self.sent: list[dict[str, object]] = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await get_machine_control_channel_registry().complete_command(
             {
-                "session_id": str(session.id),
-                "text": text,
-                "request_id": request_id,
-                "attachments": list(attachments or []),
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": True,
+                "result": {
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "turn_id": "machine-control-turn-1",
+                },
             }
         )
-        return SimpleNamespace(
-            ok=True,
-            exit_code=0,
-            error=None,
-            verified_turn_started=True,
-            verified_user_event_id=None,
-        )
 
-    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_: None)
-    monkeypatch.setattr(
-        "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
-        lambda **_: None,
+
+async def _clear_machine_control_registry() -> None:
+    await get_machine_control_channel_registry().clear_for_tests()
+
+
+async def _register_fake_machine_control(
+    *,
+    owner_id: int,
+    supports: list[str],
+    device_id: str = LIVE_DEVICE_ID,
+) -> _AutoCompletingMachineWebSocket:
+    websocket = _AutoCompletingMachineWebSocket()
+    await get_machine_control_channel_registry().register(
+        owner_id=owner_id,
+        device_id=device_id,
+        machine_name=device_id,
+        engine_build="test-engine",
+        supports=supports,
+        websocket=websocket,
     )
-    return calls
+    return websocket
 
 
 def _set_blob_root(monkeypatch, tmp_path):
@@ -435,125 +606,142 @@ def _set_blob_root(monkeypatch, tmp_path):
     monkeypatch.setenv("LONGHOUSE_MEDIA_BLOB_ROOT", str(tmp_path / "media"))
 
 
-def test_multipart_upload_succeeds_on_codex(monkeypatch, tmp_path):
+def test_multipart_upload_succeeds_on_codex(live_catalog, live_catalog_client, monkeypatch, tmp_path):
     _set_blob_root(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_codex_session(session_local)
-    calls = _stub_dispatch(monkeypatch)
+    email = "attach-codex@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["codex.send"]))
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/inputs-multipart",
-            data={"text": "look at this", "intent": "auto"},
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/inputs-multipart",
+            data={"text": "look at this", "intent": "auto", "client_request_id": "attach-codex-1"},
             files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
+            cookies=cookies,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["outcome"] == "sent"
         assert body["intent"] == "auto"
-        assert len(calls) == 1
-        assert calls[0]["text"] == "look at this"
-        forwarded = calls[0]["attachments"]
+        # The catalog receipt is the whole record; nothing is projected into an
+        # archive session_inputs row, so there is no integer id to hand back.
+        assert body["input_id"] is None
+        assert body["live_input_id"]
+
+        assert len(websocket.sent) == 1
+        payload = websocket.sent[0]["payload"]
+        assert websocket.sent[0]["command_type"] == "session.send_text"
+        assert payload["text"] == "look at this"
+        forwarded = payload["attachments"]
         assert len(forwarded) == 1
         ref = forwarded[0]
         assert ref["mime_type"] == "image/png"
-        assert len(ref["sha256"]) == 64
-        assert ref["blob_url"].startswith(f"/api/agents/sessions/{session_id}/inputs/")
-        assert ref["blob_url"].endswith("/blob")
+        assert ref["sha256"] == hashlib.sha256(_PNG_BYTES).hexdigest()
+        assert ref["blob_url"] == (
+            f"/api/agents/sessions/{session_id}/inputs/{body['live_input_id']}/attachments/{ref['id']}/blob"
+        )
 
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == INPUT_STATUS_DELIVERED
-            attachments = (
-                db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == row.id).all()
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="attach-codex-1",
+        )
+        assert receipt is not None
+        assert receipt["id"] == body["live_input_id"]
+        assert receipt["status"] == INPUT_STATUS_DELIVERED
+        assert receipt["archive_session_input_id"] is None
+
+        stored = asyncio.run(
+            get_catalog_attachment(
+                owner_id=owner_id,
+                session_id=UUID(session_id),
+                input_receipt_id=body["live_input_id"],
+                attachment_id=UUID(ref["id"]),
             )
-            assert len(attachments) == 1
-            attach = attachments[0]
-            assert attach.mime_type == "image/png"
-            assert attach.byte_size == len(_PNG_BYTES)
-            assert len(attach.sha256) == 64
-            assert ref["id"] == str(attach.id)
-            assert ref["sha256"] == attach.sha256
-            media = db.query(MediaObject).filter(MediaObject.sha256 == attach.sha256).one()
-            assert media.mime_type == "image/png"
-            assert media.byte_size == len(_PNG_BYTES)
-            assert media.first_seen_session_id == session_id
-            assert (tmp_path / "media" / media.storage_path).read_bytes() == _PNG_BYTES
-            media_ref = db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == attach.sha256).one()
-            assert media_ref.session_id == session_id
-            assert media_ref.media_state == "present"
-            assert media_ref.original_kind == "attachment"
-            assert media_ref.source_path == f"session_input:{row.id}"
-            assert media_ref.json_pointer == f"/attachments/{attach.id}"
+        )
+        assert stored is not None
+        assert stored.mime_type == "image/png"
+        assert stored.byte_size == len(_PNG_BYTES)
+        assert stored.original_filename == "a.png"
+        assert stored.blob_path.read_bytes() == _PNG_BYTES
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_multipart_accepts_attachment_only_input(monkeypatch, tmp_path):
+def test_multipart_accepts_attachment_only_input(live_catalog, live_catalog_client, monkeypatch, tmp_path):
     _set_blob_root(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_codex_session(session_local)
-    calls = _stub_dispatch(monkeypatch)
+    email = "attach-only@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["codex.send"]))
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/inputs-multipart",
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/inputs-multipart",
             data={"text": "", "intent": "auto", "client_request_id": "attachment-only-1"},
             files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
+            cookies=cookies,
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["outcome"] == "sent"
         assert body["intent"] == "auto"
-        assert len(calls) == 1
-        assert calls[0]["text"] == ""
+        assert len(websocket.sent) == 1
+        payload = websocket.sent[0]["payload"]
+        assert payload["text"] == ""
+        assert len(payload["attachments"]) == 1
 
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.client_request_id == "attachment-only-1"
-            assert row.status == INPUT_STATUS_DELIVERED
-            attachment_count = (
-                db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == row.id).count()
-            )
-            assert attachment_count == 1
+        receipt = _live_catalog_receipt(
+            live_catalog,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id="attachment-only-1",
+        )
+        assert receipt is not None
+        assert receipt["status"] == INPUT_STATUS_DELIVERED
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_multipart_rejects_non_codex_transport(monkeypatch, tmp_path):
+def test_multipart_rejects_non_codex_transport(live_catalog, live_catalog_client, monkeypatch, tmp_path):
     _set_blob_root(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_claude_session(session_local)
-    _stub_dispatch(monkeypatch)
+    email = "attach-claude@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="claude")
+    # A control channel that would happily accept the send, so the rejection
+    # below is a fact about the transport gate, not about the machine.
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"]))
 
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
     try:
-        resp = client.post(
-            f"/api/sessions/{session_id}/inputs-multipart",
-            data={"text": "blocked", "intent": "auto"},
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/inputs-multipart",
+            data={"text": "blocked", "intent": "auto", "client_request_id": "attach-claude-1"},
             files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
+            cookies=cookies,
         )
         assert resp.status_code == 409, resp.text
         assert "codex" in resp.json()["detail"].lower()
-
-        with session_local() as db:
-            assert db.query(SessionInput).count() == 0
-            assert db.query(SessionInputAttachment).count() == 0
+        assert websocket.sent == []
+        # The gate runs before anything is persisted: no receipt, no blob.
+        assert (
+            _live_catalog_receipt(
+                live_catalog,
+                owner_id=owner_id,
+                session_id=session_id,
+                client_request_id="attach-claude-1",
+            )
+            is None
+        )
+        assert list((tmp_path / "blobs").rglob("*.bin")) == []
     finally:
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(_clear_machine_control_registry())
 
 
 def test_multipart_rejects_queue_intent(monkeypatch, tmp_path):
@@ -602,7 +790,6 @@ def test_multipart_rejects_oversize(monkeypatch, tmp_path):
     _set_blob_root(monkeypatch, tmp_path)
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_codex_session(session_local)
-    _stub_dispatch(monkeypatch)
 
     big = b"\x00" * (3 * 1024 * 1024)  # 3 MB > 2 MB cap
 
@@ -623,90 +810,76 @@ def test_multipart_rejects_oversize(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
-def test_machine_blob_fetch_streams_bytes(monkeypatch, tmp_path):
-    _set_blob_root(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_codex_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+def _upload_one_attachment(live_catalog, live_catalog_client, *, owner_id, email, session_id, websocket):
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    resp = live_catalog_client.post(
+        f"/sessions/{session_id}/inputs-multipart",
+        data={"text": "look", "intent": "auto"},
+        files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
+        cookies=cookies,
     )
+    assert resp.status_code == 200, resp.text
+    ref = websocket.sent[0]["payload"]["attachments"][0]
+    return resp.json()["live_input_id"], ref
 
-    def override_verify():
-        return SimpleNamespace(device_id="cinder", id="token-1", owner_id=user_id)
 
-    def override_single():
-        return None
-
-    api_app_ref.dependency_overrides[verify_agents_token] = override_verify
-    api_app_ref.dependency_overrides[require_single_tenant] = override_single
+def test_machine_blob_fetch_streams_bytes(live_catalog, live_catalog_client, monkeypatch, tmp_path):
+    _set_blob_root(monkeypatch, tmp_path)
+    email = "attach-fetch@test.local"
+    owner_id = live_catalog.create_user(email)
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["codex.send"]))
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id=LIVE_DEVICE_ID)
 
     try:
-        upload = client.post(
-            f"/api/sessions/{session_id}/inputs-multipart",
-            data={"text": "look", "intent": "auto"},
-            files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
+        input_id, ref = _upload_one_attachment(
+            live_catalog,
+            live_catalog_client,
+            owner_id=owner_id,
+            email=email,
+            session_id=session_id,
+            websocket=websocket,
         )
-        assert upload.status_code == 200, upload.text
-        input_id = upload.json()["input_id"]
 
-        with session_local() as db:
-            attach = db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).one()
-            attach_id = attach.id
-            sha = attach.sha256
-
-        resp = client.get(
-            f"/api/agents/sessions/{session_id}/inputs/{input_id}/attachments/{attach_id}/blob",
-            headers={"X-Agents-Token": "dev"},
+        resp = live_catalog_client.get(
+            f"/agents/sessions/{session_id}/inputs/{input_id}/attachments/{ref['id']}/blob",
+            headers={"X-Agents-Token": token},
         )
         assert resp.status_code == 200, resp.text
         assert resp.content == _PNG_BYTES
-        assert resp.headers["X-Attachment-Sha256"] == sha
+        assert resp.headers["X-Attachment-Sha256"] == ref["sha256"]
         assert resp.headers["X-Attachment-Bytes"] == str(len(_PNG_BYTES))
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(_clear_machine_control_registry())
 
 
-def test_machine_blob_fetch_404_on_session_mismatch(monkeypatch, tmp_path):
+def test_machine_blob_fetch_404_on_session_mismatch(live_catalog, live_catalog_client, monkeypatch, tmp_path):
     _set_blob_root(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_codex_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    api_app_ref.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(
-        device_id="cinder", id="token-1", owner_id=user_id
-    )
-    api_app_ref.dependency_overrides[require_single_tenant] = lambda: None
+    email = "attach-mismatch@test.local"
+    owner_id = live_catalog.create_user(email)
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["codex.send"]))
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id=LIVE_DEVICE_ID)
 
     try:
-        upload = client.post(
-            f"/api/sessions/{session_id}/inputs-multipart",
-            data={"text": "look", "intent": "auto"},
-            files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
+        input_id, ref = _upload_one_attachment(
+            live_catalog,
+            live_catalog_client,
+            owner_id=owner_id,
+            email=email,
+            session_id=session_id,
+            websocket=websocket,
         )
-        assert upload.status_code == 200
-        input_id = upload.json()["input_id"]
 
-        with session_local() as db:
-            attach = db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).one()
-            attach_id = attach.id
-
-        bogus_session = uuid4()
-        resp = client.get(
-            f"/api/agents/sessions/{bogus_session}/inputs/{input_id}/attachments/{attach_id}/blob",
-            headers={"X-Agents-Token": "dev"},
+        resp = live_catalog_client.get(
+            f"/agents/sessions/{uuid4()}/inputs/{input_id}/attachments/{ref['id']}/blob",
+            headers={"X-Agents-Token": token},
         )
         assert resp.status_code == 404, resp.text
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
+        asyncio.run(_clear_machine_control_registry())
 
 
 def test_attachment_store_commit_failure_rolls_back_media_rows(monkeypatch, tmp_path):
@@ -745,62 +918,6 @@ def test_attachment_store_commit_failure_rolls_back_media_rows(monkeypatch, tmp_
         assert db.query(MediaObject).filter(MediaObject.sha256 == digest).count() == 0
         assert db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == digest).count() == 0
         assert list((tmp_path / "blobs").rglob("*.bin")) == []
-
-
-def test_cleanup_stale_blobs_removes_delivery_blob_but_keeps_media_provenance(monkeypatch, tmp_path):
-    _set_blob_root(monkeypatch, tmp_path)
-    session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_codex_session(session_local)
-    _stub_dispatch(monkeypatch)
-
-    client, api_app_ref = _make_client(
-        session_local,
-        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
-    )
-    try:
-        upload = client.post(
-            f"/api/sessions/{session_id}/inputs-multipart",
-            data={"text": "look", "intent": "auto"},
-            files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
-        )
-        assert upload.status_code == 200, upload.text
-        input_id = upload.json()["input_id"]
-
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
-            assert row.status == INPUT_STATUS_DELIVERED
-            attach = db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).one()
-            attach_id = attach.id
-            sha = attach.sha256
-            blob_path = tmp_path / "blobs" / attach.blob_path
-            assert blob_path.exists()
-
-            # Age the row beyond retention.
-            attach.created_at = datetime.now(timezone.utc) - timedelta(days=2)
-            db.add(attach)
-            db.commit()
-
-            removed = cleanup_stale_blobs(db)
-            assert removed == 1
-            assert not blob_path.exists()
-            assert (
-                db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).count()
-                == 1
-            )
-            assert db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == sha).count() == 1
-            media = db.query(MediaObject).filter(MediaObject.sha256 == sha).one()
-            assert (tmp_path / "media" / media.storage_path).exists()
-
-        fetched = client.get(
-            f"/api/agents/sessions/{session_id}/inputs/{input_id}/attachments/{attach_id}/blob",
-            headers={"X-Agents-Token": "dev"},
-        )
-        assert fetched.status_code == 200, fetched.text
-        assert fetched.content == _PNG_BYTES
-        assert fetched.headers["X-Attachment-Sha256"] == sha
-    finally:
-        asyncio.run(session_lock_manager.release(str(session_id)))
-        api_app_ref.dependency_overrides = {}
 
 
 def test_cleanup_stale_blobs_preserves_only_remaining_attachment_copy(monkeypatch, tmp_path):

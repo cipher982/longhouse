@@ -1,6 +1,14 @@
+"""Day export for machine worklog consumers.
+
+The export is served from the derived search-v2 projection: the route asks
+catalogd for projector lag, pages the day out of searchd under one snapshot, and
+never opens the archive database. So the tests that seed data provision a real
+live catalog, ship transcripts into it, drain the real projector, and read the
+day back through the route.
+"""
+
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from types import SimpleNamespace
@@ -12,19 +20,19 @@ from sqlalchemy import text
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from tests_lite.live_catalog_harness import LiveCatalog  # noqa: E402
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402,F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402,F401
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
-from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionThread
 from zerg.routers.agents_sessions import _session_detail_db
-from zerg.services.raw_json_compression import CODEC_ZSTD
-from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.worklog_day_export import WORKLOG_DAY_MESSAGE_SQL
+
+DEVICE_ID = "worklog-day"
 
 
 def _make_client(tmp_path):
@@ -53,322 +61,106 @@ def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _seed_session(
-    factory,
-    *,
-    session_id: str,
-    started_at: str,
-    provider: str = "codex",
-    environment: str = "production",
-    branch_kind: str = "root",
-    project: str = "longhouse",
-    event_specs: list[tuple[str, str | None, str]] | None = None,
-) -> None:
-    db = factory()
-    try:
-        session = AgentSession(
-            id=session_id,
-            provider=provider,
-            environment=environment,
-            project=project,
-            device_id="test-device",
-            cwd=f"/tmp/{project}",
-            git_repo=f"https://github.com/cipher982/{project}.git",
-            started_at=_dt(started_at),
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=1,
-        )
-        db.add(session)
-        db.flush()
-        thread = SessionThread(
-            id=uuid4(),
-            session_id=session.id,
-            provider=provider,
-            branch_kind=branch_kind,
-            is_primary=1,
-        )
-        db.add(thread)
-        session.primary_thread_id = thread.id
-        db.flush()
-        for index, (role, content_text, timestamp) in enumerate(event_specs or []):
-            db.add(
-                AgentEvent(
-                    session_id=session.id,
-                    role=role,
-                    content_text=content_text,
-                    timestamp=_dt(timestamp),
-                    source_path=f"/tmp/{session_id}.jsonl",
-                    source_offset=index,
-                    event_hash=f"{session_id}-{index}",
-                )
-            )
-        db.commit()
-    finally:
-        db.close()
+def _worklog_owner(live: LiveCatalog) -> tuple[int, str]:
+    owner_id = live.create_user("owner@worklog.test")
+    return owner_id, live.create_device_token(owner_id=owner_id, device_id=DEVICE_ID)
 
 
-def test_worklog_day_export_returns_window_sessions_and_messages(tmp_path):
-    client, factory = _make_client(tmp_path)
-    try:
-        _seed_session(
-            factory,
-            session_id="11111111-1111-4111-8111-111111111111",
-            started_at="2026-07-07T12:00:00Z",
-            event_specs=[
-                ("user", "start the work", "2026-07-07T12:00:00Z"),
-                ("assistant", "made progress", "2026-07-07T12:01:00Z"),
-                ("tool", None, "2026-07-07T12:02:00Z"),
-                ("user", "outside", "2026-07-08T05:00:00Z"),
-            ],
-        )
+def test_worklog_day_export_returns_window_sessions_and_messages(live_catalog, live_catalog_client):  # noqa: F811
+    """The day window bounds the export on both the session and message sides."""
+    owner_id, token = _worklog_owner(live_catalog)
+    live_catalog.commit_session(
+        owner_id=owner_id,
+        texts=("start the work", "made progress"),
+        now=_dt("2026-07-07T16:00:00Z"),
+    )
+    # 01:00 the next morning in America/New_York, so past the window's end.
+    live_catalog.commit_session(
+        owner_id=owner_id,
+        texts=("outside",),
+        now=_dt("2026-07-08T05:00:00Z"),
+    )
+    live_catalog.index_search()
 
-        response = client.get(
-            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
-            headers={"X-Agents-Token": "dev"},
-        )
+    response = live_catalog_client.get(
+        "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
+        headers={"X-Agents-Token": token},
+    )
 
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["source"] == "longhouse-worklog-api-v1"
-        assert payload["stats"] == {"session_count": 1, "message_count": 2, "event_count": 3}
-        assert payload["sessions"][0]["message_count"] == 2
-        assert payload["sessions"][0]["event_count"] == 3
-        assert [event["content_text"] for event in payload["events"]] == ["start the work", "made progress"]
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_worklog_day_export_filters_compressed_claude_control_rows(tmp_path):
-    client, factory = _make_client(tmp_path)
-    try:
-        session_id = "44444444-4444-4444-8444-444444444444"
-        _seed_session(
-            factory,
-            session_id=session_id,
-            started_at="2026-07-07T12:00:00Z",
-            provider="claude",
-            event_specs=[
-                ("user", "<local-command-caveat>native control</local-command-caveat>", "2026-07-07T12:00:00Z"),
-                ("user", "<command-name>/effort</command-name>", "2026-07-07T12:01:00Z"),
-                ("user", "do the real work", "2026-07-07T12:02:00Z"),
-                ("assistant", "done", "2026-07-07T12:03:00Z"),
-            ],
-        )
-        db = factory()
-        try:
-            events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
-            events[0].raw_json = ""
-            events[0].raw_json_z = compress_raw_json(
-                '{"type":"user","isMeta":true,"promptId":"legacy-effort","message":{"role":"user","content":"<local-command-caveat>native control</local-command-caveat>"}}'
-            )
-            events[0].raw_json_codec = CODEC_ZSTD
-            events[1].raw_json = ""
-            events[1].raw_json_z = compress_raw_json(
-                '{"type":"user","promptId":"legacy-effort","message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
-            )
-            events[1].raw_json_codec = CODEC_ZSTD
-            db.commit()
-        finally:
-            db.close()
-
-        response = client.get(
-            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
-            headers={"X-Agents-Token": "dev"},
-        )
-
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["stats"]["message_count"] == 2
-        assert [event["content_text"] for event in payload["events"]] == ["do the real work", "done"]
-    finally:
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["source"] == "longhouse-worklog-search-v2"
+    assert payload["stats"] == {"session_count": 1, "message_count": 2, "event_count": 2}
+    assert payload["sessions"][0]["message_count"] == 2
+    assert payload["sessions"][0]["event_count"] == 2
+    assert [event["content_text"] for event in payload["events"]] == ["start the work", "made progress"]
 
 
-def test_worklog_day_export_preseeds_late_claude_caveat_before_replay(tmp_path):
-    client, factory = _make_client(tmp_path)
-    try:
-        session_id = "55555555-5555-4555-8555-555555555555"
-        _seed_session(
-            factory,
-            session_id=session_id,
-            started_at="2026-07-07T12:00:00Z",
-            provider="claude",
-            event_specs=[
-                ("user", "<command-name>/effort</command-name>", "2026-07-07T12:00:00Z"),
-                ("user", "do the real work", "2026-07-07T12:01:00Z"),
-                ("user", "<local-command-caveat>native control</local-command-caveat>", "2026-07-07T12:02:00Z"),
-                ("assistant", "done", "2026-07-07T12:03:00Z"),
-            ],
-        )
-        db = factory()
-        try:
-            events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
-            events[0].raw_json = json.dumps(
-                {
-                    "type": "user",
-                    "promptId": "late-effort",
-                    "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
-                }
-            )
-            events[2].interaction_kind = "local_control"
-            events[2].interaction_context_key = "late-effort"
-            events[2].title_eligible = False
-            db.commit()
-        finally:
-            db.close()
+def test_worklog_day_export_empty_day_and_dst_window(live_catalog, live_catalog_client):  # noqa: F811
+    """A day with nothing in it still reports the timezone's real boundaries."""
+    _owner_id, token = _worklog_owner(live_catalog)
 
-        response = client.get(
-            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
-            headers={"X-Agents-Token": "dev"},
-        )
+    response = live_catalog_client.get(
+        "/agents/worklog/day?date=2026-03-08&timezone=America/New_York",
+        headers={"X-Agents-Token": token},
+    )
 
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["stats"]["message_count"] == 2
-        assert [event["content_text"] for event in payload["events"]] == ["do the real work", "done"]
-    finally:
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["sessions"] == []
+    assert payload["events"] == []
+    assert payload["window_start"] == "2026-03-08T00:00:00-05:00"
+    assert payload["window_end"] == "2026-03-09T00:00:00-04:00"
 
 
-def test_worklog_day_export_preseeds_claude_caveat_across_day_boundary(tmp_path):
-    client, factory = _make_client(tmp_path)
-    try:
-        session_id = "66666666-6666-4666-8666-666666666666"
-        _seed_session(
-            factory,
-            session_id=session_id,
-            started_at="2026-07-06T23:59:59Z",
-            provider="claude",
-            event_specs=[
-                (
-                    "user",
-                    "<local-command-caveat>native control</local-command-caveat>",
-                    "2026-07-07T03:59:59.900Z",
-                ),
-                ("user", "<command-name>/effort</command-name>", "2026-07-07T04:00:00.100Z"),
-                ("user", "do the real work", "2026-07-07T04:01:00Z"),
-                ("assistant", "done", "2026-07-07T04:02:00Z"),
-            ],
-        )
-        db = factory()
-        try:
-            events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.id).all()
-            events[0].raw_json = json.dumps(
-                {
-                    "type": "user",
-                    "isMeta": True,
-                    "promptId": "boundary-effort",
-                    "message": {
-                        "role": "user",
-                        "content": "<local-command-caveat>native control</local-command-caveat>",
-                    },
-                }
-            )
-            events[1].raw_json = json.dumps(
-                {
-                    "type": "user",
-                    "promptId": "boundary-effort",
-                    "message": {"role": "user", "content": "<command-name>/effort</command-name>"},
-                }
-            )
-            db.commit()
-        finally:
-            db.close()
+def test_worklog_day_export_rejects_invalid_timezone(live_catalog, live_catalog_client):  # noqa: F811
+    _owner_id, token = _worklog_owner(live_catalog)
 
-        response = client.get(
-            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
-            headers={"X-Agents-Token": "dev"},
-        )
+    response = live_catalog_client.get(
+        "/agents/worklog/day?date=2026-07-07&timezone=Nope/Nowhere",
+        headers={"X-Agents-Token": token},
+    )
 
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["stats"]["message_count"] == 2
-        assert [event["content_text"] for event in payload["events"]] == ["do the real work", "done"]
-    finally:
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 400
+    assert "Unknown timezone" in response.json()["detail"]
 
 
-def test_worklog_day_export_empty_day_and_dst_window(tmp_path):
-    client, _factory = _make_client(tmp_path)
-    try:
-        response = client.get(
-            "/agents/worklog/day?date=2026-03-08&timezone=America/New_York",
-            headers={"X-Agents-Token": "dev"},
-        )
+def test_worklog_day_export_drops_test_sessions_by_default(live_catalog, live_catalog_client):  # noqa: F811
+    """Environment is carried by the shipped envelope, and it decides visibility.
 
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["sessions"] == []
-        assert payload["events"] == []
-        assert payload["window_start"] == "2026-03-08T00:00:00-05:00"
-        assert payload["window_end"] == "2026-03-09T00:00:00-04:00"
-    finally:
-        api_app.dependency_overrides.clear()
+    The envelope is what a Machine Agent puts on the wire, so setting the
+    session's environment on it is how a test-scoped session actually comes to
+    exist -- and the search projection is where the include_test predicate runs.
+    """
+    owner_id, token = _worklog_owner(live_catalog)
+    envelope = live_catalog.envelope_body(
+        session_id=uuid4(),
+        device_id=DEVICE_ID,
+        texts=("test noise",),
+        now=_dt("2026-07-07T16:00:00Z"),
+    )
+    envelope["session"]["environment"] = "test"
+    shipped = live_catalog_client.post(
+        "/agents/storage/v2/envelopes",
+        json=envelope,
+        headers={"X-Agents-Token": token, "X-Longhouse-Storage-Lane": "live"},
+    )
+    assert shipped.status_code == 200, shipped.text
+    live_catalog.index_search()
 
+    default_response = live_catalog_client.get(
+        "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
+        headers={"X-Agents-Token": token},
+    )
+    include_response = live_catalog_client.get(
+        "/agents/worklog/day?date=2026-07-07&timezone=America/New_York&include_test=true",
+        headers={"X-Agents-Token": token},
+    )
 
-def test_worklog_day_export_rejects_invalid_timezone(tmp_path):
-    client, _factory = _make_client(tmp_path)
-    try:
-        response = client.get(
-            "/agents/worklog/day?date=2026-07-07&timezone=Nope/Nowhere",
-            headers={"X-Agents-Token": "dev"},
-        )
-
-        assert response.status_code == 400
-        assert "Unknown timezone" in response.json()["detail"]
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_worklog_day_export_drops_test_sessions_by_default(tmp_path):
-    client, factory = _make_client(tmp_path)
-    try:
-        _seed_session(
-            factory,
-            session_id="22222222-2222-4222-8222-222222222222",
-            started_at="2026-07-07T12:00:00Z",
-            environment="test",
-            event_specs=[("user", "test noise", "2026-07-07T12:00:00Z")],
-        )
-
-        default_response = client.get(
-            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
-            headers={"X-Agents-Token": "dev"},
-        )
-        include_response = client.get(
-            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York&include_test=true",
-            headers={"X-Agents-Token": "dev"},
-        )
-
-        assert default_response.status_code == 200, default_response.text
-        assert default_response.json()["stats"]["session_count"] == 0
-        assert include_response.status_code == 200, include_response.text
-        assert include_response.json()["stats"]["session_count"] == 1
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_worklog_day_export_excludes_worker_only_primary_thread(tmp_path):
-    client, factory = _make_client(tmp_path)
-    try:
-        _seed_session(
-            factory,
-            session_id="33333333-3333-4333-8333-333333333333",
-            started_at="2026-07-07T12:00:00Z",
-            branch_kind="subagent",
-            event_specs=[("user", "subagent work", "2026-07-07T12:00:00Z")],
-        )
-
-        response = client.get(
-            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
-            headers={"X-Agents-Token": "dev"},
-        )
-
-        assert response.status_code == 200, response.text
-        assert response.json()["sessions"] == []
-    finally:
-        api_app.dependency_overrides.clear()
+    assert default_response.status_code == 200, default_response.text
+    assert default_response.json()["stats"]["session_count"] == 0
+    assert include_response.status_code == 200, include_response.text
+    assert include_response.json()["stats"]["session_count"] == 1
 
 
 def test_worklog_day_live_catalog_uses_search_projection_without_cold_fallback(tmp_path, monkeypatch):
@@ -444,7 +236,6 @@ def test_worklog_day_live_catalog_uses_search_projection_without_cold_fallback(t
     search = FakeSearch()
     import zerg.routers.agents_sessions as route_module
 
-    monkeypatch.setattr(route_module.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(
         route_module.database_module,
         "get_session_factory",
@@ -452,11 +243,9 @@ def test_worklog_day_live_catalog_uses_search_projection_without_cold_fallback(t
     )
     monkeypatch.setattr(route_module, "get_catalogd_client", lambda: FakeCatalog())
     monkeypatch.setattr(route_module, "get_searchd_client", lambda: search)
-    monkeypatch.setattr(
-        route_module,
-        "build_worklog_day_export",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("cold worklog fallback opened")),
-    )
+    # There is no cold fallback left to guard against by name: the route no
+    # longer imports build_worklog_day_export at all. The archive factory guard
+    # above is what still proves nothing reaches for it.
     try:
         response = client.get(
             "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",

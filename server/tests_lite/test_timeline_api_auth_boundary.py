@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session as SASession
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -21,9 +22,13 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 import zerg.dependencies.agents_auth as agents_auth_deps
 import zerg.dependencies.auth as auth_deps
+from tests_lite.live_catalog_harness import LiveCatalog
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.auth.session_tokens import SESSION_TOKEN_KIND
 from zerg.auth.session_tokens import _encode_jwt
+from zerg.catalogd.schema import create_catalog_engine
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -38,10 +43,58 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
+from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.agents.store import AgentsStore
+from zerg.services.catalogd_supervisor import catalogd_paths
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_turns import hash_user_text
 from zerg.services.session_workspace import get_legacy_workspace_session_factory
+
+OWNER_EMAIL = "owner@example.com"
+# Enough sessions that a clamped page is provably shorter than the corpus.
+_OVER_CAP_SESSIONS = 105
+
+
+def _set_browser_cookie(client: TestClient, catalog: LiveCatalog, *, owner_id: int) -> None:
+    client.cookies.set(SESSION_COOKIE_NAME, catalog.browser_cookie(owner_id=owner_id, email=OWNER_EMAIL))
+
+
+def _seed_catalog_session(*, device_id: str, cwd: str, git_repo: str | None) -> None:
+    """Leave one session row in the live catalog, with facts of this test's choosing.
+
+    ``LiveCatalog.commit_session`` derives cwd and git facts from the project;
+    the workspace picker ranks exactly those, so this seeds the row directly and
+    leaves the enrollment, scoping and ranking to catalogd.
+    """
+
+    database_path, _socket_path = catalogd_paths()
+    engine = create_catalog_engine(database_path)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    try:
+        with SASession(engine) as db:
+            db.add(
+                LiveSessionCatalog(
+                    session_id=str(uuid4()),
+                    provider="claude",
+                    environment="development",
+                    project="timeline-auth",
+                    device_id=device_id,
+                    cwd=cwd,
+                    git_repo=git_repo,
+                    git_branch="main",
+                    launch_actor="human_shell",
+                    launch_surface="terminal",
+                    started_at=now,
+                    last_activity_at=now,
+                    user_messages=1,
+                    assistant_messages=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.commit()
+    finally:
+        engine.dispose()
 
 
 def _make_db(tmp_path):
@@ -58,27 +111,6 @@ def _seed_user(db, *, user_id: int = 1) -> User:
     db.commit()
     db.refresh(user)
     return user
-
-
-def _seed_runner(db, *, runner_id: int, name: str, owner_id: int = 1):
-    """Seed a Runner row so the post-cleanup property derivations
-    (source_runner_id from device_id->Runner.name) can find a match."""
-    from zerg.models.models import Runner
-
-    runner = Runner(
-        id=runner_id,
-        owner_id=owner_id,
-        name=name,
-        availability_policy="always_on",
-        capabilities=["exec.full"],
-        status="online",
-        auth_secret_hash="x",
-        runner_metadata={},
-    )
-    db.add(runner)
-    db.commit()
-    db.refresh(runner)
-    return runner
 
 
 def _seed_session(db) -> str:
@@ -143,330 +175,49 @@ def _force_agents_token_mode():
     )
 
 
-def test_timeline_sessions_accept_browser_session_cookie(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
+def test_timeline_sessions_accept_browser_session_cookie(live_catalog, live_catalog_client):  # noqa: F811
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    seeded = live_catalog.commit_session(owner_id=owner, device_id="dev-machine", project="timeline-auth")
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
 
-    client = _make_client(session_local)
+    response = live_catalog_client.get("/timeline/sessions")
 
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get("/timeline/sessions")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["total"] == 1
-        assert payload["sessions"][0]["thread_id"] == session_id
-        assert payload["sessions"][0]["head"]["project"] == "timeline-auth"
-        assert payload["sessions"][0]["detail"]["project"] == "timeline-auth"
-        assert "list_threads;dur=" in response.headers["server-timing"]
-        assert "build_cards;dur=" in response.headers["server-timing"]
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["sessions"][0]["thread_id"] == str(seeded.session_id)
+    assert payload["sessions"][0]["head"]["project"] == "timeline-auth"
+    assert payload["sessions"][0]["detail"]["project"] == "timeline-auth"
+    assert "catalog_list;dur=" in response.headers["server-timing"]
 
 
-def test_timeline_filters_use_cache_control_and_cache_hit_timing(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        _seed_session(db)
+def test_timeline_session_events_anchor_tail_accepts_browser_session_cookie(live_catalog, live_catalog_client):  # noqa: F811
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    seeded = live_catalog.commit_session(
+        owner_id=owner,
+        device_id="cinder",
+        project="timeline-auth",
+        texts=tuple(f"event {idx}" for idx in range(1, 6)),
+    )
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
 
-    client = _make_client(session_local)
+    response = live_catalog_client.get(
+        f"/timeline/sessions/{seeded.session_id}/events",
+        params={"limit": 2, "anchor": "tail", "branch_mode": "head"},
+    )
 
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            first = client.get("/timeline/filters?days_back=14")
-            second = client.get("/timeline/filters?days_back=14")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 5
+    assert [row["content_text"] for row in payload["events"]] == ["event 4", "event 5"]
 
-        assert first.status_code == 200
-        assert first.headers["cache-control"] == "private, max-age=60"
-        assert "distinct_filters;dur=" in first.headers["server-timing"]
+    response = live_catalog_client.get(
+        f"/timeline/sessions/{seeded.session_id}/events",
+        params={"anchor": "middle"},
+    )
 
-        assert second.status_code == 200
-        assert second.headers["cache-control"] == "private, max-age=60"
-        assert "cache_hit;dur=" in second.headers["server-timing"]
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_detail_includes_attach_command_for_managed_local_codex_app_server(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        _seed_runner(db, runner_id=9, name="cinder")
-        session = AgentSession(
-            id=uuid4(),
-            provider="codex",
-            environment="development",
-            project="timeline-auth",
-            device_id="cinder",
-            cwd="/tmp/timeline-auth",
-            git_repo=None,
-            git_branch="main",
-            launch_actor="human_shell",
-            launch_surface="terminal",
-            started_at=datetime.now(timezone.utc),
-            ended_at=None,
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        db.add(session)
-        db.flush()
-        db.refresh(session)
-        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-
-        seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
-        db.commit()
-        session_id = str(session.id)
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["home_label"] == "On this Mac"
-        # Codex managed control runs through the Machine Agent channel — no
-        # remote-command Runner association regardless of seeded Runner row.
-        assert payload["control"]["source_runner_id"] is None
-        assert payload["control"]["source_runner_name"] == "cinder"
-        assert payload["control"]["attach_command"]
-        assert "codex-bridge attach --session-id" in payload["control"]["attach_command"]
-        assert "attach_command" not in payload
-        assert "source_runner_name" not in payload
-        assert "load_session;dur=" in response.headers["server-timing"]
-        assert "build_response;dur=" in response.headers["server-timing"]
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_detail_includes_attach_command_for_native_claude_bridge(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        _seed_runner(db, runner_id=9, name="work-laptop")
-        session = AgentSession(
-            id=uuid4(),
-            provider="claude",
-            environment="development",
-            project="timeline-auth",
-            device_id="work-laptop",
-            cwd="/tmp/timeline-auth",
-            git_repo=None,
-            git_branch="main",
-            started_at=datetime.now(timezone.utc),
-            ended_at=None,
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        db.add(session)
-        db.flush()
-        db.refresh(session)
-        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-        from zerg.services.agents.kernel_writes import record_thread_alias
-
-        thread, _run, _connection = seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge")
-        record_thread_alias(
-            db,
-            thread=thread,
-            provider="claude",
-            alias_kind="provider_session_id",
-            alias_value="claude-native-session",
-        )
-        db.commit()
-        session_id = str(session.id)
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["home_label"] == "On this Mac"
-        assert payload["control"]["source_runner_id"] == 9
-        assert payload["control"]["source_runner_name"] == "work-laptop"
-        assert payload["control"]["attach_command"]
-        assert "--dangerously-load-development-channels server:longhouse-channel" in payload["control"]["attach_command"]
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_turns_accept_browser_session_cookie(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = uuid4()
-        session = AgentSession(
-            id=session_id,
-            provider="codex",
-            environment="development",
-            project="timeline-auth",
-            device_id="cinder",
-            cwd="/tmp/timeline-auth",
-            git_repo=None,
-            git_branch="main",
-            started_at=datetime(2026, 3, 22, 22, 0, tzinfo=timezone.utc),
-            ended_at=None,
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        turn = SessionTurn(
-            session_id=session_id,
-            request_id="req-1",
-            state="active",
-            user_submitted_at=datetime(2026, 3, 22, 22, 3, 45, tzinfo=timezone.utc),
-            send_accepted_at=datetime(2026, 3, 22, 22, 3, 46, tzinfo=timezone.utc),
-            active_phase_observed_at=datetime(2026, 3, 22, 22, 3, 47, tzinfo=timezone.utc),
-        )
-        db.add(session)
-        db.add(turn)
-        db.commit()
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/turns")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["total"] == 1
-        assert payload["turns"][0]["request_id"] == "req-1"
-        assert payload["turns"][0]["state"] == "active"
-        assert payload["turns"][0]["user_submitted_at"].endswith("Z")
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_events_anchor_tail_accepts_browser_session_cookie(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = uuid4()
-        session = AgentSession(
-            id=session_id,
-            provider="codex",
-            environment="development",
-            project="timeline-auth",
-            device_id="cinder",
-            cwd="/tmp/timeline-auth",
-            git_repo=None,
-            git_branch="main",
-            started_at=datetime(2026, 3, 22, 22, 0, tzinfo=timezone.utc),
-            ended_at=None,
-            user_messages=5,
-            assistant_messages=0,
-            tool_calls=0,
-        )
-        db.add(session)
-        for idx in range(1, 6):
-            db.add(
-                AgentEvent(
-                    session_id=session_id,
-                    role="user",
-                    content_text=f"event {idx}",
-                    timestamp=datetime(2026, 3, 22, 22, idx, tzinfo=timezone.utc),
-                )
-            )
-        db.commit()
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(
-                f"/timeline/sessions/{session_id}/events",
-                params={"limit": 2, "anchor": "tail", "branch_mode": "head"},
-            )
-
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["total"] == 5
-        assert [row["content_text"] for row in payload["events"]] == ["event 4", "event 5"]
-
-        with _force_browser_jwt_mode():
-            response = client.get(
-                f"/timeline/sessions/{session_id}/events",
-                params={"anchor": "middle"},
-            )
-
-        assert response.status_code == 400
-        assert "anchor" in response.json()["detail"]
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_turn_detail_accepts_browser_session_cookie(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = uuid4()
-        session = AgentSession(
-            id=session_id,
-            provider="codex",
-            environment="development",
-            project="timeline-auth",
-            device_id="cinder",
-            cwd="/tmp/timeline-auth",
-            git_repo=None,
-            git_branch="main",
-            started_at=datetime(2026, 3, 22, 22, 0, tzinfo=timezone.utc),
-            ended_at=None,
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        turn = SessionTurn(
-            session_id=session_id,
-            request_id="req-1",
-            state="active",
-            user_submitted_at=datetime(2026, 3, 22, 22, 3, 45, tzinfo=timezone.utc),
-            send_accepted_at=datetime(2026, 3, 22, 22, 3, 46, tzinfo=timezone.utc),
-            active_phase_observed_at=datetime(2026, 3, 22, 22, 3, 47, tzinfo=timezone.utc),
-        )
-        db.add(session)
-        db.add(turn)
-        db.commit()
-        db.refresh(turn)
-        turn_id = turn.id
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/turns/{turn_id}")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["turn"]["id"] == turn_id
-        assert payload["turn"]["request_id"] == "req-1"
-        assert payload["turn"]["state"] == "active"
-        assert payload["turn"]["user_submitted_at"].endswith("Z")
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 400
+    assert "anchor" in response.json()["detail"]
 
 
 def test_timeline_session_workspace_bootstraps_session_thread_and_projection(tmp_path):
@@ -1235,57 +986,7 @@ def test_timeline_workspace_does_not_claim_live_control_without_runner_truth(tmp
         api_app.dependency_overrides.clear()
 
 
-def test_timeline_session_detail_includes_attach_command_for_native_managed_local_codex(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        _seed_runner(db, runner_id=9, name="cinder")
-        session = AgentSession(
-            id=uuid4(),
-            provider="codex",
-            environment="development",
-            project="timeline-auth",
-            device_id="cinder",
-            cwd="/tmp/timeline-auth",
-            git_repo=None,
-            git_branch="main",
-            started_at=datetime.now(timezone.utc),
-            ended_at=None,
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        db.add(session)
-        db.flush()
-        db.refresh(session)
-        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-
-        seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
-        db.commit()
-        session_id = str(session.id)
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["home_label"] == "On this Mac"
-        # Codex managed control runs through the Machine Agent channel — no
-        # remote-command Runner association.
-        assert payload["control"]["source_runner_id"] is None
-        assert payload["control"]["source_runner_name"] == "cinder"
-        assert payload["control"]["attach_command"]
-        assert "codex-bridge attach --session-id" in payload["control"]["attach_command"]
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_machine_workspaces_accept_browser_session_cookie(tmp_path):
+def test_timeline_machine_workspaces_accept_browser_session_cookie(live_catalog, live_catalog_client):  # noqa: F811
     """The launch picker reads workspaces through the cookie surface.
 
     Regression guard for the iOS/web launch sheet: this endpoint MUST be
@@ -1293,60 +994,35 @@ def test_timeline_machine_workspaces_accept_browser_session_cookie(tmp_path):
     device-token-only; if the clients (or this route) drift onto that auth
     surface they 401 and the picker silently shows an empty list.
     """
-    from zerg.models.device_token import DeviceToken
 
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        db.add(DeviceToken(owner_id=1, device_id="dev-machine", token_hash="hash-dev-machine"))
-        db.flush()
-        # Two sessions in the same cwd outrank a single-session cwd via frecency.
-        for _ in range(2):
-            _seed_session(db)
-        solo = AgentSession(
-            id=uuid4(),
-            provider="claude",
-            environment="development",
-            project="timeline-auth",
-            device_id="dev-machine",
-            cwd="/tmp/solo-workspace",
-            git_repo="git@github.com:example/solo.git",
-            git_branch="main",
-            launch_actor="human_shell",
-            launch_surface="terminal",
-            started_at=datetime.now(timezone.utc),
-            ended_at=datetime.now(timezone.utc),
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        db.add(solo)
-        db.commit()
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    live_catalog.create_device_token(owner_id=owner, device_id="dev-machine")
+    # Two sessions in the same cwd outrank a single-session cwd via frecency.
+    for _ in range(2):
+        _seed_catalog_session(device_id="dev-machine", cwd="/tmp/timeline-auth", git_repo=None)
+    _seed_catalog_session(
+        device_id="dev-machine",
+        cwd="/tmp/solo-workspace",
+        git_repo="git@github.com:example/solo.git",
+    )
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
 
-    client = _make_client(session_local)
+    response = live_catalog_client.get("/timeline/machines/dev-machine/workspaces?limit=12")
 
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get("/timeline/machines/dev-machine/workspaces?limit=12")
-
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert payload["device_id"] == "dev-machine"
-        paths = [w["path"] for w in payload["workspaces"]]
-        assert "/tmp/timeline-auth" in paths
-        assert "/tmp/solo-workspace" in paths
-        # Frecency: the 2-session cwd outranks the 1-session cwd.
-        scores = [w["score"] for w in payload["workspaces"]]
-        assert scores == sorted(scores, reverse=True)
-        busy = next(w for w in payload["workspaces"] if w["path"] == "/tmp/timeline-auth")
-        assert busy["session_count"] == 2
-        # Git-aware label for the repo-backed cwd.
-        solo_ws = next(w for w in payload["workspaces"] if w["path"] == "/tmp/solo-workspace")
-        assert solo_ws["label"] == "solo (main)"
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["device_id"] == "dev-machine"
+    paths = [w["path"] for w in payload["workspaces"]]
+    assert "/tmp/timeline-auth" in paths
+    assert "/tmp/solo-workspace" in paths
+    # Frecency: the 2-session cwd outranks the 1-session cwd.
+    scores = [w["score"] for w in payload["workspaces"]]
+    assert scores == sorted(scores, reverse=True)
+    busy = next(w for w in payload["workspaces"] if w["path"] == "/tmp/timeline-auth")
+    assert busy["session_count"] == 2
+    # Git-aware label for the repo-backed cwd.
+    solo_ws = next(w for w in payload["workspaces"] if w["path"] == "/tmp/solo-workspace")
+    assert solo_ws["label"] == "solo (main)"
 
 
 def test_timeline_machine_workspaces_reject_agents_header_without_browser_session(tmp_path):
@@ -1444,50 +1120,34 @@ def test_agents_sessions_reject_legacy_non_device_token(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_timeline_sessions_clamps_oversized_limit(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        for _ in range(150):
-            _seed_session(db)
+def test_timeline_sessions_clamps_oversized_limit(live_catalog, live_catalog_client):  # noqa: F811
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    for _ in range(_OVER_CAP_SESSIONS):
+        live_catalog.commit_session(owner_id=owner, device_id="dev-machine", project="timeline-auth")
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
 
-    client = _make_client(session_local)
+    response = live_catalog_client.get("/timeline/sessions?limit=500")
 
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get("/timeline/sessions?limit=500")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert len(payload["sessions"]) <= 100
-        assert response.headers.get("X-Limit-Cap") == "100"
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] > 100
+    assert len(payload["sessions"]) <= 100
+    assert response.headers.get("X-Limit-Cap") == "100"
 
 
-def test_timeline_sessions_summary_clamps_oversized_limit(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        for _ in range(150):
-            _seed_session(db)
+def test_timeline_sessions_summary_clamps_oversized_limit(live_catalog, live_catalog_client):  # noqa: F811
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    for _ in range(_OVER_CAP_SESSIONS):
+        live_catalog.commit_session(owner_id=owner, device_id="dev-machine", project="timeline-auth")
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
 
-    client = _make_client(session_local)
+    response = live_catalog_client.get("/timeline/sessions/summary?limit=500")
 
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get("/timeline/sessions/summary?limit=500")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert len(payload["sessions"]) <= 100
-        assert response.headers.get("X-Limit-Cap") == "100"
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] > 100
+    assert len(payload["sessions"]) <= 100
+    assert response.headers.get("X-Limit-Cap") == "100"
 
 
 def test_timeline_session_turns_clamps_oversized_limit(tmp_path):
@@ -1566,7 +1226,7 @@ def test_timeline_sessions_stream_clamps_oversized_limit(tmp_path, monkeypatch):
 
     captured: dict = {}
 
-    async def _fake_stream(request, *, session_factory, params, skip_initial_replay, owner_id=None):
+    async def _fake_stream(request, *, params, skip_initial_replay, owner_id=None):
         captured["limit"] = params.limit
         # Immediately end the stream so TestClient can return headers + close.
         if False:
@@ -1575,7 +1235,7 @@ def test_timeline_sessions_stream_clamps_oversized_limit(tmp_path, monkeypatch):
 
     import zerg.routers.timeline as timeline_router
 
-    monkeypatch.setattr(timeline_router, "stream_timeline_sessions_for_browser", _fake_stream)
+    monkeypatch.setattr(timeline_router, "stream_live_catalog_timeline", _fake_stream)
 
     try:
         with client.stream("GET", "/timeline/sessions/stream?limit=500") as response:

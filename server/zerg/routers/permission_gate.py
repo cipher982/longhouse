@@ -29,18 +29,11 @@ from fastapi import status
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-from zerg import database as database_module
 from zerg.auth.managed_session_tokens import ManagedSessionToken
-from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentSession
-from zerg.services.session_pause_requests import PENDING_STATUS
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CURSOR_POLL
 from zerg.services.session_pause_requests import make_pause_request_key
-from zerg.services.session_pause_requests import normalize_utc
-from zerg.services.session_pause_requests import resolve_pause_request
-from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.utils.time import UTCBaseModel
 
@@ -53,13 +46,12 @@ def _no_permission_db():
     yield None
 
 
-_permission_db_dependency = _no_permission_db if database_module.live_catalog_enabled() else get_db
+_permission_db_dependency = _no_permission_db
 
 # Distinct source so answerable permission-gate requests are NOT hidden by the
 # legacy claude_hook placeholder filter in session_pause_requests.
 PERMISSION_GATE_SOURCE = "claude_permission_gate"
 CURSOR_PERMISSION_GATE_SOURCE = "cursor_permission_gate"
-PERMISSION_GATE_SOURCES = {PERMISSION_GATE_SOURCE, CURSOR_PERMISSION_GATE_SOURCE}
 PERMISSION_PROMPT_KIND = "permission_prompt"
 
 
@@ -148,8 +140,6 @@ async def register_permission_request(
 
     _enforce_session_scope(_token, payload.session_id)
     session_uuid = _coerce_session_uuid(payload.session_id)
-    if not database_module.live_catalog_enabled() and db.query(AgentSession.id).filter(AgentSession.id == session_uuid).first() is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
 
     # tool_use_id is the idempotency key: re-registering the same id (a hook
     # network retry) updates the same row, and a genuine re-ask re-pends it.
@@ -170,75 +160,52 @@ async def register_permission_request(
     )
     tool_name = (payload.tool_name or "").strip() or None
 
-    if database_module.live_catalog_enabled():
-        from zerg.catalogd.client import CatalogRemoteError
-        from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.services.catalogd_supervisor import get_catalogd_client
 
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
-        try:
-            result = await catalogd.call(
-                "interaction.register.v2",
-                {
-                    "interaction": {
-                        "session_id": str(session_uuid),
-                        "runtime_key": runtime_key,
-                        "provider": provider,
-                        "device_id": None,
-                        "source": source,
-                        "reply_transport": reply_transport,
-                        "provider_request_id": tool_use_id,
-                        "request_key": request_key,
-                        "kind": PERMISSION_PROMPT_KIND,
-                        "tool_name": tool_name,
-                        "title": f"Permission: {tool_name}" if tool_name else "Tool permission",
-                        "summary": (
-                            f"{provider_label} wants to use {tool_name}."
-                            if tool_name
-                            else f"{provider_label} is requesting tool permission."
-                        ),
-                        "request_payload": {"tool_name": tool_name, "tool_input": payload.tool_input or {}},
-                        "can_respond": True,
-                        "occurred_at": occurred_at.isoformat(),
-                        "expires_at": expires_at.isoformat(),
-                        "single_active": True,
-                    }
-                },
-                timeout_seconds=1.0,
-            )
-        except CatalogRemoteError as exc:
-            if exc.code == "conflict" and exc.details.get("reason") == "session_not_found":
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found") from exc
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction registration failed") from exc
-        except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction registration failed") from exc
-        interaction = result["interaction"]
-        return PermissionRequestAck(
-            pause_request_id=str(interaction["id"]),
-            request_key=request_key,
-            status=str(interaction["status"]),
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
+    try:
+        result = await catalogd.call(
+            "interaction.register.v2",
+            {
+                "interaction": {
+                    "session_id": str(session_uuid),
+                    "runtime_key": runtime_key,
+                    "provider": provider,
+                    "device_id": None,
+                    "source": source,
+                    "reply_transport": reply_transport,
+                    "provider_request_id": tool_use_id,
+                    "request_key": request_key,
+                    "kind": PERMISSION_PROMPT_KIND,
+                    "tool_name": tool_name,
+                    "title": f"Permission: {tool_name}" if tool_name else "Tool permission",
+                    "summary": (
+                        f"{provider_label} wants to use {tool_name}." if tool_name else f"{provider_label} is requesting tool permission."
+                    ),
+                    "request_payload": {"tool_name": tool_name, "tool_input": payload.tool_input or {}},
+                    "can_respond": True,
+                    "occurred_at": occurred_at.isoformat(),
+                    "expires_at": expires_at.isoformat(),
+                    "single_active": True,
+                }
+            },
+            timeout_seconds=1.0,
         )
-
-    row, _changed = upsert_pause_request(
-        db,
-        session_id=session_uuid,
-        runtime_key=runtime_key,
-        provider=provider,
+    except CatalogRemoteError as exc:
+        if exc.code == "conflict" and exc.details.get("reason") == "session_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found") from exc
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction registration failed") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction registration failed") from exc
+    interaction = result["interaction"]
+    return PermissionRequestAck(
+        pause_request_id=str(interaction["id"]),
         request_key=request_key,
-        occurred_at=occurred_at,
-        provider_request_id=tool_use_id,
-        provider_ref={"source": source, "reply_transport": reply_transport},
-        kind=PERMISSION_PROMPT_KIND,
-        tool_name=tool_name,
-        title=f"Permission: {tool_name}" if tool_name else "Tool permission",
-        summary=f"{provider_label} wants to use {tool_name}." if tool_name else f"{provider_label} is requesting tool permission.",
-        request_payload={"tool_name": tool_name, "tool_input": payload.tool_input or {}},
-        can_respond=True,
-        expires_at=expires_at,
+        status=str(interaction["status"]),
     )
-    db.commit()
-    return PermissionRequestAck(pause_request_id=str(row.id), request_key=request_key, status=row.status)
 
 
 @router.get("/permission-decision", response_model=PermissionDecisionOut)
@@ -260,57 +227,13 @@ async def get_permission_decision(
     _enforce_session_scope(_token, session_id)
     session_uuid = _coerce_session_uuid(session_id)
 
-    if database_module.live_catalog_enabled():
-        from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.services.catalogd_supervisor import get_catalogd_client
 
-        interaction_id = None
-        request_key = None
-        if pause_request_id:
-            try:
-                interaction_id = str(UUID(pause_request_id))
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid pause_request_id: {pause_request_id}",
-                ) from exc
-        else:
-            normalized_provider = (provider or "claude").strip() or "claude"
-            request_key = make_pause_request_key(
-                provider=normalized_provider,
-                runtime_key=runtime_key_for_session(normalized_provider, session_id),
-                provider_request_id=tool_use_id,
-            )
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
-        try:
-            result = await catalogd.call(
-                "interaction.decision.read.v2",
-                {
-                    "session_id": str(session_uuid),
-                    "interaction_id": interaction_id,
-                    "request_key": request_key,
-                },
-                timeout_seconds=1.0,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction decision unavailable") from exc
-        return PermissionDecisionOut(
-            decision=result.get("decision"),
-            reason=result.get("reason"),
-            resolved=result.get("resolved") is True,
-        )
-
-    # Import locally to avoid a router-import cycle through session_pause_requests.
-    from zerg.models.agents import SessionPauseRequest
-
-    query = db.query(SessionPauseRequest).filter(
-        SessionPauseRequest.session_id == session_uuid,
-        SessionPauseRequest.kind == PERMISSION_PROMPT_KIND,
-    )
+    interaction_id = None
+    request_key = None
     if pause_request_id:
         try:
-            query = query.filter(SessionPauseRequest.id == UUID(pause_request_id))
+            interaction_id = str(UUID(pause_request_id))
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -318,34 +241,31 @@ async def get_permission_decision(
             ) from exc
     else:
         normalized_provider = (provider or "claude").strip() or "claude"
-        runtime_key = runtime_key_for_session(normalized_provider, session_id)
         request_key = make_pause_request_key(
             provider=normalized_provider,
-            runtime_key=runtime_key,
+            runtime_key=runtime_key_for_session(normalized_provider, session_id),
             provider_request_id=tool_use_id,
         )
-        query = query.filter(SessionPauseRequest.request_key == request_key)
-
-    row = query.first()
-    if row is None or not _is_permission_gate_row(row):
-        return PermissionDecisionOut(decision=None, resolved=False)
-    if (
-        row.status == PENDING_STATUS
-        and normalize_utc(row.expires_at) is not None
-        and normalize_utc(row.expires_at) <= datetime.now(timezone.utc)
-    ):
-        return PermissionDecisionOut(decision="deny", reason="Approval deadline expired", resolved=True)
-    if row.status == PENDING_STATUS:
-        return PermissionDecisionOut(decision=None, resolved=False)
-
-    # SECURITY: only an explicit allow grants allow. Any resolved-but-unannotated
-    # row (e.g. superseded, or resolved by a non-permission path) maps to deny —
-    # never let an absent/unknown decision become a silent allow.
-    response_payload = row.response_payload_json if isinstance(row.response_payload_json, dict) else {}
-    raw_decision = str(response_payload.get("permissionDecision") or "").strip().lower()
-    decision = "allow" if raw_decision == "allow" else "deny"
-    reason = response_payload.get("permissionDecisionReason") or row.response_text
-    return PermissionDecisionOut(decision=decision, reason=reason, resolved=True)
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
+    try:
+        result = await catalogd.call(
+            "interaction.decision.read.v2",
+            {
+                "session_id": str(session_uuid),
+                "interaction_id": interaction_id,
+                "request_key": request_key,
+            },
+            timeout_seconds=1.0,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction decision unavailable") from exc
+    return PermissionDecisionOut(
+        decision=result.get("decision"),
+        reason=result.get("reason"),
+        resolved=result.get("resolved") is True,
+    )
 
 
 @router.post("/permission-requests/{pause_request_id}/expire", response_model=PermissionDecisionOut)
@@ -366,60 +286,39 @@ async def expire_permission_request(
     reason = (payload.reason or "Approval deadline expired").strip() or "Approval deadline expired"
     response_payload = {"permissionDecision": "deny", "permissionDecisionReason": reason}
     now = datetime.now(timezone.utc)
-    if database_module.live_catalog_enabled():
-        from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
-        from zerg.catalogd.client import CatalogRemoteError
-        from zerg.catalogd.client import CatalogUnavailable
-        from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.services.catalogd_supervisor import get_catalogd_client
 
-        catalogd = get_catalogd_client()
-        if catalogd is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
-        try:
-            result = await catalogd.call(
-                "interaction.resolve.v2",
-                {
-                    "session_id": str(session_uuid),
-                    "interaction_id": str(interaction_uuid),
-                    "status": "expired",
-                    "response_payload": response_payload,
-                    "response_text": reason,
-                    "resolved_at": now.isoformat(),
-                },
-                # Expiring an interaction is a mutation, not a hot read.
-                timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS,
-            )
-        except CatalogUnavailable as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction expiry failed") from exc
-        except CatalogRemoteError as exc:
-            # A bare `except Exception` here reported catalog conflicts, missing
-            # rows, and outright bugs as one infrastructure failure.
-            status_code = {
-                "not_found": status.HTTP_404_NOT_FOUND,
-                "forbidden": status.HTTP_403_FORBIDDEN,
-                "conflict": status.HTTP_409_CONFLICT,
-            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
-            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-        if result.get("found") is not True:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="permission request not found")
-    else:
-        row = resolve_pause_request(
-            db,
-            pause_request_id=interaction_uuid,
-            status="expired",
-            occurred_at=now,
-            response_payload=response_payload,
-            response_text=reason,
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
+    try:
+        result = await catalogd.call(
+            "interaction.resolve.v2",
+            {
+                "session_id": str(session_uuid),
+                "interaction_id": str(interaction_uuid),
+                "status": "expired",
+                "response_payload": response_payload,
+                "response_text": reason,
+                "resolved_at": now.isoformat(),
+            },
+            # Expiring an interaction is a mutation, not a hot read.
+            timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS,
         )
-        if row is None or row.session_id != session_uuid or not _is_permission_gate_row(row):
-            db.rollback()
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="permission request not found")
-        db.commit()
+    except CatalogUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction expiry failed") from exc
+    except CatalogRemoteError as exc:
+        # A bare `except Exception` here reported catalog conflicts, missing
+        # rows, and outright bugs as one infrastructure failure.
+        status_code = {
+            "not_found": status.HTTP_404_NOT_FOUND,
+            "forbidden": status.HTTP_403_FORBIDDEN,
+            "conflict": status.HTTP_409_CONFLICT,
+        }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    if result.get("found") is not True:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="permission request not found")
     return PermissionDecisionOut(decision="deny", reason=reason, resolved=True)
-
-
-def _is_permission_gate_row(row: object) -> bool:
-    """True only for rows this gate created (source=claude_permission_gate)."""
-    ref = getattr(row, "provider_ref_json", None)
-    source = (ref or {}).get("source") if isinstance(ref, dict) else None
-    return str(source or "").strip() in PERMISSION_GATE_SOURCES

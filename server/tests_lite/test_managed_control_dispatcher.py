@@ -44,6 +44,7 @@ from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE
 from zerg.services.managed_control_dispatcher import _engine_command_id
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
+from zerg.services.managed_provider_contracts import contract_for_provider
 
 
 def _session(**overrides):
@@ -130,7 +131,7 @@ def _seed_live_control_lease(
                 run_id=str(run_id),
                 adapter_connection_id=adapter_connection_id,
                 lease_generation=lease_generation,
-                control_plane=f"{provider}_bridge",
+                control_plane=contract_for_provider(provider).control_plane,
                 acquisition_kind="spawned_control",
                 state="attached",
                 device_id=device_id,
@@ -151,7 +152,11 @@ def _seed_live_control_lease(
             "run_id": str(run_id),
             "connection_id": adapter_connection_id,
             "lease_generation": lease_generation,
-            "granted_operations": ["interrupt", "send_input", "terminate"],
+            # Only what this provider's adapter can actually publish, so a
+            # maintenance-tier provider cannot pass on a grant it never issues.
+            "granted_operations": [
+                operation for operation in ("interrupt", "send_input", "terminate") if getattr(contract_for_provider(provider), operation)
+            ],
             "state": "attached",
             "lease_ttl_ms": 900_000,
             "source": f"{provider}_control_scan",
@@ -180,6 +185,27 @@ def _seed_live_control_lease(
         adapter_connection_id=adapter_connection_id,
         lease_generation=lease_generation,
     )
+
+
+def _seed_lease_for_new_session(*, provider: str = "codex", device_id: str = "cinder") -> tuple[UUID, _SeededControlLease]:
+    """Give one fresh session a controllable lease in the running live catalog."""
+
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+    session_id = uuid4()
+    lease = _seed_live_control_lease(database_path, session_id=session_id, provider=provider, device_id=device_id)
+    return session_id, lease
+
+
+def _expected_control_grant(lease: _SeededControlLease) -> dict[str, object]:
+    """The grant catalogd resolves from the seeded lease and puts on the frame."""
+
+    return {
+        "connection_id": lease.adapter_connection_id,
+        "catalog_connection_id": lease.catalog_connection_id,
+        "run_id": str(lease.run_id),
+        "lease_generation": lease.lease_generation,
+        "identity_source": "adapter_bound",
+    }
 
 
 def _read_control_operation(database_path: Path, *, command_id: str) -> dict[str, object]:
@@ -513,12 +539,14 @@ def test_dispatch_managed_control_command_has_no_transport_without_engine_channe
     assert result.error == MANAGED_CONTROL_UNAVAILABLE_ERROR
 
 
-def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
+def test_dispatch_managed_control_command_uses_engine_channel_when_connected(live_catalog):  # noqa: F811
+    session_id, lease = _seed_lease_for_new_session()
+
     async def _run():
         await _clear_machine_registry()
         try:
             websocket = await _connect_fake_engine(owner_id=42, supports=["codex.send"])
-            session = _session(source_runner_id=None)
+            session = _session(id=session_id, source_runner_id=None)
             completer = asyncio.create_task(
                 _complete_first_machine_command(
                     websocket,
@@ -543,7 +571,11 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
             assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
             assert result.data == {"stdout": "accepted", "exit_code": 0, "stderr": ""}
             assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_SEND_TEXT
-            assert websocket.sent[0]["payload"] == {"provider": "codex", "text": "continue"}
+            assert websocket.sent[0]["payload"] == {
+                "provider": "codex",
+                "text": "continue",
+                "longhouse_control_grant": _expected_control_grant(lease),
+            }
             assert websocket.sent[0]["command_id"] == f"managed-control:{session.id}:session.send_text:req-123"
         finally:
             await _clear_machine_registry()
@@ -655,17 +687,15 @@ def test_catalog_managed_control_uses_catalogd_for_grant_and_operation(monkeypat
                 return {"found": True, "changed": True, "commit_seq": "2"}
             raise AssertionError(method)
 
-    monkeypatch.setattr(dispatcher_module.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(dispatcher_module.database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(
         "zerg.services.catalogd_supervisor.get_catalogd_client",
         lambda: _CatalogClient(),
     )
-    monkeypatch.setattr(
-        dispatcher_module,
-        "get_live_write_serializer",
-        lambda: (_ for _ in ()).throw(AssertionError("API process must not open the live serializer")),
-    )
+    # This used to also assert the API process never opened the live write
+    # serializer itself. That inline write only existed on the legacy branch;
+    # the dispatcher no longer imports a serializer at all, so the only way to
+    # reserve and finish an operation is the catalogd round trip asserted below.
 
     async def _run():
         await _clear_machine_registry()
@@ -729,7 +759,6 @@ def test_catalog_managed_control_normalizes_pre_identity_replay(monkeypatch):
                 return {"found": True, "changed": True, "commit_seq": "2"}
             raise AssertionError(method)
 
-    monkeypatch.setattr(dispatcher_module.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(dispatcher_module.database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
 
@@ -768,12 +797,15 @@ def test_catalog_managed_control_normalizes_pre_identity_replay(monkeypatch):
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_routes_opencode_send_over_engine_channel():
+def test_dispatch_managed_control_command_routes_opencode_send_over_engine_channel(live_catalog):  # noqa: F811
+    session_id, lease = _seed_lease_for_new_session(provider="opencode")
+
     async def _run():
         await _clear_machine_registry()
         try:
             websocket = await _connect_fake_engine(owner_id=42, supports=["opencode.send"])
             session = _session(
+                id=session_id,
                 provider="opencode",
                 managed_transport="opencode_server_bridge",
                 source_runner_id=None,
@@ -819,6 +851,7 @@ def test_dispatch_managed_control_command_routes_opencode_send_over_engine_chann
             assert websocket.sent[0]["payload"] == {
                 "provider": "opencode",
                 "text": "hello from browser",
+                "longhouse_control_grant": _expected_control_grant(lease),
             }
             assert websocket.sent[0]["command_id"] == f"managed-control:{session.id}:session.send_text:req-opencode-send"
         finally:
@@ -827,12 +860,15 @@ def test_dispatch_managed_control_command_routes_opencode_send_over_engine_chann
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_routes_opencode_interrupt_over_engine_channel():
+def test_dispatch_managed_control_command_routes_opencode_interrupt_over_engine_channel(live_catalog):  # noqa: F811
+    session_id, lease = _seed_lease_for_new_session(provider="opencode")
+
     async def _run():
         await _clear_machine_registry()
         try:
             websocket = await _connect_fake_engine(owner_id=42, supports=["opencode.interrupt"])
             session = _session(
+                id=session_id,
                 provider="opencode",
                 managed_transport="opencode_server_bridge",
                 source_runner_id=None,
@@ -874,7 +910,10 @@ def test_dispatch_managed_control_command_routes_opencode_interrupt_over_engine_
                 "provider_session_id": "ses_test",
             }
             assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_INTERRUPT
-            assert websocket.sent[0]["payload"] == {"provider": "opencode"}
+            assert websocket.sent[0]["payload"] == {
+                "provider": "opencode",
+                "longhouse_control_grant": _expected_control_grant(lease),
+            }
             assert websocket.sent[0]["command_id"] == (f"managed-control:{session.id}:session.interrupt:req-opencode-interrupt")
         finally:
             await _clear_machine_registry()
@@ -882,12 +921,15 @@ def test_dispatch_managed_control_command_routes_opencode_interrupt_over_engine_
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_routes_opencode_terminate_over_engine_channel():
+def test_dispatch_managed_control_command_routes_opencode_terminate_over_engine_channel(live_catalog):  # noqa: F811
+    session_id, lease = _seed_lease_for_new_session(provider="opencode")
+
     async def _run():
         await _clear_machine_registry()
         try:
             websocket = await _connect_fake_engine(owner_id=42, supports=["opencode.terminate"])
             session = _session(
+                id=session_id,
                 provider="opencode",
                 managed_transport="opencode_server_bridge",
                 source_runner_id=None,
@@ -931,7 +973,10 @@ def test_dispatch_managed_control_command_routes_opencode_terminate_over_engine_
                 "stopped": True,
             }
             assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_TERMINATE
-            assert websocket.sent[0]["payload"] == {"provider": "opencode"}
+            assert websocket.sent[0]["payload"] == {
+                "provider": "opencode",
+                "longhouse_control_grant": _expected_control_grant(lease),
+            }
             assert websocket.sent[0]["command_id"] == (f"managed-control:{session.id}:session.terminate:req-opencode-terminate")
         finally:
             await _clear_machine_registry()
@@ -939,14 +984,17 @@ def test_dispatch_managed_control_command_routes_opencode_terminate_over_engine_
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_sends_antigravity_to_the_engine():
+def test_dispatch_managed_control_command_sends_antigravity_to_the_engine(live_catalog):  # noqa: F811
     """The send must reach the engine as a real frame."""
+
+    session_id, lease = _seed_lease_for_new_session(provider="antigravity")
 
     async def _run():
         await _clear_machine_registry()
         try:
             websocket = await _connect_fake_engine(owner_id=42, supports=["antigravity.send"])
             session = _session(
+                id=session_id,
                 provider="antigravity",
                 managed_transport="antigravity_hook_inbox",
                 source_runner_id=None,
@@ -980,6 +1028,7 @@ def test_dispatch_managed_control_command_sends_antigravity_to_the_engine():
             assert result.ok is True
             assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
             assert websocket.sent, "the send must reach the engine as a real frame"
+            assert websocket.sent[0]["payload"]["longhouse_control_grant"] == _expected_control_grant(lease)
             assert result.data["transport"] == "antigravity_hook_inbox"
         finally:
             await _clear_machine_registry()
@@ -987,7 +1036,9 @@ def test_dispatch_managed_control_command_sends_antigravity_to_the_engine():
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_rejects_malformed_engine_success():
+def test_dispatch_managed_control_command_rejects_malformed_engine_success(live_catalog):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+
     async def _run():
         await _clear_machine_registry()
         try:
@@ -1004,7 +1055,7 @@ def test_dispatch_managed_control_command_rejects_malformed_engine_success():
             result = await dispatch_managed_control_command(
                 db=object(),
                 owner_id=42,
-                session=_session(source_runner_id=None),
+                session=_session(id=session_id, source_runner_id=None),
                 timeout_secs=1,
                 command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 payload={"text": "continue"},

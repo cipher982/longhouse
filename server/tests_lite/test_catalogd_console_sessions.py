@@ -514,7 +514,6 @@ async def test_agents_console_turn_uses_catalog_without_cold_session(monkeypatch
             created=True,
         )
 
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(agents_sessions, "enqueue_catalog_console_turn", enqueue)
 
     response = await agents_sessions.create_console_turn(

@@ -463,7 +463,10 @@ def test_agent_after_parent_attaches_as_subagent_thread(tmp_path):
 
 
 def test_is_workflow_journal_only_payload_predicate():
-    from zerg.routers.agents_ingest import is_workflow_journal_only_payload
+    # The predicate lives in the store, which is where the surviving guard
+    # calls it. The v1 ingest router used to re-export it for its own
+    # short-circuit; that route now answers 426 for every payload.
+    from zerg.services.agents.store import is_workflow_journal_only_payload
 
     # Pure journal payload -> True
     assert is_workflow_journal_only_payload(_journal_payload()) is True
@@ -672,15 +675,9 @@ def test_workflow_run_query_endpoint(tmp_path):
         missing = client.get("/agents/workflows/wf_nope")
         assert missing.status_code == 404
 
-        # Browser-facing /timeline mirror (what the web UI calls).
-        t_resp = client.get(f"/timeline/workflows/{RUN}")
-        assert t_resp.status_code == 200, t_resp.text
-        assert t_resp.json()["workflow_run_id"] == RUN
-
-        t_runs = client.get(f"/timeline/sessions/{PARENT_ID}/workflows")
-        assert t_runs.status_code == 200, t_runs.text
-        t_body = t_runs.json()
-        assert len(t_body["workflow_runs"]) == 1
-        assert t_body["workflow_runs"][0]["workflow_run_id"] == RUN
+        # The browser-facing /timeline mirrors used to serve the same rows out
+        # of the archive store. On a Runtime Host they never did: both were
+        # already inert (404 / empty list) before the archive read was removed,
+        # so there is nothing left here to assert beyond the machine route.
     finally:
         api_app.dependency_overrides.clear()

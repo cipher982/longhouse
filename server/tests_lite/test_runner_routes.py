@@ -86,7 +86,6 @@ def test_delete_runner_removes_offline_runner(tmp_path: Path):
 def test_runner_status_reads_bounded_catalog_in_catalog_mode():
     response = Response()
     with (
-        patch("zerg.routers.runners.live_catalog_enabled", return_value=True),
         patch("zerg.routers.runners.runner_crud.get_runners", return_value=[]),
     ):
         result = get_runner_status(

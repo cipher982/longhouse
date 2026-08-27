@@ -1,250 +1,119 @@
+"""Archive bundle and archive manifest, read back from a real live catalog.
+
+These used to ship their transcripts through v1 ``/agents/ingest``, which parsed
+provider JSONL into archive rows and reassembled it on export. A Runtime Host
+accepts transcript ingest only through storage-v2, where the raw object holds
+the shipped bytes verbatim, so the fixtures below are shipped as real envelopes
+and read back through the routes Life Hub actually calls.
+"""
+
 from __future__ import annotations
 
 import base64
 import gzip
 import hashlib
-import json
 import os
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
-
-import pytest
-from fastapi.testclient import TestClient
+from uuid import uuid4
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import Base
-from zerg.database import get_db
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.main import api_app
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
+from zerg.dependencies.agents_auth import verify_agents_token  # noqa: E402
+from zerg.main import api_app  # noqa: E402
+
+DEVICE_ID = "cinder"
 
 
-def _fixture_path(provider: str) -> Path:
+def _golden_transcript() -> str:
+    """A real shipped transcript: the engine's codex golden fixture."""
     repo_root = Path(__file__).resolve().parents[2]
-    return repo_root / "engine" / "tests" / "fixtures" / "golden" / provider / "basic.jsonl"
+    return (repo_root / "engine" / "tests" / "fixtures" / "golden" / "codex" / "basic.jsonl").read_text(encoding="utf-8")
 
 
-def _read_lines_with_offsets(path: Path) -> list[tuple[int, str]]:
-    rows: list[tuple[int, str]] = []
-    with path.open("rb") as fh:
-        offset = 0
-        for raw in fh:
-            rows.append((offset, raw.rstrip(b"\r\n").decode("utf-8")))
-            offset += len(raw)
-    return rows
+def _owner_headers(live_catalog) -> tuple[int, dict[str, str]]:
+    owner_id = live_catalog.create_user("owner@archive-bundle.test")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id=DEVICE_ID)
+    return owner_id, {"X-Agents-Token": token}
 
 
-def _extract_fixture_events(provider: str, line_rows: list[tuple[int, str]], source_path: str) -> list[dict]:
-    events: list[dict] = []
-    for offset, line in line_rows:
-        obj = json.loads(line)
-        ts = obj.get("timestamp") or "2026-03-03T00:00:00Z"
-
-        if provider == "claude":
-            typ = obj.get("type")
-            if typ not in {"user", "assistant"}:
-                continue
-            message = obj.get("message") or {}
-            content = message.get("content")
-            content_text = None
-            if isinstance(content, str):
-                content_text = content
-            elif isinstance(content, list):
-                texts = [item.get("text") for item in content if isinstance(item, dict) and item.get("type") == "text"]
-                if texts:
-                    content_text = "\n".join(t for t in texts if t)
-
-            events.append(
-                {
-                    "role": typ,
-                    "content_text": content_text,
-                    "timestamp": ts,
-                    "source_path": source_path,
-                    "source_offset": offset,
-                    "raw_json": line,
-                }
-            )
-            continue
-
-        if provider == "codex":
-            if obj.get("type") != "response_item":
-                continue
-            payload = obj.get("payload") or {}
-            if payload.get("type") != "message":
-                continue
-            role = payload.get("role")
-            if role not in {"user", "assistant"}:
-                continue
-            texts = [item.get("text") for item in payload.get("content") or [] if isinstance(item, dict) and item.get("text")]
-            events.append(
-                {
-                    "role": role,
-                    "content_text": "\n".join(texts) if texts else None,
-                    "timestamp": ts,
-                    "source_path": source_path,
-                    "source_offset": offset,
-                    "raw_json": line,
-                }
-            )
-    return events
-
-
-def _pick_started_at(line_rows: list[tuple[int, str]]) -> str:
-    for _offset, line in line_rows:
-        try:
-            ts = json.loads(line).get("timestamp")
-        except json.JSONDecodeError:
-            ts = None
-        if isinstance(ts, str) and ts.strip():
-            return ts
-    return "2026-03-03T00:00:00Z"
-
-
-def _make_client(tmp_path: Path) -> TestClient:
-    db_path = tmp_path / "archive_bundle.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    factory = make_sessionmaker(engine)
-
-    def override():
-        d = factory()
-        try:
-            yield d
-        finally:
-            d.close()
-
-    def override_verify_agents_token():
-        return SimpleNamespace(device_id="archive-bundle", id="token-1", owner_id=1)
-
-    api_app.dependency_overrides[get_db] = override
-    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
-    return TestClient(api_app)
-
-
-def _ingest_fixture_session(client: TestClient, provider: str, session_id: str) -> str:
-    fixture = _fixture_path(provider)
-    source_path = str(fixture)
-    line_rows = _read_lines_with_offsets(fixture)
-    payload = {
-        "id": session_id,
-        "provider": provider,
-        "environment": "test",
-        "project": "archive-bundle",
-        "device_id": "test-device",
-        "cwd": "/tmp/archive-bundle",
-        "started_at": _pick_started_at(line_rows),
-        "provider_session_id": f"{provider}-fixture",
-        "events": _extract_fixture_events(provider, line_rows, source_path),
-        "source_lines": [
-            {"source_path": source_path, "source_offset": offset, "raw_json": line}
-            for offset, line in line_rows
-        ],
-    }
-    ingest = client.post("/agents/ingest", json=payload, headers={"X-Agents-Token": "dev"})
-    assert ingest.status_code == 200, ingest.text
-    return fixture.read_text(encoding="utf-8")
-
-
-def _ingest_inline_session(
-    client: TestClient,
-    *,
-    session_id: str,
-    started_at: str,
-    provider: str = "claude",
-    environment: str = "production",
-    is_sidechain: bool = False,
-) -> None:
-    source_path = f"/tmp/{session_id}.jsonl"
-    payload = {
-        "id": session_id,
-        "provider": provider,
-        "environment": environment,
-        "project": "archive-manifest",
-        "device_id": "test-device",
-        "cwd": "/tmp/archive-manifest",
-        "started_at": started_at,
-        "provider_session_id": f"{provider}-{session_id}",
-        "events": [
-            {
-                "role": "user",
-                "content_text": "hello",
-                "timestamp": started_at,
-                "source_path": source_path,
-                "source_offset": 0,
-                "raw_json": json.dumps({"type": "user", "timestamp": started_at, "text": "hello"}),
-            }
-        ],
-        "source_lines": [
-            {
-                "source_path": source_path,
-                "source_offset": 0,
-                "raw_json": json.dumps({"type": "user", "timestamp": started_at, "text": "hello"}),
-            }
-        ],
-        "is_sidechain": is_sidechain,
-    }
-    ingest = client.post("/agents/ingest", json=payload, headers={"X-Agents-Token": "dev"})
-    assert ingest.status_code == 200, ingest.text
+def _ship_inline_session(live_catalog, client, headers, *, now, environment: str = "production"):
+    """Ship one small transcript, with the session facts the Machine Agent sends."""
+    session_id = uuid4()
+    body = live_catalog.envelope_body(
+        session_id=session_id,
+        device_id=DEVICE_ID,
+        texts=("hello",),
+        project="archive-manifest",
+        now=now,
+    )
+    body["session"]["environment"] = environment
+    response = client.post(
+        "/agents/storage/v2/envelopes",
+        json=body,
+        headers={**headers, "X-Longhouse-Storage-Lane": "live"},
+    )
+    assert response.status_code == 200, response.text
+    return session_id
 
 
 def _decode_archive_payload(encoded: str) -> bytes:
     return gzip.decompress(base64.b64decode(encoded.encode("ascii")))
 
 
-@pytest.mark.parametrize(
-    ("provider", "session_id"),
-    [
-        ("claude", "818a0c1f-fd54-4f02-b4f6-f35c5df3a8a0"),
-        ("codex", "a6d42131-c2bb-4a59-89d3-d64a7070b21b"),
-    ],
-)
-def test_archive_bundle_payload_matches_export_jsonl(tmp_path, provider: str, session_id: str):
-    client = _make_client(tmp_path)
-    try:
-        expected = _ingest_fixture_session(client, provider, session_id)
+def test_archive_bundle_payload_matches_export_jsonl(live_catalog, live_catalog_client):
+    """The bundle carries the shipped bytes, byte for byte, and so does /export."""
+    owner_id, headers = _owner_headers(live_catalog)
+    expected = _golden_transcript()
+    seeded = live_catalog.commit_session(
+        owner_id=owner_id,
+        texts=tuple(expected.splitlines()),
+        project="archive-bundle",
+    )
+    session_id = seeded.session_id
 
-        export_response = client.get(f"/agents/sessions/{session_id}/export", headers={"X-Agents-Token": "dev"})
-        assert export_response.status_code == 200, export_response.text
+    export_response = live_catalog_client.get(f"/agents/sessions/{session_id}/export", headers=headers)
+    assert export_response.status_code == 200, export_response.text
 
-        bundle_response = client.get(f"/agents/sessions/{session_id}/archive-bundle", headers={"X-Agents-Token": "dev"})
-        assert bundle_response.status_code == 200, bundle_response.text
+    bundle_response = live_catalog_client.get(f"/agents/sessions/{session_id}/archive-bundle", headers=headers)
+    assert bundle_response.status_code == 200, bundle_response.text
 
-        bundle = bundle_response.json()
-        decoded_payload = _decode_archive_payload(bundle["archive"]["jsonl_b64_gzip"]).decode("utf-8")
+    bundle = bundle_response.json()
+    decoded_payload = _decode_archive_payload(bundle["archive"]["jsonl_b64_gzip"]).decode("utf-8")
 
-        assert bundle["bundle_version"] == 1
-        assert bundle["session"]["id"] == session_id
-        assert bundle["session"]["provider"] == provider
-        assert bundle["session"]["transcript_revision"] == 1
-        assert bundle["archive"]["format"] == "jsonl"
-        assert bundle["archive"]["branch_mode"] == "head"
-        assert bundle["archive"]["bytes"] == len(export_response.content)
-        assert bundle["archive"]["sha256"] == hashlib.sha256(export_response.content).hexdigest()
-        assert decoded_payload == export_response.content.decode("utf-8") == expected
-    finally:
-        api_app.dependency_overrides.clear()
+    assert bundle["bundle_version"] == 1
+    assert bundle["session"]["id"] == str(session_id)
+    assert bundle["session"]["provider"] == "codex"
+    assert bundle["session"]["transcript_revision"] >= 1
+    assert bundle["archive"]["format"] == "jsonl"
+    assert bundle["archive"]["branch_mode"] == "head"
+    assert bundle["archive"]["bytes"] == len(export_response.content)
+    assert bundle["archive"]["sha256"] == hashlib.sha256(export_response.content).hexdigest()
+    assert decoded_payload == export_response.content.decode("utf-8") == expected
 
 
-def test_archive_bundle_is_stable_across_repeated_reads(tmp_path):
-    client = _make_client(tmp_path)
-    try:
-        session_id = "095c2c93-8e0f-4ce5-bcb9-a2e80c4f2d95"
-        _ingest_fixture_session(client, "claude", session_id)
+def test_archive_bundle_is_stable_across_repeated_reads(live_catalog, live_catalog_client):
+    owner_id, headers = _owner_headers(live_catalog)
+    seeded = live_catalog.commit_session(
+        owner_id=owner_id,
+        texts=tuple(_golden_transcript().splitlines()),
+        project="archive-bundle",
+    )
 
-        first = client.get(f"/agents/sessions/{session_id}/archive-bundle", headers={"X-Agents-Token": "dev"})
-        second = client.get(f"/agents/sessions/{session_id}/archive-bundle", headers={"X-Agents-Token": "dev"})
-        assert first.status_code == 200, first.text
-        assert second.status_code == 200, second.text
+    first = live_catalog_client.get(f"/agents/sessions/{seeded.session_id}/archive-bundle", headers=headers)
+    second = live_catalog_client.get(f"/agents/sessions/{seeded.session_id}/archive-bundle", headers=headers)
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
 
-        first_bundle = first.json()
-        second_bundle = second.json()
-        assert first_bundle["archive"] == second_bundle["archive"]
-        assert first_bundle["session"] == second_bundle["session"]
-    finally:
-        api_app.dependency_overrides.clear()
+    first_bundle = first.json()
+    second_bundle = second.json()
+    assert first_bundle["archive"] == second_bundle["archive"]
+    assert first_bundle["session"] == second_bundle["session"]
 
 
 def test_archive_bundle_route_requires_agents_token_dependency():
@@ -257,90 +126,86 @@ def test_archive_bundle_route_requires_agents_token_dependency():
     assert verify_agents_token in dependency_calls
 
 
-def test_archive_bundle_rejects_non_head_branch_mode(tmp_path):
-    client = _make_client(tmp_path)
-    try:
-        session_id = "d3977f80-65f9-4f33-9912-653b7923157f"
-        _ingest_fixture_session(client, "claude", session_id)
+def test_archive_bundle_rejects_non_head_branch_mode(live_catalog, live_catalog_client):
+    owner_id, headers = _owner_headers(live_catalog)
+    seeded = live_catalog.commit_session(owner_id=owner_id, project="archive-bundle")
 
-        response = client.get(
-            f"/agents/sessions/{session_id}/archive-bundle",
-            params={"branch_mode": "all"},
-            headers={"X-Agents-Token": "dev"},
-        )
-        assert response.status_code == 400
-        assert "branch_mode" in response.text
-    finally:
-        api_app.dependency_overrides.clear()
+    response = live_catalog_client.get(
+        f"/agents/sessions/{seeded.session_id}/archive-bundle",
+        params={"branch_mode": "all"},
+        headers=headers,
+    )
+
+    assert response.status_code == 400, response.text
+    assert "branch_mode" in response.text
 
 
-def test_archive_bundle_missing_raw_returns_service_unavailable(tmp_path, monkeypatch):
+def test_archive_bundle_missing_raw_returns_service_unavailable(live_catalog, live_catalog_client, monkeypatch):
+    """Unverifiable raw bytes are an outage, not a 404 that reads as "no session"."""
     from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 
-    client = _make_client(tmp_path)
-    session_id = "f8a24cc2-b864-4433-a79f-dc3996520c36"
+    _owner_id, headers = _owner_headers(live_catalog)
 
-    def raise_missing_raw(db, requested_session_id, *, branch_mode):  # noqa: ARG001
+    def raise_missing_raw(**_kwargs):
         raise ArchiveTranscriptUnavailable("synthetic missing raw")
 
-    monkeypatch.setattr("zerg.routers.agents_sessions.build_session_archive_bundle", raise_missing_raw)
-    try:
-        response = client.get(f"/agents/sessions/{session_id}/archive-bundle", headers={"X-Agents-Token": "dev"})
+    monkeypatch.setattr("zerg.routers.agents_sessions.build_storage_v2_archive_bundle", raise_missing_raw)
 
-        assert response.status_code == 503
-        assert "Transcript raw bytes unavailable" in response.text
-    finally:
-        api_app.dependency_overrides.clear()
+    response = live_catalog_client.get(f"/agents/sessions/{uuid4()}/archive-bundle", headers=headers)
+
+    assert response.status_code == 503, response.text
+    assert "Transcript raw bytes unavailable" in response.text
 
 
-def test_archive_manifest_lists_sessions_beyond_90_days(tmp_path):
-    client = _make_client(tmp_path)
-    try:
-        older_session_id = "10000000-0000-4000-8000-000000000001"
-        recent_session_id = "10000000-0000-4000-8000-000000000002"
-        _ingest_inline_session(client, session_id=older_session_id, started_at="2025-08-01T12:00:00Z")
-        _ingest_inline_session(client, session_id=recent_session_id, started_at="2026-04-20T12:00:00Z")
+def test_archive_manifest_lists_sessions_beyond_90_days(live_catalog, live_catalog_client):
+    _owner_id, headers = _owner_headers(live_catalog)
+    now = datetime.now(UTC).replace(microsecond=0)
+    older_session_id = _ship_inline_session(live_catalog, live_catalog_client, headers, now=now - timedelta(days=300))
+    recent_session_id = _ship_inline_session(live_catalog, live_catalog_client, headers, now=now - timedelta(days=1))
 
-        response = client.get(
-            "/agents/sessions/archive-manifest",
-            params={"days_back": 3650, "limit": 10, "offset": 0},
-            headers={"X-Agents-Token": "dev"},
-        )
-        assert response.status_code == 200, response.text
+    response = live_catalog_client.get(
+        "/agents/sessions/archive-manifest",
+        params={"days_back": 3650, "limit": 10, "offset": 0},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
 
-        payload = response.json()
-        assert payload["total"] == 2
-        assert [item["id"] for item in payload["sessions"]] == [recent_session_id, older_session_id]
-        assert payload["sessions"][1]["transcript_revision"] == 1
-    finally:
-        api_app.dependency_overrides.clear()
+    payload = response.json()
+    assert payload["total"] == 2
+    assert [item["id"] for item in payload["sessions"]] == [str(recent_session_id), str(older_session_id)]
+    assert payload["sessions"][1]["transcript_revision"] >= 1
 
 
-def test_archive_manifest_excludes_test_sessions_by_default(tmp_path):
-    client = _make_client(tmp_path)
-    try:
-        prod_session_id = "20000000-0000-4000-8000-000000000001"
-        test_session_id = "20000000-0000-4000-8000-000000000002"
-        _ingest_inline_session(client, session_id=prod_session_id, started_at="2026-04-20T12:00:00Z", environment="production")
-        _ingest_inline_session(client, session_id=test_session_id, started_at="2026-04-20T13:00:00Z", environment="test")
+def test_archive_manifest_excludes_test_sessions_by_default(live_catalog, live_catalog_client):
+    _owner_id, headers = _owner_headers(live_catalog)
+    now = datetime.now(UTC).replace(microsecond=0)
+    prod_session_id = _ship_inline_session(live_catalog, live_catalog_client, headers, now=now - timedelta(hours=2))
+    test_session_id = _ship_inline_session(
+        live_catalog,
+        live_catalog_client,
+        headers,
+        now=now - timedelta(hours=1),
+        environment="test",
+    )
 
-        default_response = client.get(
-            "/agents/sessions/archive-manifest",
-            params={"days_back": 3650, "limit": 10, "offset": 0},
-            headers={"X-Agents-Token": "dev"},
-        )
-        assert default_response.status_code == 200, default_response.text
-        assert [item["id"] for item in default_response.json()["sessions"]] == [prod_session_id]
+    default_response = live_catalog_client.get(
+        "/agents/sessions/archive-manifest",
+        params={"days_back": 3650, "limit": 10, "offset": 0},
+        headers=headers,
+    )
+    assert default_response.status_code == 200, default_response.text
+    assert [item["id"] for item in default_response.json()["sessions"]] == [str(prod_session_id)]
 
-        explicit_response = client.get(
-            "/agents/sessions/archive-manifest",
-            params={"days_back": 3650, "limit": 10, "offset": 0, "include_test": "true"},
-            headers={"X-Agents-Token": "dev"},
-        )
-        assert explicit_response.status_code == 200, explicit_response.text
-        assert [item["id"] for item in explicit_response.json()["sessions"]] == [test_session_id, prod_session_id]
-    finally:
-        api_app.dependency_overrides.clear()
+    explicit_response = live_catalog_client.get(
+        "/agents/sessions/archive-manifest",
+        params={"days_back": 3650, "limit": 10, "offset": 0, "include_test": "true"},
+        headers=headers,
+    )
+    assert explicit_response.status_code == 200, explicit_response.text
+    assert [item["id"] for item in explicit_response.json()["sessions"]] == [
+        str(test_session_id),
+        str(prod_session_id),
+    ]
 
 
 def test_archive_manifest_route_requires_agents_token_dependency():

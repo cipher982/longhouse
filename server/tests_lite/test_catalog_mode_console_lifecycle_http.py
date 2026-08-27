@@ -13,7 +13,6 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg import database as database_module
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
@@ -107,8 +106,6 @@ def test_catalog_mode_http_console_lifecycle_survives_ambiguous_start_and_crash_
     catalog = _CatalogClient(store)
     registry = _MachineRegistry()
 
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(runtime_router, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(catalogd_supervisor, "get_catalogd_client", lambda: catalog)
     monkeypatch.setattr(console_sessions, "get_catalogd_client", lambda: catalog)
     monkeypatch.setattr(runtime_router, "get_catalogd_client", lambda: catalog)

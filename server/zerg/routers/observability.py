@@ -11,7 +11,6 @@ from fastapi import HTTPException
 from fastapi import Query
 from sqlalchemy.orm import Session
 
-import zerg.database as database_module
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -62,7 +61,7 @@ def _live_catalog_no_db():
     yield None
 
 
-_machine_health_db_dependency = _live_catalog_no_db if database_module.live_catalog_enabled() else get_db
+_machine_health_db_dependency = _live_catalog_no_db
 
 
 def _resolve_recent_machine_window_seconds(*, recent_within_hours: int) -> int:
@@ -178,34 +177,22 @@ async def list_machine_health(
     recent_within_seconds = _resolve_recent_machine_window_seconds(
         recent_within_hours=recent_within_hours,
     )
-    if database_module.live_catalog_enabled():
-        try:
-            owner_id = active_owner_id()
-            if owner_id is None:
-                raise CatalogReadError("owner_unavailable", "No active Longhouse owner is configured.")
-            payload = machine_heartbeats(
-                owner_id=owner_id,
-                device_id=device_id,
-                recent_after=(utc_now() - timedelta(seconds=recent_within_seconds)).isoformat(),
-                limit=100,
-            )
-        except CatalogReadError as exc:
-            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
-        summaries, total = machine_transport_health_from_catalog_rows(
-            payload.get("heartbeats", []),
-            status=status,
-            stale_after_seconds=stale_after_seconds,
-            limit=limit,
+    try:
+        owner_id = active_owner_id()
+        if owner_id is None:
+            raise CatalogReadError("owner_unavailable", "No active Longhouse owner is configured.")
+        payload = machine_heartbeats(
+            owner_id=owner_id,
+            device_id=device_id,
+            recent_after=(utc_now() - timedelta(seconds=recent_within_seconds)).isoformat(),
+            limit=100,
         )
-        return build_machine_health_list_response(summaries, total=total)
-
-    assert db is not None
-    summaries, total = list_machine_transport_health(
-        db,
-        device_id=device_id,
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    summaries, total = machine_transport_health_from_catalog_rows(
+        payload.get("heartbeats", []),
         status=status,
         stale_after_seconds=stale_after_seconds,
-        recent_within_seconds=recent_within_seconds,
         limit=limit,
     )
     return build_machine_health_list_response(summaries, total=total)

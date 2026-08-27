@@ -53,7 +53,6 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: client)
     try:
         action = await agents_sessions.set_session_action(

@@ -13,14 +13,12 @@ from starlette.requests import Request
 import zerg.database as database_module
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.database import _live_database_enabled_for_process
-from zerg.database import catalog_db_dependency
 from zerg.database import get_catalog_session_factory
 from zerg.database import get_db
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
 from zerg.database import refresh_database_settings_from_env
-from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.user import User
 from zerg.routers.agents_sessions import DirectedInputCreate
 from zerg.routers.agents_sessions import DirectedInputReply
@@ -28,7 +26,6 @@ from zerg.routers.agents_sessions import _attempt_directed_input_delivery
 from zerg.routers.agents_sessions import create_directed_input
 from zerg.routers.agents_sessions import set_session_loop_mode
 from zerg.routers.agents_sessions import wall_query
-from zerg.routers.runtime import _resume_live_snoozed_sessions
 from zerg.services.session_views import SessionLoopModeRequest
 from zerg.services.write_serializer import get_catalog_write_serializer
 from zerg.services.write_serializer import get_live_write_serializer
@@ -57,32 +54,6 @@ def test_catalog_factory_uses_live_database_without_opening_archive(tmp_path, mo
         assert catalog_db.query(User).one().email == "live-only@example.com"
 
 
-def test_catalog_dependency_stays_overrideable_during_tests(monkeypatch):
-    monkeypatch.setattr(database_module._settings, "live_database_url", "sqlite:////tmp/live.db")
-    monkeypatch.setattr(database_module._settings, "testing", True)
-    monkeypatch.setenv("TESTING", "1")
-    assert catalog_db_dependency() is get_db
-
-
-def test_get_db_keeps_test_owned_sqlite_route_when_live_catalog_is_enabled(monkeypatch):
-    class TestSession:
-        closed = False
-
-        def close(self):
-            self.closed = True
-
-    session = TestSession()
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(database_module._settings, "testing", True)
-    monkeypatch.setenv("TESTING", "1")
-    monkeypatch.setattr(database_module, "get_session_factory", lambda: lambda: session)
-
-    dependency = get_db()
-    assert next(dependency) is session
-    dependency.close()
-    assert session.closed is True
-
-
 def test_production_catalog_mode_does_not_construct_api_sqlite_engines(monkeypatch):
     settings = type("Settings", (), {"live_database_url": "sqlite:////data/longhouse-live.db", "testing": False})()
     monkeypatch.setenv("TESTING", "0")
@@ -102,21 +73,9 @@ def test_database_routing_refreshes_after_cli_sets_database_url(tmp_path, monkey
 
     assert database_module._settings.database_url.endswith("longhouse.db")
     assert database_module._settings.live_database_url.endswith("longhouse-live.db")
-    assert database_module.live_catalog_enabled() is True
-
-
-def test_archive_route_process_keeps_catalog_auth_on_live_database(monkeypatch):
-    live_sentinel = object()
-    monkeypatch.setattr(database_module, "_archive_route_process", True)
-    monkeypatch.setattr(database_module._settings, "database_url", "sqlite:///file:/tmp/archive.db?mode=ro&uri=true")
-    monkeypatch.setattr(database_module._settings, "live_database_url", "sqlite:////tmp/live.db")
-    monkeypatch.setattr(database_module, "get_session_factory", lambda: pytest.fail("catalog auth must not use cold rows"))
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_sentinel)
-    assert get_catalog_session_factory() is live_sentinel
 
 
 def test_catalog_serializer_follows_catalog_owner(monkeypatch):
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     assert get_catalog_write_serializer() is get_live_write_serializer()
 
 
@@ -143,7 +102,6 @@ def test_session_preference_mutation_uses_catalog_rpc_without_sqlite(monkeypatch
 
         return SessionPreferences(loop_mode="autopilot")
 
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr("zerg.services.session_preferences.update_session_preferences", update_preferences)
     response = asyncio.run(
         set_session_loop_mode(
@@ -158,42 +116,12 @@ def test_session_preference_mutation_uses_catalog_rpc_without_sqlite(monkeypatch
     assert observed == {"session_id": session_id, "loop_mode": "autopilot"}
 
 
-def test_runtime_activity_resumes_live_snoozed_session(tmp_path):
-    live_engine = make_live_engine(f"sqlite:///{tmp_path / 'live-auto-resume.db'}")
-    initialize_live_database(live_engine)
-    LiveSession = make_sessionmaker(live_engine)
-    session_id = "00000000-0000-0000-0000-000000000002"
-    now = datetime.now(timezone.utc)
-    with LiveSession() as live_db:
-        live_db.add(
-            LiveSessionCatalog(
-                session_id=session_id,
-                provider="codex",
-                environment="production",
-                started_at=now,
-                user_state="snoozed",
-            )
-        )
-        live_db.commit()
-
-        updated = _resume_live_snoozed_sessions(
-            live_db,
-            [{"session_id": session_id, "auto_resume": True}],
-            occurred_at=now,
-        )
-        live_db.commit()
-
-        assert updated == 1
-        assert live_db.get(LiveSessionCatalog, session_id).user_state == "active"
-
-
 def _request_with_headers(**headers: str) -> Request:
     raw_headers = [(key.lower().replace("_", "-").encode(), value.encode()) for key, value in headers.items()]
     return Request({"type": "http", "method": "GET", "path": "/", "headers": raw_headers})
 
 
 def test_catalog_wall_handles_empty_snapshot(monkeypatch):
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(
         "zerg.routers.agents_sessions.timeline_snapshot",
         lambda _params: {"observed_at": datetime.now(timezone.utc).isoformat(), "rows": [], "total": 0},
@@ -235,7 +163,6 @@ def test_directed_input_create_uses_scoped_sender_and_catalog(monkeypatch):
     }
     observed = {}
 
-    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(
         "zerg.services.live_control_catalog.load_live_control_session_snapshot",
         lambda session_id, *, owner_id=None: snapshots.get(UUID(str(session_id))) if owner_id == 7 else None,

@@ -14,31 +14,19 @@ from pydantic import Field
 from pydantic import field_validator
 from sqlalchemy.orm import Session
 
-import zerg.database as database_module
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
-from zerg.models.machine_presence import MachinePresence
-from zerg.models.user import User
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
-from zerg.services.write_backpressure import raise_hot_write_backpressure
-from zerg.services.write_serializer import WriteQueueTimeoutError
-from zerg.services.write_serializer import get_live_write_serializer
-from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
 
-_HOT_MACHINE_PRESENCE_QUEUE_TIMEOUT_SECONDS = 2.0
-
 
 def _machine_presence_db():
-    if database_module.live_catalog_enabled():
-        yield None
-        return
-    yield from _catalog_db_dependency()
+    yield None
 
 
 _machine_presence_db_dependency = get_db if _catalog_db_dependency is get_db else _machine_presence_db
@@ -110,26 +98,14 @@ def _machine_presence_identity(db: Session | None, token: DeviceToken | None) ->
     return owner_id, device_id
 
 
-def _machine_presence_collection_enabled(db: Session, *, owner_id: int) -> bool:
-    user = db.query(User).filter(User.id == owner_id).first()
-    prefs = dict(getattr(user, "prefs", None) or {})
-    value = prefs.get("machine_presence_enabled")
-    if isinstance(value, bool):
-        return value
-    return True
-
-
 @router.get("/machine-presence/policy", response_model=MachinePresencePolicyResponse)
 async def get_machine_presence_policy(
     db: Session | None = Depends(_machine_presence_db_dependency),
     token: DeviceToken | None = Depends(verify_agents_token),
 ) -> MachinePresencePolicyResponse:
     owner_id, _device_id = _machine_presence_identity(db, token)
-    if database_module.live_catalog_enabled():
-        result = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})
-        return MachinePresencePolicyResponse(enabled=result.get("enabled") is not False)
-    assert db is not None
-    return MachinePresencePolicyResponse(enabled=_machine_presence_collection_enabled(db, owner_id=owner_id))
+    result = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})
+    return MachinePresencePolicyResponse(enabled=result.get("enabled") is not False)
 
 
 @router.post("/machine-presence", response_model=MachinePresenceResponse)
@@ -139,12 +115,8 @@ async def update_machine_presence(
     token: DeviceToken | None = Depends(verify_agents_token),
 ) -> MachinePresenceResponse:
     owner_id, device_id = _machine_presence_identity(db, token)
-    if database_module.live_catalog_enabled():
-        policy = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})
-        enabled = policy.get("enabled") is not False
-    else:
-        assert db is not None
-        enabled = _machine_presence_collection_enabled(db, owner_id=owner_id)
+    policy = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})
+    enabled = policy.get("enabled") is not False
     if not enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -160,73 +132,22 @@ async def update_machine_presence(
     )
     coarse_idle_seconds = _coarse_idle_seconds(state)
 
-    if database_module.live_catalog_enabled():
-        result = await _catalog_call(
-            "machine.presence.upsert.v2",
-            {
-                "owner_id": owner_id,
-                "device_id": device_id,
-                "state": state,
-                "source": payload.source,
-                "idle_seconds": coarse_idle_seconds,
-                "measured_at": measured_at.isoformat(),
-                "received_at": now.isoformat(),
-            },
-        )
-        presence = result.get("presence")
-        if not isinstance(presence, dict):
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog presence response is invalid")
-        return MachinePresenceResponse.model_validate(presence)
-
-    assert db is not None
-
-    def _write(write_db: Session) -> MachinePresenceResponse:
-        row = (
-            write_db.query(MachinePresence)
-            .filter(
-                MachinePresence.owner_id == owner_id,
-                MachinePresence.device_id == device_id,
-            )
-            .first()
-        )
-        if row is None:
-            row = MachinePresence(
-                owner_id=owner_id,
-                device_id=device_id,
-                state=state,
-                source=payload.source,
-                idle_seconds=coarse_idle_seconds,
-                measured_at=measured_at,
-                received_at=now,
-            )
-            write_db.add(row)
-        else:
-            row.state = state
-            row.source = payload.source
-            row.idle_seconds = coarse_idle_seconds
-            row.measured_at = measured_at
-            row.received_at = now
-
-        return MachinePresenceResponse(
-            owner_id=owner_id,
-            device_id=device_id,
-            state=state,
-            source=payload.source,
-            idle_seconds=coarse_idle_seconds,
-            measured_at=measured_at,
-            received_at=now,
-        )
-
-    ws = get_live_write_serializer() if database_module.live_catalog_enabled() else get_write_serializer()
-    try:
-        return await ws.execute_after_closing_request_session(
-            _write,
-            db,
-            label="machine-presence",
-            queue_timeout_seconds=_HOT_MACHINE_PRESENCE_QUEUE_TIMEOUT_SECONDS,
-        )
-    except WriteQueueTimeoutError:
-        raise_hot_write_backpressure(ws, admission_state="machine_presence_queue_timeout")
+    result = await _catalog_call(
+        "machine.presence.upsert.v2",
+        {
+            "owner_id": owner_id,
+            "device_id": device_id,
+            "state": state,
+            "source": payload.source,
+            "idle_seconds": coarse_idle_seconds,
+            "measured_at": measured_at.isoformat(),
+            "received_at": now.isoformat(),
+        },
+    )
+    presence = result.get("presence")
+    if not isinstance(presence, dict):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog presence response is invalid")
+    return MachinePresenceResponse.model_validate(presence)
 
 
 async def _catalog_call(method: str, params: dict) -> dict:

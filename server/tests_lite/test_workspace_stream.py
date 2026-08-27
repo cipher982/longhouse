@@ -20,6 +20,8 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
 
 import zerg.dependencies.auth as _auth_deps  # noqa: F401 — triggers settings init
 import zerg.routers.timeline as timeline_mod
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -964,53 +966,27 @@ def test_workspace_stream_known_fingerprint_catches_snapshot_to_attach_race(tmp_
     assert len(grouped.get("workspace_changed", [])) == 1
 
 
-def test_codex_live_preview_round_trip_post_to_sse(tmp_path):
-    """End-to-end: POST /agents/runtime/events/batch → SSE workspace_changed.
+def test_codex_live_preview_round_trip_post_to_sse(live_catalog, live_catalog_client):  # noqa: F811
+    """End-to-end: POST /agents/runtime/events/batch -> SSE workspace_changed.
 
-    The earlier tests cover the two halves separately (handler→pubsub and
-    pubsub→SSE). This one exercises the seam: a real request hitting the route
+    The earlier tests cover the two halves separately (handler->pubsub and
+    pubsub->SSE). This one exercises the seam: a real request hitting the route
     publishes a preview that the SSE generator must surface with the same
     cursor and text the bridge posted.
+
+    Both ends are the production ones. The route reaches catalogd to apply the
+    runtime observation, so it needs a live catalog behind it, and the stream
+    the browser is served is ``_live_catalog_workspace_stream``. Posting first
+    and attaching with ``last_event_id=0`` replays the frame off the bus, which
+    is what a browser reconnecting mid-turn does.
     """
-    from types import SimpleNamespace
-
-    from fastapi.testclient import TestClient
-
-    from zerg.database import get_db
-    from zerg.dependencies.agents_auth import verify_agents_token
     from zerg.services.session_pubsub import reset_pubsub_for_test
 
     reset_pubsub_for_test()
-    sf = _make_db(tmp_path, name="workspace_stream_round_trip.db")
+    owner_id = live_catalog.create_user("owner@workspace-stream.test")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="cinder")
+    session_id = uuid4()
     now = datetime.now(timezone.utc)
-
-    with sf() as db:
-        session = AgentSession(
-            provider="codex",
-            environment="production",
-            project="test",
-            started_at=now,
-            user_messages=1,
-            assistant_messages=0,
-        )
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-        session_id = session.id
-
-    from zerg.main import api_app
-
-    def override_db():
-        db = sf()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(
-        device_id="round-trip", id="token-1", owner_id=1
-    )
 
     payload = {
         "events": [
@@ -1038,41 +1014,29 @@ def test_codex_live_preview_round_trip_post_to_sse(tmp_path):
         ]
     }
 
+    response = live_catalog_client.post(
+        "/agents/runtime/events/batch",
+        json=payload,
+        headers={"X-Agents-Token": token},
+    )
+    assert response.status_code == 200, response.text
+
     async def _run():
         request = _DisconnectAfterNCycles(8)
         events: list[dict] = []
-
-        async def fire_post():
-            await asyncio.sleep(0.01)
-            with TestClient(api_app) as client:
-                resp = await asyncio.to_thread(
-                    client.post,
-                    "/agents/runtime/events/batch",
-                    json=payload,
-                    headers={"X-Agents-Token": "dev"},
-                )
-            assert resp.status_code == 200, resp.text
-
-        post_task = asyncio.create_task(fire_post())
-        try:
-            async for event in timeline_mod._session_workspace_stream(
-                request,
-                session_factory=sf,
-                session_id=session_id,
-                skip_initial=True,
-                known_workspace_fingerprint=_current_workspace_fingerprint(sf, session_id),
-            ):
-                events.append(event)
-                if event.get("event") == "workspace_changed":
-                    break
-        finally:
-            await post_task
+        async for event in timeline_mod._live_catalog_workspace_stream(
+            request,
+            session_id=session_id,
+            skip_initial=True,
+            last_event_id=0,
+            owner_id=owner_id,
+        ):
+            events.append(event)
+            if event.get("event") == "workspace_changed":
+                break
         return events
 
-    try:
-        events = asyncio.run(_run())
-    finally:
-        api_app.dependency_overrides.clear()
+    events = asyncio.run(_run())
 
     changed_events = [event for event in events if event["event"] == "workspace_changed"]
     assert len(changed_events) == 1

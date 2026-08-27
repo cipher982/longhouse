@@ -166,7 +166,6 @@ def test_machine_session_detail_uses_token_owner_and_marks_canonical_serve(monke
     session_id = uuid4()
     projected = _session_response(session_id)
     call = {}
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
 
     def read(requested, *, owner_id):
         call.update(session_id=requested, owner_id=owner_id)
@@ -214,7 +213,6 @@ def test_machine_session_detail_uses_token_owner_and_marks_canonical_serve(monke
     ],
 )
 def test_machine_session_detail_maps_fail_closed_catalog_errors(monkeypatch, code, expected_status):
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
 
     def fail(*_args, **_kwargs):
         raise CatalogReadError(code, "canonical detail unavailable")
@@ -244,7 +242,6 @@ async def test_machine_session_reads_use_storage_v2_without_legacy_db(monkeypatc
         calls.append(kwargs)
         return _workspace(session_id)
 
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(agents_sessions, "build_storage_v2_workspace", build_workspace)
     for endpoint in (
         agents_sessions.get_session_thread,
@@ -322,7 +319,6 @@ async def test_machine_session_reads_use_storage_v2_without_legacy_db(monkeypatc
 
 @pytest.mark.asyncio
 async def test_storage_v2_machine_reads_reject_legacy_offset(monkeypatch):
-    monkeypatch.setattr(agents_sessions.database_module, "live_catalog_enabled", lambda: True)
     with pytest.raises(HTTPException) as exc_info:
         await agents_sessions.get_session_events(
             session_id=uuid4(),

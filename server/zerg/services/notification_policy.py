@@ -11,11 +11,9 @@ from enum import Enum
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
-from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.user import User
 
 WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW = timedelta(seconds=90)
@@ -121,29 +119,12 @@ def session_notifications_muted(session: AgentSession | None) -> bool:
 
 def recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at: datetime) -> bool:
     threshold = occurred_at - WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW
-    from zerg.database import live_catalog_enabled
+    from zerg.services.catalog_read_gateway import CatalogReadError
+    from zerg.services.catalog_read_gateway import recent_visible_web_presence
 
-    if live_catalog_enabled():
-        from zerg.services.catalog_read_gateway import CatalogReadError
-        from zerg.services.catalog_read_gateway import recent_visible_web_presence
-
-        try:
-            return recent_visible_web_presence(owner_id=owner_id, threshold=threshold.isoformat())
-        except CatalogReadError:
-            return False
     try:
-        return (
-            db.query(NotificationClientPresence.id)
-            .filter(
-                NotificationClientPresence.owner_id == owner_id,
-                NotificationClientPresence.client_type == "web",
-                NotificationClientPresence.visible.is_(True),
-                NotificationClientPresence.last_seen_at >= threshold,
-            )
-            .first()
-            is not None
-        )
-    except OperationalError:
+        return recent_visible_web_presence(owner_id=owner_id, threshold=threshold.isoformat())
+    except CatalogReadError:
         return False
 
 

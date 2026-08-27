@@ -1,137 +1,71 @@
 """Tests for has_real_sessions flag in the sessions list response.
 
+The flag exists so the web UI can tell "you have not shipped anything yet"
+apart from "the demo corpus is all you are looking at". A Runtime Host answers
+it out of catalogd (``LiveCatalogStore.list_sessions``), so these run against a
+real live catalog rather than seeding archive rows.
+
 Covers:
-- has_real_sessions=False when all sessions have device_id='demo-mac'
+- has_real_sessions=False when every session came from device_id='demo-mac'
 - has_real_sessions=True when at least one session has a different device_id
-- has_real_sessions=True when sessions have no device_id (None)
+- has_real_sessions=True when there are no sessions at all
 """
 
 import os
-from datetime import datetime, timezone
-from types import SimpleNamespace
 
-import pytest
+from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.database import Base, get_db, make_engine, make_sessionmaker
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentSession
-from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
 
-
-def _make_db(tmp_path, name="test_real.db"):
-    db_path = tmp_path / name
-    engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    return make_sessionmaker(engine)
+DEMO_DEVICE_ID = "demo-mac"
 
 
-def _seed(factory, *, device_id):
-    db = factory()
-    s = AgentSession(
-        provider="claude",
-        environment="production",
-        device_id=device_id,
-        started_at=datetime.now(timezone.utc),
-        ended_at=datetime.now(timezone.utc),
-        user_messages=1,
-        assistant_messages=1,
-        tool_calls=0,
-    )
-    db.add(s)
-    db.flush()
-    upsert_timeline_card_from_session(db, s)
-    db.commit()
-    db.close()
+def _owner(live_catalog) -> tuple[int, dict[str, str]]:  # noqa: F811
+    owner_id = live_catalog.create_user("owner@real-sessions.test")
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id="cinder")
+    return owner_id, {"X-Agents-Token": token}
 
 
-def _get_client(factory):
-    from fastapi.testclient import TestClient
+def test_has_real_sessions_false_when_only_demo(live_catalog, live_catalog_client):  # noqa: F811
+    """has_real_sessions=False when every session came from the demo machine."""
+    owner_id, headers = _owner(live_catalog)
+    live_catalog.commit_session(owner_id=owner_id, device_id=DEMO_DEVICE_ID)
+    live_catalog.commit_session(owner_id=owner_id, device_id=DEMO_DEVICE_ID)
 
-    from zerg.main import api_app
+    response = live_catalog_client.get("/agents/sessions", headers=headers)
 
-    def override():
-        d = factory()
-        try:
-            yield d
-        finally:
-            d.close()
-
-    def override_verify_agents_token():
-        return SimpleNamespace(device_id="real-sessions", id="token-1", owner_id=1)
-
-    api_app.dependency_overrides[get_db] = override
-    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
-    client = TestClient(api_app)
-    return client
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 2
+    assert body["has_real_sessions"] is False
 
 
-def test_has_real_sessions_false_when_only_demo(tmp_path):
-    """has_real_sessions=False when all sessions are demo (device_id='demo-mac')."""
-    factory = _make_db(tmp_path, "demo_only.db")
-    _seed(factory, device_id="demo-mac")
-    _seed(factory, device_id="demo-mac")
-
-    client = _get_client(factory)
-    try:
-        resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["has_real_sessions"] is False
-    finally:
-        from zerg.main import api_app
-
-        api_app.dependency_overrides.clear()
-
-
-def test_has_real_sessions_true_when_real_session_exists(tmp_path):
+def test_has_real_sessions_true_when_real_session_exists(live_catalog, live_catalog_client):  # noqa: F811
     """has_real_sessions=True when at least one non-demo session exists."""
-    factory = _make_db(tmp_path, "mixed.db")
-    _seed(factory, device_id="demo-mac")
-    _seed(factory, device_id="laptop-abc123")
+    owner_id, headers = _owner(live_catalog)
+    live_catalog.commit_session(owner_id=owner_id, device_id=DEMO_DEVICE_ID)
+    live_catalog.commit_session(owner_id=owner_id, device_id="laptop-abc123")
 
-    client = _get_client(factory)
-    try:
-        resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["has_real_sessions"] is True
-    finally:
-        from zerg.main import api_app
+    response = live_catalog_client.get("/agents/sessions", headers=headers)
 
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 2
+    assert body["has_real_sessions"] is True
 
 
-def test_has_real_sessions_true_when_no_device_id(tmp_path):
-    """has_real_sessions=True when session has device_id=None (not a demo)."""
-    factory = _make_db(tmp_path, "no_device.db")
-    _seed(factory, device_id=None)
+def test_has_real_sessions_true_when_no_sessions(live_catalog, live_catalog_client):  # noqa: F811
+    """has_real_sessions=True on an empty corpus (default, avoids false banners)."""
+    _owner_id, headers = _owner(live_catalog)
 
-    client = _get_client(factory)
-    try:
-        resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["has_real_sessions"] is True
-    finally:
-        from zerg.main import api_app
+    response = live_catalog_client.get("/agents/sessions", headers=headers)
 
-        api_app.dependency_overrides.clear()
-
-
-def test_has_real_sessions_true_when_no_sessions(tmp_path):
-    """has_real_sessions=True when there are no sessions (default, avoids false banners)."""
-    factory = _make_db(tmp_path, "empty.db")
-
-    client = _get_client(factory)
-    try:
-        resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["has_real_sessions"] is True
-    finally:
-        from zerg.main import api_app
-
-        api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 0
+    assert body["has_real_sessions"] is True

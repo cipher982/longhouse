@@ -30,17 +30,14 @@ from fastapi import status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-import zerg.database as database_module
 from zerg.config import get_settings
 from zerg.config import resolve_cors_origins
-from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.metrics import session_input_attachment_blob_fetches_total
 from zerg.metrics import session_input_attachment_bytes
 from zerg.metrics import session_input_attachments_total
-from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.routers.session_chat import QueuedInputSummary
@@ -51,22 +48,14 @@ from zerg.services.session_chat_impl import _assert_live_session_send_available
 from zerg.services.session_chat_impl import _build_managed_local_chat_response
 from zerg.services.session_chat_impl import _load_session_for_continuation
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
-from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_input_attachments import ALLOWED_MIME_TYPES
 from zerg.services.session_input_attachments import MAX_ATTACHMENT_BYTES
 from zerg.services.session_input_attachments import MAX_ATTACHMENTS_PER_INPUT
 from zerg.services.session_input_attachments import StoredAttachment
-from zerg.services.session_input_attachments import get_attachment
 from zerg.services.session_input_attachments import get_catalog_attachment
-from zerg.services.session_input_attachments import list_attachments_for_input
-from zerg.services.session_input_attachments import read_path_for_attachment
-from zerg.services.session_input_attachments import store_attachment_blob
 from zerg.services.session_input_attachments import store_catalog_attachment_blob
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
-from zerg.services.session_inputs import create_session_input
-from zerg.services.session_inputs import mark_delivered
-from zerg.services.session_inputs import mark_failed
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_locks import session_lock_manager
 from zerg.session_execution_home import ManagedSessionTransport
@@ -82,7 +71,7 @@ def _no_catalog_db():
     yield None
 
 
-_attachment_db_dependency = _no_catalog_db if database_module.live_catalog_enabled() else get_db
+_attachment_db_dependency = _no_catalog_db
 
 
 def _attachment_ref_for_engine(
@@ -269,11 +258,7 @@ async def create_session_input_with_attachments(
         _record_outcome("rejected_live_control")
         raise
 
-    if database_module.live_catalog_enabled():
-        codex_transport = _catalog_codex_transport_available(source_session)
-    else:
-        capabilities = current_session_capabilities(db, source_session, owner_id=current_user.id)
-        codex_transport = bool(capabilities.managed_transport and capabilities.managed_transport.value == "codex_app_server")
+    codex_transport = _catalog_codex_transport_available(source_session)
     if not codex_transport:
         _record_outcome("rejected_capability")
         raise HTTPException(
@@ -302,54 +287,31 @@ async def create_session_input_with_attachments(
     stored_refs: list[dict] = []
     catalog_receipt_id: str | None = None
     try:
-        if database_module.live_catalog_enabled():
-            catalog_receipt_id = await record_live_input_receipt_best_effort(
+        catalog_receipt_id = await record_live_input_receipt_best_effort(
+            owner_id=int(current_user.id),
+            session_id=source_session.id,
+            provider=str(source_session.provider or "codex"),
+            device_id=str(source_session.device_id or "").strip() or None,
+            thread_id=source_session.primary_thread_id,
+            text=text,
+            intent=intent,
+            status=INPUT_STATUS_DELIVERING,
+            client_request_id=request_id,
+            delivery_request_id=delivery_request_id,
+        )
+        if catalog_receipt_id is None:
+            raise RuntimeError("catalog input receipt is unavailable")
+        input_identity = catalog_receipt_id
+        for upload, data in upload_payloads:
+            stored = await store_catalog_attachment_blob(
+                input_receipt_id=catalog_receipt_id,
                 owner_id=int(current_user.id),
                 session_id=source_session.id,
-                provider=str(source_session.provider or "codex"),
-                device_id=str(source_session.device_id or "").strip() or None,
-                thread_id=source_session.primary_thread_id,
-                text=text,
-                intent=intent,
-                status=INPUT_STATUS_DELIVERING,
-                client_request_id=request_id,
-                delivery_request_id=delivery_request_id,
+                mime_type=upload.content_type,
+                data=data,
+                original_filename=upload.filename,
+                original_byte_size=len(data),
             )
-            if catalog_receipt_id is None:
-                raise RuntimeError("catalog input receipt is unavailable")
-            input_identity: int | str = catalog_receipt_id
-        else:
-            row = create_session_input(
-                db,
-                session_id=source_session.id,
-                text=text,
-                owner_id=current_user.id,
-                intent=intent,
-                status=INPUT_STATUS_DELIVERING,
-                client_request_id=request_id,
-                delivery_request_id=delivery_request_id,
-            )
-            input_identity = int(row.id)
-        for upload, data in upload_payloads:
-            if database_module.live_catalog_enabled():
-                stored = await store_catalog_attachment_blob(
-                    input_receipt_id=catalog_receipt_id,
-                    owner_id=int(current_user.id),
-                    session_id=source_session.id,
-                    mime_type=upload.content_type,
-                    data=data,
-                    original_filename=upload.filename,
-                    original_byte_size=len(data),
-                )
-            else:
-                stored = store_attachment_blob(
-                    db,
-                    session_input=row,
-                    mime_type=upload.content_type,
-                    data=data,
-                    original_filename=upload.filename,
-                    original_byte_size=len(data),
-                )
             stored_refs.append(
                 _attachment_ref_for_engine(
                     session_id=str(source_session.id),
@@ -365,8 +327,6 @@ async def create_session_input_with_attachments(
                 delivery_request_id=delivery_request_id,
                 error="attachment store rejected",
             )
-        elif "row" in locals():
-            mark_failed(db, int(row.id), error="attachment store rejected")
         _record_outcome("store_rejected")
         raise
     except Exception as exc:
@@ -377,8 +337,6 @@ async def create_session_input_with_attachments(
                 delivery_request_id=delivery_request_id,
                 error=f"attachment store failed: {exc}",
             )
-        elif "row" in locals():
-            mark_failed(db, int(row.id), error=f"attachment store failed: {exc}")
         logger.exception("attachment upload failed for session %s", source_session.id)
         _record_outcome("store_failed")
         raise HTTPException(
@@ -394,31 +352,25 @@ async def create_session_input_with_attachments(
             request_id=delivery_request_id,
             lock_scope_id=lock_scope_id,
             db=db,
-            session_input_id=(int(row.id) if not database_module.live_catalog_enabled() else None),
+            session_input_id=None,
             attachments=stored_refs,
         )
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
-        if catalog_receipt_id is not None:
-            await _finish_catalog_receipt(
-                receipt_id=catalog_receipt_id,
-                delivery_request_id=delivery_request_id,
-                error="dispatch rejected",
-            )
-        else:
-            mark_failed(db, int(row.id), error="dispatch rejected")
+        await _finish_catalog_receipt(
+            receipt_id=catalog_receipt_id,
+            delivery_request_id=delivery_request_id,
+            error="dispatch rejected",
+        )
         _record_outcome("dispatch_rejected")
         raise
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
-        if catalog_receipt_id is not None:
-            await _finish_catalog_receipt(
-                receipt_id=catalog_receipt_id,
-                delivery_request_id=delivery_request_id,
-                error=str(exc)[:200],
-            )
-        else:
-            mark_failed(db, int(row.id), error=str(exc)[:200])
+        await _finish_catalog_receipt(
+            receipt_id=catalog_receipt_id,
+            delivery_request_id=delivery_request_id,
+            error=str(exc)[:200],
+        )
         logger.exception("attachment dispatch failed for session %s", source_session.id)
         _record_outcome("dispatch_failed")
         raise HTTPException(
@@ -428,14 +380,11 @@ async def create_session_input_with_attachments(
 
     dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
     if dispatch_status >= 400:
-        if catalog_receipt_id is not None:
-            await _finish_catalog_receipt(
-                receipt_id=catalog_receipt_id,
-                delivery_request_id=delivery_request_id,
-                error=f"dispatch returned {dispatch_status}",
-            )
-        else:
-            mark_failed(db, int(row.id), error=f"dispatch returned {dispatch_status}")
+        await _finish_catalog_receipt(
+            receipt_id=catalog_receipt_id,
+            delivery_request_id=delivery_request_id,
+            error=f"dispatch returned {dispatch_status}",
+        )
         _record_outcome("dispatch_error")
         raise HTTPException(
             status_code=dispatch_status,
@@ -444,22 +393,14 @@ async def create_session_input_with_attachments(
 
     uploaded_count = len(stored_refs)
     uploaded_bytes = sum(len(data) for _, data in upload_payloads)
-    if catalog_receipt_id is not None:
-        await _finish_catalog_receipt(receipt_id=catalog_receipt_id, delivery_request_id=delivery_request_id)
-        attachments_list = []
-    else:
-        mark_delivered(db, int(row.id))
-        attachments_list = list_attachments_for_input(db, int(row.id))
-    for stored in attachments_list:
-        session_input_attachment_bytes.observe(int(stored.byte_size))
-    if catalog_receipt_id is not None:
-        for _, data in upload_payloads:
-            session_input_attachment_bytes.observe(len(data))
+    await _finish_catalog_receipt(receipt_id=catalog_receipt_id, delivery_request_id=delivery_request_id)
+    for _, data in upload_payloads:
+        session_input_attachment_bytes.observe(len(data))
     _record_outcome("delivered")
     logger.info(
         "session_input_attachments_uploaded session=%s input=%s client=%s count=%d total_bytes=%d",
         source_session.id,
-        catalog_receipt_id or int(row.id),
+        catalog_receipt_id,
         client_label,
         uploaded_count,
         uploaded_bytes,
@@ -467,7 +408,7 @@ async def create_session_input_with_attachments(
 
     return SessionInputResponse(
         outcome="sent",
-        input_id=(None if catalog_receipt_id else int(row.id)),
+        input_id=None,
         live_input_id=catalog_receipt_id,
         client_request_id=request_id,
         intent=intent,
@@ -505,44 +446,22 @@ async def fetch_attachment_blob(
     # when the token names an owner who no longer exists.
     owner_id = _resolve_agents_owner_id(db, device_token)
 
-    if database_module.live_catalog_enabled():
-        try:
-            stored = await get_catalog_attachment(
-                owner_id=int(owner_id),
-                session_id=session_uuid,
-                input_receipt_id=input_id,
-                attachment_id=attach_uuid,
-            )
-        except (RuntimeError, ValueError) as exc:
-            logger.warning("catalog attachment lookup failed", exc_info=True)
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="attachment catalog unavailable") from exc
-        row = stored
-    else:
-        try:
-            legacy_input_id = int(input_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found") from exc
-        row = get_attachment(db, attach_uuid)
-        if row is not None and int(row.session_input_id) != legacy_input_id:
-            row = None
-        if row is not None:
-            # Archive mode carries the owner on the input the attachment hangs
-            # off, so scope the read there rather than trusting the id triple.
-            authored_by_caller = (
-                db.query(SessionInput.id)
-                .filter(
-                    SessionInput.id == legacy_input_id,
-                    SessionInput.owner_id == int(owner_id),
-                )
-                .first()
-            )
-            if authored_by_caller is None:
-                row = None
+    try:
+        stored = await get_catalog_attachment(
+            owner_id=int(owner_id),
+            session_id=session_uuid,
+            input_receipt_id=input_id,
+            attachment_id=attach_uuid,
+        )
+    except (RuntimeError, ValueError) as exc:
+        logger.warning("catalog attachment lookup failed", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="attachment catalog unavailable") from exc
+    row = stored
     if row is None or row.session_id != session_uuid:
         session_input_attachment_blob_fetches_total.labels(outcome="not_found").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
 
-    blob_path: Path = row.blob_path if database_module.live_catalog_enabled() else read_path_for_attachment(db, row)
+    blob_path: Path = row.blob_path
     if not blob_path.exists():
         logger.warning("attachment row %s exists but blob is missing at %s", row.id, blob_path)
         session_input_attachment_blob_fetches_total.labels(outcome="blob_missing").inc()

@@ -43,7 +43,6 @@ from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_console_turn_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
-from zerg.services.live_launch_readiness import latest_live_launch_readiness_map as query_live_launch_readiness_map
 from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_local_transport import build_managed_local_attach_command
@@ -2624,27 +2623,21 @@ def latest_live_launch_readiness(session_ids, *, now: datetime | None = None) ->
 
     if not session_ids or not database_module.live_store_configured():
         return {}
-    if database_module.live_catalog_enabled():
-        from zerg.services.catalog_facts import hydrate_catalog_row
-        from zerg.services.catalog_facts import session_facts_map
+    from zerg.services.catalog_facts import hydrate_catalog_row
+    from zerg.services.catalog_facts import session_facts_map
 
-        cutoff = normalize_utc(now) or datetime.now(timezone.utc)
-        facts_by_session = session_facts_map([str(session_id) for session_id in session_ids])
-        result: dict[UUID, LiveLaunchReadinessView] = {}
-        for session_id, facts in facts_by_session.items():
-            row = hydrate_catalog_row(LiveLaunchReadiness, facts.get("readiness"))
-            if row is None:
-                continue
-            expires_at = normalize_utc(row.expires_at)
-            if expires_at is not None and expires_at <= cutoff:
-                continue
-            result[UUID(session_id)] = project_live_launch_readiness(row)
-        return result
-    live_session_factory = database_module.get_live_session_factory()
-    if live_session_factory is None:
-        return {}
-    with live_session_factory() as live_db:
-        return query_live_launch_readiness_map(live_db, session_ids, now=now)
+    cutoff = normalize_utc(now) or datetime.now(timezone.utc)
+    facts_by_session = session_facts_map([str(session_id) for session_id in session_ids])
+    result: dict[UUID, LiveLaunchReadinessView] = {}
+    for session_id, facts in facts_by_session.items():
+        row = hydrate_catalog_row(LiveLaunchReadiness, facts.get("readiness"))
+        if row is None:
+            continue
+        expires_at = normalize_utc(row.expires_at)
+        if expires_at is not None and expires_at <= cutoff:
+            continue
+        result[UUID(session_id)] = project_live_launch_readiness(row)
+    return result
 
 
 def build_live_launch_placeholder_response(

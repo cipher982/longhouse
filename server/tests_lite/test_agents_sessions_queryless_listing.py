@@ -9,172 +9,129 @@ A real query must keep the existing content-search behavior.
 from __future__ import annotations
 
 import os
+from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.database import get_db
-from zerg.database import initialize_database
-from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.main import api_app
-from zerg.services.agents import AgentsStore
-from zerg.services.agents import EventIngest
-from zerg.services.agents import SessionIngest
+from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
+
+OWNER_EMAIL = "owner@queryless.test"
+DEVICE_ID = "cinder"
 
 
-def _make_db(tmp_path, name: str):
-    db_path = tmp_path / f"{name}.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    initialize_database(engine)
-    return make_sessionmaker(engine)
+def _owner(live_catalog) -> tuple[int, dict[str, str]]:
+    owner_id = live_catalog.create_user(OWNER_EMAIL)
+    token = live_catalog.create_device_token(owner_id=owner_id, device_id=DEVICE_ID)
+    return owner_id, {"X-Agents-Token": token}
 
 
-def _ingest(
-    store: AgentsStore,
-    *,
-    provider: str = "claude",
-    project: str = "zerg",
-    content: str = "hello there",
-    active_at: datetime,
-) -> str:
-    result = store.ingest_session(
-        SessionIngest(
-            provider=provider,
-            environment="development",
-            project=project,
-            device_id="cinder",
-            cwd=f"/tmp/{project}",
-            git_repo=None,
-            git_branch=None,
-            started_at=active_at - timedelta(minutes=5),
-            events=[
-                EventIngest(
-                    role="user",
-                    content_text=content,
-                    timestamp=active_at,
-                    source_path=f"/tmp/{project}/session.jsonl",
-                    source_offset=0,
-                )
-            ],
-        )
+def test_queryless_listing_returns_recent_sessions_ordered_by_activity(live_catalog, live_catalog_client):
+    owner_id, headers = _owner(live_catalog)
+    now = datetime.now(UTC).replace(microsecond=0)
+
+    older = live_catalog.commit_session(owner_id=owner_id, texts=("older",), now=now - timedelta(days=2))
+    newest = live_catalog.commit_session(owner_id=owner_id, texts=("newest",), now=now - timedelta(hours=1))
+    middle = live_catalog.commit_session(owner_id=owner_id, texts=("middle",), now=now - timedelta(days=1))
+
+    response = live_catalog_client.get("/agents/sessions", headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 3
+    assert [s["id"] for s in payload["sessions"]] == [
+        str(newest.session_id),
+        str(middle.session_id),
+        str(older.session_id),
+    ]
+    for session in payload["sessions"]:
+        assert session["match_snippet"] is None
+        assert session["match_score"] is None
+
+
+def test_blank_query_is_treated_as_absent(live_catalog, live_catalog_client):
+    owner_id, headers = _owner(live_catalog)
+    now = datetime.now(UTC).replace(microsecond=0)
+
+    older = live_catalog.commit_session(owner_id=owner_id, texts=("older",), now=now - timedelta(days=1))
+    newer = live_catalog.commit_session(owner_id=owner_id, texts=("newer",), now=now - timedelta(hours=1))
+
+    for blank in ("", "   "):
+        response = live_catalog_client.get("/agents/sessions", params={"query": blank}, headers=headers)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        # An FTS search for "" would return zero sessions; the listing
+        # path returns the full recent-ordered corpus.
+        assert payload["total"] == 2
+        assert [s["id"] for s in payload["sessions"]] == [str(newer.session_id), str(older.session_id)]
+        assert all(s["match_snippet"] is None for s in payload["sessions"])
+
+
+def test_queryless_listing_honors_filters(live_catalog, live_catalog_client):
+    owner_id, headers = _owner(live_catalog)
+    now = datetime.now(UTC).replace(microsecond=0)
+
+    zerg_recent = live_catalog.commit_session(owner_id=owner_id, project="zerg", now=now - timedelta(hours=1))
+    zerg_older = live_catalog.commit_session(owner_id=owner_id, project="zerg", now=now - timedelta(hours=2))
+    other_project = live_catalog.commit_session(owner_id=owner_id, project="g55", now=now - timedelta(hours=3))
+    stale = live_catalog.commit_session(owner_id=owner_id, project="zerg", now=now - timedelta(days=30))
+
+    response = live_catalog_client.get("/agents/sessions", params={"project": "zerg"}, headers=headers)
+    assert response.status_code == 200, response.text
+    ids = [s["id"] for s in response.json()["sessions"]]
+    assert ids == [str(zerg_recent.session_id), str(zerg_older.session_id)]
+    assert str(other_project.session_id) not in ids
+    assert str(stale.session_id) not in ids  # outside default days_back=14
+
+    response = live_catalog_client.get("/agents/sessions", params={"provider": "codex"}, headers=headers)
+    assert [s["id"] for s in response.json()["sessions"]] == [
+        str(zerg_recent.session_id),
+        str(zerg_older.session_id),
+        str(other_project.session_id),
+    ]
+
+    response = live_catalog_client.get("/agents/sessions", params={"provider": "claude"}, headers=headers)
+    assert response.json()["sessions"] == []
+
+    response = live_catalog_client.get("/agents/sessions", params={"days_back": 60, "project": "zerg"}, headers=headers)
+    assert [s["id"] for s in response.json()["sessions"]] == [
+        str(zerg_recent.session_id),
+        str(zerg_older.session_id),
+        str(stale.session_id),
+    ]
+
+    response = live_catalog_client.get("/agents/sessions", params={"limit": 2}, headers=headers)
+    payload = response.json()
+    assert [s["id"] for s in payload["sessions"]] == [str(zerg_recent.session_id), str(zerg_older.session_id)]
+    assert payload["total"] == 3
+
+
+def test_query_search_behavior_unchanged(live_catalog, live_catalog_client):
+    owner_id, headers = _owner(live_catalog)
+    now = datetime.now(UTC).replace(microsecond=0)
+
+    match = live_catalog.commit_session(
+        owner_id=owner_id,
+        texts=("rotating refresh tokens shipped",),
+        now=now - timedelta(days=1),
     )
-    return str(result.session_id)
+    live_catalog.commit_session(
+        owner_id=owner_id,
+        texts=("unrelated timeline work",),
+        now=now - timedelta(hours=1),
+    )
+    assert live_catalog.index_search() == 2
 
+    response = live_catalog_client.get("/agents/sessions", params={"query": "refresh tokens"}, headers=headers)
 
-def _make_client(db_session) -> TestClient:
-    def override_db():
-        yield db_session
-
-    api_app.dependency_overrides[get_db] = override_db
-    return TestClient(api_app)
-
-
-def test_queryless_listing_returns_recent_sessions_ordered_by_activity(tmp_path):
-    session_local = _make_db(tmp_path, "queryless_order")
-    now = datetime.now(timezone.utc)
-
-    with session_local() as db:
-        store = AgentsStore(db)
-        older = _ingest(store, active_at=now - timedelta(days=2))
-        newest = _ingest(store, active_at=now - timedelta(hours=1))
-        middle = _ingest(store, active_at=now - timedelta(days=1))
-        client = _make_client(db)
-
-        try:
-            response = client.get("/agents/sessions")
-            assert response.status_code == 200, response.text
-            payload = response.json()
-            assert payload["total"] == 3
-            assert [s["id"] for s in payload["sessions"]] == [newest, middle, older]
-            for session in payload["sessions"]:
-                assert session["match_snippet"] is None
-                assert session["match_score"] is None
-        finally:
-            api_app.dependency_overrides.clear()
-
-
-def test_blank_query_is_treated_as_absent(tmp_path):
-    session_local = _make_db(tmp_path, "queryless_blank")
-    now = datetime.now(timezone.utc)
-
-    with session_local() as db:
-        store = AgentsStore(db)
-        older = _ingest(store, active_at=now - timedelta(days=1))
-        newer = _ingest(store, active_at=now - timedelta(hours=1))
-        client = _make_client(db)
-
-        try:
-            for blank in ("", "   "):
-                response = client.get("/agents/sessions", params={"query": blank})
-                assert response.status_code == 200, response.text
-                payload = response.json()
-                # An FTS search for "" would return zero sessions; the listing
-                # path returns the full recent-ordered corpus.
-                assert payload["total"] == 2
-                assert [s["id"] for s in payload["sessions"]] == [newer, older]
-                assert all(s["match_snippet"] is None for s in payload["sessions"])
-        finally:
-            api_app.dependency_overrides.clear()
-
-
-def test_queryless_listing_honors_filters(tmp_path):
-    session_local = _make_db(tmp_path, "queryless_filters")
-    now = datetime.now(timezone.utc)
-
-    with session_local() as db:
-        store = AgentsStore(db)
-        zerg_claude = _ingest(store, project="zerg", provider="claude", active_at=now - timedelta(hours=1))
-        zerg_codex = _ingest(store, project="zerg", provider="codex", active_at=now - timedelta(hours=2))
-        other_project = _ingest(store, project="g55", provider="claude", active_at=now - timedelta(hours=3))
-        stale = _ingest(store, project="zerg", provider="claude", active_at=now - timedelta(days=30))
-        client = _make_client(db)
-
-        try:
-            response = client.get("/agents/sessions", params={"project": "zerg"})
-            assert response.status_code == 200, response.text
-            ids = [s["id"] for s in response.json()["sessions"]]
-            assert ids == [zerg_claude, zerg_codex]
-            assert other_project not in ids
-            assert stale not in ids  # outside default days_back=14
-
-            response = client.get("/agents/sessions", params={"provider": "codex"})
-            assert [s["id"] for s in response.json()["sessions"]] == [zerg_codex]
-
-            response = client.get("/agents/sessions", params={"days_back": 60, "project": "zerg"})
-            assert [s["id"] for s in response.json()["sessions"]] == [zerg_claude, zerg_codex, stale]
-
-            response = client.get("/agents/sessions", params={"limit": 2})
-            payload = response.json()
-            assert [s["id"] for s in payload["sessions"]] == [zerg_claude, zerg_codex]
-            assert payload["total"] == 3
-        finally:
-            api_app.dependency_overrides.clear()
-
-
-def test_query_search_behavior_unchanged(tmp_path):
-    session_local = _make_db(tmp_path, "queryless_search")
-    now = datetime.now(timezone.utc)
-
-    with session_local() as db:
-        store = AgentsStore(db)
-        match = _ingest(store, content="rotating refresh tokens shipped", active_at=now - timedelta(days=1))
-        _ingest(store, content="unrelated timeline work", active_at=now - timedelta(hours=1))
-        client = _make_client(db)
-
-        try:
-            response = client.get("/agents/sessions", params={"query": "refresh tokens"})
-            assert response.status_code == 200, response.text
-            payload = response.json()
-            assert [s["id"] for s in payload["sessions"]] == [match]
-            assert payload["sessions"][0]["match_snippet"]
-            assert "refresh" in payload["sessions"][0]["match_snippet"].lower()
-        finally:
-            api_app.dependency_overrides.clear()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [s["id"] for s in payload["sessions"]] == [str(match.session_id)]
+    assert payload["sessions"][0]["match_snippet"]
+    assert "refresh" in payload["sessions"][0]["match_snippet"].lower()
