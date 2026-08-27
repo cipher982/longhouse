@@ -37,12 +37,12 @@ from zerg.catalogd.store import CatalogStore
 
 logger = logging.getLogger(__name__)
 
-# Browser QA opens timeline/detail surfaces concurrently, and an SSE client
-# that disconnects cannot cancel an already-running synchronous SQLite read.
-# Four slots let those abandoned reads queue every new timeline/auth request
-# past the RPC deadline. Eight remains bounded to the normal hosted core count
-# while preserving one admission wave for active interactive traffic.
-CATALOG_INTERACTIVE_READ_WORKERS = 8
+# A timed-out caller cannot cancel synchronous SQLite work already running in a
+# thread. Keep the lane small and queue-free so abandoned session-detail reads
+# cannot accumulate into a self-sustaining retry storm on the hosted catalog.
+CATALOG_INTERACTIVE_READ_WORKERS = 2
+CATALOG_CONTROL_READ_WORKERS = 1
+CATALOG_CONTROL_READ_MAX_DEPTH = 8
 
 # Log any single write that holds the shared writer longer than this. Set near
 # the hosted hot-API p95 budget (250 ms, speed-of-light-database.md) so the log
@@ -157,6 +157,10 @@ class CatalogWriterBusy(CatalogDaemonError):
     pass
 
 
+class CatalogReaderBusy(CatalogDaemonError):
+    pass
+
+
 class CatalogWriterExpired(CatalogDaemonError):
     pass
 
@@ -184,11 +188,15 @@ class CatalogDaemon:
         self._runtime_boot_id = runtime_boot_id
         self._executor: ThreadPoolExecutor | None = None
         self._read_executor: ThreadPoolExecutor | None = None
+        self._control_read_executor: ThreadPoolExecutor | None = None
         self._projector_read_executor: ThreadPoolExecutor | None = None
         self._store: CatalogStore | None = None
         self._checkpoint_task: asyncio.Task | None = None
         self._maintenance_executor: ThreadPoolExecutor | None = None
         self._timeline_reads: dict[tuple[tuple[str, object], ...], asyncio.Task[dict]] = {}
+        self._read_depth = 0
+        self._read_max_depth = CATALOG_INTERACTIVE_READ_WORKERS
+        self._control_read_depth = 0
         self._writer_stats = CatalogWriterStats()
         self._writer_slow_ms = float(os.getenv("CATALOGD_WRITER_SLOW_MS", str(CATALOG_WRITER_SLOW_MS_DEFAULT)))
         self._writer_max_depth = max(
@@ -233,6 +241,10 @@ class CatalogDaemon:
             self._read_executor = ThreadPoolExecutor(
                 max_workers=CATALOG_INTERACTIVE_READ_WORKERS,
                 thread_name_prefix="catalogd-read",
+            )
+            self._control_read_executor = ThreadPoolExecutor(
+                max_workers=CATALOG_CONTROL_READ_WORKERS,
+                thread_name_prefix="catalogd-control-read",
             )
             self._projector_read_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="catalogd-projector-read")
             # A PASSIVE checkpoint yields instead of blocking, so it does not
@@ -330,6 +342,9 @@ class CatalogDaemon:
         if self._read_executor is not None:
             self._read_executor.shutdown(wait=True, cancel_futures=True)
             self._read_executor = None
+        if self._control_read_executor is not None:
+            self._control_read_executor.shutdown(wait=True, cancel_futures=True)
+            self._control_read_executor = None
         if self._projector_read_executor is not None:
             self._projector_read_executor.shutdown(wait=True, cancel_futures=True)
             self._projector_read_executor = None
@@ -393,6 +408,13 @@ class CatalogDaemon:
                         response = await self._dispatch(message)
                     finally:
                         _REQUEST_DEADLINE_NS.reset(deadline_token)
+                except CatalogReaderBusy:
+                    response = self._error(
+                        message,
+                        "resource_exhausted",
+                        "catalog read lane is full",
+                        retryable=True,
+                    )
                 except CatalogWriterBusy:
                     response = self._error(
                         message,
@@ -679,7 +701,7 @@ class CatalogDaemon:
             return await self._list_migration_gaps(request)
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
-        metadata = await self._run_read_store(read_catalog_meta, self._engine)
+        metadata = await self._run_control_read_store(read_catalog_meta, self._engine)
         if request.method == "ping.v2":
             writer = self._writer_stats.snapshot()
             return CatalogRpcResponse(
@@ -727,7 +749,7 @@ class CatalogDaemon:
         if not isinstance(token_hash, str) or len(token_hash) != 64 or any(character not in "0123456789abcdef" for character in token_hash):
             return self._error(request, "invalid_request", "token_hash must be 64 lowercase hexadecimal characters")
         assert self._store is not None
-        result = await self._run_read_store(
+        result = await self._run_control_read_store(
             self._store.authenticate_device,
             token_hash=token_hash,
         )
@@ -746,7 +768,7 @@ class CatalogDaemon:
         # Resolve on the read pool always; take the writer only when a stamp is
         # actually owed. Routing on the flag meant an authenticated read held
         # the single writer for a write that never happened.
-        result = await self._run_read_store(self._store.get_user, user_id=user_id, touch_last_login=touch)
+        result = await self._run_control_read_store(self._store.get_user, user_id=user_id, touch_last_login=touch)
         if result.pop("touch_due", False):
             stamped = await self._run_store(self._store.touch_user_login, user_id=user_id)
             result["changed"] = stamped["changed"]
@@ -761,7 +783,7 @@ class CatalogDaemon:
         assert self._store is not None
         return CatalogRpcResponse(
             id=request.id,
-            result=await self._run_read_store(self._store.get_active_owner),
+            result=await self._run_control_read_store(self._store.get_active_owner),
         )
 
     async def _ensure_single_tenant_owner(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -801,7 +823,7 @@ class CatalogDaemon:
         if type(interval) is not int or not 0 <= interval <= 86_400:
             return self._error(request, "invalid_request", "touch_interval_seconds must be an integer from 0 through 86400")
         assert self._store is not None
-        result = await self._run_read_store(
+        result = await self._run_control_read_store(
             self._store.resolve_device,
             token_hash=token_hash,
             touch_last_used=touch,
@@ -3662,8 +3684,46 @@ class CatalogDaemon:
     async def _run_read_store(self, operation, *args, **kwargs):
         if self._read_executor is None:
             raise CatalogDaemonError("catalog read executor is not ready")
+        return await self._run_bounded_read_store(
+            self._read_executor,
+            "_read_depth",
+            self._read_max_depth,
+            operation,
+            *args,
+            **kwargs,
+        )
+
+    async def _run_control_read_store(self, operation, *args, **kwargs):
+        if self._control_read_executor is None:
+            raise CatalogDaemonError("catalog control read executor is not ready")
+        return await self._run_bounded_read_store(
+            self._control_read_executor,
+            "_control_read_depth",
+            CATALOG_CONTROL_READ_MAX_DEPTH,
+            operation,
+            *args,
+            **kwargs,
+        )
+
+    async def _run_bounded_read_store(self, executor, depth_attribute, max_depth, operation, *args, **kwargs):
+        if getattr(self, depth_attribute) >= max_depth:
+            raise CatalogReaderBusy("catalog read lane is full")
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._read_executor, lambda: operation(*args, **kwargs))
+        setattr(self, depth_attribute, getattr(self, depth_attribute) + 1)
+        try:
+            future = loop.run_in_executor(executor, lambda: operation(*args, **kwargs))
+        except BaseException:
+            setattr(self, depth_attribute, getattr(self, depth_attribute) - 1)
+            raise
+
+        # Shielding prevents caller cancellation from cancelling the asyncio
+        # wrapper while its SQLite thread keeps running. The slot is released
+        # only when that underlying work actually ends.
+        future.add_done_callback(lambda completed: self._release_read_slot(depth_attribute, completed))
+        return await asyncio.shield(future)
+
+    def _release_read_slot(self, depth_attribute: str, _future: asyncio.Future) -> None:
+        setattr(self, depth_attribute, max(0, getattr(self, depth_attribute) - 1))
 
     async def _coalesced_timeline_read(self, params: dict[str, object]) -> dict:
         """Share one in-flight snapshot across identical timeline readers.

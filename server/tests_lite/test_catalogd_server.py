@@ -25,6 +25,7 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.server import CatalogDaemonError
+from zerg.catalogd.server import CatalogReaderBusy
 from zerg.catalogd.server import CatalogWriterBusy
 from zerg.catalogd.server import CatalogWriterExpired
 from zerg.catalogd.store import CatalogStore
@@ -127,7 +128,7 @@ async def test_interactive_reads_do_not_queue_behind_projector_read_lane(daemon_
 
 
 @pytest.mark.asyncio
-async def test_interactive_read_lane_preserves_eighth_admission_slot(daemon_paths):
+async def test_interactive_read_lane_rejects_work_instead_of_queueing(daemon_paths):
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
@@ -141,19 +142,56 @@ async def test_interactive_read_lane_preserves_eighth_admission_slot(daemon_path
         nonlocal entered_count
         with lock:
             entered_count += 1
-            if entered_count == 7:
+            if entered_count == daemon._read_max_depth:
                 entered.set()
         release.wait(timeout=2)
 
-    blocked = [asyncio.create_task(daemon._run_read_store(block_interactive_read_lane)) for _ in range(7)]
+    blocked = [
+        asyncio.create_task(daemon._run_read_store(block_interactive_read_lane))
+        for _ in range(daemon._read_max_depth)
+    ]
     try:
         assert await asyncio.to_thread(entered.wait, 1)
+        with pytest.raises(CatalogReaderBusy):
+            await daemon._run_read_store(lambda: None)
         ping = await client.call("ping.v2", timeout_seconds=0.25)
         assert ping["ready"] is True
     finally:
         release.set()
         await asyncio.gather(*blocked)
         await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_interactive_read_holds_slot_until_worker_exits(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    daemon._read_max_depth = 1
+    await daemon.start()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def block_interactive_read_lane() -> None:
+        entered.set()
+        release.wait(timeout=2)
+
+    blocked = asyncio.create_task(daemon._run_read_store(block_interactive_read_lane))
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        blocked.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await blocked
+        assert daemon._read_depth == 1
+        with pytest.raises(CatalogReaderBusy):
+            await daemon._run_read_store(lambda: None)
+    finally:
+        release.set()
+        for _ in range(100):
+            if daemon._read_depth == 0:
+                break
+            await asyncio.sleep(0.01)
+        assert daemon._read_depth == 0
         await daemon.close()
 
 
