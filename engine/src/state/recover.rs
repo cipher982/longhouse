@@ -99,13 +99,25 @@ impl RecoveryReport {
 /// Recovery refuses to run against a healthy database — salvage is strictly a
 /// response to a file SQLite will not accept, never a routine maintenance pass.
 pub fn is_unreadable(db_path: &Path) -> bool {
+    fn is_corruption(error: &rusqlite::Error) -> bool {
+        // Only SQLite saying "this is not a database" or "this database is
+        // malformed" earns a destructive repair. A lock held by a live agent, a
+        // permission problem, or a transient I/O error must never be answered by
+        // rewriting the file — those are recoverable by doing nothing.
+        matches!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::NotADatabase) | Some(rusqlite::ErrorCode::DatabaseCorrupt)
+        )
+    }
+
     match Connection::open(db_path) {
-        Ok(conn) => conn
-            .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .is_err(),
-        Err(_) => true,
+        Ok(conn) => match conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        }) {
+            Ok(_) => false,
+            Err(error) => is_corruption(&error),
+        },
+        Err(error) => is_corruption(&error),
     }
 }
 
@@ -358,16 +370,35 @@ fn row_is_plausible(table: &str, values: &[rusqlite::types::Value]) -> bool {
     fn non_negative_integer(values: &[Value], index: usize) -> bool {
         matches!(values.get(index), Some(Value::Integer(value)) if *value >= 0)
     }
+    fn is_known_provider(provider: &str) -> bool {
+        matches!(
+            provider,
+            "claude" | "codex" | "cursor" | "opencode" | "antigravity" | "gemini" | "pi"
+        )
+    }
+    fn file_length(path: &str) -> Option<u64> {
+        std::fs::metadata(path).ok().map(|meta| meta.len())
+    }
 
     match table {
         "file_state" => {
             let Some(path) = text(values, 0) else {
                 return false;
             };
+            let (Some(Value::Integer(queued)), Some(Value::Integer(acked))) =
+                (values.get(2), values.get(3))
+            else {
+                return false;
+            };
             path.starts_with('/')
-                && text(values, 1).is_some_and(|provider| !provider.is_empty())
-                && non_negative_integer(values, 2)
-                && non_negative_integer(values, 3)
+                && text(values, 1).is_some_and(is_known_provider)
+                && *queued >= 0
+                && *acked >= 0
+                // A cursor claiming more acknowledged than queued, or more than
+                // the file on disk holds, is not a cursor worth restoring — it
+                // would tell the shipper to resume past bytes that do not exist.
+                && *acked <= *queued
+                && file_length(path).is_none_or(|length| *acked as u64 <= length)
         }
         "source_epoch_registry" => {
             text(values, 0).is_some_and(|epoch| epoch.len() == 36)
@@ -375,8 +406,12 @@ fn row_is_plausible(table: &str, values: &[rusqlite::types::Value]) -> bool {
                 && text(values, 2).is_some_and(|source| !source.is_empty())
         }
         "source_epoch_lane_state" => {
+            // `last_position` is the storage-v2 cursor itself. SQLite will store
+            // text in an INTEGER column and `integrity_check` will still say ok,
+            // so its type is checked here or nowhere.
             text(values, 0).is_some_and(|epoch| epoch.len() == 36)
                 && text(values, 1).is_some_and(|lane| !lane.is_empty())
+                && non_negative_integer(values, 2)
         }
         "session_binding" => text(values, 0).is_some_and(|key| !key.is_empty()),
         _ => false,
@@ -397,6 +432,24 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
             "{} opens and reads normally; recovery is only for a database SQLite rejects",
             db_path.display()
         );
+    }
+
+    // A `-wal` holds committed frames that live only there, and a `-shm` is
+    // evidence of a connection that may still hold a writable fd — renaming the
+    // path does not take that fd away. Recovery copies the main database only,
+    // so proceeding past either would silently drop committed work or race a
+    // writer. Both are the agent's to clear by stopping.
+    for sidecar in ["-wal", "-shm"] {
+        let mut path = db_path.as_os_str().to_os_string();
+        path.push(sidecar);
+        let path = PathBuf::from(path);
+        if path.exists() {
+            bail!(
+                "{} exists: stop the Machine Agent before recovering, so no connection holds \
+                 the database and no committed frames are left behind",
+                path.display()
+            );
+        }
     }
 
     // Beside the database, not in the system temp dir: the final install is a
@@ -420,8 +473,8 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     // recovered set is partial by design, so constraints stay off during load.
     rebuilt.execute_batch("PRAGMA foreign_keys=OFF;")?;
 
-    let mut tables = Vec::new();
-    let mut notes = Vec::new();
+    let mut tables: Vec<RecoveredTable> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     for table_name in RECOVERED_TABLES {
         let Some(schema) = schemas.get(*table_name) else {
             notes.push(format!(
@@ -449,15 +502,68 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
         });
     }
 
-    rebuilt.execute_batch("PRAGMA foreign_keys=ON;").ok();
+    // Install gate. A salvage that produced almost nothing is a worse database
+    // than the corrupt one it would replace, because the corrupt one can be
+    // recovered again and an installed empty one silently rewinds every cursor.
+    // Nothing is allowed near the real path until every check below passes.
     let integrity: String = rebuilt.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if integrity != "ok" {
         bail!("rebuilt database failed integrity_check: {integrity}");
     }
+    // Recovery is partial by nature: a lane whose registry row failed validation
+    // references an epoch that is not here. Such a lane is unusable — the
+    // shipper cannot interpret a position without the source identity it
+    // belongs to — so drop it rather than refuse the other 27,000 that are
+    // fine. Counted as rejected, because that is what happened to it.
+    let orphaned_lanes = rebuilt.execute(
+        "DELETE FROM source_epoch_lane_state
+         WHERE source_epoch NOT IN (SELECT source_epoch FROM source_epoch_registry)",
+        [],
+    )?;
+    if orphaned_lanes > 0 {
+        if let Some(entry) = tables
+            .iter_mut()
+            .find(|table| table.table == "source_epoch_lane_state")
+        {
+            entry.recovered = entry.recovered.saturating_sub(orphaned_lanes);
+            entry.rejected += orphaned_lanes;
+        }
+        notes.push(format!(
+            "{orphaned_lanes} lane cursor(s) dropped: their source epoch did not survive validation"
+        ));
+    }
+
+    rebuilt.execute_batch("PRAGMA foreign_keys=ON;").ok();
+    let foreign_key_violations: i64 =
+        rebuilt.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })?;
+    if foreign_key_violations > 0 {
+        bail!("rebuilt database still has {foreign_key_violations} foreign key violation(s) after pruning orphans");
+    }
+    let cursors_recovered = tables
+        .iter()
+        .find(|table| table.table == "source_epoch_lane_state")
+        .map(|table| table.recovered)
+        .unwrap_or(0);
+    if cursors_recovered == 0 {
+        bail!(
+            "refusing to install a recovery with no shipping cursors: \
+             source_epoch_lane_state came back empty"
+        );
+    }
     drop(rebuilt);
     drop(salvaged);
 
-    // Only now is the original touched, and only by being moved aside.
+    // Stage the replacement beside its destination and flush it, so the final
+    // step is a rename rather than a copy. A crash mid-copy would otherwise
+    // leave a truncated database at the canonical path with the original
+    // already moved away.
+    let staged = staged_path(db_path);
+    std::fs::copy(&rebuilt_path, &staged)
+        .with_context(|| format!("staging the recovered database at {}", staged.display()))?;
+    std::fs::File::open(&staged)?.sync_all().ok();
+
     let quarantine = quarantine_path(db_path);
     std::fs::rename(db_path, &quarantine).with_context(|| {
         format!(
@@ -465,8 +571,18 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
             quarantine.display()
         )
     })?;
-    std::fs::copy(&rebuilt_path, db_path)
-        .with_context(|| format!("installing the recovered database at {}", db_path.display()))?;
+    // Atomic within the directory: either the old path or the new one is there,
+    // never a half-written file.
+    if let Err(error) = std::fs::rename(&staged, db_path) {
+        // Put the original back rather than leaving no database at all.
+        let _ = std::fs::rename(&quarantine, db_path);
+        return Err(error).with_context(|| {
+            format!(
+                "installing the recovered database at {}; the original was restored",
+                db_path.display()
+            )
+        });
+    }
 
     // Hand it to the normal opener so the ALTER-if-missing migrations bring the
     // recovered on-disk shape up to the current schema.
@@ -500,7 +616,10 @@ impl RecoveryWorkspace {
             ".longhouse-recovery-{}-{stamp}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&root)
+        // `create_dir` rather than `create_dir_all`: this must be a directory
+        // this run owns. Adopting a pre-existing one would mean the Drop below
+        // recursively deletes files that belong to somebody else.
+        std::fs::create_dir(&root)
             .with_context(|| format!("creating recovery workspace {}", root.display()))?;
         Ok(Self { root })
     }
@@ -518,14 +637,35 @@ impl Drop for RecoveryWorkspace {
     }
 }
 
+fn staged_path(db_path: &Path) -> PathBuf {
+    let mut name = db_path.as_os_str().to_os_string();
+    name.push(format!(".recovered-{}", std::process::id()));
+    PathBuf::from(name)
+}
+
+/// A quarantine name that cannot collide with an earlier one.
+///
+/// Second resolution alone would let a second recovery in the same second
+/// overwrite the first quarantine — destroying the only copy of the evidence
+/// this whole routine exists to preserve.
 fn quarantine_path(db_path: &Path) -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_secs())
+        .map(|value| value.as_nanos())
         .unwrap_or_default();
-    let mut name = db_path.as_os_str().to_os_string();
-    name.push(format!(".corrupt-{stamp}"));
-    PathBuf::from(name)
+    let mut candidate = {
+        let mut name = db_path.as_os_str().to_os_string();
+        name.push(format!(".corrupt-{stamp}"));
+        PathBuf::from(name)
+    };
+    let mut attempt = 1u32;
+    while candidate.exists() {
+        let mut name = db_path.as_os_str().to_os_string();
+        name.push(format!(".corrupt-{stamp}-{attempt}"));
+        candidate = PathBuf::from(name);
+        attempt += 1;
+    }
+    candidate
 }
 
 /// Recreate one table from its on-disk DDL and load its validated rows.
@@ -547,7 +687,7 @@ fn recover_table(
         .collect::<Vec<_>>()
         .join(", ");
     let mut stmt = salvaged.prepare(&format!(
-        "SELECT nfield, {selected} FROM lost_and_found WHERE rootpgno = ?1"
+        "SELECT nfield, {selected} FROM lost_and_found WHERE rootpgno = ?1 ORDER BY pgno, id"
     ))?;
 
     let mut attributed = 0usize;
@@ -560,19 +700,23 @@ fn recover_table(
         Some(rebuilt.unchecked_transaction()?)
     };
 
-    let insert_sql = {
-        let names = schema.columns.join(", ");
-        let placeholders = (1..=column_count)
+    // One statement per arity, so a pre-ALTER row inserts only the columns it
+    // has. `OR IGNORE` rather than `OR REPLACE`: with duplicate keys the first
+    // row wins deterministically instead of the last one silently deleting it.
+    let insert_sql = |arity: usize| {
+        let names = schema.columns[..arity].join(", ");
+        let placeholders = (1..=arity)
             .map(|index| format!("?{index}"))
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "INSERT OR REPLACE INTO {} ({names}) VALUES ({placeholders})",
+            "INSERT OR IGNORE INTO {} ({names}) VALUES ({placeholders})",
             schema.table
         )
     };
 
     let mut rows = stmt.query([schema.root_page])?;
+    let mut seen_short_rows = false;
     while let Some(row) = rows.next()? {
         attributed += 1;
         let nfield: i64 = row.get(0)?;
@@ -583,8 +727,16 @@ fn recover_table(
             rejected += 1;
             continue;
         }
-        let mut values = Vec::with_capacity(column_count);
-        for index in 0..column_count {
+        // Bind only the fields the row actually carried. Binding the trailing
+        // ones as NULL is not the same as omitting them: a column added later
+        // with a NOT NULL default rejects an explicit NULL and takes the whole
+        // row down with it, where an omitted column simply gets its default.
+        let present = (nfield.max(0) as usize).min(column_count);
+        if present < column_count {
+            seen_short_rows = true;
+        }
+        let mut values = Vec::with_capacity(present);
+        for index in 0..present {
             values.push(row.get::<_, rusqlite::types::Value>(index + 1)?);
         }
         if !row_is_plausible(&schema.table, &values) {
@@ -597,7 +749,14 @@ fn recover_table(
             // schema rejects — a NOT NULL column that did not survive, a type
             // the column will not take — is counted and skipped rather than
             // failing the whole table.
-            match transaction.execute(&insert_sql, rusqlite::params_from_iter(values.iter())) {
+            match transaction.execute(
+                &insert_sql(values.len()),
+                rusqlite::params_from_iter(values.iter()),
+            ) {
+                // `OR IGNORE` reports zero changed rows for a duplicate key
+                // rather than erroring, and a row that changed nothing was not
+                // recovered.
+                Ok(0) => rejected += 1,
                 Ok(_) => recovered += 1,
                 Err(_) => rejected += 1,
             }
@@ -608,6 +767,16 @@ fn recover_table(
 
     if let Some(transaction) = transaction {
         transaction.commit()?;
+    }
+
+    if seen_short_rows {
+        // Not an error: these predate a column being added, and their trailing
+        // columns take defaults. Worth reporting so a thin recovery is not read
+        // as a clean one.
+        tracing::info!(
+            table = %schema.table,
+            "recovered rows from an older on-disk shape; trailing columns took their defaults"
+        );
     }
 
     Ok(RecoveredTable {
@@ -625,9 +794,13 @@ fn recover_table(
 fn run_recovery_walk(source: &Path, destination: &Path) -> Result<()> {
     use std::process::Command;
 
+    // `--ignore-freelist` keeps deleted rows out of the salvage. Without it a
+    // historical `file_state` row — an old, smaller offset for a path that has
+    // since advanced — is indistinguishable from the live one and can win the
+    // insert, rewinding a cursor to a position the host has already accepted.
     let output = Command::new("sqlite3")
         .arg(source)
-        .arg(".recover")
+        .arg(".recover --ignore-freelist")
         .output()
         .context("running `sqlite3 .recover` (is the sqlite3 CLI installed?)")?;
     if !output.status.success() {
@@ -636,12 +809,18 @@ fn run_recovery_walk(source: &Path, destination: &Path) -> Result<()> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
+    if output.stdout.is_empty() {
+        bail!("sqlite3 .recover produced no output");
+    }
 
+    // `output()` rather than a hand-managed pipe: an undrained stderr pipe
+    // deadlocks `write_all` once the loader emits enough errors, and the
+    // destroyed schema page guarantees it emits some.
     let mut child = Command::new("sqlite3")
         .arg(destination)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .context("loading the recovery walk output")?;
     {
@@ -652,13 +831,17 @@ fn run_recovery_walk(source: &Path, destination: &Path) -> Result<()> {
             .context("recovery loader stdin unavailable")?;
         stdin.write_all(&output.stdout)?;
     }
-    let status = child.wait().context("waiting for the recovery loader")?;
-    if !status.success() {
-        // The loader reports errors for the destroyed schema page while still
-        // materializing `lost_and_found`, which is the part recovery reads.
-        if !destination.exists() {
-            bail!("recovery loader produced no database");
-        }
+    child.wait().context("waiting for the recovery loader")?;
+
+    // The loader always reports errors for the destroyed schema page, so its
+    // exit status says nothing. What matters is whether the one table recovery
+    // actually reads came out the other side.
+    let salvaged = Connection::open(destination).context("opening the salvage database")?;
+    let rows: i64 = salvaged
+        .query_row("SELECT count(*) FROM lost_and_found", [], |row| row.get(0))
+        .context("the recovery walk produced no lost_and_found table")?;
+    if rows == 0 {
+        bail!("the recovery walk recovered no rows");
     }
     Ok(())
 }

@@ -1968,7 +1968,12 @@ where
                 Some(service),
                 before_health,
                 None,
-                vec!["The original database was left exactly as it was found."],
+                vec![
+                    "Recovery installs nothing until every check passes, and restores the \
+                     original if the final swap fails.",
+                    "Check the reported error before retrying; a database in use is refused \
+                     rather than recovered.",
+                ],
             );
         }
     };
