@@ -392,12 +392,11 @@ def _mark_machine_preview_sessions(managed_sessions: list[dict[str, Any]]) -> No
         )
 
 
-# A managed session must not silently miss its Runtime Host title merely
-# because it sorts after eight older attached sessions.  The request fan-out is
-# bounded below, but coverage is intentionally complete: this is the cold
-# snapshot that establishes the menu bar's title provenance before its stream
-# takes over.
-_MANAGED_SESSION_TITLE_FETCH_CONCURRENCY = 8
+# Title hydration is a cold-path convenience, not permission to saturate a
+# two-core Runtime Host. Fresh managed leases are few in normal operation and
+# all are still covered; a small concurrency bound keeps one local snapshot
+# from occupying the hosted catalog's entire interactive read lane.
+_MANAGED_SESSION_TITLE_FETCH_CONCURRENCY = 2
 _MANAGED_SESSION_TITLE_FETCH_TIMEOUT_SECONDS = 0.8
 
 
@@ -451,8 +450,10 @@ def _enrich_managed_session_titles(
         session_id: row
         for row in managed_sessions
         for session_id in [_normalize_optional_string(row.get("session_id"))]
-        if session_id is not None
+        if session_id is not None and row.get("state") != "unknown"
     }
+    if not by_id:
+        return
     with ThreadPoolExecutor(max_workers=min(_MANAGED_SESSION_TITLE_FETCH_CONCURRENCY, max(1, len(by_id)))) as executor:
         futures = {executor.submit(_fetch_managed_session_title, runtime_url, token, session_id): session_id for session_id in by_id}
         for future in as_completed(futures):

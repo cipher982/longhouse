@@ -342,10 +342,31 @@ def _resolved_engine_unmanaged_process_row(raw_row: Mapping[str, Any]) -> dict[s
 
 def _collect_resolved_sessions_from_engine_status(
     engine_status: dict[str, Any],
+    *,
+    now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
     raw_rows = _engine_status_resolved_sessions(engine_status)
     if raw_rows is None:
         return None
+    observed_now = now or datetime.now(timezone.utc)
+
+    # The canonical projection intentionally separates a control lease from
+    # process evidence, but older engine builds omitted the lease timestamp
+    # from each resolved row. The companion managed_sessions ledger still
+    # carries the exact observation and TTL. Use it to prevent an expired
+    # lease from remaining "attached" forever in fast local-health snapshots.
+    # Missing companion evidence stays backward compatible; present but
+    # expired or malformed evidence becomes explicitly unknown.
+    payload = _engine_status_payload(engine_status)
+    raw_managed_leases = payload.get("managed_sessions")
+    managed_leases_by_session: dict[str, Mapping[str, Any]] = {}
+    if isinstance(raw_managed_leases, list):
+        for raw_lease in raw_managed_leases:
+            if not isinstance(raw_lease, Mapping):
+                continue
+            session_id = _normalize_optional_string(raw_lease.get("session_id"))
+            if session_id:
+                managed_leases_by_session[session_id] = raw_lease
 
     # Phase evidence deliberately lives in the separate engine ledger: a
     # control lease is not an activity claim.  The resolved-session rows are
@@ -355,7 +376,6 @@ def _collect_resolved_sessions_from_engine_status(
     # `running` evidence.  Merge only the current ledger row for the matching
     # managed session; freshness is enforced by the engine before emission.
     phase_by_session: dict[str, Mapping[str, Any]] = {}
-    payload = _engine_status_payload(engine_status)
     raw_ledger = payload.get("phase_ledger")
     if isinstance(raw_ledger, list):
         for item in raw_ledger:
@@ -375,7 +395,26 @@ def _collect_resolved_sessions_from_engine_status(
         control_path = _normalize_optional_string(raw_row.get("control_path"))
         if control_path == CONTROL_PATH_MANAGED:
             row = _resolved_engine_managed_session_row(raw_row=raw_row)
-            phase_row = phase_by_session.get(str(row.get("session_id") or ""))
+            session_id = str(row.get("session_id") or "")
+            raw_lease = managed_leases_by_session.get(session_id)
+            if raw_lease is not None:
+                lease_observed_at = _parse_rfc3339(_normalize_optional_string(raw_lease.get("observed_at")))
+                raw_ttl_ms = raw_lease.get("lease_ttl_ms")
+                ttl_ms = raw_ttl_ms if type(raw_ttl_ms) is int and raw_ttl_ms > 0 else None
+                reason = None
+                if lease_observed_at is None or ttl_ms is None:
+                    reason = "lease_evidence_invalid"
+                elif (observed_now - lease_observed_at).total_seconds() * 1000 > ttl_ms:
+                    reason = "lease_expired"
+                if reason is not None:
+                    row["state"] = "unknown"
+                    row["bridge_status"] = None
+                    reason_codes = list(row.get("reason_codes") or [])
+                    if reason not in reason_codes:
+                        reason_codes.append(reason)
+                    row["reason_codes"] = reason_codes
+
+            phase_row = phase_by_session.get(session_id)
             if phase_row is not None:
                 raw_phase = _normalize_optional_string(phase_row.get("phase"))
                 tool_name = _normalize_optional_string(phase_row.get("tool_name"))
