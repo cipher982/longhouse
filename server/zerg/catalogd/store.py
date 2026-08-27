@@ -10205,7 +10205,22 @@ class CatalogStore:
     ) -> dict[str, Any]:
         table = ProjectorState.__table__
         tombstones = LiveSessionTombstone.__table__
-        with _write_transaction(self.engine) as connection:
+        eligible_predicates = [
+            table.c.projector == projector,
+            table.c.desired_revision > table.c.completed_revision,
+            # No status exclusion. "quarantined" is no longer written (see
+            # fail_projector_claim); rows still carrying it from before that
+            # change have retry_at=NULL, so dropping the exclusion makes
+            # them immediately claimable and they heal on the next tick
+            # rather than needing an operator to call
+            # projector.state.requeue.v2 by hand.
+            or_(table.c.claim_expires_at.is_(None), table.c.claim_expires_at <= now),
+            or_(table.c.retry_at.is_(None), table.c.retry_at <= now),
+        ]
+        if projector != "search-v2":
+            eligible_predicates.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists())
+
+        def replay_result(connection) -> dict[str, Any] | None:
             replay_rows = (
                 connection.execute(
                     select(table)
@@ -10223,35 +10238,28 @@ class CatalogStore:
                     "exact_replay": True,
                     "commit_seq": str(replay_rows[0]["commit_seq"]),
                 }
-            terminal_replay = connection.execute(
-                select(table.c.commit_seq).where(
-                    table.c.projector == projector,
-                    or_(
-                        table.c.last_completion_token == claim_token,
-                        table.c.last_failure_token == claim_token,
-                    ),
-                )
-            ).first()
+            # Keep these as two point lookups. SQLite otherwise chooses the
+            # broad projector index for the OR expression and scans the full
+            # projector history instead of using the token indexes.
+            terminal_replay = None
+            for terminal_token in (table.c.last_completion_token, table.c.last_failure_token):
+                terminal_replay = connection.execute(
+                    select(table.c.commit_seq).where(
+                        table.c.projector == projector,
+                        terminal_token == claim_token,
+                    )
+                ).first()
+                if terminal_replay is not None:
+                    break
             if terminal_replay is not None:
                 return {
                     "claimed": [],
                     "exact_replay": True,
                     "commit_seq": str(terminal_replay[0]),
                 }
-            eligible_predicates = [
-                table.c.projector == projector,
-                table.c.desired_revision > table.c.completed_revision,
-                # No status exclusion. "quarantined" is no longer written (see
-                # fail_projector_claim); rows still carrying it from before that
-                # change have retry_at=NULL, so dropping the exclusion makes
-                # them immediately claimable and they heal on the next tick
-                # rather than needing an operator to call
-                # projector.state.requeue.v2 by hand.
-                or_(table.c.claim_expires_at.is_(None), table.c.claim_expires_at <= now),
-                or_(table.c.retry_at.is_(None), table.c.retry_at <= now),
-            ]
-            if projector != "search-v2":
-                eligible_predicates.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists())
+            return None
+
+        def eligible_rows(connection, row_limit: int):
             if projector == EMBEDDING_PROJECTOR_ID:
                 # Embeddings read episode text from searchd's *published* render
                 # generation, so a session is only workable up to the revision
@@ -10270,7 +10278,7 @@ class CatalogStore:
                 # so the projector always makes progress on the newest text that
                 # actually exists to embed.
                 search_state = table.alias("search_state")
-                eligible = (
+                return (
                     connection.execute(
                         select(table, search_state.c.completed_revision.label("search_completed_revision"))
                         .join(
@@ -10283,19 +10291,41 @@ class CatalogStore:
                         )
                         .where(*eligible_predicates)
                         .order_by(table.c.updated_at.asc(), table.c.session_id.asc())
-                        .limit(limit)
+                        .limit(row_limit)
                     )
                     .mappings()
                     .all()
                 )
-            else:
-                eligible = (
-                    connection.execute(
-                        select(table).where(*eligible_predicates).order_by(table.c.updated_at.asc(), table.c.session_id.asc()).limit(limit)
-                    )
-                    .mappings()
-                    .all()
+            return (
+                connection.execute(
+                    select(table).where(*eligible_predicates).order_by(table.c.updated_at.asc(), table.c.session_id.asc()).limit(row_limit)
                 )
+                .mappings()
+                .all()
+            )
+
+        # Idle pollers dominate the steady state. Do the exact eligibility and
+        # replay checks on a read connection first so a poll with nothing to do
+        # never enters SQLite's single-writer lane. A newly eligible row that
+        # arrives after this check is picked up on the next bounded poll.
+        with self.engine.connect() as connection:
+            replay = replay_result(connection)
+            if replay is not None:
+                return replay
+            if not eligible_rows(connection, 1):
+                return {
+                    "claimed": [],
+                    "exact_replay": False,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+
+        # Eligibility can change before the reservation is acquired, so repeat
+        # every decision that matters under the write transaction.
+        with _write_transaction(self.engine) as connection:
+            replay = replay_result(connection)
+            if replay is not None:
+                return replay
+            eligible = eligible_rows(connection, limit)
             if not eligible:
                 return {
                     "claimed": [],

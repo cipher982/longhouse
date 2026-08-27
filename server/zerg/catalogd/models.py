@@ -518,6 +518,22 @@ class ProjectorState(CatalogBase):
             "session_id",
             sqlite_where=desired_revision > completed_revision,
         ),
+        # Claim RPCs are idempotent. A retry must recognize a token that
+        # already completed or failed, but those probes run on every poll.
+        # Without token indexes, even an active claim scans the whole
+        # historical projector ledger before it can do useful work.
+        Index(
+            "ix_projector_state_completion_token",
+            "projector",
+            "last_completion_token",
+            sqlite_where=last_completion_token.is_not(None),
+        ),
+        Index(
+            "ix_projector_state_failure_token",
+            "projector",
+            "last_failure_token",
+            sqlite_where=last_failure_token.is_not(None),
+        ),
         # Claimers consume oldest work first. The previous lag index starts
         # with two columns compared to each other, so SQLite still had to sort
         # every eligible row before applying LIMIT. This index lets it walk the

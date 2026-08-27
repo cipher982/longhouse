@@ -20,10 +20,12 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy import insert
 from sqlalchemy import select
 from sqlalchemy import update
 
+from zerg.catalogd import store as catalog_store
 from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
@@ -157,6 +159,65 @@ def test_legacy_quarantined_row_becomes_claimable(store: CatalogStore) -> None:
         limit=10,
     )
     assert [row["session_id"] for row in claimed["claimed"]] == [session_id]
+
+
+def test_idle_claim_poll_does_not_take_a_write_transaction(store: CatalogStore, monkeypatch) -> None:
+    """Backoff and dependency waits must not reserve the global writer lane."""
+
+    session_id = str(uuid4())
+    _seed_row(
+        store,
+        projector="search-v2",
+        session_id=session_id,
+        status="failed",
+        retry_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    def refuse_write(*_args, **_kwargs):
+        raise AssertionError("idle projector poll took a write transaction")
+
+    monkeypatch.setattr(catalog_store, "_write_transaction", refuse_write)
+    result = store.claim_projector_lag(
+        projector="search-v2",
+        worker_id="worker-a",
+        claim_token=str(uuid4()),
+        now=datetime.now(UTC),
+        lease_seconds=60,
+        limit=10,
+    )
+
+    assert result["claimed"] == []
+    assert result["exact_replay"] is False
+
+
+def test_claim_replay_token_probes_use_indexes(store: CatalogStore) -> None:
+    """Idempotency checks must not scan every historical projector row."""
+
+    statements: list[str] = []
+
+    def capture(_connection, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().startswith("SELECT projector_state.commit_seq"):
+            statements.append(statement)
+
+    event.listen(store.engine, "before_cursor_execute", capture)
+    try:
+        store.claim_projector_lag(
+            projector="search-v2",
+            worker_id="worker-a",
+            claim_token=str(uuid4()),
+            now=datetime.now(UTC),
+            lease_seconds=60,
+            limit=10,
+        )
+    finally:
+        event.remove(store.engine, "before_cursor_execute", capture)
+
+    assert len(statements) == 2, "completion and failure tokens must be separate point probes"
+    assert all(" OR " not in statement.upper() for statement in statements)
+    with store.engine.connect() as connection:
+        indexes = {row[1] for row in connection.exec_driver_sql("PRAGMA index_list('projector_state')")}
+    assert "ix_projector_state_completion_token" in indexes
+    assert "ix_projector_state_failure_token" in indexes
 
 
 def test_reaper_deletes_retired_generations_and_spares_live_ones(store: CatalogStore) -> None:
