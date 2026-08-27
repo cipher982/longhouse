@@ -375,6 +375,35 @@ function makeFailedToolItem(output: string, wrapped = true): TimelineItem {
 }
 
 describe("TimelinePane", () => {
+  it("exposes copy-independent pagination counts", () => {
+    render(
+      <TimelinePane
+        items={[messageItem]}
+        totalEntries={400}
+        loadedEntries={200}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("session-timeline-summary")).toHaveAttribute(
+      "data-loaded-entries",
+      "200",
+    );
+    expect(screen.getByTestId("session-timeline-summary")).toHaveAttribute(
+      "data-total-entries",
+      "400",
+    );
+  });
+
   it("keeps repeated shell work recognizable while collapsed", () => {
     render(
       <TimelinePane

@@ -1,6 +1,6 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { APIRequestContext, Page, Response } from "@playwright/test";
+import type { APIRequestContext, Locator, Page, Response } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { waitForPageReady } from "../helpers/ready-signals";
 import {
@@ -301,9 +301,13 @@ async function openReadableSession(page: Page, session: JourneySession | null): 
   return { resultCount: await rows.count(), paintMarker: "longhouse-session-timeline-row" };
 }
 
-function loadedEntryCount(text: string | null): number {
-  const match = String(text ?? "").match(/^(\d+)(?:\/(\d+))? entries/);
-  return match ? Number(match[1]) : 0;
+async function loadedEntryCount(summary: Locator): Promise<number> {
+  const rawValue = await summary.getAttribute("data-loaded-entries");
+  const value = rawValue === null ? Number.NaN : Number(rawValue);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error("loaded_entry_evidence_unavailable");
+  }
+  return value;
 }
 
 function ageBucket(session: JourneySession | null, nowMs: number): string {
@@ -407,7 +411,7 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
       async () => {
         await openReadableSession(page!, cohorts.older_projection);
         const summary = page!.getByTestId("session-timeline-summary");
-        const before = loadedEntryCount(await summary.textContent());
+        const before = await loadedEntryCount(summary);
         const sentinel = page!.getByTestId("session-timeline-load-older");
         if ((await sentinel.count()) === 0) throw new Error("missing_cohort");
         // Use the browser's performance clock so buffered entries painted just
@@ -416,8 +420,8 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
         await runAndWaitForSuccessfulResponse(page!, "session_projection", 25_000, () => (
           page!.getByTestId("session-timeline-list").evaluate((element) => element.scrollTo({ top: 0 }))
         ));
-        await expect.poll(async () => loadedEntryCount(await summary.textContent()), { timeout: 20_000 }).toBeGreaterThan(before);
-        const after = loadedEntryCount(await summary.textContent());
+        await expect.poll(async () => loadedEntryCount(summary), { timeout: 20_000 }).toBeGreaterThan(before);
+        const after = await loadedEntryCount(summary);
         if (after <= before) throw new Error("projection_not_appended");
         return {
           resultCount: after - before,

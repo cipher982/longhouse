@@ -1218,7 +1218,12 @@ export function TimelinePane({
         <div className="timeline-pane__header-main">
           {headerLeft}
           <div className="timeline-pane__title-group">
-            <div className="timeline-pane__summary" data-testid="session-timeline-summary">
+            <div
+              className="timeline-pane__summary"
+              data-testid="session-timeline-summary"
+              data-loaded-entries={loadedEntries}
+              data-total-entries={totalEntries}
+            >
               {transcriptSummary}
             </div>
           </div>
