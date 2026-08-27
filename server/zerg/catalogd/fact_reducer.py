@@ -565,26 +565,43 @@ def _prune_candidate_rows_setwise(connection: Connection, table, candidates: lis
     connection.execute(delete(table).where(table.c.id.in_(doomed)))
 
 
-def _prune_fact_family(connection: Connection, family: str) -> None:
-    """Bound heads and all child history for one family in the same transaction."""
+def _prune_fact_family(connection: Connection, family: str, *, head_count: int | None = None) -> None:
+    """Evict only the exact overflow and its child history.
+
+    Families normally sit at their hard ceiling, so a heartbeat introducing a
+    handful of new subjects should delete that same handful.  Ranking the kept
+    2,048 candidates separately for heads, receipts, and conflicts made this
+    small steady-state operation scan the whole family three times while
+    holding catalogd's single writer.
+    """
+
+    if head_count is None:
+        head_count = int(
+            connection.execute(
+                select(func.count()).select_from(FactHead.__table__).where(FactHead.__table__.c.family == family)
+            ).scalar_one()
+        )
+    overflow = head_count - MAX_HEADS_PER_FAMILY
+    if overflow <= 0:
+        return
 
     heads = FactHead.__table__
     candidate_columns = (heads.c.family, heads.c.subject_key, heads.c.source, heads.c.source_epoch)
-    keep_candidates = (
+    doomed_candidates = (
         select(*candidate_columns)
         .where(heads.c.family == family)
         .order_by(
-            heads.c.updated_commit_seq.desc(),
-            heads.c.subject_key,
-            heads.c.source,
-            heads.c.source_epoch,
+            heads.c.updated_commit_seq.asc(),
+            heads.c.subject_key.desc(),
+            heads.c.source.desc(),
+            heads.c.source_epoch.desc(),
         )
-        .limit(MAX_HEADS_PER_FAMILY)
+        .limit(overflow)
     )
     for table in (FactReceipt.__table__, FactConflict.__table__):
         child_candidate = tuple_(table.c.family, table.c.subject_key, table.c.source, table.c.source_epoch)
-        connection.execute(delete(table).where(table.c.family == family, child_candidate.not_in(keep_candidates)))
-    connection.execute(delete(heads).where(heads.c.family == family, tuple_(*candidate_columns).not_in(keep_candidates)))
+        connection.execute(delete(table).where(table.c.family == family, child_candidate.in_(doomed_candidates)))
+    connection.execute(delete(heads).where(heads.c.family == family, tuple_(*candidate_columns).in_(doomed_candidates)))
 
 
 def _current_commit_seq(connection: Connection) -> int:
@@ -964,7 +981,7 @@ def reduce_fact_batch_setwise(
             select(func.count()).select_from(FactHead.__table__).where(FactHead.__table__.c.family == family)
         ).scalar_one()
         if head_count > MAX_HEADS_PER_FAMILY:
-            _prune_fact_family(connection, family)
+            _prune_fact_family(connection, family, head_count=int(head_count))
 
     # The fold is three reads and three writes; everything after it is bounds
     # enforcement, which is per candidate and per family rather than per fact.

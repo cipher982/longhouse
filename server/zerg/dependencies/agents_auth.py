@@ -152,8 +152,8 @@ def _validate_device_token_through_catalogd(token: str) -> DeviceToken | None:
                 "touch_interval_seconds": 300,
             },
             # Machine-token auth sits in front of every agents request. Use the
-            # same hard-failure budget as browser auth so ordinary catalog
-            # pressure becomes bounded latency instead of intermittent 503s.
+            # same bounded busy-wait as browser auth so a healthy catalog writer
+            # transaction becomes latency instead of an intermittent 503.
             timeout_seconds=AUTH_CATALOG_CALL_DEADLINE_SECONDS,
         )
     except (CatalogUnavailable, CatalogRemoteError) as exc:

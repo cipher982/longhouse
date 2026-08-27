@@ -309,10 +309,12 @@ def test_global_family_bound_evicts_heads_and_child_history_together(tmp_path, m
         reduce_fact_batch(connection, conflicts, received_at=NOW + timedelta(seconds=1))
         reduce_fact_batch(connection, newcomers, received_at=NOW + timedelta(seconds=2))
         head_count = connection.execute(select(func.count()).select_from(fact_reducer.FactHead)).scalar_one()
+        head_subjects = set(connection.execute(select(fact_reducer.FactHead.subject_key)).scalars())
         receipt_count = connection.execute(select(func.count()).select_from(FactReceipt)).scalar_one()
         conflict_count = connection.execute(select(func.count()).select_from(FactConflict)).scalar_one()
 
     assert head_count == 3
+    assert head_subjects == {"run:run-0", "run:run-3", "run:run-4"}
     assert receipt_count == 3
     assert conflict_count == 1
 
