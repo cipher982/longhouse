@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { devices } from '@playwright/test';
+import { ciPortCacheKey } from './port-cache-key.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,9 +57,7 @@ if (envPath && fs.existsSync(envPath)) {
 // Generate random high ports for E2E - avoids conflicts with dev servers and parallel worktrees
 // Cache file is keyed by directory hash so parallel runs in different dirs don't collide
 const dirHash = Buffer.from(__dirname).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
-const ciRunKey = process.env.CI
-  ? (process.env.GITHUB_RUN_ID || process.env.GITHUB_RUN_NUMBER || process.env.GITHUB_SHA || 'ci')
-  : '';
+const ciRunKey = ciPortCacheKey(process.env);
 const portCacheFile = ciRunKey
   ? path.join(os.tmpdir(), `pw-ports-${dirHash}-${ciRunKey}.json`)
   : path.join(os.tmpdir(), `pw-ports-${dirHash}.json`);
