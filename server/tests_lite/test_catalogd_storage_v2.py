@@ -3119,15 +3119,33 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
     metadata = initialize_catalog_schema(engine)
     with engine.connect() as connection:
         table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
-        projector_indexes = {
-            str(row[1])
-            for row in connection.exec_driver_sql("PRAGMA index_list('projector_state')")
-        }
+        projector_indexes = {str(row[1]) for row in connection.exec_driver_sql("PRAGMA index_list('projector_state')")}
+        active_claim_index = connection.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ix_projector_state_active_claim_order'"
+        ).scalar_one()
+        claim_plan = " ".join(
+            str(row[3])
+            for row in connection.exec_driver_sql(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT * FROM projector_state
+                WHERE projector = 'search-v2'
+                  AND desired_revision > completed_revision
+                  AND (claim_expires_at IS NULL OR claim_expires_at <= CURRENT_TIMESTAMP)
+                  AND (retry_at IS NULL OR retry_at <= CURRENT_TIMESTAMP)
+                ORDER BY updated_at, session_id
+                LIMIT 1
+                """
+            )
+        )
     engine.dispose()
 
     assert metadata.schema_version == CATALOG_SCHEMA_VERSION
     assert set(CatalogBase.metadata.tables).issubset(table_names)
     assert "ix_projector_state_claim_order" in projector_indexes
+    assert "ix_projector_state_active_claim_order" in projector_indexes
+    assert "WHERE desired_revision > completed_revision" in active_claim_index
+    assert "ix_projector_state_active_claim_order" in claim_plan
 
 
 @pytest.mark.asyncio

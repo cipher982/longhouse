@@ -506,6 +506,18 @@ class ProjectorState(CatalogBase):
 
     __table_args__ = (
         Index("ix_projector_state_lag", "projector", "completed_revision", "desired_revision", "session_id"),
+        # Claims only ever inspect rows whose desired revision is ahead. On a
+        # converged corpus that is a tiny subset of projector_state; without a
+        # partial index SQLite walks every historical row in updated_at order
+        # on each idle poll and holds catalogd's single-writer lane while it
+        # does so.
+        Index(
+            "ix_projector_state_active_claim_order",
+            "projector",
+            "updated_at",
+            "session_id",
+            sqlite_where=desired_revision > completed_revision,
+        ),
         # Claimers consume oldest work first. The previous lag index starts
         # with two columns compared to each other, so SQLite still had to sort
         # every eligible row before applying LIMIT. This index lets it walk the
