@@ -17,6 +17,7 @@ from sqlalchemy import inspect as sa_inspect
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from zerg.auth.catalog_gateway import AUTH_CATALOG_CALL_DEADLINE_SECONDS
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -205,7 +206,7 @@ def test_production_agents_token_validation_uses_catalogd_without_opening_db():
     assert observed["params"]["token_hash"] == hash_token(plain_token)
     assert observed["params"]["touch_last_used"] is False
     assert observed["params"]["touch_interval_seconds"] == 300
-    assert observed["timeout_seconds"] == 1.0
+    assert observed["timeout_seconds"] == AUTH_CATALOG_CALL_DEADLINE_SECONDS
 
 
 def test_production_agents_token_validation_maps_catalog_failure_to_typed_503():
