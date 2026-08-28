@@ -42,6 +42,7 @@ _MAX_SEQUENCE_REPLAY_VALUES = 8_192
 _MAX_SEQUENCE_REPLAY_VALUE_BYTES = 16 * 1024 * 1024
 _MAX_SEQUENCE_CAVEAT_RECORDS = 4_096
 _MAX_SEQUENCE_CAVEAT_BYTES = 8 * 1024 * 1024
+_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
 
 
 async def recover_render_interaction_kinds(
@@ -517,6 +518,7 @@ async def _load_raw_manifests(
                 "after_source_key": after_source_key,
                 "limit": 1_000,
             },
+            **({} if projector_read else {"timeout_seconds": _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS}),
         )
         if page.get("found") is not True:
             if allow_missing_session and page.get("deleted") is not True:

@@ -299,7 +299,7 @@ async def test_multi_page_semantic_repair_uses_final_catalog_completion(monkeypa
         def __init__(self):
             self.repairs: list[dict[str, object]] = []
 
-        async def call(self, method, params):
+        async def call(self, method, params, **_kwargs):
             if method == "storage.session.projector.read.v2":
                 return {"found": True, "commit_seq": 9}
             if method == "storage.session.render_objects.list.v2":
@@ -468,9 +468,10 @@ async def test_storage_semantics_seed_from_prior_raw_envelope(tmp_path):
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     class Catalog:
-        async def call(self, method, params):
+        async def call(self, method, params, *, timeout_seconds=None):
             assert method == "storage.session.raw_manifest.v2"
             assert params["session_id"] == str(session_id)
+            assert timeout_seconds == 4.25
             return {
                 "found": True,
                 "objects": [
@@ -553,7 +554,7 @@ async def test_storage_semantics_allows_missing_manifest_only_for_new_ingest(tmp
     )
 
     class Catalog:
-        async def call(self, method, _params):
+        async def call(self, method, _params, **_kwargs):
             assert method == "storage.session.raw_manifest.v2"
             return {
                 "found": False,
@@ -640,7 +641,7 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
     class Catalog:
         calls = 0
 
-        async def call(self, method, params):
+        async def call(self, method, params, **_kwargs):
             assert method == "storage.session.raw_manifest.v2"
             self.calls += 1
             if self.calls == 1:
@@ -754,7 +755,7 @@ async def test_storage_semantics_replays_current_raw_in_order(tmp_path, command_
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     class Catalog:
-        async def call(self, method, params):
+        async def call(self, method, params, **_kwargs):
             assert method == "storage.session.raw_manifest.v2"
             return {"found": True, "objects": [], "objects_truncated": False}
 
@@ -825,7 +826,7 @@ async def test_storage_semantic_recovery_skips_full_stream_scan_without_sequence
     )
 
     class Catalog:
-        async def call(self, method, params):
+        async def call(self, method, params, **_kwargs):
             assert method == "storage.session.raw_manifest.v2"
             return {
                 "found": True,
@@ -951,7 +952,7 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     class Catalog:
-        async def call(self, method, params):
+        async def call(self, method, params, **_kwargs):
             assert method == "storage.session.raw_manifest.v2"
             return {
                 "found": True,
