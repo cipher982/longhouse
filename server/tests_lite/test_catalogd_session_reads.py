@@ -765,6 +765,42 @@ def test_catalog_gateway_gives_composed_session_snapshots_a_bounded_retry_budget
     assert attempts == [1.0, 1.0]
 
 
+def test_catalog_gateway_waits_through_cold_session_read_lane_burst(monkeypatch):
+    attempts: list[float] = []
+    sleeps: list[float] = []
+    monotonic_seconds = 0.0
+
+    def fake_call(_socket_path, method, *, params, timeout_seconds):
+        assert method == "session.read.v2"
+        assert params == {"session_id": "session-1", "owner_id": 1}
+        attempts.append(timeout_seconds)
+        if len(attempts) < 14:
+            raise CatalogRemoteError(
+                CatalogRpcError(
+                    code="resource_exhausted",
+                    message="catalog read lane is full",
+                    retryable=True,
+                    retry_after_ms=25,
+                    details={},
+                )
+            )
+        return {"found": True}
+
+    def fake_sleep(seconds):
+        nonlocal monotonic_seconds
+        sleeps.append(seconds)
+        monotonic_seconds += seconds
+
+    monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
+    monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+    monkeypatch.setattr(catalog_read_gateway.time, "monotonic", lambda: monotonic_seconds)
+    monkeypatch.setattr(catalog_read_gateway.time, "sleep", fake_sleep)
+
+    assert catalog_read_gateway.session_snapshot("session-1", owner_id=1) == {"found": True}
+    assert len(attempts) == 14
+    assert sum(sleeps) == pytest.approx(2.625)
+
+
 @pytest.mark.asyncio
 async def test_active_owner_read_is_catalog_owned(daemon_paths):
     database_path, socket_path = daemon_paths
