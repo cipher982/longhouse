@@ -1010,6 +1010,16 @@ async def test_shadow_state_read_is_owner_scoped_and_commit_coherent(daemon_path
             {"session_id": ownerless_session_id, "owner_id": 7},
         )
         assert ownerless["found"] is False
+        batch = await client.call(
+            "session.shadow_state.read.batch.v2",
+            {"session_ids": [session_id, ownerless_session_id], "owner_id": 7},
+        )
+        assert batch["commit_seq"] == str(reduced.commit_seq)
+        assert [item["session_id"] for item in batch["sessions"]] == [session_id, ownerless_session_id]
+        assert batch["sessions"][0]["found"] is True
+        assert {head["family"] for head in batch["sessions"][0]["heads"]} == {"activity", "control"}
+        assert batch["sessions"][1]["found"] is False
+        assert batch["sessions"][1]["heads"] == []
         with pytest.raises(CatalogRemoteError) as exc_info:
             await client.call(
                 "session.shadow_state.read.v2",

@@ -164,6 +164,47 @@ async def test_interactive_read_lane_rejects_work_instead_of_queueing(daemon_pat
 
 
 @pytest.mark.asyncio
+async def test_background_reads_do_not_consume_interactive_lane(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    entered = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    entered_count = 0
+
+    def block_interactive_read_lane() -> None:
+        nonlocal entered_count
+        with lock:
+            entered_count += 1
+            if entered_count == daemon._read_max_depth:
+                entered.set()
+        release.wait(timeout=2)
+
+    blocked = [
+        asyncio.create_task(daemon._run_read_store(block_interactive_read_lane))
+        for _ in range(daemon._read_max_depth)
+    ]
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        assert (await client.call("session.input.queued.list.v2", {"limit": 10}))["session_ids"] == []
+        assert (await client.call("storage.session.title.candidates.v2", {"limit": 10}))["sessions"] == []
+        assert (await client.call("storage.telemetry.summary.v2", {}))["objects"]["raw"]["count"] == 0
+        assert (
+            await client.call(
+                "storage.session.projector.read.v2",
+                {"session_id": "11111111-1111-4111-8111-111111111111"},
+            )
+        )["found"] is False
+    finally:
+        release.set()
+        await asyncio.gather(*blocked)
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_interactive_read_holds_slot_until_worker_exits(daemon_paths):
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)

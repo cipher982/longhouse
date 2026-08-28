@@ -5189,6 +5189,75 @@ class CatalogStore:
                 ],
             }
 
+    def read_shadow_sessions_state(self, *, session_ids: list[str], owner_id: int) -> dict[str, Any]:
+        """Read up to twenty owner-scoped session projections in one snapshot."""
+
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            owner_exists = connection.execute(
+                select(LiveUser.id).where(LiveUser.id == owner_id, LiveUser.is_active.is_(True))
+            ).scalar_one_or_none()
+            owned_ids = (
+                [
+                    session_id
+                    for session_id in session_ids
+                    if self._resolve_session_owner_id(connection, session_id=session_id) == str(owner_id)
+                ]
+                if owner_exists is not None
+                else []
+            )
+            facts = _assemble_session_facts(
+                connection,
+                session_ids=owned_ids,
+                observed_at=observed_at,
+                compact=False,
+            )
+            facts_by_id = {
+                str(catalog["session_id"]): item
+                for item in facts
+                if isinstance(item, dict) and isinstance((catalog := item.get("catalog")), dict) and catalog.get("session_id")
+            }
+            commit_seq, heads_by_session, truncated = read_bounded_sessions_fact_heads(
+                connection,
+                session_ids=owned_ids,
+                families=("activity", "control", "continuation"),
+                limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
+            )
+            sessions = []
+            for session_id in session_ids:
+                session_facts = facts_by_id.get(session_id)
+                heads = heads_by_session.get(session_id, [])
+                provider = str(session_facts["catalog"].get("provider") or "").strip().lower() if session_facts is not None else ""
+                sessions.append(
+                    {
+                        "session_id": session_id,
+                        "found": session_facts is not None,
+                        "provider": provider or None,
+                        "head_count": len(heads),
+                        "heads_truncated": session_id in truncated,
+                        "legacy_facts": session_facts,
+                        "heads": [
+                            {
+                                "family": head["family"],
+                                "session_id": head["session_id"],
+                                "subject_key": head["subject_key"],
+                                "source": head["source"],
+                                "source_epoch": head["source_epoch"],
+                                "evidence_hash": head["evidence_hash"],
+                                "value_json": head["value_json"],
+                                "valid_until": head["valid_until"].isoformat() if head["valid_until"] is not None else None,
+                                "updated_commit_seq": head["updated_commit_seq"],
+                            }
+                            for head in heads
+                        ],
+                    }
+                )
+            return {
+                "commit_seq": str(commit_seq),
+                "observed_at": observed_at.isoformat(),
+                "sessions": sessions,
+            }
+
     def read_sessions(self, *, session_ids: list[str]) -> dict[str, Any]:
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:

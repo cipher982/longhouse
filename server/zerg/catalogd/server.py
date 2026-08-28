@@ -581,6 +581,8 @@ class CatalogDaemon:
             return await self._read_session(request)
         if request.method == "session.shadow_state.read.v2":
             return await self._read_shadow_session_state(request)
+        if request.method == "session.shadow_state.read.batch.v2":
+            return await self._read_shadow_sessions_state(request)
         if request.method == "session.shadow_state.health.v2":
             return await self._read_shadow_session_state_health(request)
         if request.method == "session.read.batch.v2":
@@ -615,6 +617,8 @@ class CatalogDaemon:
             return await self._raw_objects_exist_batch(request)
         if request.method == "storage.session.read.v2":
             return await self._read_storage_session(request)
+        if request.method == "storage.session.projector.read.v2":
+            return await self._read_storage_session_for_projector(request)
         if request.method == "storage.session.canary.lookup.v2":
             return await self._lookup_storage_canary_session(request)
         if request.method == "storage.session.title.candidates.v2":
@@ -1928,7 +1932,9 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 100:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 100")
         assert self._store is not None
-        result = await self._run_read_store(self._store.list_queued_input_sessions, limit=limit)
+        # Recovery polling is background maintenance. Keep it off the scarce
+        # interactive lane so a stuck recovery pass cannot reject user reads.
+        result = await self._run_projector_read_store(self._store.list_queued_input_sessions, limit=limit)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _claim_queued_input(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2153,6 +2159,29 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
         assert self._store is not None
         result = await self._run_read_store(self._store.read_shadow_session_state_health, owner_id=owner_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_shadow_sessions_state(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_ids", "owner_id"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "session.shadow_state.read.batch.v2 requires session_ids and owner_id",
+            )
+        session_ids = request.params["session_ids"]
+        owner_id = request.params["owner_id"]
+        if not isinstance(session_ids, list) or not 1 <= len(session_ids) <= 20:
+            return self._error(request, "invalid_request", "session_ids must contain 1 to 20 UUIDs")
+        if len(set(session_ids)) != len(session_ids) or any(not _is_canonical_uuid(value) for value in session_ids):
+            return self._error(request, "invalid_request", "session_ids must be unique canonical UUIDs")
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.read_shadow_sessions_state,
+            session_ids=session_ids,
+            owner_id=owner_id,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2516,6 +2545,17 @@ class CatalogDaemon:
         result = await self._run_read_store(self._store.read_storage_session, session_id=session_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _read_storage_session_for_projector(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id"}:
+            return self._error(request, "invalid_request", "storage.session.projector.read.v2 requires session_id")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_projector_read_store(self._store.read_storage_session, session_id=session_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _lookup_storage_canary_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"observed_at", "max_age_seconds"}:
             return self._error(
@@ -2546,7 +2586,13 @@ class CatalogDaemon:
         if set(request.params) != {"limit"} or type(request.params["limit"]) is not int or not 1 <= request.params["limit"] <= 100:
             return self._error(request, "invalid_request", "title candidates require limit from 1 through 100")
         assert self._store is not None
-        result = await self._run_read_store(self._store.list_storage_title_candidates, limit=request.params["limit"])
+        # Title generation is background projection work, not an interactive
+        # catalog consumer. Large candidate scans must not occupy both user
+        # read slots while the timeline is loading.
+        result = await self._run_projector_read_store(
+            self._store.list_storage_title_candidates,
+            limit=request.params["limit"],
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _complete_storage_title(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2845,7 +2891,7 @@ class CatalogDaemon:
         if request.params:
             return self._error(request, "invalid_request", "storage.telemetry.summary.v2 takes no parameters")
         assert self._store is not None
-        result = await self._run_read_store(self._store.read_storage_telemetry_summary)
+        result = await self._run_projector_read_store(self._store.read_storage_telemetry_summary)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_raw_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -58,6 +58,7 @@ _READ_BUDGETS = {
     "session.timeline.list.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
     "machine.workspace.list.v2": (_WORKSPACE_DEADLINE_SECONDS, _WORKSPACE_ATTEMPT_SECONDS),
     "session.shadow_state.read.v2": (_SHADOW_STATE_DEADLINE_SECONDS, _SHADOW_STATE_ATTEMPT_SECONDS),
+    "session.shadow_state.read.batch.v2": (_TIMELINE_DEADLINE_SECONDS, _TIMELINE_ATTEMPT_SECONDS),
     "storage.session.title.dependency.health.v2": (_TITLE_HEALTH_DEADLINE_SECONDS, _TITLE_HEALTH_ATTEMPT_SECONDS),
 }
 
@@ -93,6 +94,13 @@ def shadow_session_state_snapshot(session_id: str, *, owner_id: int) -> dict[str
     return _call(
         "session.shadow_state.read.v2",
         {"session_id": session_id, "owner_id": owner_id},
+    )
+
+
+def shadow_session_states_snapshot(session_ids: list[str], *, owner_id: int) -> dict[str, Any]:
+    return _call(
+        "session.shadow_state.read.batch.v2",
+        {"session_ids": session_ids, "owner_id": owner_id},
     )
 
 
@@ -234,6 +242,7 @@ __all__ = [
     "resolve_session_prefix",
     "session_snapshot",
     "shadow_session_state_snapshot",
+    "shadow_session_states_snapshot",
     "shadow_session_state_health",
     "session_batch_snapshot",
     "timeline_snapshot",

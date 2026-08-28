@@ -98,7 +98,7 @@ class SemanticV2Projector:
             logger.warning("Semantic-v2 projection failed session=%s error=%s", session_id, exc)
 
     async def _project(self, *, session_id: str) -> None:
-        response = await self.catalog.call("storage.session.read.v2", {"session_id": session_id})
+        response = await self.catalog.call("storage.session.projector.read.v2", {"session_id": session_id})
         if response.get("found") is not True:
             # Deleted and retired sessions have no semantic work left. Their
             # ledger still converges so a stale claim cannot spin forever.

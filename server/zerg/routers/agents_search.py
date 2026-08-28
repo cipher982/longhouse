@@ -33,6 +33,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_catalog_timeline import read_live_catalog_session
+from zerg.services.live_catalog_timeline import read_live_catalog_sessions
 from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_views import RECALL_COVERAGE_MAX_NAMED_SESSIONS
 from zerg.services.session_views import MachineSearchLaneFailure
@@ -562,19 +563,34 @@ async def search_storage_v2_sessions(
         session_id = str(row.get("session_id") or "")
         if session_id and session_id not in best_rows:
             best_rows[session_id] = row
-    projected = await asyncio.gather(
-        *(
-            asyncio.to_thread(
-                read_live_catalog_session,
-                UUID(session_id),
-                owner_id=owner_id,
-            )
-            for session_id in best_rows
-        ),
-        return_exceptions=True,
-    )
     sessions: list[SessionResponse | MachineSessionResponse] = []
-    for projection, row in zip(projected, best_rows.values(), strict=True):
+    candidates = [
+        item
+        for item in best_rows.items()
+        if device_id is not None
+        or _search_row_matches_filters(
+            item[1],
+            hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
+            device_id=None,
+        )
+    ]
+    projected: list[object] = []
+    for offset in range(0, len(candidates), 20):
+        page = candidates[offset : offset + 20]
+        try:
+            projected.extend(
+                await asyncio.to_thread(
+                    read_live_catalog_sessions,
+                    [UUID(session_id) for session_id, _row in page],
+                    owner_id=owner_id,
+                )
+            )
+        except (CatalogReadError, CatalogRemoteError, CatalogUnavailable) as exc:
+            projected.extend([exc] * len(page))
+        if len(projected) >= limit:
+            break
+    for projection, (_session_id, row) in zip(projected, candidates):
         if isinstance(projection, BaseException):
             if not isinstance(projection, (CatalogReadError, CatalogRemoteError, CatalogUnavailable)):
                 raise projection
@@ -589,7 +605,12 @@ async def search_storage_v2_sessions(
                     )
                 )
             fallback = _machine_session_from_search_row(row)
-            if fallback is not None:
+            if fallback is not None and _search_row_matches_filters(
+                row,
+                hide_autonomous=hide_autonomous,
+                include_automation=include_automation,
+                device_id=device_id,
+            ):
                 sessions.append(fallback)
             if len(sessions) >= limit:
                 break
@@ -613,6 +634,26 @@ async def search_storage_v2_sessions(
         if len(sessions) >= limit:
             break
     return sessions
+
+
+def _search_row_matches_filters(
+    row: dict[str, object],
+    *,
+    hide_autonomous: bool,
+    include_automation: bool,
+    device_id: str | None,
+) -> bool:
+    # searchd already applies owner, project, provider, environment, hidden,
+    # archived, test, and tombstone policy. These are the remaining filters
+    # that canonical hydration normally proves. Device identity is not in the
+    # derived row, so fail closed if that filter was requested.
+    if device_id is not None:
+        return False
+    if hide_autonomous and int(row.get("user_messages") or 0) <= 0:
+        return False
+    if not include_automation and str(row.get("environment") or "") == "automation":
+        return False
+    return True
 
 
 def _machine_session_from_search_row(row: dict[str, object]) -> MachineSessionResponse | None:

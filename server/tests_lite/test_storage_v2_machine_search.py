@@ -122,12 +122,12 @@ def test_storage_v2_machine_search_hydrates_hits_with_owner_scope(monkeypatch):
         assert kwargs["owner_id"] == 7
         return [{"session_id": session_id, "content_snippet": "scoped hit"}]
 
-    def read_session(requested, *, owner_id):
+    def read_sessions(requested, *, owner_id):
         observed.update(requested=requested, owner_id=owner_id)
-        return None, None, "9"
+        return [(None, None, "9")]
 
     monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
-    monkeypatch.setattr(agents_search, "read_live_catalog_session", read_session)
+    monkeypatch.setattr(agents_search, "read_live_catalog_sessions", read_sessions)
 
     result = asyncio.run(
         agents_search.search_storage_v2_sessions(
@@ -143,7 +143,7 @@ def test_storage_v2_machine_search_hydrates_hits_with_owner_scope(monkeypatch):
     )
 
     assert result == []
-    assert observed == {"requested": agents_search.UUID(session_id), "owner_id": 7}
+    assert observed == {"requested": [agents_search.UUID(session_id)], "owner_id": 7}
 
 
 def test_machine_search_returns_index_hit_when_catalog_hydration_times_out(monkeypatch):
@@ -172,12 +172,12 @@ def test_machine_search_returns_index_hit_when_catalog_hydration_times_out(monke
             }
         ]
 
-    def read_session(_requested, *, owner_id):
+    def read_sessions(_requested, *, owner_id):
         assert owner_id == 7
         raise CatalogReadError("catalog_unavailable", "catalog deadline")
 
     monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
-    monkeypatch.setattr(agents_search, "read_live_catalog_session", read_session)
+    monkeypatch.setattr(agents_search, "read_live_catalog_sessions", read_sessions)
 
     result = asyncio.run(
         agents_search.search_storage_v2_sessions(
@@ -197,6 +197,45 @@ def test_machine_search_returns_index_hit_when_catalog_hydration_times_out(monke
     assert result[0].id == session_id
     assert result[0].match_snippet == "scoped hit"
     assert degraded[0].lane == "catalog"
+
+
+def test_machine_search_batches_catalog_hydration(monkeypatch):
+    rows = [
+        {
+            "session_id": f"00000000-0000-4000-8000-{index:012d}",
+            "environment": "production",
+            "user_messages": 1,
+        }
+        for index in range(100)
+    ]
+    page_sizes: list[int] = []
+
+    async def search_v2(**_kwargs):
+        return rows
+
+    def read_sessions(requested, *, owner_id):
+        assert owner_id == 7
+        page_sizes.append(len(requested))
+        return [(None, None, "9") for _ in requested]
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
+    monkeypatch.setattr(agents_search, "read_live_catalog_sessions", read_sessions)
+
+    result = asyncio.run(
+        agents_search.search_storage_v2_sessions(
+            owner_id=7,
+            query="scoped hit",
+            project=None,
+            provider=None,
+            environment=None,
+            days_back=14,
+            limit=21,
+            include_test=False,
+        )
+    )
+
+    assert result == []
+    assert page_sizes == [20, 20]
 
 
 def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):

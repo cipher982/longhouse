@@ -25,6 +25,7 @@ from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import canonical_timeline_snapshot
 from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
+from zerg.services.catalog_read_gateway import shadow_session_states_snapshot
 from zerg.services.console_control_projection import project_console_control
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
@@ -700,6 +701,42 @@ def read_live_catalog_session(
             "Canonical session detail requires an owner-scoped request.",
         )
     snapshot = shadow_session_state_snapshot(str(session_id), owner_id=owner_id)
+    return _project_live_catalog_session_snapshot(snapshot, include_hidden=include_hidden)
+
+
+def read_live_catalog_sessions(
+    session_ids: list[UUID],
+    *,
+    owner_id: int | None = None,
+    include_hidden: bool = True,
+) -> list[tuple[SessionResponse | None, str | None, str]]:
+    """Project a bounded session page from one catalog snapshot."""
+
+    if owner_id is None:
+        raise CatalogReadError(
+            "canonical_owner_required",
+            "Canonical session detail requires an owner-scoped request.",
+        )
+    snapshot = shadow_session_states_snapshot([str(session_id) for session_id in session_ids], owner_id=owner_id)
+    commit_seq = str(snapshot.get("commit_seq") or "0")
+    observed_at = snapshot.get("observed_at")
+    sessions = snapshot.get("sessions")
+    if not isinstance(sessions, list) or len(sessions) != len(session_ids) or any(not isinstance(item, dict) for item in sessions):
+        raise CatalogReadError("invalid_catalog_snapshot", "Catalog session batch snapshot is incomplete.")
+    return [
+        _project_live_catalog_session_snapshot(
+            {**item, "commit_seq": commit_seq, "observed_at": observed_at},
+            include_hidden=include_hidden,
+        )
+        for item in sessions
+    ]
+
+
+def _project_live_catalog_session_snapshot(
+    snapshot: dict[str, Any],
+    *,
+    include_hidden: bool,
+) -> tuple[SessionResponse | None, str | None, str]:
     commit_seq = str(snapshot.get("commit_seq") or "0")
     if snapshot.get("found") is not True:
         return None, None, commit_seq

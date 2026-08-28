@@ -31,7 +31,7 @@ async def test_claude_semantic_repair_runs_from_claim_and_completes(monkeypatch)
                         }
                     ]
                 }
-            if method == "storage.session.read.v2":
+            if method == "storage.session.projector.read.v2":
                 return {
                     "found": True,
                     "session": {
@@ -69,7 +69,7 @@ async def test_claude_semantic_repair_runs_from_claim_and_completes(monkeypatch)
     assert repairs[0]["generation_id"] == generation_id
     assert [method for method, _params in calls] == [
         "projector.state.claim.v2",
-        "storage.session.read.v2",
+        "storage.session.projector.read.v2",
         "projector.state.complete.v2",
     ]
     assert calls[-1][1]["completed_revision"] == 12
