@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -35,6 +36,7 @@ from zerg.routers.session_chat import _respond_to_live_pause_request
 from zerg.services.live_control_catalog import live_control_capability_available
 from zerg.services.live_control_catalog import live_session_input_block_reason
 from zerg.services.live_control_catalog import load_live_control_session
+from zerg.services.live_control_catalog import run_live_catalog_input_recovery_loop
 from zerg.services.live_control_catalog import wake_next_live_catalog_input
 from zerg.services.live_session_inputs import upsert_live_input_receipt
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
@@ -255,6 +257,32 @@ def test_catalog_input_block_reason_uses_disposition_and_latest_run_not_legacy_r
 
     session.catalog_facts["runtime"]["terminal_state"] = "user_closed"
     assert live_session_input_block_reason(None, session) == "session_closed"
+
+
+@pytest.mark.asyncio
+async def test_catalog_input_recovery_uses_background_read_budget(monkeypatch):
+    calls = []
+
+    class FakeCatalogClient:
+        async def call(self, method, params, *, timeout_seconds):
+            calls.append((method, params, timeout_seconds))
+            return {"session_ids": []}
+
+    sleep_count = 0
+
+    async def fake_sleep(_interval):
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr("zerg.services.live_control_catalog.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: FakeCatalogClient())
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_live_catalog_input_recovery_loop()
+
+    assert calls == [("session.input.queued.list.v2", {"limit": 100}, 5.0)]
 
 
 @pytest.mark.asyncio

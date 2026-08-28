@@ -32,6 +32,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cyc
 logger = logging.getLogger(__name__)
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
 _CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor", "antigravity"})
+_INPUT_RECOVERY_CATALOG_TIMEOUT_SECONDS = 5.0
 
 
 def canonical_command_authorization_providers() -> tuple[str, ...]:
@@ -611,7 +612,11 @@ async def run_live_catalog_input_recovery_loop() -> None:
             catalogd = get_catalogd_client()
             if catalogd is None:
                 continue
-            queued = await catalogd.call("session.input.queued.list.v2", {"limit": 100}, timeout_seconds=1.0)
+            queued = await catalogd.call(
+                "session.input.queued.list.v2",
+                {"limit": 100},
+                timeout_seconds=_INPUT_RECOVERY_CATALOG_TIMEOUT_SECONDS,
+            )
             for session_id in queued.get("session_ids", []):
                 await wake_next_live_catalog_input(session_id)
         except asyncio.CancelledError:
