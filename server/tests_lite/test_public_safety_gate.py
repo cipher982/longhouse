@@ -263,3 +263,22 @@ def test_system_destructive_routes_depend_on_require_admin():
 
     assert seen.get("/system/reset-sessions") is True
     assert seen.get("/system/seed-demo-sessions") is True
+
+
+def test_no_unauthenticated_destructive_demo_route_is_mounted():
+    """The demo seed/reset routes must not exist on the served surface.
+
+    longhouse.ai runs this image with DEMO_MODE=1 and
+    LONGHOUSE_ALLOW_PUBLIC_NO_AUTH=1, so auth_disabled is true there. The
+    deleted handlers guarded their destructive paths with
+    ``if not settings.auth_disabled: raise 403`` -- which permits exactly where
+    it meant to block, leaving a public unauthenticated wipe behind nothing but
+    get_db raising 503. Absence is the guard; a 403 that inverts under the
+    deployment's own configuration is not.
+    """
+
+    from zerg.main import api_app
+
+    mounted = {getattr(route, "path", "") for route in api_app.routes}
+    offenders = {path for path in mounted if path.endswith("/agents/demo") or path.endswith("/timeline/demo")}
+    assert offenders == set(), f"destructive demo routes are mounted: {sorted(offenders)}"

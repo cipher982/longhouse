@@ -102,7 +102,6 @@ from zerg.openapi_schema import export_openapi_schema
 from zerg.routers.admin import router as admin_router
 from zerg.routers.agents_backfill import router as agents_backfill_router
 from zerg.routers.agents_control import router as agents_control_router
-from zerg.routers.agents_demo import router as agents_demo_router
 from zerg.routers.agents_ingest import router as agents_ingest_router
 from zerg.routers.agents_machine_presence import router as agents_machine_presence_router
 from zerg.routers.agents_machines import router as agents_machines_router
@@ -308,7 +307,6 @@ api_app.include_router(agents_state_diagnostics_router)
 api_app.include_router(agents_source_lines_router)
 api_app.include_router(agents_storage_v2_router)
 api_app.include_router(agents_backfill_router)
-api_app.include_router(agents_demo_router)
 api_app.include_router(heartbeat_router)
 api_app.include_router(presence_router)
 api_app.include_router(permission_gate_router)

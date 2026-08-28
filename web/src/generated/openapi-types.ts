@@ -2014,23 +2014,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/timeline/demo": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Seed Timeline Demo Sessions */
-        post: operations["seed_timeline_demo_sessions_timeline_demo_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/timeline/sessions/{session_id}/action": {
         parameters: {
             query?: never;
@@ -3667,30 +3650,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/demo": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Seed Demo Sessions
-         * @description Seed missing demo sessions for the timeline (idempotent top-up).
-         */
-        post: operations["seed_demo_sessions_agents_demo_post"];
-        /**
-         * Reset Demo Sessions
-         * @description Delete all demo-seeded sessions (provider_session_id LIKE 'demo-%').
-         */
-        delete: operations["reset_demo_sessions_agents_demo_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agents/heartbeat": {
         parameters: {
             query?: never;
@@ -4692,26 +4651,6 @@ export interface components {
             confirmation_password?: string | null;
             /** @default clear_data */
             reset_type: components["schemas"]["ResetType"];
-        };
-        /**
-         * DemoSeedResponse
-         * @description Response for demo session seeding.
-         */
-        DemoSeedResponse: {
-            /** Seeded */
-            seeded: boolean;
-            /** Sessions Created */
-            sessions_created: number;
-            /**
-             * Sessions Failed
-             * @default 0
-             */
-            sessions_failed: number;
-            /**
-             * Sessions Deleted
-             * @default 0
-             */
-            sessions_deleted: number;
         };
         /**
          * DirectedInputCreate
@@ -14954,38 +14893,6 @@ export interface operations {
             };
         };
     };
-    seed_timeline_demo_sessions_timeline_demo_post: {
-        parameters: {
-            query?: {
-                /** @description Delete existing demo sessions before seeding fresh demo data */
-                replace?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DemoSeedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     set_timeline_session_action_timeline_sessions__session_id__action_post: {
         parameters: {
             query?: never;
@@ -18008,58 +17915,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    seed_demo_sessions_agents_demo_post: {
-        parameters: {
-            query?: {
-                /** @description Delete existing demo sessions before seeding fresh demo data */
-                replace?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DemoSeedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reset_demo_sessions_agents_demo_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DemoSeedResponse"];
                 };
             };
         };

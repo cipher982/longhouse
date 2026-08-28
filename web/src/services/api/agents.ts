@@ -1329,27 +1329,6 @@ export async function fetchRecallContext(
   );
 }
 
-export interface DemoSeedResponse {
-  seeded: boolean;
-  sessions_created: number;
-  sessions_failed: number;
-  sessions_deleted: number;
-}
-
-/**
- * Seed demo sessions for the timeline (idempotent).
- */
-export async function seedDemoSessions(options?: {
-  replace?: boolean;
-}): Promise<DemoSeedResponse> {
-  const params = new URLSearchParams();
-  if (options?.replace) params.set("replace", "true");
-  const suffix = params.size > 0 ? `?${params.toString()}` : "";
-  return request<DemoSeedResponse>(`${TIMELINE_API_PREFIX}/demo${suffix}`, {
-    method: "POST",
-  });
-}
-
 /**
  * Set user-driven bucket state for a session (park/snooze/archive/resume).
  */

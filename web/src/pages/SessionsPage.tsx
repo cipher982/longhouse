@@ -24,7 +24,6 @@ import {
   type AgentSessionFilters,
   fetchAgentSessionWorkspace,
   type TimelineSessionCard,
-  seedDemoSessions,
 } from "../services/api/agents";
 import {
   Button,
@@ -371,43 +370,8 @@ export default function SessionsPage() {
     setPopoverOpen(false);
   }, [updateUrlState]);
 
-  // Demo seeding state
-  const [demoLoading, setDemoLoading] = useState(false);
-  const [seedError, setSeedError] = useState<string | null>(null);
-  const autoSeededRef = useRef(false);
-
-  const handleSeedDemo = useCallback(async () => {
-    setDemoLoading(true);
-    setSeedError(null);
-    try {
-      const result = await seedDemoSessions();
-      // Invalidate both sessions and filter options so new demo data appears
-      queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
-      queryClient.invalidateQueries({ queryKey: ["agent-session-filters"] });
-      if (result.sessions_failed > 0) {
-        setSeedError(`Loaded ${result.sessions_created} demo sessions, ${result.sessions_failed} failed. Check backend logs.`);
-      }
-    } catch {
-      setSeedError("Failed to load demo sessions. Please try again.");
-    } finally {
-      setDemoLoading(false);
-    }
-  }, [queryClient]);
-
   const hasFilters = !!(project || provider || deviceId || daysBack !== DEFAULT_DAYS_BACK || searchQuery);
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
-
-  // Auto-seed demo sessions ONLY in demo mode, where fabricated data is
-  // expected. On a real self-host/hosted instance we must never silently write
-  // synthetic `demo-` sessions into the user's database — the empty state shows
-  // a "connect your machine" guide plus an explicit opt-in "Show me a demo"
-  // button instead.
-  useEffect(() => {
-    if (!isLoading && !autoSeededRef.current && showGuidedEmptyState && config.demoMode) {
-      autoSeededRef.current = true;
-      handleSeedDemo();
-    }
-  }, [isLoading, showGuidedEmptyState, handleSeedDemo, config.demoMode]);
 
   // Count active non-default filters (for badge)
   const activeFilterCount = [
@@ -458,7 +422,6 @@ export default function SessionsPage() {
       <PageShell size="wide" className="sessions-page-container" onScrollActivity={handleScrollActivity}>
         <div className="sessions-hero-empty">
           <EmptyState
-            icon={demoLoading ? <Spinner size="lg" /> : undefined}
             title="Connect your first machine"
             description="Run one command on the machine where you use Claude Code, Codex, or Antigravity and your sessions will start appearing here."
             action={
@@ -486,21 +449,6 @@ export default function SessionsPage() {
                 >
                   Machines
                 </Button>
-                {seedError && (
-                  <Button
-                    variant="secondary"
-                    size="md"
-                    onClick={handleSeedDemo}
-                    disabled={demoLoading}
-                  >
-                    Retry demo sessions
-                  </Button>
-                )}
-                {seedError && (
-                  <p style={{ color: "var(--color-intent-error)", marginTop: "0.5rem", fontSize: "0.875rem" }}>
-                    {seedError}
-                  </p>
-                )}
               </div>
             }
           />
@@ -516,7 +464,6 @@ export default function SessionsPage() {
               <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
               <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
               <a href="https://antigravity.google/product/antigravity-cli" target="_blank" rel="noopener noreferrer">Antigravity CLI</a>.
-              {demoLoading && " Demo sessions are loading in the background."}
             </p>
           </div>
         </div>

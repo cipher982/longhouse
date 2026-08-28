@@ -60,7 +60,6 @@ from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
 from zerg.services.session_shares import SessionShareError
 from zerg.services.session_shares import resolve_session_share
-from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import FiltersResponse
 from zerg.services.session_views import RecallContextResponse
 from zerg.services.session_views import RecallResponse
@@ -621,13 +620,6 @@ async def get_timeline_filters(
         if offset + len(listed.sessions) >= listed.total or not listed.sessions:
             break
     return FiltersResponse(projects=sorted(projects), providers=sorted(providers), machines=sorted(machines))
-
-
-@router.post("/demo", response_model=DemoSeedResponse)
-async def seed_timeline_demo_sessions(
-    replace: bool = Query(False, description="Delete existing demo sessions before seeding fresh demo data"),
-):
-    raise HTTPException(status_code=404, detail="Demo seeding is unavailable on storage-v2 Runtime Hosts")
 
 
 @router.post("/sessions/{session_id}/action", response_model=SessionActionResponse)

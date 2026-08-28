@@ -52,7 +52,6 @@ def test_timeline_router_exposes_browser_archive_routes():
         "/timeline/filters",
         "/timeline/recall",
         "/timeline/recall/context",
-        "/timeline/demo",
     } <= timeline_paths
 
 

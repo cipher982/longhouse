@@ -10,28 +10,12 @@ import { randomUUID } from "crypto";
 import type { APIRequestContext } from "@playwright/test";
 import { test, expect, type Page } from "../fixtures";
 
-async function ensureDemoProviders(
-  page: Page,
-  request: APIRequestContext,
-): Promise<void> {
-  // The timeline no longer auto-seeds demo data outside demo mode (a real
-  // instance must not get synthetic sessions). If we land on the hero empty
-  // state, explicitly seed demo sessions. Seed via the `request` fixture (not
-  // page.request) — it carries the X-Test-Worker header that routes writes to
-  // this worker's isolated DB schema, which is the same schema the page reads.
-  const heroEmpty = page.locator(".sessions-hero-empty");
-  if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
-    const resp = await request.post("/api/timeline/demo").catch(() => null);
-    if (!resp || !resp.ok()) {
-      throw new Error(
-        `Demo seed failed: ${resp ? resp.status() : "no response"}`,
-      );
-    }
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
-    // Wait for the toolbar to appear once data exists.
-    await page.waitForSelector(".sessions-toolbar", { timeout: 20000 });
-  }
+async function ensureDemoProviders(page: Page): Promise<void> {
+  // There is no runtime demo-seed route any more. POST /api/timeline/demo
+  // answered 404 on every Runtime Host before it was deleted, so this helper's
+  // seeding branch could only ever have thrown; the suite's data comes from
+  // its own fixtures. Landing on the hero empty state is a real failure now
+  // and the provider assertions below say so.
 
   // Open filter popover to check available providers
   const filterBtn = page.locator('button[aria-controls="filter-panel"]');
@@ -218,7 +202,7 @@ test.describe("Sessions Page", () => {
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Seed demos first so toolbar is visible (hero state has no toolbar)
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
 
     // Toolbar should be visible
     const toolbar = page.locator(".sessions-toolbar");
@@ -244,7 +228,7 @@ test.describe("Sessions Page", () => {
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
     const claudeBtn = page.locator(
       '[data-filter-section="provider"] [data-filter-option="claude"]',
     );
@@ -259,7 +243,7 @@ test.describe("Sessions Page", () => {
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Seed demo data if empty so the toolbar (with the search input) renders.
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
 
     // Type in search
     const searchInput = page.locator('input[type="search"]');
@@ -831,7 +815,7 @@ test.describe("Filter Chips and Popover", () => {
     request,
   }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
 
     // Select provider filter via popover
     await page
@@ -875,7 +859,7 @@ test.describe("Filter Chips and Popover", () => {
     });
 
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
 
     // Select provider
     await page
@@ -905,7 +889,7 @@ test.describe("Filter Chips and Popover", () => {
 
   test("Escape closes the filter popover", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
 
     // Popover is open (ensureDemoProviders opened it)
     await expect(page.locator("#filter-panel")).toBeVisible();
@@ -918,7 +902,7 @@ test.describe("Filter Chips and Popover", () => {
 
   test("clicking outside the popover closes it", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
 
     await expect(page.locator("#filter-panel")).toBeVisible();
 
@@ -930,7 +914,7 @@ test.describe("Filter Chips and Popover", () => {
 
   test("non-default days filter creates a chip", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
 
     // Select 30d in the popover
     const days30 = page.locator(
@@ -1459,7 +1443,7 @@ test.describe("Machine Filter", () => {
 
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
 
     // Filter popover should have a machine section with the ingested machine name
     const filterPanel = page.locator("#filter-panel");
@@ -1481,7 +1465,7 @@ test.describe("Machine Filter", () => {
 
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
-    await ensureDemoProviders(page, request);
+    await ensureDemoProviders(page);
 
     const filterPanel = page.locator("#filter-panel");
 

@@ -1750,15 +1750,6 @@ class FiltersResponse(BaseModel):
     machines: List[str] = []
 
 
-class DemoSeedResponse(BaseModel):
-    """Response for demo session seeding."""
-
-    seeded: bool
-    sessions_created: int
-    sessions_failed: int = 0
-    sessions_deleted: int = 0
-
-
 class SessionActionRequest(BaseModel):
     action: str = Field(..., description="park | snooze | archive | resume")
 
