@@ -70,8 +70,9 @@ enum SessionProjectionEvent: Sendable {
     /// The SSE connection itself is established. Emitted from `drain` after the
     /// 200, so it cannot claim authority the stream has not actually acquired.
     case connected
-    /// Liveness evidence with no payload — an SSE keepalive or any other line.
-    /// Renews the projection lease so a healthy idle stream does not expire.
+    /// Coalesced liveness evidence with no payload. Renews the projection lease
+    /// so a healthy idle stream does not expire without publishing UI state for
+    /// every line of a chatty SSE connection.
     case alive
     /// The stream failed and is backing off. Emitted on every failed attempt so
     /// the store can stop presenting Runtime Host projection as current — the
@@ -87,6 +88,31 @@ actor LivenessFlag {
 
     func markObserved() {
         observed = true
+    }
+}
+
+/// Bounds how often transport liveness becomes observable UI state.
+///
+/// The stream can deliver hundreds of protocol lines per second while agents
+/// are active. Publishing a fresh timestamp for each line invalidates the
+/// entire SwiftUI panel even while it is hidden. Ten seconds is comfortably
+/// inside the five-minute projection authority lease.
+struct ProjectionLeasePulse {
+    static let interval: TimeInterval = 10
+
+    private var lastEmittedAt: Date?
+
+    init(lastEmittedAt: Date? = nil) {
+        self.lastEmittedAt = lastEmittedAt
+    }
+
+    mutating func shouldEmit(at date: Date) -> Bool {
+        if let lastEmittedAt,
+           date.timeIntervalSince(lastEmittedAt) < Self.interval {
+            return false
+        }
+        lastEmittedAt = date
+        return true
     }
 }
 
@@ -270,13 +296,17 @@ enum SessionProjectionStream {
         var eventName = ""
         var dataLines: [String] = []
         var lineDecoder = SSELineDecoder()
+        var leasePulse = ProjectionLeasePulse(lastEmittedAt: Date())
         for try await byte in bytes {
             guard let line = lineDecoder.append(byte) else { continue }
             // Any line, including an SSE keepalive comment, is liveness
-            // evidence. Renewing the lease only on deltas would expire a healthy
-            // but idle stream and strip presentation from quiet sessions.
+            // evidence for connection retry policy. Projection lease updates are
+            // coalesced separately so protocol framing cannot become a UI render
+            // loop; deltas also renew the lease in SnapshotStore.
             await liveness.markObserved()
-            continuation.yield(.alive)
+            if leasePulse.shouldEmit(at: Date()) {
+                continuation.yield(.alive)
+            }
             if line.isEmpty {
                 if eventName == "session_delta", !dataLines.isEmpty {
                     let data = Data(dataLines.joined(separator: "\n").utf8)

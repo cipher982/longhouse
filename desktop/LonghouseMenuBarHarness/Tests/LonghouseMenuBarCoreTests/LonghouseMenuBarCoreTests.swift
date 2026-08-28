@@ -717,6 +717,24 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func realtimeStreamCoalescesChattyLivenessIntoLeasePulses() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var pulse = ProjectionLeasePulse(lastEmittedAt: start)
+
+        let afterOneSecond = pulse.shouldEmit(at: start.addingTimeInterval(1))
+        let beforeInterval = pulse.shouldEmit(at: start.addingTimeInterval(9.999))
+        let atInterval = pulse.shouldEmit(at: start.addingTimeInterval(10))
+        let immediatelyAfter = pulse.shouldEmit(at: start.addingTimeInterval(10.001))
+        let nextInterval = pulse.shouldEmit(at: start.addingTimeInterval(20))
+
+        #expect(!afterOneSecond)
+        #expect(!beforeInterval)
+        #expect(atInterval)
+        #expect(!immediatelyAfter)
+        #expect(nextInterval)
+    }
+
+    @Test
     func localStatusMonitorWakesForPulseReconciliationAndSessionChanges() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("longhouse-status-monitor-\(UUID().uuidString)")
