@@ -1,16 +1,41 @@
 """Unit tests for usage-stats endpoint (live query against sessions table)."""
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from zerg.database import Base
+from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
-from zerg.database import get_db
-from zerg.database import Base
 from zerg.models.agents import AgentSession
+
+
+@pytest.fixture(autouse=True)
+def _restore_api_app_dependency_overrides():
+    """An override installed here must not outlive this test.
+
+    ``api_app`` is a process-global, so an override left behind keeps
+    answering for every later test in the run. This file used to leave
+    ``verify_agents_token`` returning device ``usage-stats``, and an unrelated
+    storage-v2 test several hundred tests later failed with
+    ``identity_mismatch``. Nothing catches that until an edit elsewhere
+    reorders the suite, so each test puts back what it found.
+    """
+
+    from zerg.main import api_app
+
+    saved = dict(api_app.dependency_overrides)
+    try:
+        yield
+    finally:
+        api_app.dependency_overrides.clear()
+        api_app.dependency_overrides.update(saved)
 
 
 def _make_db(tmp_path):

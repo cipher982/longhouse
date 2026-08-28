@@ -13,7 +13,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
+
 os.environ.setdefault("TESTING", "1")
+
+import pytest
 
 import zerg.services.agent_heartbeat_health as machine_health_service
 import zerg.services.session_turns as session_turns_service
@@ -33,6 +36,28 @@ from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_TERMINAL
 
 
+@pytest.fixture(autouse=True)
+def _restore_api_app_dependency_overrides():
+    """An override installed here must not outlive this test.
+
+    ``api_app`` is a process-global, so an override left behind keeps
+    answering for every later test in the run. This file used to leave
+    ``verify_agents_token`` returning device ``usage-stats``, and an unrelated
+    storage-v2 test several hundred tests later failed with
+    ``identity_mismatch``. Nothing catches that until an edit elsewhere
+    reorders the suite, so each test puts back what it found.
+    """
+
+    from zerg.main import api_app
+
+    saved = dict(api_app.dependency_overrides)
+    try:
+        yield
+    finally:
+        api_app.dependency_overrides.clear()
+        api_app.dependency_overrides.update(saved)
+
+
 def _make_db(tmp_path):
     db_path = tmp_path / "test_agents_slow_turns.db"
     engine = make_engine(f"sqlite:///{db_path}")
@@ -45,6 +70,7 @@ def _make_client(SessionLocal):
     from zerg.dependencies.agents_auth import require_single_tenant
     from zerg.dependencies.auth import get_current_user
     from zerg.main import api_app
+
 
     def override_get_db():
         with SessionLocal() as db:

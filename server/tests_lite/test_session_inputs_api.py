@@ -14,12 +14,15 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
+
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
+
+import pytest
 
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from tests_lite.live_catalog_harness import LiveCatalog
@@ -55,6 +58,28 @@ from zerg.services.session_inputs import create_session_input
 from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+
+
+@pytest.fixture(autouse=True)
+def _restore_api_app_dependency_overrides():
+    """An override installed here must not outlive this test.
+
+    ``api_app`` is a process-global, so an override left behind keeps
+    answering for every later test in the run. This file used to leave
+    ``verify_agents_token`` returning device ``usage-stats``, and an unrelated
+    storage-v2 test several hundred tests later failed with
+    ``identity_mismatch``. Nothing catches that until an edit elsewhere
+    reorders the suite, so each test puts back what it found.
+    """
+
+    from zerg.main import api_app
+
+    saved = dict(api_app.dependency_overrides)
+    try:
+        yield
+    finally:
+        api_app.dependency_overrides.clear()
+        api_app.dependency_overrides.update(saved)
 
 
 def _make_db(tmp_path):

@@ -14,8 +14,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
+
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+
+import pytest
 
 import zerg.services.agent_heartbeat_health as machine_health_service
 from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
@@ -28,6 +31,28 @@ from zerg.models.live_store import LiveBase
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.routers.agents_machines import archive_backlog_control_command_type
 from zerg.schemas.machines import ArchiveBacklogControlRequest
+
+
+@pytest.fixture(autouse=True)
+def _restore_api_app_dependency_overrides():
+    """An override installed here must not outlive this test.
+
+    ``api_app`` is a process-global, so an override left behind keeps
+    answering for every later test in the run. This file used to leave
+    ``verify_agents_token`` returning device ``usage-stats``, and an unrelated
+    storage-v2 test several hundred tests later failed with
+    ``identity_mismatch``. Nothing catches that until an edit elsewhere
+    reorders the suite, so each test puts back what it found.
+    """
+
+    from zerg.main import api_app
+
+    saved = dict(api_app.dependency_overrides)
+    try:
+        yield
+    finally:
+        api_app.dependency_overrides.clear()
+        api_app.dependency_overrides.update(saved)
 
 # One machine's archive backlog, read by the archive-backlog route out of the
 # archived heartbeat and by the health route out of the catalog heartbeat.

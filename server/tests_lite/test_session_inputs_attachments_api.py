@@ -68,6 +68,29 @@ from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
+
+@pytest.fixture(autouse=True)
+def _restore_api_app_dependency_overrides():
+    """An override installed here must not outlive this test.
+
+    ``api_app`` is a process-global, so an override left behind keeps
+    answering for every later test in the run. This file used to leave
+    ``verify_agents_token`` returning device ``usage-stats``, and an unrelated
+    storage-v2 test several hundred tests later failed with
+    ``identity_mismatch``. Nothing catches that until an edit elsewhere
+    reorders the suite, so each test puts back what it found.
+    """
+
+    from zerg.main import api_app
+
+    saved = dict(api_app.dependency_overrides)
+    try:
+        yield
+    finally:
+        api_app.dependency_overrides.clear()
+        api_app.dependency_overrides.update(saved)
+
+
 # A 1x1 PNG (~70 bytes) — enough to hash, well under the 2MB cap.
 _PNG_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00"
