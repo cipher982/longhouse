@@ -13,6 +13,9 @@ final class MenuBarStatusController: NSObject {
     private var localMonitor: Any?
     private var globalMonitor: Any?
     private var panelGeneration: UInt64 = 0
+    private var renderedStatusItem = false
+    private var renderedAttentionColor: NSColor?
+    private var renderedTooltip: String?
 
     init(
         store: SnapshotStore,
@@ -130,8 +133,11 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func refreshPanelLayout() {
+        guard panelController.isPresented else {
+            return
+        }
         panelController.updateContentSizeToFit()
-        if panelController.isPresented, let button = statusItem.button {
+        if let button = statusItem.button {
             panelController.reposition(relativeTo: button)
         }
     }
@@ -141,12 +147,26 @@ final class MenuBarStatusController: NSObject {
             return
         }
 
-        button.image = MenuBarBrandIcon.image(attentionColor: statusItemAttentionColor())
+        let attentionColor = statusItemAttentionColor()
         let tooltip = statusItemAttentionLabel()
             ?? store.snapshot?.menuBarPresentation(relativeTo: Date()).headline
             ?? "Longhouse"
-        button.toolTip = tooltip
-        button.setAccessibilityLabel(tooltip)
+
+        let colorChanged = switch (renderedAttentionColor, attentionColor) {
+        case (nil, nil): false
+        case let (current?, next?): !current.isEqual(next)
+        default: true
+        }
+        if !renderedStatusItem || colorChanged {
+            button.image = MenuBarBrandIcon.image(attentionColor: attentionColor)
+            renderedAttentionColor = attentionColor
+        }
+        if !renderedStatusItem || renderedTooltip != tooltip {
+            button.toolTip = tooltip
+            button.setAccessibilityLabel(tooltip)
+            renderedTooltip = tooltip
+        }
+        renderedStatusItem = true
     }
 
     private func statusItemAttentionColor() -> NSColor? {
