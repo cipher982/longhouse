@@ -232,15 +232,19 @@ enum SessionProjectionStream {
                 var backoff = Duration.milliseconds(250)
                 let allowedSessionIds = Set(sessionIds)
                 var retryPolicy = ProjectionRetryPolicy()
+                var needsBootstrap = true
                 while !Task.isCancelled {
                     let liveness = LivenessFlag()
                     let connectionStartedAt = Date()
                     do {
-                        try await bootstrap(
-                            connection: connection,
-                            sessionIds: sessionIds,
-                            continuation: continuation
-                        )
+                        if needsBootstrap {
+                            try await bootstrap(
+                                connection: connection,
+                                sessionIds: sessionIds,
+                                continuation: continuation
+                            )
+                            needsBootstrap = false
+                        }
                         try await drain(
                             connection: connection,
                             allowedSessionIds: allowedSessionIds,
@@ -395,41 +399,43 @@ enum SessionProjectionStream {
         guard !token.isEmpty else { throw URLError(.userAuthenticationRequired) }
 
         var succeeded = 0
-        await withTaskGroup(of: (String, SessionProjection?).self) { group in
-            for sessionId in sessionIds {
-                group.addTask {
-                    do {
-                        let url = baseURL
-                            .appendingPathComponent("api/agents/sessions")
-                            .appendingPathComponent(sessionId)
-                        var request = URLRequest(url: url)
-                        request.setValue(token, forHTTPHeaderField: "X-Agents-Token")
-                        let (data, response) = try await URLSession.shared.data(for: request)
-                        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                            return (sessionId, nil)
-                        }
-                        let decoder = JSONDecoder()
-                        decoder.keyDecodingStrategy = .convertFromSnakeCase
-                        return (sessionId, try decoder.decode(SessionDetail.self, from: data).projection)
-                    } catch {
-                        logger.error(
-                            "Runtime Host session bootstrap failed for \(sessionId, privacy: .public): \(String(describing: error), privacy: .public)"
-                        )
-                        return (sessionId, nil)
-                    }
-                }
-            }
-            for await (sessionId, projection) in group {
-                if let projection {
-                    succeeded += 1
-                    continuation.yield(.delta(projection))
+        // Bootstrap is intentionally serial. A reconnect may have dozens of
+        // locally known sessions; fanning every detail read out at once can
+        // consume the Runtime Host's bounded catalog lane before the SSE
+        // connection is established. This hydration runs once per projection
+        // task, while later stream reconnects use the retained projection and
+        // initial SSE replay instead of repeating the burst.
+        for sessionId in sessionIds {
+            let projection: SessionProjection?
+            do {
+                let url = baseURL
+                    .appendingPathComponent("api/agents/sessions")
+                    .appendingPathComponent(sessionId)
+                var request = URLRequest(url: url)
+                request.setValue(token, forHTTPHeaderField: "X-Agents-Token")
+                let (data, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                    let decoder = JSONDecoder()
+                    decoder.keyDecodingStrategy = .convertFromSnakeCase
+                    projection = try decoder.decode(SessionDetail.self, from: data).projection
                 } else {
-                    // The stream may still be healthy overall, so the global
-                    // lease is not the right lever. Drop authority for this one
-                    // session rather than letting its stale Runtime Host fields
-                    // ride along under a renewed lease.
-                    continuation.yield(.projectionUnavailable(sessionId: sessionId))
+                    projection = nil
                 }
+            } catch {
+                logger.error(
+                    "Runtime Host session bootstrap failed for \(sessionId, privacy: .public): \(String(describing: error), privacy: .public)"
+                )
+                projection = nil
+            }
+            if let projection {
+                succeeded += 1
+                continuation.yield(.delta(projection))
+            } else {
+                // The stream may still be healthy overall, so the global
+                // lease is not the right lever. Drop authority for this one
+                // session rather than letting its stale Runtime Host fields
+                // ride along under a renewed lease.
+                continuation.yield(.projectionUnavailable(sessionId: sessionId))
             }
         }
 
