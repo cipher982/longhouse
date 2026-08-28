@@ -861,7 +861,13 @@ async def stream_live_catalog_machine_sessions(
                     include_hidden=False,
                     owner_id=owner_id,
                 )
-            except (ValueError, TypeError):
+            except (CatalogReadError, ValueError, TypeError):
+                # A live invalidation is only a hint to refresh one session.
+                # Catalog saturation or a temporarily incomplete projection
+                # must not tear down an already-started SSE response: doing so
+                # produces a malformed chunked body and makes every client
+                # reconnect, amplifying the same read pressure that caused the
+                # transient failure. A later invalidation will retry the read.
                 continue
             if session is None or (params.device_id and session.device_id != params.device_id):
                 if session_id in previous:

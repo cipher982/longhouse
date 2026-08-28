@@ -14,6 +14,7 @@ os.environ.setdefault("AUTH_DISABLED", "1")
 
 import zerg.routers.agents_sessions as agents_sessions
 import zerg.services.live_catalog_timeline as live_catalog_timeline
+from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_catalog_timeline import project_machine_session_delta
 from zerg.services.session_state_contract import SessionStateFacts
 
@@ -193,3 +194,76 @@ def test_canonical_machine_stream_initial_replay_preserves_commit_coordinate(mon
     assert connected["event"] == "connected"
     assert delta["event"] == "session_delta"
     assert json.loads(delta["data"])["commit_seq"] == "91"
+
+
+def test_machine_stream_survives_transient_catalog_saturation(monkeypatch):
+    session_id = "633a0114-de2d-4b3d-b1b9-dfa7f314e300"
+
+    class Request:
+        async def is_disconnected(self):
+            return False
+
+    class Subscription:
+        def __init__(self):
+            self.messages = [
+                SimpleNamespace(payload={"session_id": session_id}),
+                SimpleNamespace(payload={"session_id": session_id}),
+            ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        async def next_message(self, *, timeout):
+            assert timeout == 30.0
+            return self.messages.pop(0)
+
+    class Bus:
+        def peek_latest_seq(self, _topic):
+            return 0
+
+        def subscribe(self, _topic, *, since_seq):
+            assert since_seq == 0
+            return Subscription()
+
+    calls = 0
+
+    def read_session(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise CatalogReadError("resource_exhausted", "catalog read lane is full")
+        return SimpleNamespace(id=session_id, device_id="cinder"), None, "92"
+
+    monkeypatch.setattr(live_catalog_timeline, "get_pubsub", lambda: Bus())
+    monkeypatch.setattr(live_catalog_timeline, "read_live_catalog_session", read_session)
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "project_machine_session_delta",
+        lambda session, **_kwargs: {
+            "session_id": session.id,
+            "device_id": session.device_id,
+            "source": "runtime_host",
+        },
+    )
+
+    async def read_events():
+        stream = live_catalog_timeline.stream_live_catalog_machine_sessions(
+            Request(),
+            params=SimpleNamespace(device_id="cinder"),
+            skip_initial_replay=True,
+            owner_id=1,
+        )
+        try:
+            return await anext(stream), await anext(stream)
+        finally:
+            await stream.aclose()
+
+    connected, delta = asyncio.run(read_events())
+
+    assert connected["event"] == "connected"
+    assert delta["event"] == "session_delta"
+    assert json.loads(delta["data"])["session_id"] == session_id
+    assert calls == 2
