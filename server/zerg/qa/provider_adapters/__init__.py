@@ -14,9 +14,9 @@ universal_agent_harness.adapter_registry(), the real production entry
 point, so every caller of that function gets real registration without
 needing to know this package exists.
 
-All five provider adapters live here. `load_all()` discovers modules from the
-package instead of naming providers, so a sixth adapter becomes available to
-the production registry by adding its module; this file does not need another
+Every provider adapter lives here. `load_all()` discovers modules from the
+package instead of naming providers, so a new adapter becomes available to the
+production registry by adding its module; this file does not need another
 provider-specific edit.
 """
 

@@ -30,8 +30,8 @@ In scope: this repository — the Runtime Host (`server/`), web UI (`web/`),
 Machine Agent (`engine/`), runner, CLI, and the macOS and iOS apps — plus the
 hosted service at longhouse.ai, which runs this code.
 
-Out of scope: the provider CLIs Longhouse observes (Claude Code, Codex, Cursor,
-OpenCode, Antigravity). Report those to their vendors.
+Out of scope: the provider CLIs Longhouse observes. Report those to their
+vendors.
 
 ## Supported versions
 

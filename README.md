@@ -116,7 +116,7 @@ Other tools spin up sandboxed cloud agents or wrap a single vendor's dashboard. 
 
 ## Status
 
-Actively developed pre-release. All five major providers sync into one searchable timeline today:
+Actively developed pre-release. Every provider Longhouse supports syncs into one searchable timeline today:
 
 | Provider | Search | Launch | Interrupt | Mid-turn steer | Resume |
 |---|---|---|---|---|---|
@@ -125,6 +125,7 @@ Actively developed pre-release. All five major providers sync into one searchabl
 | Cursor Agent | ✓ | ✓ | ✓ | — | ✓ |
 | OpenCode | ✓ | ✓ | ✓ | — | ✓ |
 | Antigravity | ✓ | ✓ | — | — | — |
+| Pi Agent | ✓ | ✓ | ✓ | — | — |
 
 iOS companion ships APNs push on `needs_user`. See [RELEASE.md](RELEASE.md) for what's changed.
 
