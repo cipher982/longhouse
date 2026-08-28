@@ -194,6 +194,7 @@ class CatalogDaemon:
         self._checkpoint_task: asyncio.Task | None = None
         self._maintenance_executor: ThreadPoolExecutor | None = None
         self._timeline_reads: dict[tuple[tuple[str, object], ...], asyncio.Task[dict]] = {}
+        self._session_detail_reads: dict[tuple[str, tuple[object, ...], tuple[tuple[str, object], ...]], asyncio.Task[dict]] = {}
         self._read_depth = 0
         self._read_max_depth = CATALOG_INTERACTIVE_READ_WORKERS
         self._control_read_depth = 0
@@ -2130,7 +2131,12 @@ class CatalogDaemon:
         owner_id = request.params.get("owner_id")
         if owner_id is not None and (type(owner_id) is not int or owner_id <= 0):
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
-        result = await self._run_read_store(self._store.read_session, session_id=session_id, owner_id=owner_id)
+        result = await self._coalesced_session_detail_read(
+            "session.read.v2",
+            self._store.read_session,
+            session_id=session_id,
+            owner_id=owner_id,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_shadow_session_state(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2545,7 +2551,11 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         # Session detail is a read snapshot and must not queue behind claims or ingest commits.
-        result = await self._run_read_store(self._store.read_storage_session, session_id=session_id)
+        result = await self._coalesced_session_detail_read(
+            "storage.session.read.v2",
+            self._store.read_storage_session,
+            session_id=session_id,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_for_projector(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2938,14 +2948,23 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        read = self._run_projector_read_store if projector else self._run_read_store
-        result = await read(
-            self._store.read_storage_session_raw_manifest,
-            session_id=session_id,
-            owner_id=owner_id,
-            after_source_key=after_source_key,
-            limit=limit,
-        )
+        if projector:
+            result = await self._run_projector_read_store(
+                self._store.read_storage_session_raw_manifest,
+                session_id=session_id,
+                owner_id=owner_id,
+                after_source_key=after_source_key,
+                limit=limit,
+            )
+        else:
+            result = await self._coalesced_session_detail_read(
+                "storage.session.raw_manifest.v2",
+                self._store.read_storage_session_raw_manifest,
+                session_id=session_id,
+                owner_id=owner_id,
+                after_source_key=after_source_key,
+                limit=limit,
+            )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_render_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2990,7 +3009,8 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_read_store(
+        result = await self._coalesced_session_detail_read(
+            "storage.session.render_manifest.v2",
             self._store.read_storage_session_render_manifest,
             session_id=session_id,
             owner_id=owner_id,
@@ -3806,6 +3826,32 @@ class CatalogDaemon:
             def forget(completed: asyncio.Task[dict]) -> None:
                 if self._timeline_reads.get(key) is completed:
                     self._timeline_reads.pop(key, None)
+
+            task.add_done_callback(forget)
+        return await asyncio.shield(task)
+
+    async def _coalesced_session_detail_read(self, label: str, operation, *args, **kwargs) -> dict:
+        """Share identical in-flight detail snapshots without caching them.
+
+        The browser can request the workspace and events projection together.
+        Both routes need the same session, storage, render, and sometimes raw
+        manifests. Running every copy independently fills the intentionally
+        queue-free interactive lane; sharing only work already in progress
+        preserves fresh snapshots while preventing duplicate disk reads.
+        """
+
+        key = (label, args, tuple(sorted(kwargs.items())))
+        task = self._session_detail_reads.get(key)
+        if task is None:
+            task = asyncio.create_task(
+                self._run_read_store(operation, *args, **kwargs),
+                name=f"catalogd-{label}-read",
+            )
+            self._session_detail_reads[key] = task
+
+            def forget(completed: asyncio.Task[dict]) -> None:
+                if self._session_detail_reads.get(key) is completed:
+                    self._session_detail_reads.pop(key, None)
 
             task.add_done_callback(forget)
         return await asyncio.shield(task)
