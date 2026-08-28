@@ -33,6 +33,7 @@ from zerg.database import get_db
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
 from zerg.dependencies.auth import get_current_user
+from zerg.middleware.access_log import log_ws_principal
 from zerg.models.models import User
 from zerg.request_urls import get_request_public_base_url
 from zerg.schemas.runner_schemas import EnrollTokenResponse
@@ -1147,6 +1148,12 @@ async def _runner_websocket_with_db(
             return
 
         logger.info(f"Runner {runner_id} (owner {owner_id}) connected")
+        # The access log already wrote an honest ``unattributed`` line at accept
+        # above: this protocol carries its secret in the ``hello`` frame, so
+        # there was nobody to name yet. Now there is. Keep the line above too --
+        # it carries owner_id, which the access-log principal vocabulary
+        # (user:/device:/managed-session:) has no slot for.
+        log_ws_principal(websocket.scope, f"runner:{runner_id}")
 
         # Enter message loop
         while True:

@@ -117,6 +117,31 @@ def _principal(scope: Scope) -> str:
     return str(state.get("principal") or state.get("agents_rate_key") or "unattributed")
 
 
+def log_ws_principal(scope: Scope, principal: str) -> None:
+    """Record a WebSocket principal that only became known after ``accept()``.
+
+    For every socket that authenticates from the handshake -- a query token, a
+    cookie, a header -- the endpoint stamps ``scope["state"]["principal"]``
+    before accepting and the accept-time line carries it. ``/api/runners/ws``
+    cannot: its secret arrives in the ``hello`` frame, so at accept the server
+    genuinely does not know who is calling and the honest label is
+    ``unattributed``. This writes the second, attributed line once it does,
+    tied to the same path and client IP.
+
+    Use it only where authentication is in-band. Anywhere the principal exists
+    before accept, stamp the state instead: one line beats two.
+    """
+    logger.info(
+        "WS %s authenticated",
+        _safe_path(str(scope.get("path", "-"))),
+        extra={
+            "principal": principal,
+            "client_ip": _client_ip(scope),
+            "tag": "access",
+        },
+    )
+
+
 class AccessLogMiddleware:
     """Log one line per non-noise request. Pure ASGI — never touches the body."""
 
@@ -165,8 +190,18 @@ class AccessLogMiddleware:
         so a line written before then is always unattributed — worthless for
         exactly the streams (live transcripts) worth auditing. Not at close
         either: a stream can stay open for hours and the record is no use while
-        it is still being read. Accept/reject is the first moment the principal
-        exists, and it arrives within milliseconds.
+        it is still being read.
+
+        Accept/reject is the first moment the principal exists for the two
+        sockets that authenticate from the handshake itself: ``/api/ws`` (query
+        token or session cookie) and ``/api/agents/control/ws`` (device token
+        header). Both resolve their caller before accepting and stamp
+        ``scope["state"]["principal"]``, so the accept-time line carries it.
+
+        ``/api/runners/ws`` is the exception: its secret arrives in the ``hello``
+        frame, after accept, so its accept-time line is honestly
+        ``unattributed`` and it emits a second attributed line through
+        ``log_ws_principal`` once the frame authenticates.
         """
         logged = False
 

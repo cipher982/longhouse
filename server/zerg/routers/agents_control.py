@@ -146,6 +146,13 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             await _close_control_ws(websocket, code=4401, reason="Invalid or missing device token")
             return
 
+        # Name the caller for the access log, in the same format the HTTP
+        # machine surface stamps (dependencies/agents_auth.py). The owner-bound
+        # credential is validated above and was otherwise thrown away for
+        # logging purposes. Not from the ``hello`` frame below: that arrives
+        # after accept and its ``device_id`` is attacker-chosen.
+        websocket.state.principal = f"device:{token.id}" if token is not None else "auth-disabled"
+
         await websocket.accept()
 
         try:

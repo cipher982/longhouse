@@ -105,6 +105,16 @@ async def websocket_endpoint(
 
     logger.debug("WebSocket auth succeeded for user %s (client %s)", user_id or "?", client_id)
 
+    # Name the caller for the access log, in the same format the HTTP path
+    # stamps (auth/strategy.py). ``validate_ws_jwt`` resolves the user above but
+    # does not stamp, so without this the browser transcript stream -- the
+    # stream most worth auditing -- logged "unattributed" on every authenticated
+    # connection. The middleware reads scope["state"], and this write lands
+    # there, so it must happen before ``accept()``: that is the message the
+    # access log writes its line on.
+    if user_id is not None:
+        websocket.state.principal = f"user:{user_id}"
+
     try:
         await websocket.accept()
         await topic_manager.connect(client_id, websocket, user_id, auto_system=True, principal=user)
