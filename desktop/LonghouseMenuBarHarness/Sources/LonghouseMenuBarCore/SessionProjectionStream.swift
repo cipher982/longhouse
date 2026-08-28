@@ -68,16 +68,11 @@ enum SessionProjectionEvent: Sendable {
     case delta(SessionProjection)
     case remove(sessionId: String)
     /// The SSE connection itself is established. Emitted from `drain` after the
-    /// 200, not after bootstrap, so it cannot claim authority the stream has not
-    /// actually acquired.
+    /// 200, so it cannot claim authority the stream has not actually acquired.
     case connected
     /// Liveness evidence with no payload — an SSE keepalive or any other line.
     /// Renews the projection lease so a healthy idle stream does not expire.
     case alive
-    /// This session's Runtime Host projection could not be fetched. The stream
-    /// as a whole may be fine, so the global lease still renews; only this
-    /// session's Runtime Host fields lose authority.
-    case projectionUnavailable(sessionId: String)
     /// The stream failed and is backing off. Emitted on every failed attempt so
     /// the store can stop presenting Runtime Host projection as current — the
     /// stream retries forever, so silence here is indistinguishable from health.
@@ -170,42 +165,6 @@ enum SessionProjectionStream {
 
     private struct Remove: Decodable { let sessionId: String }
 
-    private struct SessionDetail: Decodable {
-        struct State: Decodable {
-            let stateContractVersion: Int?
-            let presentationPolicyVersion: Int?
-            let mode: String?
-            let presentation: SessionPresentationSnapshot?
-            let activity: SessionActivitySnapshot?
-            let control: SessionControlSnapshot?
-            let commitSeq: Int?
-        }
-
-        let id: String
-        let timelineTitle: String?
-        let titleState: String?
-        let titleSource: String?
-        let runtimePhase: String?
-        let displayPhase: String?
-        let lastActivityAt: String?
-        let sessionState: State
-
-        var projection: SessionProjection {
-            SessionProjection(
-                sessionId: id, timelineTitle: timelineTitle, summaryTitle: nil,
-                firstUserMessage: nil, titleState: titleState, titleSource: titleSource,
-                runtimePhase: runtimePhase, displayPhase: displayPhase,
-                lastActivityAt: lastActivityAt, source: "runtime_host",
-                authority: "runtime_host",
-                stateContractVersion: sessionState.stateContractVersion,
-                presentationPolicyVersion: sessionState.presentationPolicyVersion,
-                commitSeq: sessionState.commitSeq.map(String.init), mode: sessionState.mode,
-                presentation: sessionState.presentation, activity: sessionState.activity,
-                control: sessionState.control
-            )
-        }
-    }
-
     struct SSELineDecoder {
         private var buffer: [UInt8] = []
 
@@ -232,19 +191,10 @@ enum SessionProjectionStream {
                 var backoff = Duration.milliseconds(250)
                 let allowedSessionIds = Set(sessionIds)
                 var retryPolicy = ProjectionRetryPolicy()
-                var needsBootstrap = true
                 while !Task.isCancelled {
                     let liveness = LivenessFlag()
                     let connectionStartedAt = Date()
                     do {
-                        if needsBootstrap {
-                            try await bootstrap(
-                                connection: connection,
-                                sessionIds: sessionIds,
-                                continuation: continuation
-                            )
-                            needsBootstrap = false
-                        }
                         try await drain(
                             connection: connection,
                             allowedSessionIds: allowedSessionIds,
@@ -296,7 +246,7 @@ enum SessionProjectionStream {
             resolvingAgainstBaseURL: false
         )!
         var queryItems = [
-            URLQueryItem(name: "limit", value: "40"),
+            URLQueryItem(name: "limit", value: "100"),
             URLQueryItem(name: "skip_initial_replay", value: "false"),
         ]
         if let machineName = connection.machineName {
@@ -312,9 +262,9 @@ enum SessionProjectionStream {
             throw URLError(.badServerResponse)
         }
         logger.info("Runtime Host session stream connected")
-        // Only now is the stream genuinely established. Emitting this after
-        // bootstrap alone would claim authority before the SSE connection was
-        // known to work.
+        // Only now is the stream genuinely established. Its bounded initial
+        // replay hydrates the known sessions before live deltas continue on
+        // the same connection, avoiding a second per-session read path.
         continuation.yield(.connected)
 
         var eventName = ""
@@ -385,65 +335,4 @@ enum SessionProjectionStream {
         throw URLError(.networkConnectionLost)
     }
 
-    private static func bootstrap(
-        connection: RealtimeConnectionSnapshot,
-        sessionIds: [String],
-        continuation: AsyncStream<SessionProjectionEvent>.Continuation
-    ) async throws {
-        guard let rawURL = connection.runtimeUrl,
-              let baseURL = URL(string: rawURL),
-              let tokenPath = connection.tokenPath
-        else { throw URLError(.badURL) }
-        let token = try String(contentsOfFile: tokenPath, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { throw URLError(.userAuthenticationRequired) }
-
-        var succeeded = 0
-        // Bootstrap is intentionally serial. A reconnect may have dozens of
-        // locally known sessions; fanning every detail read out at once can
-        // consume the Runtime Host's bounded catalog lane before the SSE
-        // connection is established. This hydration runs once per projection
-        // task, while later stream reconnects use the retained projection and
-        // initial SSE replay instead of repeating the burst.
-        for sessionId in sessionIds {
-            let projection: SessionProjection?
-            do {
-                let url = baseURL
-                    .appendingPathComponent("api/agents/sessions")
-                    .appendingPathComponent(sessionId)
-                var request = URLRequest(url: url)
-                request.setValue(token, forHTTPHeaderField: "X-Agents-Token")
-                let (data, response) = try await URLSession.shared.data(for: request)
-                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-                    let decoder = JSONDecoder()
-                    decoder.keyDecodingStrategy = .convertFromSnakeCase
-                    projection = try decoder.decode(SessionDetail.self, from: data).projection
-                } else {
-                    projection = nil
-                }
-            } catch {
-                logger.error(
-                    "Runtime Host session bootstrap failed for \(sessionId, privacy: .public): \(String(describing: error), privacy: .public)"
-                )
-                projection = nil
-            }
-            if let projection {
-                succeeded += 1
-                continuation.yield(.delta(projection))
-            } else {
-                // The stream may still be healthy overall, so the global
-                // lease is not the right lever. Drop authority for this one
-                // session rather than letting its stale Runtime Host fields
-                // ride along under a renewed lease.
-                continuation.yield(.projectionUnavailable(sessionId: sessionId))
-            }
-        }
-
-        // Per-session failures are individually tolerable, but if every session
-        // failed the Runtime Host is not answering and reporting success would
-        // hand stale projections a fresh authority lease.
-        if succeeded == 0 && !sessionIds.isEmpty {
-            throw URLError(.cannotConnectToHost)
-        }
-    }
 }
