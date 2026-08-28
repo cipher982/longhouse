@@ -47,6 +47,38 @@ async def test_process_pool_seals_live_and_repair_objects_without_sharing_capaci
 
 
 @pytest.mark.asyncio
+async def test_identical_user_reads_share_one_inflight_decode(tmp_path, monkeypatch):
+    pool = RawObjectWorkerPool(tmp_path, live_workers=1, repair_workers=1, user_read_workers=1, queue_multiplier=1)
+    calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+    decoded = object()
+
+    async def slow_read(object_path, expected_object_hash, tenant_id, **_kwargs):
+        nonlocal calls
+        calls += 1
+        assert object_path == "raw.zst"
+        assert expected_object_hash == "a" * 64
+        assert tenant_id == "single"
+        started.set()
+        await release.wait()
+        return decoded
+
+    monkeypatch.setattr(pool, "_read_with_recovery", slow_read)
+    reads = [asyncio.create_task(pool.read("raw.zst", "a" * 64, "single")) for _ in range(8)]
+    try:
+        await started.wait()
+        await asyncio.sleep(0)
+        release.set()
+        assert await asyncio.gather(*reads) == [decoded] * 8
+        assert calls == 1
+    finally:
+        release.set()
+        await asyncio.gather(*reads, return_exceptions=True)
+        await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_timed_out_seal_holds_capacity_until_child_finishes(tmp_path):
     pool = RawObjectWorkerPool(tmp_path, live_workers=1, repair_workers=1, queue_multiplier=1)
     try:
