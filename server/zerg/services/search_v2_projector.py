@@ -344,6 +344,7 @@ class SearchV2Projector:
                     manifest_cache=self._raw_manifest_cache,
                     sequence_context_cache=sequence_context_cache,
                     reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
+                    projector_read=True,
                 )
             except StorageV2SemanticRecoveryPermanentError as exc:
                 # The render object already carries its parser-derived

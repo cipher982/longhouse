@@ -56,6 +56,7 @@ async def recover_render_interaction_kinds(
     manifest_cache: MutableMapping[str, dict[str, dict[str, object]]],
     sequence_context_cache: MutableMapping[tuple[str, str, str, str, str], dict[str, object]] | None = None,
     reclassify_sequence_controls: bool = False,
+    projector_read: bool = False,
 ) -> dict[int, str]:
     """Return semantic kinds for render records from the immutable raw companion.
 
@@ -77,7 +78,12 @@ async def recover_render_interaction_kinds(
 
     manifests = manifest_cache.get(session_id)
     if manifests is None:
-        manifests = await _load_raw_manifests(catalog, session_id=session_id, owner_id=owner_id)
+        manifests = await _load_raw_manifests(
+            catalog,
+            session_id=session_id,
+            owner_id=owner_id,
+            projector_read=projector_read,
+        )
         manifest_cache[session_id] = manifests
     manifest = manifests.get(source_envelope_id)
     if manifest is None:
@@ -497,13 +503,14 @@ async def _load_raw_manifests(
     session_id: str,
     owner_id: str,
     allow_missing_session: bool = False,
+    projector_read: bool = False,
 ) -> dict[str, dict[str, object]]:
     manifests: dict[str, dict[str, object]] = {}
     after_source_key: str | None = None
     previous_source_key: str | None = None
     while True:
         page = await catalog.call(
-            "storage.session.projector.raw_manifest.v2",
+            ("storage.session.projector.raw_manifest.v2" if projector_read else "storage.session.raw_manifest.v2"),
             {
                 "session_id": session_id,
                 "owner_id": owner_id,
@@ -608,6 +615,7 @@ async def repair_storage_session_semantic_projection(
             catalog,
             session_id=session_id,
             owner_id=owner_id,
+            projector_read=True,
         )
         raw_manifest_cache[session_id] = initial_raw_manifests
         raw_manifest_snapshot = _raw_manifest_signature(initial_raw_manifests)
@@ -702,6 +710,7 @@ async def repair_storage_session_semantic_projection(
                 manifest_cache=raw_manifest_cache,
                 sequence_context_cache=sequence_context_cache,
                 reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
+                projector_read=True,
             )
             updated_records = tuple(
                 replace(
@@ -742,6 +751,7 @@ async def repair_storage_session_semantic_projection(
             catalog,
             session_id=session_id,
             owner_id=owner_id,
+            projector_read=True,
         )
         if _raw_manifest_signature(final_raw_manifests) != raw_manifest_snapshot:
             raise StorageV2SemanticRecoveryError("raw manifest changed during semantic repair")
