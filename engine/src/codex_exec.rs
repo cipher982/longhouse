@@ -2771,6 +2771,118 @@ for line in sys.stdin:
         }));
     }
 
+    /// Drive one real turn and return (provider thread id, assistant text).
+    async fn run_installed_codex_turn(
+        run_config: CodexExecRunConfig,
+        needle: &str,
+    ) -> (String, bool) {
+        let (api_url, mut received) = spawn_runtime_capture_server().await;
+        let mut run_config = run_config;
+        run_config.api_url = api_url;
+        run_config.codex_bin =
+            std::env::var("LONGHOUSE_TEST_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
+        start_codex_exec_once(run_config).await.unwrap();
+
+        let mut provider_thread_id = None;
+        let mut saw_needle = false;
+        let mut saw_terminal = false;
+        tokio::time::timeout(Duration::from_secs(180), async {
+            while let Some(batch) = received.recv().await {
+                for event in batch {
+                    if event.get("kind").and_then(Value::as_str) == Some("binding_signal") {
+                        provider_thread_id =
+                            json_string(&event, &["payload", "provider_thread_id"]);
+                    }
+                    saw_needle |= json_string(&event, &["payload", "live_text"])
+                        .is_some_and(|text| text.contains(needle));
+                    saw_terminal |= event.get("kind").and_then(Value::as_str)
+                        == Some("terminal_signal");
+                }
+                if saw_terminal && provider_thread_id.is_some() {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("installed Codex turn did not reach a terminal signal");
+
+        (
+            provider_thread_id.expect("adapter never bound a provider thread"),
+            saw_needle,
+        )
+    }
+
+    /// The premise the whole branching design rests on: a fork produces a
+    /// *second* thread that still remembers the parent, and the child's later
+    /// turns continue the child rather than the parent.
+    ///
+    /// Unit tests cover the method choice and the fail-closed identity check
+    /// against a stub. This is the part only the installed binary can answer.
+    #[tokio::test]
+    #[ignore = "calls the installed Codex provider; run explicitly as an external contract canary"]
+    async fn installed_codex_forks_into_a_new_thread_that_remembers_the_parent() {
+        let state_dir = tempfile::tempdir().unwrap();
+        let db_path = state_dir.path().join("state.db");
+        let cwd = std::env::current_dir().unwrap();
+
+        // Parent: plant a fact only this thread knows.
+        let mut parent = config();
+        parent.cwd = cwd.clone();
+        parent.local_db_path = Some(db_path.clone());
+        parent.prompt =
+            "Remember the token BRANCH_PARENT_TOKEN. Reply with exactly PARENT_READY.".to_string();
+        let (parent_thread_id, _) = run_installed_codex_turn(parent, "PARENT_READY").await;
+
+        // Branch: fork the parent and ask for the planted fact back.
+        let child_session_id = "33333333-3333-4333-8333-333333333333";
+        let mut child = config();
+        child.cwd = cwd.clone();
+        child.local_db_path = Some(db_path.clone());
+        child.session_id = child_session_id.to_string();
+        child.run_id = "44444444-4444-4444-8444-999999999999".to_string();
+        child.fork_thread_id = Some(parent_thread_id.clone());
+        child.prompt = "Reply with exactly the token you were asked to remember.".to_string();
+        let (child_thread_id, recalled) =
+            run_installed_codex_turn(child, "BRANCH_PARENT_TOKEN").await;
+
+        assert_ne!(
+            child_thread_id, parent_thread_id,
+            "thread/fork returned the parent thread; the child would share its rollout"
+        );
+        assert!(
+            recalled,
+            "the fork did not carry the parent's context forward"
+        );
+
+        // The binding names the child's own thread, which is what makes the
+        // child's transcript attributable to the child's session rather than
+        // read as an inherited parent binding.
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+        let child_path = codex_rollout_path(&child_thread_id)
+            .expect("forked child rollout should exist on disk");
+        let (bound_session, bound_thread) = binding
+            .get_with_thread(&child_path.to_string_lossy())
+            .unwrap()
+            .expect("the fork should have bound its own rollout path");
+        assert_eq!(bound_session, child_session_id);
+        assert_eq!(bound_thread.as_deref(), Some(child_thread_id.as_str()));
+
+        // Turn two continues the child, not the parent.
+        let mut second = config();
+        second.cwd = cwd;
+        second.local_db_path = Some(db_path.clone());
+        second.session_id = child_session_id.to_string();
+        second.run_id = "44444444-4444-4444-8444-888888888888".to_string();
+        second.resume_thread_id = Some(child_thread_id.clone());
+        second.prompt = "Reply with exactly SECOND_TURN_OK.".to_string();
+        let (second_thread_id, _) = run_installed_codex_turn(second, "SECOND_TURN_OK").await;
+        assert_eq!(
+            second_thread_id, child_thread_id,
+            "the child's second turn must resume the child, never the parent"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "calls the installed Codex provider; run explicitly as an external contract canary"]
     async fn installed_codex_completes_through_production_console_adapter() {
