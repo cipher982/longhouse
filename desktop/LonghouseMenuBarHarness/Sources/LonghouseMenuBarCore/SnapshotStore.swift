@@ -12,6 +12,10 @@ public final class SnapshotStore: ObservableObject {
     public static let historyRetentionMinutes = 30
     public static let bootGraceSeconds: TimeInterval = 10
     public static let presentationRefreshFreshnessSeconds: TimeInterval = 10
+    /// Visible ages are deliberately coarse (seconds, then minutes), so a
+    /// five-second presentation tick keeps them useful without rebuilding a
+    /// large SwiftUI session list every second while the menu is open.
+    public static let presentationUpdateIntervalSeconds: TimeInterval = 5
     /// Backstop for a producer that goes quiet without reporting a failure.
     /// The primary mechanism is the outcome of the last completed attempt; this
     /// only catches a wedged refresh that never completes at all.
@@ -222,7 +226,7 @@ public final class SnapshotStore: ObservableObject {
             return
         }
 
-        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: Self.presentationUpdateIntervalSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.presentationConsumerCount > 0 else {
                     return
@@ -230,7 +234,7 @@ public final class SnapshotStore: ObservableObject {
                 self.presentationDate = Date()
             }
         }
-        timer.tolerance = 0.2
+        timer.tolerance = 1.0
         RunLoop.main.add(timer, forMode: .common)
         presentationTimer = timer
     }
