@@ -20,6 +20,8 @@ from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.tool_presentation import project_tool_presentation
 from zerg.utils.server_timing import ServerTimingRecorder
 
+_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
+
 
 def _event_projection(
     event: dict[str, object],
@@ -197,7 +199,11 @@ async def build_storage_v2_workspace(
         return None
     try:
         with timing.span("storage_manifest"):
-            storage_result = await catalogd.call("storage.session.read.v2", {"session_id": str(session_id)})
+            storage_result = await catalogd.call(
+                "storage.session.read.v2",
+                {"session_id": str(session_id)},
+                timeout_seconds=_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS,
+            )
     except (CatalogRemoteError, CatalogUnavailable) as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
     storage = storage_result if storage_result.get("found") is True else None

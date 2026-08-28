@@ -18,8 +18,9 @@ from zerg.services.catalog_read_gateway import CatalogReadError
 
 
 class _Catalog:
-    async def call(self, method, params):
+    async def call(self, method, params, *, timeout_seconds=None):
         assert method == "storage.session.read.v2"
+        assert timeout_seconds == 4.25
         return {
             "found": True,
             "commit_seq": "8",
@@ -124,7 +125,8 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
 @pytest.mark.asyncio
 async def test_storage_v2_workspace_returns_none_for_legacy_session(monkeypatch):
     class MissingCatalog:
-        async def call(self, method, params):
+        async def call(self, method, params, *, timeout_seconds=None):
+            assert timeout_seconds == 4.25
             return {"found": False, "deleted": False}
 
     monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: MissingCatalog())
@@ -163,7 +165,8 @@ async def test_storage_v2_workspace_keeps_live_control_only_session_openable(mon
     session_id = uuid4()
 
     class MissingCatalog:
-        async def call(self, method, params):
+        async def call(self, method, params, *, timeout_seconds=None):
+            assert timeout_seconds == 4.25
             return {"found": False, "deleted": False}
 
     session = SimpleNamespace(
@@ -225,9 +228,10 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
     class ArchiveProjection:
         ready = False
 
-        async def call(self, method, params):
+        async def call(self, method, params, *, timeout_seconds=None):
             assert method == "storage.session.read.v2"
             assert params == {"session_id": str(session_id)}
+            assert timeout_seconds == 4.25
             if self.ready:
                 return {
                     "found": True,

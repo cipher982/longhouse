@@ -353,8 +353,9 @@ async def test_storage_v2_render_reader_surfaces_semantic_recovery_pending(monke
     source_envelope_id = "b" * 64
 
     class _Catalog:
-        async def call(self, method, _params):
+        async def call(self, method, _params, *, timeout_seconds=None):
             assert method == "storage.session.render_manifest.v2"
+            assert timeout_seconds == 4.25
             return {
                 "found": True,
                 "current_generation_id": str(generation_id),

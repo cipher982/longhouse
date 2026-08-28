@@ -78,6 +78,8 @@ from zerg.storage_v2.render_objects import RenderRecord
 from zerg.storage_v2.render_objects import validate_render_object_spec
 from zerg.utils.server_timing import ServerTimingRecorder
 
+_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
+
 router = APIRouter(prefix="/agents/storage/v2", tags=["agents"])
 logger = logging.getLogger(__name__)
 
@@ -1602,6 +1604,7 @@ async def read_storage_v2_session_events_page(
                     "before_order_key": cursor_order_key if anchor == "tail" else None,
                     "limit": _RENDER_MANIFEST_LIMIT,
                 },
+                timeout_seconds=_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS,
             )
     except (CatalogUnavailable, CatalogRemoteError) as exc:
         raise _http_error(
