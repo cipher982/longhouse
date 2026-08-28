@@ -1735,5 +1735,7 @@ def test_catalog_only_pending_session_projects_without_a_timeline_card(tmp_path)
     )
 
     assert response.id == str(session_id)
-    assert response.launch_state == "launching"
+    # The launch lives on the fact, not on a second top-level spelling of it.
+    assert response.session_state.launch is not None
+    assert response.session_state.launch.state == "pending"
     assert response.user_messages == 0

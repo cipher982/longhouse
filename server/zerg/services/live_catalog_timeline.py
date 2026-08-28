@@ -376,7 +376,6 @@ def _pending_response_from_catalog(
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
     canonical_aliases = _canonical_runtime_aliases(session_state=session_state, runtime_display=runtime_display)
-    launch_state = readiness.launch_state
     execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
         update={
@@ -436,10 +435,7 @@ def _pending_response_from_catalog(
             ),
             "loop_mode": session.loop_mode or "assist",
             "user_state": session.user_state or "active",
-            "launch_state": launch_state,
             "execution_lifetime": execution_lifetime,
-            "launch_error_code": readiness.launch_error_code,
-            "launch_error_message": readiness.launch_error_message,
         }
     )
 
@@ -565,10 +561,7 @@ def _response_from_catalog(
         loop_mode=session.loop_mode or "assist",
         user_state=session.user_state or "active",
         user_hidden_from_timeline=bool(session.user_hidden_from_timeline),
-        launch_state=readiness.launch_state if readiness is not None else None,
         execution_lifetime=readiness.execution_lifetime if readiness is not None else None,
-        launch_error_code=readiness.launch_error_code if readiness is not None else None,
-        launch_error_message=readiness.launch_error_message if readiness is not None else None,
     )
 
 

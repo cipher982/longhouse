@@ -57,9 +57,7 @@ from zerg.services.session_kernel_projection import SessionControlProjection
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_launch_lifecycle import ExecutionLifetime
-from zerg.services.session_launch_lifecycle import LaunchErrorCode
 from zerg.services.session_launch_lifecycle import LaunchLifecycle
-from zerg.services.session_launch_lifecycle import LaunchLifecycleState
 from zerg.services.session_launch_lifecycle import project_launch_lifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
@@ -1085,22 +1083,15 @@ class SessionResponse(UTCBaseModel):
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
     user_hidden_from_timeline: bool = Field(False, description="User has hidden this session from default timeline and search views")
-    launch_state: Optional[LaunchLifecycleState] = Field(
-        None,
-        description=(
-            "Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt"
-        ),
-    )
+    #: Launch lifecycle lives on `session_state.launch`, which is what web and
+    #: iOS read. The top-level aliases spelled the same readiness row a second
+    #: way (`launching`/`launch_failed` against the fact's
+    #: `pending`/`failed`), and a second spelling is what let one surface bind
+    #: to the copy the interaction reducer did not read. `execution_lifetime`
+    #: stays: it has no equivalent on the fact.
     execution_lifetime: Optional[ExecutionLifetime] = Field(
         None,
         description="Remote launch execution lifetime: one_shot|live_control; null when there is no launch attempt",
-    )
-    launch_error_code: Optional[LaunchErrorCode] = Field(
-        None,
-        description="Remote-launch error code when launch_state=launch_failed/launch_orphaned",
-    )
-    launch_error_message: Optional[str] = Field(
-        None, description="Remote-launch error message when launch_state=launch_failed/launch_orphaned"
     )
     sharer: Optional[SessionSharerResponse] = Field(
         None,
@@ -2550,10 +2541,7 @@ def build_session_response(
         loop_mode=_coerce_session_loop_mode(preferences.loop_mode),
         user_state=preferences.user_state,
         user_hidden_from_timeline=preferences.user_hidden_from_timeline,
-        launch_state=launch_state,
         execution_lifetime=execution_lifetime,
-        launch_error_code=launch_error_code,
-        launch_error_message=launch_error_message,
         sharer=sharer,
     )
 
@@ -2829,10 +2817,7 @@ def build_live_launch_placeholder_response(
         ),
         loop_mode=SessionLoopMode.ASSIST,
         user_state=user_state,
-        launch_state=launch_readiness.launch_state,
         execution_lifetime=launch_readiness.execution_lifetime,
-        launch_error_code=launch_readiness.launch_error_code,
-        launch_error_message=launch_readiness.launch_error_message,
         sharer=sharer,
     )
 

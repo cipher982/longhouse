@@ -9811,25 +9811,10 @@ export interface components {
              */
             user_hidden_from_timeline: boolean;
             /**
-             * Launch State
-             * @description Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt
-             */
-            launch_state?: ("launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned") | null;
-            /**
              * Execution Lifetime
              * @description Remote launch execution lifetime: one_shot|live_control; null when there is no launch attempt
              */
             execution_lifetime?: ("one_shot" | "live_control") | null;
-            /**
-             * Launch Error Code
-             * @description Remote-launch error code when launch_state=launch_failed/launch_orphaned
-             */
-            launch_error_code?: ("invalid_request" | "device_not_enrolled" | "provider_unsupported" | "cwd_not_allowed" | "cwd_not_found" | "machine_offline" | "provider_launch_failed" | "transcript_not_found" | "launch_timeout") | null;
-            /**
-             * Launch Error Message
-             * @description Remote-launch error message when launch_state=launch_failed/launch_orphaned
-             */
-            launch_error_message?: string | null;
             /** @description Attribution for the user whose signed share token or legacy ?shared_by=<id> link surfaced this session. Null when attribution is absent, the user is gone, or the sharer is the current viewer. */
             sharer?: components["schemas"]["SessionSharerResponse"] | null;
         };

@@ -394,10 +394,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let loopMode: APISessionLoopMode?
     let userState: String?
     let userHiddenFromTimeline: Bool?
-    let launchState: String?
     let executionLifetime: String?
-    let launchErrorCode: String?
-    let launchErrorMessage: String?
     let sharer: APISessionSharerResponse?
 }
 
