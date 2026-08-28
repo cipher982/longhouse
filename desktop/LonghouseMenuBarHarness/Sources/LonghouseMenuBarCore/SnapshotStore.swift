@@ -44,9 +44,12 @@ public final class SnapshotStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var bootGraceTask: Task<Void, Never>?
     private var realtimeTask: Task<Void, Never>?
+    private var realtimeFlushTask: Task<Void, Never>?
     private var transientRetryTask: Task<Void, Never>?
     private var realtimeConnection: RealtimeConnectionSnapshot?
     private var realtimeSessionIds: [String] = []
+    private var pendingRealtimeProjections: [String: SessionProjection] = [:]
+    private var pendingRealtimeRemovals: Set<String> = []
     private var localStatusMonitor: LocalStatusMonitor?
     private var localStatusPath: String?
     private var activeRefreshReason: SnapshotRefreshReason?
@@ -154,6 +157,7 @@ public final class SnapshotStore: ObservableObject {
         refreshTask?.cancel()
         bootGraceTask?.cancel()
         realtimeTask?.cancel()
+        realtimeFlushTask?.cancel()
         transientRetryTask?.cancel()
         localStatusMonitor?.stop()
     }
@@ -368,6 +372,7 @@ public final class SnapshotStore: ObservableObject {
         guard connection != realtimeConnection || normalizedSessionIds != realtimeSessionIds else { return }
         realtimeTask?.cancel()
         realtimeTask = nil
+        clearQueuedRealtimeEvents()
         realtimeConnection = connection
         realtimeSessionIds = normalizedSessionIds
         guard let connection,
@@ -386,6 +391,7 @@ public final class SnapshotStore: ObservableObject {
                 case .connected, .alive:
                     self.projectionState = self.projectionState.recordingSuccess(at: Date())
                 case let .failed(message):
+                    self.flushQueuedRealtimeEvents()
                     self.projectionState = self.projectionState.recordingFailure(
                         ProducerRefreshFailure(
                             message: message,
@@ -394,21 +400,71 @@ public final class SnapshotStore: ObservableObject {
                         )
                     )
                 case let .delta(projection):
-                    guard let snapshot = self.snapshot else { return }
-                    // A delta is itself proof the stream is alive.
-                    self.projectionState = self.projectionState.recordingSuccess(at: Date())
-                    let updated = snapshot.applying(projection)
-                    self.snapshot = updated
-                    self.persistCachedSnapshot(updated)
+                    self.queueRealtimeProjection(projection)
                 case let .remove(sessionId):
-                    guard let snapshot = self.snapshot else { return }
-                    self.projectionState = self.projectionState.recordingSuccess(at: Date())
-                    let updated = snapshot.removingSession(sessionId)
-                    self.snapshot = updated
-                    self.persistCachedSnapshot(updated)
+                    self.queueRealtimeRemoval(sessionId)
                 }
             }
         }
+    }
+
+    /// Coalesce projection traffic before invalidating the full SwiftUI tree and
+    /// atomically rewriting the cached snapshot. The stream's initial replay can
+    /// contain 100 rows, and active agents can emit several deltas per second;
+    /// neither should turn protocol framing into a render or disk-write loop.
+    private func queueRealtimeProjection(_ projection: SessionProjection) {
+        pendingRealtimeRemovals.remove(projection.sessionId)
+        pendingRealtimeProjections[projection.sessionId] = projection
+        scheduleRealtimeFlush()
+    }
+
+    private func queueRealtimeRemoval(_ sessionId: String) {
+        pendingRealtimeProjections.removeValue(forKey: sessionId)
+        pendingRealtimeRemovals.insert(sessionId)
+        scheduleRealtimeFlush()
+    }
+
+    private func scheduleRealtimeFlush() {
+        guard realtimeFlushTask == nil else { return }
+        realtimeFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            self.realtimeFlushTask = nil
+            self.flushQueuedRealtimeEvents()
+        }
+    }
+
+    private func flushQueuedRealtimeEvents() {
+        realtimeFlushTask?.cancel()
+        realtimeFlushTask = nil
+        guard var updated = snapshot else {
+            pendingRealtimeProjections.removeAll(keepingCapacity: true)
+            pendingRealtimeRemovals.removeAll(keepingCapacity: true)
+            return
+        }
+        guard !pendingRealtimeProjections.isEmpty || !pendingRealtimeRemovals.isEmpty else {
+            return
+        }
+
+        let projections = Array(pendingRealtimeProjections.values)
+        let removals = Array(pendingRealtimeRemovals)
+        pendingRealtimeProjections.removeAll(keepingCapacity: true)
+        pendingRealtimeRemovals.removeAll(keepingCapacity: true)
+        for projection in projections {
+            updated = updated.applying(projection)
+        }
+        for sessionId in removals {
+            updated = updated.removingSession(sessionId)
+        }
+        snapshot = updated
+        persistCachedSnapshot(updated)
+    }
+
+    private func clearQueuedRealtimeEvents() {
+        realtimeFlushTask?.cancel()
+        realtimeFlushTask = nil
+        pendingRealtimeProjections.removeAll(keepingCapacity: true)
+        pendingRealtimeRemovals.removeAll(keepingCapacity: true)
     }
 
     private func completeRefresh(reason: SnapshotRefreshReason) {
