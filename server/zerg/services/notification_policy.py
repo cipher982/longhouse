@@ -109,12 +109,12 @@ def next_quiet_hours_end(user: User | None, occurred_at: datetime) -> datetime |
     return end_dt.astimezone(timezone.utc)
 
 
-def session_notifications_muted(session: AgentSession | None) -> bool:
+def session_notifications_muted(session: AgentSession | None, *, owner_id: int | None) -> bool:
     if session is None:
         return False
     from zerg.services.session_preferences import load_session_preferences
 
-    return load_session_preferences(session.id, standalone_session=session).notification_muted
+    return load_session_preferences(session.id, owner_id=owner_id, standalone_session=session).notification_muted
 
 
 def recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at: datetime) -> bool:
@@ -138,7 +138,7 @@ def evaluate_tier1_delivery(
 ) -> AttentionDeliveryDecision:
     if not user_apns_notifications_enabled(user):
         return AttentionDeliveryDecision(AttentionDeliveryAction.SUPPRESS, "apns_disabled")
-    if session_notifications_muted(session):
+    if session_notifications_muted(session, owner_id=int(user.id) if user is not None else None):
         return AttentionDeliveryDecision(AttentionDeliveryAction.SUPPRESS, "session_muted")
 
     if user_notify_only_when_away(user) and recent_visible_web_client_exists(db, owner_id=int(user.id), occurred_at=occurred_at):
@@ -167,7 +167,7 @@ def evaluate_tier2_delivery(
 ) -> AttentionDeliveryDecision:
     if not user_apns_notifications_enabled(user):
         return AttentionDeliveryDecision(AttentionDeliveryAction.SUPPRESS, "apns_disabled")
-    if session_notifications_muted(session):
+    if session_notifications_muted(session, owner_id=int(user.id) if user is not None else None):
         return AttentionDeliveryDecision(AttentionDeliveryAction.SUPPRESS, "session_muted")
 
     if recent_visible_web_client_exists(db, owner_id=int(user.id), occurred_at=occurred_at):

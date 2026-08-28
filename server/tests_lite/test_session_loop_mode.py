@@ -84,6 +84,7 @@ def _console_session(live: LiveCatalog, *, owner_id: int, loop_mode: str | None 
             "session.preferences.update.v2",
             {
                 "session_id": str(session_id),
+                "owner_id": owner_id,
                 "user_state": None,
                 "loop_mode": loop_mode,
                 "notification_muted": None,

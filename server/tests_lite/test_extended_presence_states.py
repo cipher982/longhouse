@@ -343,6 +343,7 @@ def _snoozed_console_session(live_catalog: LiveCatalog, *, owner_id: int) -> str
         "session.preferences.update.v2",
         {
             "session_id": str(session_id),
+            "owner_id": owner_id,
             "user_state": "snoozed",
             "loop_mode": None,
             "notification_muted": None,

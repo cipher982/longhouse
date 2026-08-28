@@ -627,12 +627,13 @@ async def set_timeline_session_action(
     session_id: UUID,
     body: SessionActionRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    current_user=Depends(get_current_browser_user),
 ):
     return await _sessions_router.set_session_action(
         session_id=session_id,
         body=body,
         db=db,
-        _auth=None,
+        owner_id=int(current_user.id),
         _single=None,
     )
 
@@ -642,12 +643,13 @@ async def mark_timeline_session_read(
     session_id: UUID,
     body: SessionReadRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    current_user=Depends(get_current_browser_user),
 ):
     return await _sessions_router.mark_session_read(
         session_id=session_id,
         body=body,
         db=db,
-        _auth=None,
+        owner_id=int(current_user.id),
         _single=None,
     )
 
@@ -657,12 +659,13 @@ async def set_timeline_session_loop_mode(
     session_id: UUID,
     body: SessionLoopModeRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    current_user=Depends(get_current_browser_user),
 ):
     return await _sessions_router.set_session_loop_mode(
         session_id=session_id,
         body=body,
         db=db,
-        _auth=None,
+        owner_id=int(current_user.id),
         _single=None,
     )
 
@@ -672,12 +675,13 @@ async def set_timeline_session_notification_watch(
     session_id: UUID,
     body: SessionNotificationWatchRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    current_user=Depends(get_current_browser_user),
 ):
     return await _sessions_router.set_session_notification_watch(
         session_id=session_id,
         body=body,
         db=db,
-        _auth=None,
+        owner_id=int(current_user.id),
         _single=None,
     )
 
@@ -687,12 +691,13 @@ async def set_timeline_session_visibility(
     session_id: UUID,
     body: SessionTimelineVisibilityRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    current_user=Depends(get_current_browser_user),
 ):
     return await _sessions_router.set_session_timeline_visibility(
         session_id=session_id,
         body=body,
         db=db,
-        _auth=None,
+        owner_id=int(current_user.id),
         _single=None,
     )
 

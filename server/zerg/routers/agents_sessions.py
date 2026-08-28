@@ -163,6 +163,21 @@ def _no_viewer_owner_id() -> int | None:
     return None
 
 
+def _session_preferences_owner_id(
+    db: Session | None = Depends(session_preferences_db_dependency),
+    auth: object = Depends(verify_agents_token),
+) -> int:
+    """Owner every preference write is scoped to.
+
+    The machine credential is owner-bound; reading it here is what stops a
+    device token from writing preferences on another owner's session. The
+    browser twins in ``routers/timeline.py`` call these handlers directly and
+    pass the signed-in user's id in place of this dependency.
+    """
+
+    return _resolve_agents_owner_id(db, auth)
+
+
 def _console_write_db():
     yield None
 
@@ -997,7 +1012,7 @@ async def set_session_action(
     session_id: UUID,
     body: SessionActionRequest,
     db: Session | None = Depends(session_preferences_db_dependency),
-    _auth: None = Depends(verify_agents_token),
+    owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionActionResponse:
     """Set user-driven bucket state for a session (park/snooze/archive/resume)."""
@@ -1011,7 +1026,7 @@ async def set_session_action(
     new_state = action_to_state[body.action]
     from zerg.services.session_preferences import update_session_preferences
 
-    preferences = await update_session_preferences(session_id, user_state=new_state)
+    preferences = await update_session_preferences(session_id, owner_id=owner_id, user_state=new_state)
     if preferences is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     return SessionActionResponse(session_id=str(session_id), user_state=preferences.user_state)
@@ -1022,7 +1037,7 @@ async def mark_session_read(
     session_id: UUID,
     body: SessionReadRequest,
     db: Session | None = Depends(session_preferences_db_dependency),
-    _auth: None = Depends(verify_agents_token),
+    owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionReadResponse:
     """Acknowledge a session's Console results up to the observed read_through.
@@ -1039,7 +1054,7 @@ async def mark_session_read(
 
     from zerg.services.session_preferences import update_session_preferences
 
-    preferences = await update_session_preferences(session_id, last_read_at=read_through)
+    preferences = await update_session_preferences(session_id, owner_id=owner_id, last_read_at=read_through)
     if preferences is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     if preferences.read_through_rejected:
@@ -1056,13 +1071,13 @@ async def set_session_loop_mode(
     session_id: UUID,
     body: SessionLoopModeRequest,
     db: Session | None = Depends(session_preferences_db_dependency),
-    _auth: None = Depends(verify_agents_token),
+    owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionLoopModeResponse:
     """Set the explicit loop mode for a coding session."""
     from zerg.services.session_preferences import update_session_preferences
 
-    preferences = await update_session_preferences(session_id, loop_mode=body.loop_mode.value)
+    preferences = await update_session_preferences(session_id, owner_id=owner_id, loop_mode=body.loop_mode.value)
     if preferences is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     return SessionLoopModeResponse(session_id=str(session_id), loop_mode=preferences.loop_mode)
@@ -1073,7 +1088,7 @@ async def set_session_notification_watch(
     session_id: UUID,
     body: SessionNotificationWatchRequest,
     db: Session | None = Depends(session_preferences_db_dependency),
-    _auth: None = Depends(verify_agents_token),
+    owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionNotificationWatchResponse:
     """Mute or unmute session attention notifications."""
@@ -1081,6 +1096,7 @@ async def set_session_notification_watch(
 
     preferences = await update_session_preferences(
         session_id,
+        owner_id=owner_id,
         notification_muted=bool(body.notification_muted),
     )
     if preferences is None:
@@ -1096,13 +1112,13 @@ async def set_session_timeline_visibility(
     session_id: UUID,
     body: SessionTimelineVisibilityRequest,
     db: Session | None = Depends(session_preferences_db_dependency),
-    _auth: None = Depends(verify_agents_token),
+    owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionTimelineVisibilityResponse:
     """Hide or restore one session in the owner's default timeline."""
     from zerg.services.session_preferences import update_session_preferences
 
-    preferences = await update_session_preferences(session_id, user_hidden_from_timeline=bool(body.hidden))
+    preferences = await update_session_preferences(session_id, owner_id=owner_id, user_hidden_from_timeline=bool(body.hidden))
     if preferences is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     return SessionTimelineVisibilityResponse(session_id=str(session_id), hidden=preferences.user_hidden_from_timeline)

@@ -12,7 +12,9 @@ from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveUser
 from zerg.routers import agents_sessions
 from zerg.services.session_views import SessionActionRequest
 from zerg.services.session_views import SessionLoopModeRequest
@@ -37,6 +39,17 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
     session_id = str(uuid4())
     now = datetime.now(UTC).replace(microsecond=0)
     with engine.begin() as connection:
+        connection.execute(LiveUser.__table__.insert().values(id=1, email="owner@catalogd-preferences.test", provider="test", is_active=True))
+        connection.execute(
+            LiveSession.__table__.insert().values(
+                session_id=session_id,
+                owner_id="1",
+                provider="codex",
+                started_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
         connection.execute(
             LiveSessionCatalog.__table__.insert().values(
                 session_id=session_id,
@@ -59,21 +72,21 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
             session_id=UUID(session_id),
             body=SessionActionRequest(action="snooze"),
             db=None,
-            _auth=None,
+            owner_id=1,
             _single=None,
         )
         loop = await agents_sessions.set_session_loop_mode(
             session_id=UUID(session_id),
             body=SessionLoopModeRequest(loop_mode="autopilot"),
             db=None,
-            _auth=None,
+            owner_id=1,
             _single=None,
         )
         watch = await agents_sessions.set_session_notification_watch(
             session_id=UUID(session_id),
             body=SessionNotificationWatchRequest(notification_muted=True),
             db=None,
-            _auth=None,
+            owner_id=1,
             _single=None,
         )
         assert action.user_state == "snoozed"
@@ -90,6 +103,7 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
             "session.preferences.update.v2",
             {
                 "session_id": session_id,
+                "owner_id": 1,
                 "user_state": None,
                 "loop_mode": None,
                 "notification_muted": True,

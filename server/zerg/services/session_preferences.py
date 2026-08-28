@@ -18,8 +18,18 @@ class SessionPreferences:
     read_through_rejected: bool = False
 
 
-def load_session_preferences(session_id: UUID | str, *, standalone_session=None) -> SessionPreferences:
-    """Load preferences from live state; standalone test databases use their local row."""
+def load_session_preferences(
+    session_id: UUID | str,
+    *,
+    owner_id: int | None,
+    standalone_session=None,
+) -> SessionPreferences:
+    """Load preferences from live state; standalone test databases use their local row.
+
+    ``owner_id`` is mandatory because the catalog branch below is a real read
+    of another user's row when it is missing. Callers hold an owner already;
+    an unresolvable owner reads as canonical defaults, never as the catalog.
+    """
 
     from zerg import database as database_module
 
@@ -40,9 +50,11 @@ def load_session_preferences(session_id: UUID | str, *, standalone_session=None)
             notification_muted=catalog.get("notification_muted") is True,
             user_hidden_from_timeline=bool(catalog.get("user_hidden_from_timeline")),
         )
+    if owner_id is None:
+        return SessionPreferences()
     from zerg.services.catalog_read_gateway import session_snapshot
 
-    result = session_snapshot(str(session_id))
+    result = session_snapshot(str(session_id), owner_id=int(owner_id))
     facts = result.get("facts") if result.get("found") is True else None
     catalog = facts.get("catalog") if isinstance(facts, dict) else None
     if not isinstance(catalog, dict):
@@ -58,13 +70,19 @@ def load_session_preferences(session_id: UUID | str, *, standalone_session=None)
 async def update_session_preferences(
     session_id: UUID | str,
     *,
+    owner_id: int,
     user_state: str | None = None,
     loop_mode: str | None = None,
     notification_muted: bool | None = None,
     user_hidden_from_timeline: bool | None = None,
     last_read_at: datetime | None = None,
 ) -> SessionPreferences | None:
-    """Update session preferences through catalogd without opening SQLite here."""
+    """Update session preferences through catalogd without opening SQLite here.
+
+    ``owner_id`` is the write predicate, not decoration: catalogd refuses the
+    call without it and answers ``found: False`` for a session bound to anyone
+    else, so a non-owner cannot tell "not yours" from "never existed".
+    """
 
     from zerg.services.catalogd_supervisor import get_catalogd_client
 
@@ -75,6 +93,7 @@ async def update_session_preferences(
         "session.preferences.update.v2",
         {
             "session_id": str(session_id),
+            "owner_id": int(owner_id),
             "user_state": user_state,
             "loop_mode": loop_mode,
             "notification_muted": notification_muted,

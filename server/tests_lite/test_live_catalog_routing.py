@@ -108,12 +108,12 @@ def test_session_preference_mutation_uses_catalog_rpc_without_sqlite(monkeypatch
             session_id=session_id,
             body=SessionLoopModeRequest(loop_mode="autopilot"),
             db=None,
-            _auth=None,
+            owner_id=7,
             _single=None,
         )
     )
     assert response.loop_mode.value == "autopilot"
-    assert observed == {"session_id": session_id, "loop_mode": "autopilot"}
+    assert observed == {"session_id": session_id, "owner_id": 7, "loop_mode": "autopilot"}
 
 
 def _request_with_headers(**headers: str) -> Request:

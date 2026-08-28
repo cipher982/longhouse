@@ -2402,7 +2402,7 @@ def build_session_response(
     )
     from zerg.services.session_preferences import load_session_preferences
 
-    preferences = load_session_preferences(session.id, standalone_session=session)
+    preferences = load_session_preferences(session.id, owner_id=owner_id, standalone_session=session)
     if is_console:
         session_state = build_session_state_facts(
             session=session,
@@ -2821,6 +2821,7 @@ def build_active_session_response(
     kernel_capabilities=None,
     pause_request: dict[str, Any] | None = None,
     launch_attempt: SessionLaunchAttempt | None = None,
+    owner_id: int | None = None,
 ) -> ActiveSessionResponse:
     kernel_projection = project_session_kernel_fields(store.db, session, capabilities=kernel_capabilities)
     resolved_kernel_capabilities = kernel_projection.capabilities
@@ -2834,7 +2835,7 @@ def build_active_session_response(
     message_count = (session.user_messages or 0) + (session.assistant_messages or 0)
     from zerg.services.session_preferences import load_session_preferences
 
-    preferences = load_session_preferences(session.id, standalone_session=session)
+    preferences = load_session_preferences(session.id, owner_id=owner_id, standalone_session=session)
     launch_lifecycle = project_launch_lifecycle(launch_attempt)
     session_state = build_archive_session_state_facts(
         session=session,

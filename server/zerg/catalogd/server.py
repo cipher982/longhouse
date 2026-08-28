@@ -2209,6 +2209,7 @@ class CatalogDaemon:
     async def _update_session_preferences(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {
             "session_id",
+            "owner_id",
             "user_state",
             "loop_mode",
             "notification_muted",
@@ -2221,6 +2222,8 @@ class CatalogDaemon:
         params = dict(request.params)
         if not _is_canonical_uuid(params["session_id"]):
             return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
         if params["user_state"] is not None and params["user_state"] not in {
             "active",
             "parked",

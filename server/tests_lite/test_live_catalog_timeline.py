@@ -23,11 +23,13 @@ from zerg.machine_evidence import canonical_evidence_hash
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
+from zerg.models.live_store import LiveUser
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_catalog_timeline import _timeline_card_signature
 from zerg.services.live_catalog_timeline import list_live_catalog_timeline
@@ -1349,6 +1351,17 @@ def test_user_hide_updates_legacy_live_timeline_card_projection(tmp_path):
     now = datetime.now(timezone.utc)
     session_id = uuid4()
     with LiveSession() as db:
+        db.add(LiveUser(id=1, email="owner@user-hide-card.test", provider="test", is_active=True))
+        db.add(
+            LiveSessionRow(
+                session_id=str(session_id),
+                owner_id="1",
+                provider="codex",
+                started_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
         db.add(
             LiveSessionCatalog(
                 session_id=str(session_id),
@@ -1382,6 +1395,7 @@ def test_user_hide_updates_legacy_live_timeline_card_projection(tmp_path):
     store = CatalogStore(engine)
     hidden = store.update_session_preferences(
         session_id=str(session_id),
+        owner_id=1,
         user_state=None,
         loop_mode=None,
         notification_muted=None,
@@ -1394,6 +1408,7 @@ def test_user_hide_updates_legacy_live_timeline_card_projection(tmp_path):
 
     restored = store.update_session_preferences(
         session_id=str(session_id),
+        owner_id=1,
         user_state=None,
         loop_mode=None,
         notification_muted=None,

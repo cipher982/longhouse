@@ -83,6 +83,7 @@ def _console_session(
         "session.preferences.update.v2",
         {
             "session_id": str(session_id),
+            "owner_id": owner_id,
             "user_state": user_state,
             "loop_mode": loop_mode,
             "notification_muted": notification_muted,
@@ -113,7 +114,7 @@ def test_live_catalog_is_authoritative_for_session_preferences(live):
     )
     stale_archive = _stale_archive(user_state="active", loop_mode="assist", notification_muted=False)
 
-    preferences = load_session_preferences(session_id, standalone_session=stale_archive)
+    preferences = load_session_preferences(session_id, owner_id=owner, standalone_session=stale_archive)
 
     assert preferences.user_state == "archived"
     assert preferences.loop_mode == "autopilot"
@@ -128,11 +129,12 @@ def test_missing_live_row_uses_canonical_defaults_not_archive(live):
     and on autopilot because a stale mirror said so.
     """
 
+    owner = live.create_user("owner@preferences.test")
     unknown_session_id = uuid4()
     assert live.rpc("session.read.v2", {"session_id": str(unknown_session_id)})["found"] is False
     stale_archive = _stale_archive(user_state="archived", loop_mode="autopilot", notification_muted=True)
 
-    preferences = load_session_preferences(unknown_session_id, standalone_session=stale_archive)
+    preferences = load_session_preferences(unknown_session_id, owner_id=owner, standalone_session=stale_archive)
 
     assert preferences.user_state == "active"
     assert preferences.loop_mode == "assist"
@@ -162,7 +164,7 @@ def test_catalog_mode_reads_preferences_without_opening_sqlite(live, monkeypatch
         lambda: (_ for _ in ()).throw(AssertionError("API process must not open live SQLite")),
     )
 
-    preferences = load_session_preferences(session_id)
+    preferences = load_session_preferences(session_id, owner_id=owner)
 
     assert preferences.user_state == "snoozed"
     assert preferences.loop_mode == "autopilot"

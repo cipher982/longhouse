@@ -17,11 +17,13 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.machine_evidence import canonical_evidence_hash
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
+from zerg.models.live_store import LiveUser
 
 
 @pytest.fixture
@@ -63,6 +65,18 @@ def _seed_eligible_session(
         "observed_at": now.isoformat(),
     }
     with Session(engine) as db:
+        db.add(LiveUser(id=1, email="owner@codex-visibility-repair.test", provider="test", is_active=True))
+        db.add(
+            LiveSession(
+                session_id=session_id,
+                owner_id="1",
+                provider="codex",
+                device_id="cinder",
+                started_at=now,
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
         db.add(
             LiveSessionCatalog(
                 session_id=session_id,
@@ -299,6 +313,7 @@ async def test_codex_visibility_repair_refuses_when_fact_changes_after_dry_run(d
             "session.preferences.update.v2",
             {
                 "session_id": session_id,
+                "owner_id": 1,
                 "user_state": None,
                 "loop_mode": None,
                 "notification_muted": None,

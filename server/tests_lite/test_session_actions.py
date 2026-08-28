@@ -57,6 +57,7 @@ def _seed_session(live: LiveCatalog, *, user_state: str = "active") -> str:
             "session.preferences.update.v2",
             {
                 "session_id": str(session_id),
+                "owner_id": owner_id,
                 "user_state": user_state,
                 "loop_mode": None,
                 "notification_muted": None,

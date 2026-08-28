@@ -998,7 +998,13 @@ class CatalogStore:
             return {"changed": True, "user": _user_dto(row), "commit_seq": str(commit_seq)}
 
     def get_active_owner(self) -> dict[str, Any]:
-        """Resolve the single-tenant owner without exposing a SQLite reader."""
+        """Resolve the single-tenant owner without exposing a SQLite reader.
+
+        The single-row assumption is load-bearing: with more than one active
+        non-service user this silently promotes the lowest id to owner. Only an
+        auth-disabled host reaches it today. Anything authenticated must carry
+        the owner on its credential instead of asking here.
+        """
 
         user_table = LiveUser.__table__
         with _read_snapshot(self.engine) as connection:
@@ -5958,6 +5964,7 @@ class CatalogStore:
         self,
         *,
         session_id: str,
+        owner_id: int,
         user_state: str | None,
         loop_mode: str | None,
         notification_muted: bool | None,
@@ -5965,10 +5972,22 @@ class CatalogStore:
         observed_at: datetime,
         last_read_at: datetime | None = None,
     ) -> dict[str, Any]:
-        """Update bounded user-owned session state in one catalog transaction."""
+        """Update bounded user-owned session state in one catalog transaction.
+
+        Scoped like every other owner-bound write: a session that does not
+        explicitly belong to ``owner_id`` reports ``found: False``, which is the
+        same answer an unknown session id gets, so the caller cannot use this
+        route as an existence oracle.
+        """
 
         table = LiveSessionCatalog.__table__
         with _write_transaction(self.engine) as connection:
+            if not self._session_explicitly_belongs_to_owner(connection, session_id=session_id, owner_id=owner_id):
+                return {
+                    "found": False,
+                    "preferences": None,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
             current = (
                 connection.execute(
                     select(
