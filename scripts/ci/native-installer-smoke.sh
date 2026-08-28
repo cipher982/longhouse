@@ -143,9 +143,23 @@ cat > "$HOME_DIR/traps/open" <<'EOF'
 "$LONGHOUSE_SMOKE_NODE" -e '
 const target = new URL(process.argv[1]);
 const callback = new URL(target.searchParams.get("callback"));
-callback.searchParams.set("state", target.searchParams.get("state"));
-callback.searchParams.set("token", "zdt_browser_fixture_token");
-require("http").get(callback, (response) => process.exit(response.statusCode === 200 ? 0 : 1));
+const body = new URLSearchParams({
+  state: target.searchParams.get("state"),
+  token: "zdt_browser_fixture_token",
+}).toString();
+const request = require("http").request(
+  callback,
+  {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      "content-length": Buffer.byteLength(body),
+    },
+  },
+  (response) => process.exit(response.statusCode === 303 ? 0 : 1),
+);
+request.on("error", () => process.exit(1));
+request.end(body);
 ' "$1"
 EOF
 chmod 755 "$HOME_DIR/traps/open"
