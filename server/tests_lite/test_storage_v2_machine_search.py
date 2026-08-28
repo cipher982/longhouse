@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi import Response
 from starlette.requests import Request
 
+import zerg.database as zerg_database
 from zerg.routers import agents_search
 from zerg.routers import agents_sessions
 from zerg.routers import timeline
@@ -467,7 +468,7 @@ def test_machine_session_list_query_uses_searchd_without_legacy_db(monkeypatch):
         observed.update(kwargs)
         return []
 
-    monkeypatch.setattr(agents_sessions.database_module, "get_session_factory", _fail_legacy_factory)
+    monkeypatch.setattr(zerg_database, "get_session_factory", _fail_legacy_factory)
     monkeypatch.setattr(agents_sessions, "search_storage_v2_sessions", search_v2)
 
     response = asyncio.run(

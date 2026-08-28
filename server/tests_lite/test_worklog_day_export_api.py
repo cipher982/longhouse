@@ -234,10 +234,11 @@ def test_worklog_day_live_catalog_uses_search_projection_without_cold_fallback(t
             }
 
     search = FakeSearch()
+    import zerg.database as zerg_database
     import zerg.routers.agents_sessions as route_module
 
     monkeypatch.setattr(
-        route_module.database_module,
+        zerg_database,
         "get_session_factory",
         lambda: (_ for _ in ()).throw(AssertionError("cold database factory opened")),
     )

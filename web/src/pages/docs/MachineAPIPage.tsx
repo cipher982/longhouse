@@ -61,20 +61,6 @@ export default function MachineAPIPage() {
 #   sort               - sort order: relevance|recency|balanced`}
       </CodeBlock>
 
-      <h3>List session summaries</h3>
-      <CodeBlock title="GET /api/agents/sessions/summary">
-        {`curl "http://localhost:8080/api/agents/sessions/summary?project=zerg&limit=20"
-
-# Returns compact session metadata for picker UIs`}
-      </CodeBlock>
-
-      <h3>List active sessions</h3>
-      <CodeBlock title="GET /api/agents/sessions/active">
-        {`curl "http://localhost:8080/api/agents/sessions/active?project=zerg"
-
-# Returns recently active sessions for live monitoring`}
-      </CodeBlock>
-
       <h3>Get session detail</h3>
       <CodeBlock title="GET /api/agents/sessions/:id">
         {`curl http://localhost:8080/api/agents/sessions/SESSION_ID`}
@@ -108,13 +94,6 @@ export default function MachineAPIPage() {
 
 # Returns the last N events from a session
 # Useful for cross-session reading of recent activity`}
-      </CodeBlock>
-
-      <h3>Get session preview</h3>
-      <CodeBlock title="GET /api/agents/sessions/:id/preview">
-        {`curl "http://localhost:8080/api/agents/sessions/SESSION_ID/preview?last_n=6"
-
-# Returns compact preview of recent messages (for UI cards)`}
       </CodeBlock>
 
       <h3>Get session thread</h3>
@@ -161,13 +140,6 @@ export default function MachineAPIPage() {
 #   limit      - max results (default 50, max 200)`}
       </CodeBlock>
       <p>Returns raw signal metadata for active and recently active sessions.</p>
-
-      <h3>Get filter options</h3>
-      <CodeBlock title="GET /api/agents/filters">
-        {`curl "http://localhost:8080/api/agents/filters?days_back=90"
-
-# Returns distinct projects, providers, and machine IDs for UI dropdowns`}
-      </CodeBlock>
 
       <h3>Send directed input</h3>
       <CodeBlock title="POST /api/agents/directed-inputs">

@@ -14,8 +14,11 @@ from sqlalchemy.orm import sessionmaker
 from typer.testing import CliRunner
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
+
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("TESTING", "1")
+
+import pytest
 
 from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
@@ -38,6 +41,29 @@ from zerg.services.agents.automation_backfill import classify_reviewed_hatch_aut
 from zerg.services.agents.automation_backfill import reconcile_legacy_session_visibility
 from zerg.services.apns_sender import APNSDeviceTarget
 from zerg.services.apns_sender import prepare_session_attention_push
+
+
+@pytest.fixture(autouse=True)
+def _restore_api_app_dependency_overrides():
+    """An override installed here must not outlive this test.
+
+    ``api_app`` is a process-global, so an override left behind keeps
+    answering for every later test in the run. This file used to leave
+    ``verify_agents_token`` returning device ``usage-stats``, and an unrelated
+    storage-v2 test several hundred tests later failed with
+    ``identity_mismatch``. Nothing catches that until an edit elsewhere
+    reorders the suite, so each test puts back what it found.
+    """
+
+    from zerg.main import api_app
+
+    saved = dict(api_app.dependency_overrides)
+    try:
+        yield
+    finally:
+        api_app.dependency_overrides.clear()
+        api_app.dependency_overrides.update(saved)
+
 
 # These fixtures exercise live timeline and wall windows, so keep their
 # activity anchored to the current test run instead of a date that ages out.
@@ -388,33 +414,6 @@ def test_test_or_canary_origin_hides_from_default_timeline(tmp_path):
         )
         assert include_total == 2
         assert {row[1] for row in include_rows} == {str(PARENT_ID), str(HATCH_ID)}
-
-
-def test_hatch_automation_hides_from_active_sessions_live_path(tmp_path, monkeypatch):
-    SessionLocal = _session_factory(tmp_path)
-    with SessionLocal() as db:
-        store = AgentsStore(db)
-        store.ingest_session(_root_payload())
-        store.ingest_session(_hatch_payload())
-
-    monkeypatch.setattr(
-        "zerg.routers.agents_sessions._active_live_session_candidates",
-        lambda **_kwargs: [HATCH_ID, PARENT_ID],
-    )
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        default_resp = client.get("/api/agents/sessions/active", params={"limit": 10})
-        assert default_resp.status_code == 200
-        assert [item["id"] for item in default_resp.json()["sessions"]] == [str(PARENT_ID)]
-
-        include_resp = client.get(
-            "/api/agents/sessions/active",
-            params={"limit": 10, "include_automation": "true"},
-        )
-        assert include_resp.status_code == 200
-        assert {item["id"] for item in include_resp.json()["sessions"]} == {str(PARENT_ID), str(HATCH_ID)}
-    finally:
-        api_ref.dependency_overrides = {}
 
 
 def test_hatch_automation_does_not_prepare_attention_push(tmp_path):

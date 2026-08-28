@@ -20,7 +20,10 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
+
 os.environ.setdefault("TESTING", "1")
+
+import pytest
 
 from tests_lite.live_catalog_harness import LiveCatalog  # noqa: E402
 from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
@@ -32,6 +35,28 @@ from zerg.database import make_sessionmaker  # noqa: E402
 from zerg.dependencies.agents_auth import verify_agents_token  # noqa: E402
 from zerg.models.agents import AgentSession  # noqa: E402
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _restore_api_app_dependency_overrides():
+    """An override installed here must not outlive this test.
+
+    ``api_app`` is a process-global, so an override left behind keeps
+    answering for every later test in the run. This file used to leave
+    ``verify_agents_token`` returning device ``usage-stats``, and an unrelated
+    storage-v2 test several hundred tests later failed with
+    ``identity_mismatch``. Nothing catches that until an edit elsewhere
+    reorders the suite, so each test puts back what it found.
+    """
+
+    from zerg.main import api_app
+
+    saved = dict(api_app.dependency_overrides)
+    try:
+        yield
+    finally:
+        api_app.dependency_overrides.clear()
+        api_app.dependency_overrides.update(saved)
 
 
 def _console_session(live: LiveCatalog, *, owner_id: int, loop_mode: str | None = None) -> UUID:
@@ -107,6 +132,7 @@ def _seed_session(factory, *, loop_mode="assist"):
 def _client(factory):
     from zerg.main import api_app
 
+
     def override():
         db = factory()
         try:
@@ -181,23 +207,6 @@ def test_patch_session_timeline_visibility_hides_and_restores(live_catalog, live
 
     listing = live_catalog_client.get("/agents/sessions", headers=headers)
     assert session_id in {item["id"] for item in listing.json()["sessions"]}
-
-
-def test_active_sessions_exposes_loop_mode(tmp_path):
-    factory = _make_db(tmp_path, "active_sessions_loop_mode.db")
-    _seed_session(factory, loop_mode="autopilot")
-    client = _client(factory)
-
-    try:
-        response = client.get("/agents/sessions/active", headers={"X-Agents-Token": "dev"})
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["sessions"]
-        assert payload["sessions"][0]["loop_mode"] == "autopilot"
-    finally:
-        from zerg.main import api_app
-
-        api_app.dependency_overrides.clear()
 
 
 def test_invalid_loop_mode_rejected(live_catalog, live_catalog_client):

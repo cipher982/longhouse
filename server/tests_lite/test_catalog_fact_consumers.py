@@ -5,7 +5,6 @@ from datetime import datetime
 from uuid import UUID
 
 import zerg.database as database_module
-from zerg.routers import agents_sessions
 from zerg.services.managed_control_state import _load_live_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import load_runtime_state_map
@@ -84,17 +83,3 @@ def test_hot_fact_consumers_use_catalog_batch_without_sqlite(monkeypatch):
     assert controls[UUID(session_id)].control_state == "online"
     assert readiness[UUID(session_id)].launch_state == "live"
     assert previews[session_id].text == "Streaming output"
-
-
-def test_active_candidate_ids_use_catalog_rpc_without_sqlite(monkeypatch):
-    session_id = "22222222-2222-4222-8222-222222222222"
-    now = datetime.now(UTC)
-    monkeypatch.setattr(agents_sessions, "live_store_configured", lambda: True)
-    monkeypatch.setattr(
-        "zerg.services.catalog_read_gateway.active_session_ids",
-        lambda **_kwargs: {"session_ids": [session_id], "commit_seq": "4"},
-    )
-
-    result = agents_sessions._active_live_session_candidates(limit=50, days_back=14, now=now)
-
-    assert result == [UUID(session_id)]

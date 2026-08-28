@@ -11,17 +11,11 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("TESTING", "1")
 
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import Base
-from zerg.database import get_db
 from zerg.database import make_engine
-from zerg.database import make_sessionmaker
-from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.main import api_app
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
@@ -35,8 +29,6 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.agents.kernel_backfill import backfill_subagent_child_threads
-from zerg.services.session_graph_projection import build_session_graph_projection
-from zerg.services.session_workspace import get_legacy_workspace_session_factory
 
 PARENT_ID = UUID("f6a553e2-8aca-49c4-9823-3b3d8690fd2e")
 CHILD_ID = UUID("ddb1a69b-628e-5677-bba7-3fb76ba6ffc2")
@@ -847,127 +839,6 @@ def test_opencode_unknown_parentage_stays_visible_without_fork_label(tmp_path):
         total, rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
         assert total == 1
         assert rows[0][1] == str(OPENCODE_FORK_ID)
-
-
-def test_session_graph_projection_surfaces_child_fork_and_unknown_edges(tmp_path):
-    db_path = tmp_path / "session-graph.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    factory = make_sessionmaker(engine)
-    linked_id = UUID("019ee600-0000-7000-8000-000000000004")
-
-    with factory() as db:
-        store = AgentsStore(db)
-        store.ingest_session(
-            _root_payload(
-                session_id=OPENCODE_PARENT_ID,
-                provider="opencode",
-                provider_session_id="ses_parent",
-                project="longhouse",
-            )
-        )
-        store.ingest_session(
-            SessionIngest(
-                id=OPENCODE_CHILD_ID,
-                provider="opencode",
-                environment="production",
-                project="longhouse",
-                device_id="cinder",
-                cwd="/Users/davidrose/git/zerg/longhouse",
-                started_at=NOW,
-                provider_session_id="ses_child",
-                is_sidechain=True,
-                parent_provider_session_id="ses_parent",
-                subagent_id="explore",
-                subagent_tool_use_id="call_task",
-                attribution_agent="explore",
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="opencode child work",
-                        timestamp=NOW,
-                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_child",
-                        source_offset=0,
-                    )
-                ],
-            )
-        )
-        store.ingest_session(
-            SessionIngest(
-                id=OPENCODE_FORK_ID,
-                provider="opencode",
-                environment="production",
-                project="longhouse",
-                device_id="cinder",
-                cwd="/Users/davidrose/git/zerg/longhouse",
-                started_at=NOW,
-                provider_session_id="ses_fork",
-                parent_provider_session_id="ses_parent",
-                lineage_kind="fork",
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="forked opencode work",
-                        timestamp=NOW,
-                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_fork",
-                        source_offset=0,
-                    )
-                ],
-            )
-        )
-        store.ingest_session(
-            SessionIngest(
-                id=linked_id,
-                provider="opencode",
-                environment="production",
-                project="longhouse",
-                device_id="cinder",
-                cwd="/Users/davidrose/git/zerg/longhouse",
-                started_at=NOW,
-                provider_session_id="ses_linked",
-                parent_provider_session_id="ses_parent",
-                events=[
-                    EventIngest(
-                        role="user",
-                        content_text="linked opencode work",
-                        timestamp=NOW,
-                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_linked",
-                        source_offset=0,
-                    )
-                ],
-            )
-        )
-        projection = build_session_graph_projection(db, OPENCODE_PARENT_ID)
-        db.commit()
-
-    assert projection["session_id"] == str(OPENCODE_PARENT_ID)
-    assert [edge["edge_kind"] for edge in projection["children"]] == ["task_child"]
-    assert projection["children"][0]["agent_id"] == "explore"
-    assert [edge["edge_kind"] for edge in projection["forks"]] == ["fork"]
-    assert [edge["edge_kind"] for edge in projection["linked"]] == ["unknown"]
-
-    def override_db():
-        db = factory()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[get_legacy_workspace_session_factory] = lambda: factory
-    api_app.dependency_overrides[verify_agents_token] = lambda: None
-    api_app.dependency_overrides[require_single_tenant] = lambda: None
-    try:
-        client = TestClient(api_app)
-        response = client.get(f"/agents/sessions/{OPENCODE_PARENT_ID}/graph")
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["session_id"] == str(OPENCODE_PARENT_ID)
-        assert [edge["edge_kind"] for edge in body["children"]] == ["task_child"]
-        assert [edge["edge_kind"] for edge in body["forks"]] == ["fork"]
-        assert [edge["edge_kind"] for edge in body["linked"]] == ["unknown"]
-    finally:
-        api_app.dependency_overrides.clear()
 
 
 def test_unresolved_child_file_is_hidden_from_default_timeline(tmp_path):

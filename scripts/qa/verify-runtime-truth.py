@@ -5,8 +5,8 @@ Systems inspected (read-only):
   1) Local: ~/.longhouse/agent/longhouse-shipper.db -> session_phase_state
      (written by the engine on every hook/bridge phase signal, LWW)
   2) Local view: `longhouse local-health --json` (the overlay + scans)
-  3) Server view: GET /api/agents/sessions/active (SessionRuntimeState,
-     overlayed by resolve_runtime_overlay)
+  3) Server view: GET /api/timeline/sessions (catalog facts projected by
+     live_catalog_timeline, which is what the product actually serves)
 
 For each session observed in any of the three, print the phase each system
 reports. A disagreement is the interesting signal.
@@ -196,7 +196,13 @@ def read_local_health() -> list[dict[str, Any]]:
 
 
 def read_server_active(base_url: str, token: str | None) -> list[dict[str, Any]]:
-    url = f"{base_url.rstrip('/')}/api/agents/sessions/active?limit=200"
+    # /api/agents/sessions/active used to serve this and never worked outside a
+    # test: it took Depends(get_db), which 503s wherever catalogd owns the
+    # database -- so on a real Runtime Host this column was always blank. The
+    # timeline route is what the product serves. It clamps limit to 100 and
+    # takes browser auth, so run this against a local server (AUTH_DISABLED=1)
+    # or supply a longhouse_session cookie.
+    url = f"{base_url.rstrip('/')}/api/timeline/sessions?limit=100"
     req = urllib.request.Request(url)
     req.add_header("Accept", "application/json")
     req.add_header("User-Agent", "longhouse-verify-runtime-truth/1.0")

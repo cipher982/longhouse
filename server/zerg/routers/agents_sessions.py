@@ -4,10 +4,8 @@ import asyncio
 import logging
 from datetime import date as date_type
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from typing import Any
-from typing import List
 from typing import Literal
 from typing import Optional
 from uuid import UUID
@@ -25,24 +23,18 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-import zerg.database as database_module
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
-from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import SessionThread
 from zerg.models.device_token import DeviceToken
 from zerg.routers.agents_search import read_search_coverage
 from zerg.routers.agents_search import search_storage_v2_semantic_sessions
 from zerg.routers.agents_search import search_storage_v2_sessions
-from zerg.services.agents import AgentsStore
-from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
-from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import resolve_session_alias
@@ -67,20 +59,12 @@ from zerg.services.session_archive import build_storage_v2_archive_bundle
 from zerg.services.session_archive import build_storage_v2_archive_manifest
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_coordination import project_storage_v2_wall
-from zerg.services.session_graph_projection import build_session_graph_projection
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import validate_managed_hook_scope
 from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
-from zerg.services.session_turns import execute_session_turn_write
-from zerg.services.session_turns import get_session_turn_by_id
-from zerg.services.session_turns import list_session_turns
-from zerg.services.session_turns import materialize_managed_transcript_turns
-from zerg.services.session_views import ActiveSessionResponse
-from zerg.services.session_views import ActiveSessionsResponse
 from zerg.services.session_views import EventsListResponse
-from zerg.services.session_views import FiltersResponse
 from zerg.services.session_views import MachineSearchCoverage
 from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import MachineSessionResponse
@@ -91,31 +75,20 @@ from zerg.services.session_views import SessionLoopModeRequest
 from zerg.services.session_views import SessionLoopModeResponse
 from zerg.services.session_views import SessionNotificationWatchRequest
 from zerg.services.session_views import SessionNotificationWatchResponse
-from zerg.services.session_views import SessionPreviewMessage
-from zerg.services.session_views import SessionPreviewResponse
 from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionReadRequest
 from zerg.services.session_views import SessionReadResponse
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
-from zerg.services.session_views import SessionsSummaryResponse
-from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionTimelineVisibilityRequest
 from zerg.services.session_views import SessionTimelineVisibilityResponse
-from zerg.services.session_views import SessionTurnEnvelopeResponse
-from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import StartupContextItemResponse
 from zerg.services.session_views import StartupContextResponse
 from zerg.services.session_views import WallResponse
-from zerg.services.session_views import build_active_session_response
-from zerg.services.session_views import build_session_turn_response
-from zerg.services.session_views import latest_launch_attempts
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import project_machine_session
-from zerg.services.session_visibility_policy import evaluate_origin_visibility
-from zerg.services.session_visibility_policy import facts_from_row
 from zerg.services.session_workspace import build_session_workspace
 from zerg.services.session_workspace import get_legacy_workspace_session_factory
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_DAYS_BACK
@@ -155,8 +128,6 @@ session_preferences_db_dependency = _no_session_preferences_db
 
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
-_ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER = 5
-_ACTIVE_LIVE_SESSION_CANDIDATE_MAX = 1000
 _DIRECTED_INPUT_MAX_CHARS = 4000
 
 
@@ -310,31 +281,6 @@ async def export_worklog_day(
                 "reason": reason,
             },
         ) from exc
-
-
-def _active_live_session_candidates(*, limit: int, days_back: int, now: datetime) -> list[UUID] | None:
-    if not live_store_configured():
-        return None
-    from zerg.services.catalog_read_gateway import active_session_ids
-
-    result = active_session_ids(
-        limit=min(
-            _ACTIVE_LIVE_SESSION_CANDIDATE_MAX,
-            max(limit, limit * _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER),
-        ),
-        days_back=days_back,
-        observed_at=now.isoformat(),
-    )
-    return [UUID(value) for value in result.get("session_ids", [])]
-
-
-def _bounded_preview(value: str | None, *, max_len: int) -> str | None:
-    if value is None:
-        return None
-    stripped = value.strip()
-    if not stripped:
-        return None
-    return stripped[:max_len]
 
 
 def _parse_current_session_header(request: Request) -> UUID | None:
@@ -711,83 +657,6 @@ def get_startup_context(
         )
 
 
-@router.get("/sessions/summary", response_model=SessionsSummaryResponse)
-def list_session_summaries(
-    project: Optional[str] = Query(None, description="Filter by project"),
-    provider: Optional[str] = Query(None, description="Filter by provider"),
-    environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
-    include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
-    device_id: Optional[str] = Query(None, description="Filter by device ID"),
-    days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
-    query: Optional[str] = Query(None, description="Search query for content"),
-    limit: int = Query(20, ge=1, le=100, description="Max results"),
-    offset: int = Query(0, ge=0, description="Offset for pagination"),
-    hide_autonomous: bool = Query(
-        True,
-        description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
-    ),
-    include_automation: bool = Query(
-        False,
-        description="Include Hatch automation sessions in otherwise default-hidden summaries",
-    ),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> SessionsSummaryResponse:
-    """List session summaries for picker UI."""
-    try:
-        store = AgentsStore(db)
-        since = datetime.now(timezone.utc) - timedelta(days=days_back)
-
-        sessions, total = store.list_sessions(
-            project=project,
-            provider=provider,
-            environment=environment,
-            include_test=include_test,
-            device_id=device_id,
-            since=since,
-            query=query,
-            limit=limit,
-            offset=offset,
-            hide_autonomous=hide_autonomous,
-            include_automation=include_automation,
-            anchor_on_activity=query is None,
-        )
-
-        summaries: List[SessionSummaryResponse] = []
-        now = datetime.now(timezone.utc)
-        for s in sessions:
-            started_at = normalize_utc_datetime(s.started_at)
-            end_time = normalize_utc_datetime(s.ended_at) or now
-            duration_minutes = int((end_time - started_at).total_seconds() / 60) if started_at else None
-            turn_count = s.user_messages or 0
-
-            summaries.append(
-                SessionSummaryResponse(
-                    id=str(s.id),
-                    project=s.project,
-                    provider=s.provider,
-                    cwd=s.cwd,
-                    git_branch=s.git_branch,
-                    started_at=s.started_at,
-                    ended_at=s.ended_at,
-                    duration_minutes=duration_minutes,
-                    turn_count=turn_count,
-                    last_user_message=_bounded_preview(s.last_user_message_preview, max_len=200),
-                    last_ai_message=_bounded_preview(s.last_assistant_message_preview, max_len=200),
-                )
-            )
-
-        return SessionsSummaryResponse(sessions=summaries, total=total)
-
-    except Exception:
-        logger.exception("Failed to list session summaries")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list session summaries",
-        )
-
-
 @router.get("/sessions/wall", response_model=WallResponse)
 async def wall_query(
     repo: Optional[str] = Query(None, description="Filter by git_repo (substring match)"),
@@ -825,57 +694,6 @@ async def wall_query(
         limit=limit,
     )
     return WallResponse(sessions=items, total=len(items))
-
-
-@router.get("/workflows/{workflow_run_id}")
-def get_workflow_run(
-    workflow_run_id: str,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> dict:
-    """Return the subagent threads that belong to a dynamic-workflow run.
-
-    Groups all agents tagged with this ``workflow_run_id`` under their parent
-    session and surfaces each agent's attribution labels — the data a UI uses to
-    render a workflow as a single collapsible unit.
-    """
-    store = AgentsStore(db)
-    run = store.get_workflow_run(workflow_run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Unknown workflow run: {workflow_run_id}")
-    return run
-
-
-@router.get("/sessions/{session_id}/workflows")
-def list_session_workflow_runs(
-    session_id: UUID,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> dict:
-    """List dynamic-workflow runs whose subagent threads live under this session.
-
-    Each entry is one collapsible 'workflow run' node for the session detail UI:
-    {workflow_run_id, agent_count, skill}.
-    """
-    store = AgentsStore(db)
-    runs = store.list_workflow_runs_for_session(session_id)
-    return {"session_id": str(session_id), "workflow_runs": runs}
-
-
-@router.get("/sessions/{session_id}/graph")
-def get_session_graph(
-    session_id: UUID,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> dict:
-    """Return provider-neutral child/fork/link graph context for a session."""
-    store = AgentsStore(db)
-    if store.get_session(session_id) is None:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-    return build_session_graph_projection(db, session_id)
 
 
 _TAIL_ALL_ROLES = frozenset({"user", "assistant", "tool"})
@@ -1172,260 +990,6 @@ async def create_console_turn(
         state=turn.state,
         created=turn.created,
     )
-
-
-@router.get("/sessions/{session_id}/turns", response_model=SessionTurnsListResponse)
-async def get_session_turns(
-    session_id: UUID,
-    limit: int = Query(50, ge=1, le=100, description="Max turns to return"),
-    offset: int = Query(0, ge=0, description="Offset within the stable per-session turn order"),
-    order: str = Query("asc", description="Turn order: asc|desc"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> SessionTurnsListResponse:
-    """List canonical turn timing rows for one session."""
-    store = AgentsStore(db)
-    session = store.get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
-
-    if (
-        not database_module.archive_database_is_read_only()
-        and project_session_capabilities(db, session_id=session.id).managed_transport is not None
-    ):
-        await execute_session_turn_write(
-            db_bind=db.get_bind(),
-            label="session-turn-terminal",
-            fn=lambda turn_db: materialize_managed_transcript_turns(turn_db, session_id=session.id),
-        )
-
-    normalized_order = str(order or "asc").strip().lower()
-    if normalized_order not in {"asc", "desc"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="order must be one of: asc, desc",
-        )
-
-    turns, total = list_session_turns(
-        db,
-        session_id=session_id,
-        limit=limit,
-        offset=offset,
-        order=normalized_order,
-    )
-    return SessionTurnsListResponse(
-        turns=[build_session_turn_response(turn) for turn in turns],
-        total=total,
-    )
-
-
-@router.get("/sessions/{session_id}/turns/{turn_id}", response_model=SessionTurnEnvelopeResponse)
-def get_session_turn_detail(
-    session_id: UUID,
-    turn_id: int,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> SessionTurnEnvelopeResponse:
-    """Get one canonical turn timing row for a session."""
-    store = AgentsStore(db)
-    session = store.get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
-
-    turn = get_session_turn_by_id(db, session_id=session_id, turn_id=turn_id)
-    if turn is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Turn {turn_id} not found for session {session_id}",
-        )
-
-    return SessionTurnEnvelopeResponse(turn=build_session_turn_response(turn))
-
-
-@router.get("/sessions/active", response_model=ActiveSessionsResponse)
-def list_active_sessions(
-    project: Optional[str] = Query(None, description="Filter by project"),
-    status_filter: Optional[str] = Query(
-        None,
-        alias="status",
-        description="Filter by status (working, active, idle, completed)",
-    ),
-    attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
-    limit: int = Query(50, ge=1, le=200, description="Max results"),
-    days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
-    include_automation: bool = Query(False, description="Include hidden Hatch automation sessions"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> ActiveSessionsResponse:
-    """Return active/recent session summaries for the live sessions surface."""
-    try:
-        store = AgentsStore(db)
-        now = datetime.now(timezone.utc)
-        live_candidate_ids = _active_live_session_candidates(limit=limit, days_back=days_back, now=now)
-
-        if live_candidate_ids is None:
-            since = now - timedelta(days=days_back)
-            sessions, _total = store.list_sessions(
-                project=project,
-                provider=None,
-                environment=None,
-                include_test=False,
-                device_id=None,
-                since=since,
-                query=None,
-                limit=limit,
-                offset=0,
-                exclude_user_states=["archived", "snoozed"],
-                anchor_on_activity=True,
-            )
-        else:
-            sessions = []
-            unique_live_candidate_ids = list(dict.fromkeys(live_candidate_ids))
-            hydrated_live_sessions = store.get_sessions_ordered(unique_live_candidate_ids)
-            hydrated_live_ids = {session.id for session in hydrated_live_sessions}
-            primary_threads = {
-                thread.session_id: thread
-                for thread in db.query(SessionThread)
-                .filter(SessionThread.session_id.in_(hydrated_live_ids), SessionThread.is_primary == 1)
-                .all()
-            }
-            missing_live_candidate_count = len(
-                [session_id for session_id in unique_live_candidate_ids if session_id not in hydrated_live_ids]
-            )
-            for session in hydrated_live_sessions:
-                primary = primary_threads.get(session.id)
-                if (
-                    not include_automation
-                    and evaluate_origin_visibility(
-                        facts_from_row(
-                            session,
-                            primary_thread_is_worker_only=bool(primary and primary.branch_kind == "subagent"),
-                        )
-                    ).system_hidden
-                ):
-                    continue
-                if int(session.user_hidden_from_timeline or 0) == 1:
-                    continue
-                if project and session.project != project:
-                    continue
-                sessions.append(session)
-                if len(sessions) >= limit:
-                    break
-            if missing_live_candidate_count:
-                logger.info("Active session catalog included %s archive-missing ids", missing_live_candidate_count)
-
-        session_ids = [s.id for s in sessions]
-        last_activity = store.get_last_activity_map(session_ids)
-        kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
-        launch_attempt_map = latest_launch_attempts(db, session_ids)
-        items: List[ActiveSessionResponse] = []
-        for s in sessions:
-            last_activity_at = normalize_utc_datetime(last_activity.get(s.id) or s.ended_at or s.started_at) or now
-            attention_level = "auto"
-
-            if attention and attention_level != attention:
-                continue
-
-            item = build_active_session_response(
-                store,
-                s,
-                last_activity_at=last_activity_at,
-                runtime_overlay=None,
-                attention=attention_level,
-                last_user_message=_bounded_preview(s.last_user_message_preview, max_len=300),
-                last_assistant_message=_bounded_preview(s.last_assistant_message_preview, max_len=300),
-                now=now,
-                kernel_capabilities=kernel_capabilities_map.get(s.id),
-                launch_attempt=launch_attempt_map.get(s.id),
-            )
-            if status_filter and item.status != status_filter:
-                continue
-            items.append(item)
-
-        return ActiveSessionsResponse(
-            sessions=items,
-            total=len(items),
-            last_refresh=now,
-        )
-
-    except Exception:
-        logger.exception("Failed to list active sessions")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to list active sessions",
-        )
-
-
-@router.get("/sessions/{session_id}/preview", response_model=SessionPreviewResponse)
-def preview_session(
-    session_id: UUID,
-    last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> SessionPreviewResponse:
-    """Get a preview of a session's recent messages."""
-    store = AgentsStore(db)
-    session = store.get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
-
-    events = store.get_session_preview(session_id, last_n)
-    messages = [
-        SessionPreviewMessage(
-            role=e.role,
-            content=e.content_text or "",
-            timestamp=e.timestamp,
-        )
-        for e in events
-    ]
-    total_messages = (session.user_messages or 0) + (session.assistant_messages or 0)
-
-    return SessionPreviewResponse(
-        id=str(session_id),
-        messages=messages,
-        total_messages=total_messages,
-    )
-
-
-@router.get("/filters", response_model=FiltersResponse)
-def get_filters(
-    response: Response,
-    days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
-) -> FiltersResponse:
-    """Get distinct filter values for UI dropdowns."""
-    try:
-        store = AgentsStore(db)
-        timing = ServerTimingRecorder()
-        with timing.span("distinct_filters"):
-            filters = store.get_distinct_filters(days_back=days_back)
-        timing.apply(response)
-        return FiltersResponse(
-            projects=filters["projects"],
-            providers=filters["providers"],
-            machines=filters["machines"],
-        )
-    except Exception:
-        logger.exception("Failed to get filters")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get filters",
-        )
 
 
 @router.post("/sessions/{session_id}/action", response_model=SessionActionResponse)
