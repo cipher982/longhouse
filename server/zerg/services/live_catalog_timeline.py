@@ -916,11 +916,22 @@ async def stream_live_catalog_timeline(
         # that, only a real pubsub wake triggers another catalog read. A
         # timeout is a heartbeat opportunity, not permission to rescan the
         # entire timeline.
-        response = await asyncio.to_thread(
-            list_live_catalog_timeline,
-            params=params,
-            owner_id=owner_id,
-        )
+        while True:
+            try:
+                response = await asyncio.to_thread(
+                    list_live_catalog_timeline,
+                    params=params,
+                    owner_id=owner_id,
+                )
+                break
+            except CatalogReadError:
+                # Headers and the connected event have already been sent. A
+                # transiently full catalog lane must keep this response valid
+                # and retry in place, rather than creating a browser reconnect
+                # loop that adds more timeline reads to the saturated lane.
+                if await request.is_disconnected():
+                    return
+                await asyncio.sleep(1.0)
         previous = {card.thread_id: _timeline_card_signature(card) for card in response.sessions}
         previous_total = response.total
         if not skip_initial_replay:
@@ -959,11 +970,17 @@ async def stream_live_catalog_timeline(
             drain_nowait = getattr(subscription, "drain_nowait", None)
             if drain_nowait is not None:
                 drain_nowait()
-            response = await asyncio.to_thread(
-                list_live_catalog_timeline,
-                params=params,
-                owner_id=owner_id,
-            )
+            try:
+                response = await asyncio.to_thread(
+                    list_live_catalog_timeline,
+                    params=params,
+                    owner_id=owner_id,
+                )
+            except CatalogReadError:
+                # The next invalidation will retry this authoritative snapshot.
+                # Keeping the stream open is more important than turning one
+                # missed hint into a reconnect storm.
+                continue
             current = {card.thread_id: _timeline_card_signature(card) for card in response.sessions}
             for thread_id in sorted(previous.keys() - current.keys()):
                 yield {
