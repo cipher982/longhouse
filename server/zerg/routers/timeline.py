@@ -64,6 +64,7 @@ from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.live_catalog_timeline import read_live_catalog_session
+from zerg.services.live_catalog_timeline import read_live_catalog_sessions
 from zerg.services.live_catalog_timeline import stream_live_catalog_timeline
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.searchd_supervisor import get_searchd_client
@@ -162,7 +163,7 @@ class _TimelineFiltersCacheEntry:
 
 _timeline_filters_cache: dict[tuple[str, int, str | None], _TimelineFiltersCacheEntry] = {}
 _timeline_filters_cache_lock = Lock()
-_SEARCH_RESULT_HYDRATION_CONCURRENCY = 4
+_SEARCH_RESULT_HYDRATION_BATCH_SIZE = 20
 
 
 async def _search_storage_v2_timeline(
@@ -208,10 +209,14 @@ async def _search_storage_v2_timeline(
             session_ids.append(UUID(session_id))
             search_rows.append(row)
     projected = []
-    for start in range(0, len(session_ids), _SEARCH_RESULT_HYDRATION_CONCURRENCY):
-        batch = session_ids[start : start + _SEARCH_RESULT_HYDRATION_CONCURRENCY]
+    for start in range(0, len(session_ids), _SEARCH_RESULT_HYDRATION_BATCH_SIZE):
+        batch = session_ids[start : start + _SEARCH_RESULT_HYDRATION_BATCH_SIZE]
         projected.extend(
-            await asyncio.gather(*(asyncio.to_thread(read_live_catalog_session, session_id, owner_id=owner_id) for session_id in batch))
+            await asyncio.to_thread(
+                read_live_catalog_sessions,
+                batch,
+                owner_id=owner_id,
+            )
         )
     cards: list[TimelineSessionCardResponse] = []
     for (session, _provider_alias, _commit_seq), row in zip(projected, search_rows, strict=True):

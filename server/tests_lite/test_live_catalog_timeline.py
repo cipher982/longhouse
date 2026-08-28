@@ -459,7 +459,7 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
                 ]
             }
 
-    def read_session(requested, *, owner_id):
+    def read_sessions(requested, *, owner_id):
         observed.update(requested=requested, owner_id=owner_id)
         session = SessionResponse.model_construct(
             id=str(session_id),
@@ -471,10 +471,10 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
             match_snippet=None,
             match_score=None,
         )
-        return session, None, "9"
+        return [(session, None, "9")]
 
     monkeypatch.setattr(timeline_router, "get_searchd_client", lambda: SearchClient())
-    monkeypatch.setattr(timeline_router, "read_live_catalog_session", read_session)
+    monkeypatch.setattr(timeline_router, "read_live_catalog_sessions", read_sessions)
 
     result = await timeline_router._search_storage_v2_timeline(
         owner_id=7,
@@ -484,14 +484,15 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
     assert result.total == 1
     assert result.sessions[0].head.match_snippet == "matched provider channel"
     assert result.sessions[0].head.match_score == 0.25
-    assert observed == {"requested": session_id, "owner_id": 7}
+    assert observed == {"requested": [session_id], "owner_id": 7}
 
 
 @pytest.mark.asyncio
-async def test_storage_v2_browser_search_bounds_catalog_hydration_to_read_capacity(monkeypatch):
+async def test_storage_v2_browser_search_batches_catalog_hydration(monkeypatch):
     session_ids = [uuid4() for _ in range(12)]
     active = 0
     maximum_active = 0
+    page_sizes: list[int] = []
 
     class SearchClient:
         async def call(self, method, params):
@@ -517,30 +518,35 @@ async def test_storage_v2_browser_search_bounds_catalog_hydration_to_read_capaci
         finally:
             active -= 1
 
-    def read_session(requested, *, owner_id):
-        return (
-            SessionResponse.model_construct(
-                id=str(requested),
-                user_hidden_from_timeline=False,
-                environment="development",
-                user_messages=1,
-                timeline_anchor_at=datetime.now(timezone.utc),
-                origin_label="cube",
-                match_snippet=None,
-                match_score=None,
-            ),
-            None,
-            "9",
-        )
+    def read_sessions(requested, *, owner_id):
+        page_sizes.append(len(requested))
+        return [
+            (
+                SessionResponse.model_construct(
+                    id=str(session_id),
+                    user_hidden_from_timeline=False,
+                    environment="development",
+                    user_messages=1,
+                    timeline_anchor_at=datetime.now(timezone.utc),
+                    origin_label="cube",
+                    match_snippet=None,
+                    match_score=None,
+                ),
+                None,
+                "9",
+            )
+            for session_id in requested
+        ]
 
     monkeypatch.setattr(timeline_router, "get_searchd_client", lambda: SearchClient())
-    monkeypatch.setattr(timeline_router, "read_live_catalog_session", read_session)
+    monkeypatch.setattr(timeline_router, "read_live_catalog_sessions", read_sessions)
     monkeypatch.setattr(timeline_router.asyncio, "to_thread", fake_to_thread)
 
     result = await timeline_router._search_storage_v2_timeline(owner_id=7, params=_params(query="needle", limit=12))
 
     assert result.total == 12
-    assert maximum_active == timeline_router._SEARCH_RESULT_HYDRATION_CONCURRENCY
+    assert maximum_active == 1
+    assert page_sizes == [12]
 
 
 def test_canonical_timeline_projects_all_rows_at_snapshot_commit(monkeypatch):
