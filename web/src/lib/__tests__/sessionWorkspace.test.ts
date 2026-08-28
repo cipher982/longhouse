@@ -581,6 +581,84 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.composerDisabledReason).not.toMatch(/confirm the control link/i);
   });
 
+  it("treats a launch still in flight as starting, not as a control fault", () => {
+    // The banner said "Starting session on cinder" while the chip under it said
+    // "Longhouse can't confirm the control link", because the reducer read no
+    // launch fact at all. Nothing has attached yet, so there is no control path
+    // for anything to be wrong with.
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        session_state: makeSessionStateFacts({ access: null, mode: "helm", launchState: "dispatched" }),
+        capabilities: makeCapabilities(),
+      }),
+    });
+
+    expect(capabilities.capabilityLabel).toBe("Launching");
+    expect(capabilities.capabilityVariant).toBe("neutral");
+    expect(capabilities.notice?.title).toBe("Starting");
+    expect(capabilities.composerDisabledReason).toMatch(/starting this Codex session/i);
+    expect(capabilities.composerDisabledReason).not.toMatch(/confirm the control link/i);
+  });
+
+  it("calls a session Longhouse is starting managed before a control path claims it", () => {
+    // A `launch` fact exists only for a launch Longhouse itself initiated, so
+    // it proves ownership in the window before the control axis reports it.
+    // Ranked below ownership, a starting session read as somebody else's.
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        session_state: makeSessionStateFacts({ access: null, mode: "helm", launchState: "pending" }),
+        capabilities: makeCapabilities(),
+      }),
+    });
+
+    expect(capabilities.managementLabel).toBe("Managed");
+    expect(capabilities.managementDescription).toMatch(/starting it now/i);
+    expect(capabilities.description).not.toMatch(/unmanaged/i);
+  });
+
+  it("names the launch error instead of inventing a lease diagnostic", () => {
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        session_state: makeSessionStateFacts({
+          access: null,
+          mode: "helm",
+          launchState: "failed",
+          launchErrorCode: "launch_timeout",
+          launchErrorMessage: "Machine Agent did not report back before lease expired",
+        }),
+        capabilities: makeCapabilities(),
+      }),
+    });
+
+    expect(capabilities.capabilityLabel).toBe("Launch failed");
+    expect(capabilities.notice?.title).toBe("Launch failed");
+    expect(capabilities.composerDisabledReason).toMatch(/did not report back/i);
+    expect(capabilities.composerDisabledReason).not.toMatch(/confirm the control link/i);
+    // A launch that actually failed is a fault; only the in-flight state is not.
+    expect(capabilities.capabilityVariant).toBe("warning");
+  });
+
+  it("lets Closed outrank a launch that never landed", () => {
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        session_state: makeSessionStateFacts({
+          access: null,
+          mode: "helm",
+          closed: true,
+          launchState: "failed",
+        }),
+        capabilities: makeCapabilities(),
+      }),
+    });
+
+    expect(capabilities.capabilityLabel).toBe("Closed");
+    expect(capabilities.composerDisabledReason).toMatch(/session is closed/i);
+  });
+
   it("lets Closed and an unreachable machine outrank an ended run", () => {
     const base = makeSessionStateFacts({ access: "reattach" });
     const ended = {

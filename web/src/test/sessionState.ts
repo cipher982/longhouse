@@ -16,6 +16,9 @@ type SessionStateOptions = {
   lastResultAt?: string | null;
   lastResultOutcome?: string | null;
   activityValidUntil?: string | null;
+  launchState?: NonNullable<SessionStateFacts["launch"]>["state"] | null;
+  launchErrorCode?: string | null;
+  launchErrorMessage?: string | null;
 };
 
 export function makeSessionStateFacts(options: SessionStateOptions = {}): SessionStateFacts {
@@ -56,6 +59,12 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
       ? "open"
       : "history";
 
+  // Mirror the server's `_project_run`: a launch that has not landed yet has no
+  // run row, and the projector reports its run as `starting` rather than
+  // inventing one. A fixture with a launch pending and a run already running is
+  // a state the server cannot emit.
+  const launchInFlight = options.launchState === "pending" || options.launchState === "dispatched";
+
   return {
     state_contract_version: 1,
     presentation_policy_version: 1,
@@ -64,7 +73,18 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
       state: options.closed ? "closed" : "open",
       closed_at: options.closed ? (options.observedAt ?? "2026-03-21T12:00:00Z") : null,
     },
-    run: options.closed ? { lifecycle: "ended" } : { lifecycle: "running" },
+    launch: options.launchState
+      ? {
+          state: options.launchState,
+          error_code: options.launchErrorCode ?? null,
+          error_message: options.launchErrorMessage ?? null,
+        }
+      : null,
+    run: launchInFlight
+      ? { lifecycle: "starting" }
+      : options.closed
+        ? { lifecycle: "ended" }
+        : { lifecycle: "running" },
     activity: {
       state: activity,
       observed_at: options.observedAt,

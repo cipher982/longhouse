@@ -843,9 +843,12 @@ describe("SessionDetailPage", () => {
   it("renders the backend launch lifecycle pending state", () => {
     const session = makeSession({
       ended_at: null,
-      launch_state: "launching_unknown",
-      launch_error_code: null,
-      launch_error_message: "transport timed out",
+      session_state: makeSessionStateFacts({
+        access: null,
+        mode: "helm",
+        launchState: "dispatched",
+        launchErrorMessage: "transport timed out",
+      }),
     });
 
     mockWorkspaceState({ session, model: buildTimelineModel([]) });
@@ -860,9 +863,13 @@ describe("SessionDetailPage", () => {
   it("renders the backend launch lifecycle failure reason", () => {
     const session = makeSession({
       ended_at: "2026-03-22T22:05:00Z",
-      launch_state: "launch_orphaned",
-      launch_error_code: "launch_timeout",
-      launch_error_message: "Machine Agent did not report back before lease expired",
+      session_state: makeSessionStateFacts({
+        access: null,
+        mode: "helm",
+        launchState: "abandoned",
+        launchErrorCode: "launch_timeout",
+        launchErrorMessage: "Machine Agent did not report back before lease expired",
+      }),
     });
 
     mockWorkspaceState({ session, model: buildTimelineModel([]) });

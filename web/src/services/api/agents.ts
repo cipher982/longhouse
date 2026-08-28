@@ -6,7 +6,6 @@
  */
 
 import { buildUrl, request } from "./base";
-import type { RemoteLaunchErrorCode } from "./launch";
 import type { components } from "../../generated/openapi-types";
 
 const TIMELINE_API_PREFIX = "/timeline";
@@ -76,11 +75,7 @@ export interface AgentSession {
   loop_mode: SessionLoopMode;
   user_state?: string;
   user_hidden_from_timeline?: boolean;
-  /** Remote-launch lifecycle state; null for sessions created before remote-launch. */
-  launch_state?: "launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned" | null;
   execution_lifetime?: "one_shot" | "live_control" | null;
-  launch_error_code?: RemoteLaunchErrorCode | null;
-  launch_error_message?: string | null;
   /**
    * Attribution for the user whose signed share link or legacy
    * `?shared_by=<id>` URL surfaced this session. The server hides this when

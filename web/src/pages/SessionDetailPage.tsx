@@ -187,8 +187,10 @@ function SessionDetailWorkspaceRoute({
     }
   }, [session, resumeLoading]);
 
-  const sessionLaunchState = session?.launch_state ?? null;
-  const effectiveLaunchState = sessionLaunchState;
+  // Read the canonical launch fact, not the top-level compat alias. Two
+  // spellings of one readiness row is what let this banner and the interaction
+  // reducer disagree about whether a starting session was starting.
+  const launchFacts = session?.session_state?.launch ?? null;
 
   const refreshSessionQueries = useCallback(
     (targetSessionId: string) => {
@@ -303,25 +305,25 @@ function SessionDetailWorkspaceRoute({
   ].join(" ");
 
   const launchPendingBanner = (() => {
-    const state = effectiveLaunchState;
-    if (state === "launching" || state === "launching_unknown") {
+    const state = launchFacts?.state ?? null;
+    if (state === "pending" || state === "dispatched") {
       return (
         <div className="launch-pending-banner" role="status" data-testid="launch-pending-banner">
           <Spinner size="sm" />
           <span>
             Starting session on {runtimeHostLabel}…{" "}
-            {state === "launching_unknown" ? "waiting for the machine to confirm." : ""}
+            {state === "dispatched" ? "waiting for the machine to confirm." : ""}
           </span>
         </div>
       );
     }
-    if (state === "launch_failed" || state === "launch_orphaned") {
+    if (state === "failed" || state === "abandoned") {
       return (
         <div className="launch-failed-banner" role="alert" data-testid="launch-failed-banner">
           <strong>Launch failed</strong>
           <span>
-            {session.launch_error_code ? `${session.launch_error_code}: ` : ""}
-            {session.launch_error_message || "The machine did not start this session."}
+            {launchFacts?.error_code ? `${launchFacts.error_code}: ` : ""}
+            {launchFacts?.error_message || "The machine did not start this session."}
           </span>
         </div>
       );

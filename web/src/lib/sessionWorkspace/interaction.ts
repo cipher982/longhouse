@@ -29,6 +29,17 @@ export function getSessionInteractionCapabilities({
     throw new Error("Session workspace interactions require session.capabilities");
   }
   const facts = session.session_state;
+  // A launch that has not landed yet is the most fundamental fact about a
+  // session: nothing has ever attached to it, so there is no control path for
+  // anything to be wrong with. Every branch below this reads a control axis
+  // that only means something after a launch succeeded, which is why launch
+  // outranks all of them. iOS has ranked it this way since Console launch
+  // shipped (`SessionModels.swift`, `controlBlock`); web read a compat alias
+  // for its banner and nothing here, so a starting session drew a spinner and
+  // a "Longhouse can't confirm the control link" warning at the same time.
+  const launchState = facts.launch?.state ?? null;
+  const launchInFlight = launchState === "pending" || launchState === "dispatched";
+  const launchFailed = launchState === "failed" || launchState === "abandoned";
   const inputAction = facts.mode === "console"
     ? facts.control.actions.start_turn
     : facts.control.actions.send_input;
@@ -45,10 +56,16 @@ export function getSessionInteractionCapabilities({
   // decide this. Treat any owned-but-blocked Console session as unavailable so
   // it reaches the typed blocker copy instead of the generic read-only text.
   const consoleTurnBlocked = facts.mode === "console" && !liveControlAvailable;
+  // Launch outranks ownership deliberately. A session whose launch is still in
+  // flight may not have been claimed by a control path yet, and "unsupported"
+  // tells the user Longhouse cannot steer their session at the one moment it
+  // is busy starting it.
   const mode: SessionInteractionMode =
     liveControlAvailable
       ? "managed_local"
-      : isManagedLocalSession && (facts.control.connection !== "connected" || consoleTurnBlocked)
+      : launchInFlight ||
+          launchFailed ||
+          (isManagedLocalSession && (facts.control.connection !== "connected" || consoleTurnBlocked))
         ? "managed_local_unavailable"
         : "unsupported";
   const isUnsupportedManagedSession = mode === "unsupported" && isManagedLocalSession;
@@ -75,6 +92,15 @@ export function getSessionInteractionCapabilities({
     // control link" for a session that is simply over.
     if (facts.disposition.state === "closed") {
       return `This ${providerLabel} session is closed.`;
+    }
+    if (launchInFlight) {
+      return `Longhouse is starting this ${providerLabel} session on ${sourceOriginLabel}.`;
+    }
+    if (launchFailed) {
+      const detail = facts.launch?.error_message?.trim();
+      return detail
+        ? `This ${providerLabel} session did not start: ${detail}`
+        : `This ${providerLabel} session did not start on ${sourceOriginLabel}.`;
     }
     // An ended Helm run is not a control fault. Ending the run clears the
     // durable run id, which rejects every run-bound control head by design, so
@@ -116,9 +142,13 @@ export function getSessionInteractionCapabilities({
         return `Longhouse can't confirm the control link to this ${providerLabel} session right now.`;
     }
   })();
-  const controlUnavailableTitle = runEnded
-    ? "Run ended"
-    : facts.presentation.access?.label?.trim() || "Control is offline";
+  const controlUnavailableTitle = launchInFlight
+    ? "Starting"
+    : launchFailed
+      ? "Launch failed"
+      : runEnded
+        ? "Run ended"
+        : facts.presentation.access?.label?.trim() || "Control is offline";
 
   const managedLaunchSuggestion =
     mode === "unsupported" && !isManagedLocalSession
@@ -138,13 +168,23 @@ export function getSessionInteractionCapabilities({
     ? `Longhouse imported this ${providerLabel} session.`
     : `Longhouse imported this ${providerLabel} session.`;
 
-  const managementLabel = isManagedLocalSession ? "Managed" : "Unmanaged";
-  const managementDescription = isManagedLocalSession
+  // A `launch` fact only exists for a launch Longhouse itself initiated — the
+  // readiness row is written by the launch path — so its presence proves the
+  // session is Longhouse's even in the window before a control path claims
+  // ownership. Without this, a session Longhouse is in the middle of starting
+  // was labelled "Unmanaged" and described as imported.
+  const managedByLonghouse = isManagedLocalSession || launchInFlight || launchFailed;
+  const managementLabel = managedByLonghouse ? "Managed" : "Unmanaged";
+  const managementDescription = managedByLonghouse
     ? liveControlAvailable
       ? "Longhouse owns the control path for this session."
-      : runEnded
-        ? "Longhouse owns this session. Its run has ended."
-        : "Longhouse owns this session, but control is currently offline."
+      : launchInFlight
+        ? "Longhouse owns this session and is starting it now."
+        : launchFailed
+          ? "Longhouse owns this session. It never started."
+          : runEnded
+            ? "Longhouse owns this session. Its run has ended."
+            : "Longhouse owns this session, but control is currently offline."
     : unsupportedManagementDescription;
 
   const submitLabel =
@@ -155,16 +195,22 @@ export function getSessionInteractionCapabilities({
   const rawAccessLabel = facts.presentation.access?.label?.trim();
   const capabilityLabel = facts.disposition.state === "closed"
     ? "Closed"
-    : runEnded
-      ? "Ended"
-      : rawAccessLabel || (mode === "managed_local_unavailable" ? "Control unavailable" : "Read only");
+    : launchInFlight
+      ? "Launching"
+      : launchFailed
+        ? "Launch failed"
+        : runEnded
+          ? "Ended"
+          : rawAccessLabel || (mode === "managed_local_unavailable" ? "Control unavailable" : "Read only");
 
   const capabilityVariant =
     mode === "managed_local"
       ? "success"
-      // An ended run is an ordinary resting state, not a degraded one. Warning
-      // tone here is what made a finished session look broken.
-      : mode === "managed_local_unavailable" && !runEnded
+      // An ended run is an ordinary resting state, not a degraded one, and so
+      // is a launch still in flight. Warning tone on either is what made a
+      // normal session look broken. A launch that actually failed keeps it —
+      // that one is a fault, and it is the user's to act on.
+      : mode === "managed_local_unavailable" && !runEnded && !launchInFlight
         ? "warning"
         : "neutral";
 
