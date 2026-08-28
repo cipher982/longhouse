@@ -210,7 +210,7 @@ def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
     )
     deadline = time.monotonic() + deadline_seconds
     last_unavailable: CatalogUnavailable | None = None
-    for _attempt in range(2):
+    for attempt in range(2):
         try:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -222,6 +222,12 @@ def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
                 timeout_seconds=min(attempt_seconds, remaining),
             )
         except CatalogRemoteError as exc:
+            if attempt == 0 and exc.retryable:
+                retry_seconds = max(0, exc.retry_after_ms or 0) / 1_000
+                remaining = deadline - time.monotonic()
+                if retry_seconds < remaining:
+                    time.sleep(retry_seconds)
+                    continue
             raise CatalogReadError(exc.code, str(exc)) from exc
         except CatalogUnavailable as exc:
             last_unavailable = exc

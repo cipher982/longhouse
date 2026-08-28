@@ -20,6 +20,7 @@ from zerg.catalogd.models import FactHead
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.protocol import HEADER_BYTES
 from zerg.catalogd.protocol import MAX_PAYLOAD_BYTES
+from zerg.catalogd.protocol import CatalogRpcError
 from zerg.catalogd.protocol import CatalogRpcResponse
 from zerg.catalogd.protocol import encode_frame
 from zerg.catalogd.schema import create_catalog_engine
@@ -676,6 +677,34 @@ def test_catalog_gateway_gives_search_hydration_its_measured_bounded_budget(monk
 
     assert result == {"found": True}
     assert attempts == [1.0, 1.0]
+
+
+def test_catalog_gateway_retries_retryable_read_lane_collision(monkeypatch):
+    attempts: list[float] = []
+
+    def fake_call(_socket_path, method, *, params, timeout_seconds):
+        assert method == "session.shadow_state.read.batch.v2"
+        assert params == {"session_ids": ["session-1"], "owner_id": 1}
+        attempts.append(timeout_seconds)
+        if len(attempts) == 1:
+            raise CatalogRemoteError(
+                CatalogRpcError(
+                    code="resource_exhausted",
+                    message="catalog read lane is full",
+                    retryable=True,
+                    retry_after_ms=25,
+                    details={},
+                )
+            )
+        return {"sessions": []}
+
+    monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
+    monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+
+    result = catalog_read_gateway.shadow_session_states_snapshot(["session-1"], owner_id=1)
+
+    assert result == {"sessions": []}
+    assert len(attempts) == 2
 
 
 def test_catalog_gateway_gives_title_health_its_measured_bounded_budget(monkeypatch):

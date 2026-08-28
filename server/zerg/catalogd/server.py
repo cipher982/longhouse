@@ -414,6 +414,7 @@ class CatalogDaemon:
                         "resource_exhausted",
                         "catalog read lane is full",
                         retryable=True,
+                        retry_after_ms=25,
                     )
                 except CatalogWriterBusy:
                     response = self._error(
@@ -3903,6 +3904,7 @@ class CatalogDaemon:
         message: str,
         *,
         retryable: bool = False,
+        retry_after_ms: int | None = None,
         details: dict | None = None,
     ) -> CatalogRpcResponse:
         return CatalogRpcResponse(
@@ -3911,7 +3913,7 @@ class CatalogDaemon:
                 code=code,
                 message=message,
                 retryable=retryable,
-                retry_after_ms=0 if retryable else None,
+                retry_after_ms=(retry_after_ms if retry_after_ms is not None else 0) if retryable else None,
                 details=details or {},
             ),
         )

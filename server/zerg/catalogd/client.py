@@ -235,8 +235,14 @@ class CatalogClient:
                         remaining = deadline - asyncio.get_running_loop().time()
                         try:
                             return await self._call_once(method, params or {}, remaining)
-                        except CatalogRemoteError:
-                            raise
+                        except CatalogRemoteError as exc:
+                            if attempt + 1 == attempts or not exc.retryable:
+                                raise
+                            retry_seconds = max(0, exc.retry_after_ms or 0) / 1_000
+                            remaining = deadline - asyncio.get_running_loop().time()
+                            if retry_seconds >= remaining:
+                                raise
+                            await asyncio.sleep(retry_seconds)
                         except (OSError, EOFError, ProtocolError, asyncio.IncompleteReadError) as exc:
                             if attempt + 1 == attempts:
                                 raise CatalogUnavailable(f"catalogd unavailable for {method}") from exc

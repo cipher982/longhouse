@@ -155,6 +155,44 @@ async def test_client_surfaces_typed_remote_error(socket_path):
 
 
 @pytest.mark.asyncio
+async def test_client_retries_retryable_remote_error_inside_original_deadline(socket_path):
+    requests = 0
+
+    async def handle(reader, writer):
+        nonlocal requests
+        request = await read_frame(reader)
+        assert isinstance(request, CatalogRpcRequest)
+        requests += 1
+        if requests == 1:
+            response = CatalogRpcResponse(
+                id=request.id,
+                error=CatalogRpcError(
+                    code="resource_exhausted",
+                    message="catalog read lane is full",
+                    retryable=True,
+                    retry_after_ms=25,
+                    details={},
+                ),
+            )
+        else:
+            response = CatalogRpcResponse(id=request.id, result={"ready": True})
+        await write_frame(writer, response)
+        writer.close()
+
+    server = await asyncio.start_unix_server(handle, path=socket_path)
+    client = CatalogClient(socket_path)
+    started = time.monotonic()
+    try:
+        assert await client.call("ping.v2", timeout_seconds=0.5) == {"ready": True}
+        assert requests == 2
+        assert time.monotonic() - started >= 0.02
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_client_maps_missing_socket_to_catalog_unavailable(socket_path):
     client = CatalogClient(socket_path, default_timeout_seconds=0.05)
     with pytest.raises(CatalogUnavailable):
