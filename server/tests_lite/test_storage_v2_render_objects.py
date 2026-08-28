@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -1015,4 +1016,41 @@ async def test_user_read_lane_decodes_in_persistent_process(tmp_path):
         decoded = await pool.read(sealed.object_path, sealed.object_hash, lane="user")
         assert decoded.spec == _spec()
     finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_identical_user_reads_share_one_inflight_decode(tmp_path, monkeypatch):
+    pool = RenderObjectWorkerPool(
+        tmp_path,
+        live_workers=1,
+        repair_workers=1,
+        user_read_workers=1,
+        queue_multiplier=1,
+    )
+    calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+    decoded = SimpleNamespace(object_hash="a" * 64)
+
+    async def slow_read(object_path, expected_object_hash, **_kwargs):
+        nonlocal calls
+        calls += 1
+        assert object_path == "render.zst"
+        assert expected_object_hash == "a" * 64
+        started.set()
+        await release.wait()
+        return decoded
+
+    monkeypatch.setattr(pool, "_read_with_recovery", slow_read)
+    reads = [asyncio.create_task(pool.read("render.zst", "a" * 64)) for _ in range(8)]
+    try:
+        await started.wait()
+        await asyncio.sleep(0)
+        release.set()
+        assert await asyncio.gather(*reads) == [decoded] * 8
+        assert calls == 1
+    finally:
+        release.set()
+        await asyncio.gather(*reads, return_exceptions=True)
         await pool.close()

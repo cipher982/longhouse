@@ -75,6 +75,7 @@ class RenderObjectWorkerPool:
         self._user_read_executor = self._new_executor(user_read_workers)
         self._replace_lock = asyncio.Lock()
         self._slot_drainers: set[asyncio.Task[None]] = set()
+        self._user_reads: dict[tuple[str, str, float, float], asyncio.Task[DecodedRenderObject]] = {}
         self._closed = False
 
     @staticmethod
@@ -174,6 +175,47 @@ class RenderObjectWorkerPool:
             raise RenderObjectWorkerError("render worker pool is closed")
         if lane not in {"user", "background"}:
             raise ValueError("render read lane must be user or background")
+        if lane == "user":
+            key = (object_path, expected_object_hash, queue_timeout_seconds, operation_timeout_seconds)
+            task = self._user_reads.get(key)
+            if task is None:
+                task = asyncio.create_task(
+                    self._read_with_recovery(
+                        object_path,
+                        expected_object_hash,
+                        lane=lane,
+                        queue_timeout_seconds=queue_timeout_seconds,
+                        operation_timeout_seconds=operation_timeout_seconds,
+                    ),
+                    name="render-user-object-read",
+                )
+                self._user_reads[key] = task
+
+                def forget(completed: asyncio.Task[DecodedRenderObject]) -> None:
+                    if self._user_reads.get(key) is completed:
+                        self._user_reads.pop(key, None)
+                    if not completed.cancelled():
+                        completed.exception()
+
+                task.add_done_callback(forget)
+            return await asyncio.shield(task)
+        return await self._read_with_recovery(
+            object_path,
+            expected_object_hash,
+            lane=lane,
+            queue_timeout_seconds=queue_timeout_seconds,
+            operation_timeout_seconds=operation_timeout_seconds,
+        )
+
+    async def _read_with_recovery(
+        self,
+        object_path: str,
+        expected_object_hash: str,
+        *,
+        lane: str,
+        queue_timeout_seconds: float,
+        operation_timeout_seconds: float,
+    ) -> DecodedRenderObject:
         slots = self._user_read_slots if lane == "user" else self._repair_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
@@ -247,6 +289,8 @@ class RenderObjectWorkerPool:
         if self._closed:
             return
         self._closed = True
+        if self._user_reads:
+            await asyncio.gather(*tuple(self._user_reads.values()), return_exceptions=True)
         await asyncio.gather(
             asyncio.to_thread(self._live_executor.shutdown, wait=True, cancel_futures=True),
             asyncio.to_thread(self._repair_executor.shutdown, wait=True, cancel_futures=True),
