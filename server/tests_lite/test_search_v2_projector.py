@@ -143,7 +143,7 @@ async def test_search_projector_publishes_when_semantic_recovery_hits_archive_bo
     )
     catalog = FakeClient(
         {
-            "storage.session.raw_manifest.v2": {"found": True, "objects": [], "objects_truncated": False},
+            "storage.session.projector.raw_manifest.v2": {"found": True, "objects": [], "objects_truncated": False},
         }
     )
     search = FakeClient({"search.index.object.v2": {"created": True}})
@@ -501,7 +501,7 @@ async def test_search_projector_recovers_semantics_for_legacy_render_object():
                 "objects": [{"object_id": object_id, "object_hash": object_id, "object_path": "render.zst"}],
                 "has_more": False,
             },
-            "storage.session.raw_manifest.v2": {
+            "storage.session.projector.raw_manifest.v2": {
                 "found": True,
                 "objects_truncated": False,
                 "objects": [

@@ -681,12 +681,13 @@ def test_catalog_gateway_gives_search_hydration_its_measured_bounded_budget(monk
 
 def test_catalog_gateway_retries_retryable_read_lane_collision(monkeypatch):
     attempts: list[float] = []
+    sleeps: list[float] = []
 
     def fake_call(_socket_path, method, *, params, timeout_seconds):
         assert method == "session.shadow_state.read.batch.v2"
         assert params == {"session_ids": ["session-1"], "owner_id": 1}
         attempts.append(timeout_seconds)
-        if len(attempts) == 1:
+        if len(attempts) <= 3:
             raise CatalogRemoteError(
                 CatalogRpcError(
                     code="resource_exhausted",
@@ -700,11 +701,13 @@ def test_catalog_gateway_retries_retryable_read_lane_collision(monkeypatch):
 
     monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
     monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+    monkeypatch.setattr(catalog_read_gateway.time, "sleep", sleeps.append)
 
     result = catalog_read_gateway.shadow_session_states_snapshot(["session-1"], owner_id=1)
 
     assert result == {"sessions": []}
-    assert len(attempts) == 2
+    assert len(attempts) == 4
+    assert sleeps == [0.025, 0.05, 0.1]
 
 
 def test_catalog_gateway_gives_title_health_its_measured_bounded_budget(monkeypatch):

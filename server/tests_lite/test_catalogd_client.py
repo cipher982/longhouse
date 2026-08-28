@@ -163,7 +163,7 @@ async def test_client_retries_retryable_remote_error_inside_original_deadline(so
         request = await read_frame(reader)
         assert isinstance(request, CatalogRpcRequest)
         requests += 1
-        if requests == 1:
+        if requests <= 3:
             response = CatalogRpcResponse(
                 id=request.id,
                 error=CatalogRpcError(
@@ -184,8 +184,8 @@ async def test_client_retries_retryable_remote_error_inside_original_deadline(so
     started = time.monotonic()
     try:
         assert await client.call("ping.v2", timeout_seconds=0.5) == {"ready": True}
-        assert requests == 2
-        assert time.monotonic() - started >= 0.02
+        assert requests == 4
+        assert time.monotonic() - started >= 0.15
     finally:
         await client.close()
         server.close()

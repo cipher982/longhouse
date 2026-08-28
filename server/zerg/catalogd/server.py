@@ -652,6 +652,8 @@ class CatalogDaemon:
             return await self._read_storage_telemetry_summary(request)
         if request.method == "storage.session.raw_manifest.v2":
             return await self._read_storage_session_raw_manifest(request)
+        if request.method == "storage.session.projector.raw_manifest.v2":
+            return await self._read_storage_session_raw_manifest(request, projector=True)
         if request.method == "storage.session.render_manifest.v2":
             return await self._read_storage_session_render_manifest(request)
         if request.method == "storage.session.render_objects.list.v2":
@@ -2746,7 +2748,10 @@ class CatalogDaemon:
         cached = self._title_health_cache
         if cached is not None and now - cached[0] < TITLE_HEALTH_CACHE_SECONDS:
             return CatalogRpcResponse(id=request.id, result=cached[1])
-        result = await self._run_read_store(self._store.read_storage_title_dependency_health)
+        # This is an operator-wide scan over the full session catalog. During
+        # a backfill, dependency mutations invalidate the short cache often;
+        # keep those repeated health scans off the two queue-free user slots.
+        result = await self._run_projector_read_store(self._store.read_storage_title_dependency_health)
         self._title_health_cache = (now, result)
         return CatalogRpcResponse(id=request.id, result=result)
 
@@ -2895,9 +2900,14 @@ class CatalogDaemon:
         result = await self._run_projector_read_store(self._store.read_storage_telemetry_summary)
         return CatalogRpcResponse(id=request.id, result=result)
 
-    async def _read_storage_session_raw_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+    async def _read_storage_session_raw_manifest(
+        self,
+        request: CatalogRpcRequest,
+        *,
+        projector: bool = False,
+    ) -> CatalogRpcResponse:
         if set(request.params) != {"session_id", "owner_id", "after_source_key", "limit"}:
-            return self._error(request, "invalid_request", "storage.session.raw_manifest.v2 has invalid parameters")
+            return self._error(request, "invalid_request", f"{request.method} has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
         except ValueError as exc:
@@ -2928,7 +2938,8 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_read_store(
+        read = self._run_projector_read_store if projector else self._run_read_store
+        result = await read(
             self._store.read_storage_session_raw_manifest,
             session_id=session_id,
             owner_id=owner_id,

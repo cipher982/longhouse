@@ -106,6 +106,7 @@ _SAFE_RETRY_METHODS = {
     "storage.health.v2",
     "storage.telemetry.summary.v2",
     "storage.session.raw_manifest.v2",
+    "storage.session.projector.raw_manifest.v2",
     "storage.session.render_manifest.v2",
     "storage.session.render_objects.list.v2",
     # Deletion's two read RPCs: both are pure reads, safe to replay.
@@ -220,7 +221,7 @@ class CatalogClient:
         timeout = self.default_timeout_seconds if timeout_seconds is None else timeout_seconds
         if timeout <= 0:
             raise ValueError("timeout_seconds must be positive")
-        attempts = 2 if method in _SAFE_RETRY_METHODS else 1
+        safe_to_retry = method in _SAFE_RETRY_METHODS
         deadline = asyncio.get_running_loop().time() + timeout
         try:
             # One persistent socket plus a process-wide mutex turned unrelated
@@ -231,20 +232,27 @@ class CatalogClient:
             # explicit bounded admission gate and one wall-clock deadline.
             async with asyncio.timeout_at(deadline):
                 async with self._admission:
-                    for attempt in range(attempts):
+                    transport_attempts = 0
+                    retry_delay_seconds = 0.025
+                    while True:
                         remaining = deadline - asyncio.get_running_loop().time()
                         try:
                             return await self._call_once(method, params or {}, remaining)
                         except CatalogRemoteError as exc:
-                            if attempt + 1 == attempts or not exc.retryable:
+                            if not safe_to_retry or not exc.retryable:
                                 raise
-                            retry_seconds = max(0, exc.retry_after_ms or 0) / 1_000
+                            retry_seconds = max(
+                                retry_delay_seconds,
+                                max(0, exc.retry_after_ms or 0) / 1_000,
+                            )
                             remaining = deadline - asyncio.get_running_loop().time()
                             if retry_seconds >= remaining:
                                 raise
                             await asyncio.sleep(retry_seconds)
+                            retry_delay_seconds = min(retry_delay_seconds * 2, 0.25)
                         except (OSError, EOFError, ProtocolError, asyncio.IncompleteReadError) as exc:
-                            if attempt + 1 == attempts:
+                            transport_attempts += 1
+                            if not safe_to_retry or transport_attempts >= 2:
                                 raise CatalogUnavailable(f"catalogd unavailable for {method}") from exc
         except asyncio.TimeoutError as exc:
             # The request may have been processed and only its answer lost.

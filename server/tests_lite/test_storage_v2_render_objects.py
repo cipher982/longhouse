@@ -300,7 +300,7 @@ async def test_multi_page_semantic_repair_uses_final_catalog_completion(monkeypa
             self.repairs: list[dict[str, object]] = []
 
         async def call(self, method, params):
-            if method == "storage.session.read.v2":
+            if method == "storage.session.projector.read.v2":
                 return {"found": True, "commit_seq": 9}
             if method == "storage.session.render_objects.list.v2":
                 page = objects[0:1] if params["after_object_id"] is None else objects[1:]
@@ -469,7 +469,7 @@ async def test_storage_semantics_seed_from_prior_raw_envelope(tmp_path):
 
     class Catalog:
         async def call(self, method, params):
-            assert method == "storage.session.raw_manifest.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             assert params["session_id"] == str(session_id)
             return {
                 "found": True,
@@ -554,7 +554,7 @@ async def test_storage_semantics_allows_missing_manifest_only_for_new_ingest(tmp
 
     class Catalog:
         async def call(self, method, _params):
-            assert method == "storage.session.raw_manifest.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             return {
                 "found": False,
                 "deleted": deleted,
@@ -641,7 +641,7 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
         calls = 0
 
         async def call(self, method, params):
-            assert method == "storage.session.raw_manifest.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             self.calls += 1
             if self.calls == 1:
                 return missing_page
@@ -755,7 +755,7 @@ async def test_storage_semantics_replays_current_raw_in_order(tmp_path, command_
 
     class Catalog:
         async def call(self, method, params):
-            assert method == "storage.session.raw_manifest.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             return {"found": True, "objects": [], "objects_truncated": False}
 
     enriched = await enrich_render_interaction_kinds(
@@ -826,7 +826,7 @@ async def test_storage_semantic_recovery_skips_full_stream_scan_without_sequence
 
     class Catalog:
         async def call(self, method, params):
-            assert method == "storage.session.raw_manifest.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             return {
                 "found": True,
                 "objects": [
@@ -952,7 +952,7 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
 
     class Catalog:
         async def call(self, method, params):
-            assert method == "storage.session.raw_manifest.v2"
+            assert method == "storage.session.projector.raw_manifest.v2"
             return {
                 "found": True,
                 "objects": [

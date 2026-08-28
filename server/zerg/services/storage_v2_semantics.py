@@ -503,7 +503,7 @@ async def _load_raw_manifests(
     previous_source_key: str | None = None
     while True:
         page = await catalog.call(
-            "storage.session.raw_manifest.v2",
+            "storage.session.projector.raw_manifest.v2",
             {
                 "session_id": session_id,
                 "owner_id": owner_id,
@@ -592,7 +592,7 @@ async def repair_storage_session_semantic_projection(
     its raw companion.
     """
 
-    session_read = await catalog.call("storage.session.read.v2", {"session_id": session_id})
+    session_read = await catalog.call("storage.session.projector.read.v2", {"session_id": session_id})
     if session_read.get("found") is not True:
         raise StorageV2SemanticRecoveryError("storage session is unavailable for semantic repair")
     try:

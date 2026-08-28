@@ -197,6 +197,18 @@ async def test_background_reads_do_not_consume_interactive_lane(daemon_paths):
                 {"session_id": "11111111-1111-4111-8111-111111111111"},
             )
         )["found"] is False
+        assert (
+            await client.call(
+                "storage.session.projector.raw_manifest.v2",
+                {
+                    "session_id": "11111111-1111-4111-8111-111111111111",
+                    "owner_id": "1",
+                    "after_source_key": None,
+                    "limit": 100,
+                },
+            )
+        )["found"] is False
+        assert (await client.call("storage.session.title.dependency.health.v2"))["status"] == "healthy"
     finally:
         release.set()
         await asyncio.gather(*blocked)

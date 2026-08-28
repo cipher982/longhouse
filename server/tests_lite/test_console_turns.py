@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+import zerg.services.console_sessions as console_sessions
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -104,6 +105,31 @@ async def test_test_surface_console_session_is_automation_hidden(tmp_path):
     assert session.hidden_from_default_timeline == 1
     assert session.launch_actor == "automation"
     assert session.launch_surface == "test"
+
+
+@pytest.mark.asyncio
+async def test_catalog_console_create_uses_human_facing_write_budget(monkeypatch):
+    observed: dict[str, object] = {}
+
+    class Catalog:
+        async def call(self, method, params, *, timeout_seconds=None):
+            observed.update(method=method, params=params, timeout_seconds=timeout_seconds)
+            return {"created": True}
+
+    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(console_sessions, "get_catalogd_client", lambda: Catalog())
+
+    created = await create_empty_console_session(
+        None,
+        owner_id=1,
+        provider="codex",
+        device_id="cinder",
+        cwd="/tmp/longhouse",
+    )
+
+    assert created.created is True
+    assert observed["method"] == "session.console.create.v2"
+    assert observed["timeout_seconds"] == console_sessions.CONSOLE_CREATE_CATALOG_TIMEOUT_SECONDS
 
 
 def test_enqueue_console_turn_creates_linked_input_and_turn_atomically(tmp_path):

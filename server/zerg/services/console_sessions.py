@@ -18,6 +18,8 @@ from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_visibility_policy import SessionVisibilityFacts
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
 
+CONSOLE_CREATE_CATALOG_TIMEOUT_SECONDS = 5.0
+
 
 @dataclass(frozen=True)
 class CreatedConsoleSession:
@@ -70,7 +72,15 @@ async def create_empty_console_session(
         client = get_catalogd_client()
         if client is None:
             raise RuntimeError("Console session catalog is unavailable")
-        result = await client.call("session.console.create.v2", {"session": data})
+        # Console creation is a human-facing, idempotent write. Under a burst,
+        # the hosted catalog has measured a successful commit at 2.4 seconds;
+        # the generic one-second RPC budget reports that committed outcome as a
+        # 500 and forces the caller to discover it by replaying the request.
+        result = await client.call(
+            "session.console.create.v2",
+            {"session": data},
+            timeout_seconds=CONSOLE_CREATE_CATALOG_TIMEOUT_SECONDS,
+        )
         if result.get("idempotency_conflict") is True:
             raise ValueError("Console session identity was reused with different attributes")
         return CreatedConsoleSession(
