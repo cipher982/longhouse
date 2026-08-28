@@ -10,7 +10,9 @@ from zerg.auth import catalog_gateway
 from zerg.auth.principal import AuthenticatedUser
 from zerg.auth.strategy import DevAuthStrategy
 from zerg.auth.strategy import JWTAuthStrategy
+from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
+from zerg.catalogd.protocol import CatalogRpcError
 from zerg.dependencies import auth as auth_deps
 from zerg.dependencies import browser_auth
 
@@ -110,3 +112,39 @@ def test_catalog_pause_maps_to_typed_503(monkeypatch):
     assert len(attempts) == 2
     assert attempts[0][1]["params"] == attempts[1][1]["params"]
     assert all(0 < attempt[1]["timeout_seconds"] <= catalog_gateway.AUTH_CATALOG_ATTEMPT_TIMEOUT_SECONDS for attempt in attempts)
+
+
+def test_catalog_auth_waits_out_retryable_reader_admission(monkeypatch):
+    monkeypatch.setattr(catalog_gateway, "catalogd_paths", lambda: (None, "/tmp/catalog.sock"))
+    attempts = []
+    sleeps = []
+
+    def catalog_call(*args, **kwargs):
+        attempts.append((args, kwargs))
+        if len(attempts) < 4:
+            raise CatalogRemoteError(
+                CatalogRpcError(
+                    code="resource_exhausted",
+                    message="catalog read lane is full",
+                    retryable=True,
+                    retry_after_ms=25,
+                    details={},
+                )
+            )
+        return {
+            "found": True,
+            "user": {
+                "id": 7,
+                "email": "owner@example.com",
+                "email_verified": True,
+                "is_active": True,
+                "role": "ADMIN",
+            },
+        }
+
+    monkeypatch.setattr(catalog_gateway, "call_catalogd_sync", catalog_call)
+    monkeypatch.setattr(catalog_gateway.time, "sleep", sleeps.append)
+
+    assert catalog_gateway.resolve_user(7, touch_last_login=False).id == 7
+    assert len(attempts) == 4
+    assert sleeps == [0.025, 0.05, 0.1]

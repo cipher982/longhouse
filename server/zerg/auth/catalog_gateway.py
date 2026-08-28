@@ -36,6 +36,23 @@ def resolve_user(user_id: int, *, touch_last_login: bool) -> AuthenticatedUser |
 
 
 def resolve_device_token(token: str, *, touch_last_used: bool) -> AuthenticatedUser | None:
+    result = _resolve_device(token, touch_last_used=touch_last_used)
+    if result is None:
+        return None
+    return _principal(result.get("user"))
+
+
+def resolve_device_record(token: str, *, touch_last_used: bool) -> dict[str, Any] | None:
+    result = _resolve_device(token, touch_last_used=touch_last_used)
+    if result is None:
+        return None
+    payload = result.get("token")
+    if not isinstance(payload, dict):
+        raise _unavailable("Catalog authentication returned an invalid response.")
+    return payload
+
+
+def _resolve_device(token: str, *, touch_last_used: bool) -> dict[str, Any] | None:
     result = _call(
         "auth.device.resolve.v2",
         {
@@ -46,7 +63,7 @@ def resolve_device_token(token: str, *, touch_last_used: bool) -> AuthenticatedU
     )
     if result.get("valid") is not True:
         return None
-    return _principal(result.get("user"))
+    return result
 
 
 def resolve_control_plane_user(claims: CPTokenClaims) -> AuthenticatedUser:
@@ -192,7 +209,9 @@ def _call(method: str, params: dict) -> dict:
     # busy period into a 503/reconnect storm.
     deadline = time.monotonic() + AUTH_CATALOG_CALL_DEADLINE_SECONDS
     last_unavailable: CatalogUnavailable | None = None
-    for _attempt in range(2):
+    transport_attempts = 0
+    remote_retry_delay = 0.025
+    while True:
         try:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -204,11 +223,21 @@ def _call(method: str, params: dict) -> dict:
                 timeout_seconds=min(AUTH_CATALOG_ATTEMPT_TIMEOUT_SECONDS, remaining),
             )
         except CatalogRemoteError as exc:
-            if exc.code != "conflict":
+            if exc.code == "conflict":
+                raise
+            if not exc.retryable:
                 raise _unavailable() from exc
-            raise
+            remaining = deadline - time.monotonic()
+            retry_seconds = max(remote_retry_delay, max(0, exc.retry_after_ms or 0) / 1_000)
+            if retry_seconds >= remaining:
+                raise _unavailable() from exc
+            time.sleep(retry_seconds)
+            remote_retry_delay = min(remote_retry_delay * 2, 0.25)
         except CatalogUnavailable as exc:
             last_unavailable = exc
+            transport_attempts += 1
+            if transport_attempts >= 2:
+                break
     raise _unavailable() from last_unavailable
 
 
@@ -235,6 +264,7 @@ def _aware_iso(value: datetime) -> str:
 __all__ = [
     "create_refresh",
     "resolve_control_plane_user",
+    "resolve_device_record",
     "resolve_device_token",
     "resolve_local_user",
     "resolve_user",

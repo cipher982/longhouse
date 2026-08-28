@@ -17,7 +17,7 @@ from sqlalchemy import inspect as sa_inspect
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.auth.catalog_gateway import AUTH_CATALOG_CALL_DEADLINE_SECONDS
+from zerg.auth.catalog_gateway import AUTH_CATALOG_ATTEMPT_TIMEOUT_SECONDS
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -191,9 +191,9 @@ def test_production_agents_token_validation_uses_catalogd_without_opening_db():
         patch("zerg.dependencies.agents_auth.live_store_configured", return_value=True),
         patch("zerg.dependencies.agents_auth.get_settings", return_value=SimpleNamespace(testing=False)),
         patch("zerg.dependencies.agents_auth.get_session_factory", side_effect=AssertionError("must not open DB")),
-        patch("zerg.catalogd.client.call_catalogd_sync", side_effect=catalog_call),
+        patch("zerg.auth.catalog_gateway.call_catalogd_sync", side_effect=catalog_call),
         patch(
-            "zerg.services.catalogd_supervisor.catalogd_paths",
+            "zerg.auth.catalog_gateway.catalogd_paths",
             return_value=(Path("/data/longhouse-live.db"), Path("/data/.catalogd/catalogd.sock")),
         ),
     ):
@@ -206,7 +206,7 @@ def test_production_agents_token_validation_uses_catalogd_without_opening_db():
     assert observed["params"]["token_hash"] == hash_token(plain_token)
     assert observed["params"]["touch_last_used"] is False
     assert observed["params"]["touch_interval_seconds"] == 300
-    assert observed["timeout_seconds"] == AUTH_CATALOG_CALL_DEADLINE_SECONDS
+    assert observed["timeout_seconds"] == AUTH_CATALOG_ATTEMPT_TIMEOUT_SECONDS
 
 
 def test_production_agents_token_validation_maps_catalog_failure_to_typed_503():
@@ -215,9 +215,9 @@ def test_production_agents_token_validation_maps_catalog_failure_to_typed_503():
     with (
         patch("zerg.dependencies.agents_auth.live_store_configured", return_value=True),
         patch("zerg.dependencies.agents_auth.get_settings", return_value=SimpleNamespace(testing=False)),
-        patch("zerg.catalogd.client.call_catalogd_sync", side_effect=CatalogUnavailable("down")),
+        patch("zerg.auth.catalog_gateway.call_catalogd_sync", side_effect=CatalogUnavailable("down")),
         patch(
-            "zerg.services.catalogd_supervisor.catalogd_paths",
+            "zerg.auth.catalog_gateway.catalogd_paths",
             return_value=(Path("/data/longhouse-live.db"), Path("/data/.catalogd/catalogd.sock")),
         ),
         pytest.raises(HTTPException) as exc_info,

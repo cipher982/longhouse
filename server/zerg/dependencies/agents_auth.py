@@ -14,7 +14,6 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 
-from zerg.auth.catalog_gateway import AUTH_CATALOG_CALL_DEADLINE_SECONDS
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.auth.managed_session_tokens import validate_managed_session_token
 from zerg.config import get_settings
@@ -135,40 +134,12 @@ def _validate_device_token_for_request(token: str) -> DeviceToken | None:
 
 
 def _validate_device_token_through_catalogd(token: str) -> DeviceToken | None:
-    from zerg.catalogd.client import CatalogRemoteError
-    from zerg.catalogd.client import CatalogUnavailable
-    from zerg.catalogd.client import call_catalogd_sync
-    from zerg.services.catalogd_supervisor import catalogd_paths
+    from zerg.auth.catalog_gateway import resolve_device_record
 
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    _database_path, socket_path = catalogd_paths()
-    try:
-        result = call_catalogd_sync(
-            socket_path,
-            "auth.device.resolve.v2",
-            params={
-                "token_hash": token_hash,
-                "touch_last_used": False,
-                "touch_interval_seconds": 300,
-            },
-            # Machine-token auth sits in front of every agents request. Use the
-            # same bounded busy-wait as browser auth so a healthy catalog writer
-            # transaction becomes latency instead of an intermittent 503.
-            timeout_seconds=AUTH_CATALOG_CALL_DEADLINE_SECONDS,
-        )
-    except (CatalogUnavailable, CatalogRemoteError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "catalog_unavailable", "message": "Catalog authentication is temporarily unavailable."},
-        ) from exc
-    if result.get("valid") is not True:
+    payload = resolve_device_record(token, touch_last_used=False)
+    if payload is None:
         return None
-    payload = result.get("token")
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "catalog_unavailable", "message": "Catalog authentication returned an invalid response."},
-        )
     try:
         return DeviceToken(
             id=payload["id"],
