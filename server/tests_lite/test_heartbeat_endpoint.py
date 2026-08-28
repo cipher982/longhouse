@@ -39,6 +39,9 @@ from zerg.machine_evidence import canonical_evidence_hash  # noqa: E402
 from zerg.machine_evidence import validate_machine_evidence_identities  # noqa: E402
 from zerg.models.live_store import LiveControlLease  # noqa: E402
 from zerg.models.live_store import LiveHeartbeatStamp  # noqa: E402
+from zerg.models.live_store import LiveSessionCatalog  # noqa: E402
+from zerg.models.live_store import LiveSessionRun  # noqa: E402
+from zerg.models.live_store import LiveSessionThread  # noqa: E402
 from zerg.services.catalogd_supervisor import catalogd_paths  # noqa: E402
 
 OWNER_EMAIL = "owner@heartbeat.test"
@@ -318,6 +321,53 @@ def _resolved_managed_session(
         "evidence": {"process_observed": True, "transcript_observed": True},
         "reason_codes": [] if state == "attached" else [state],
     }
+
+
+def _seed_open_run(session_id, *, provider: str = "codex") -> tuple[str, str]:
+    """A session whose run is still open, as while the provider is running."""
+
+    started_at = datetime.now(UTC) - timedelta(minutes=5)
+    thread_id = str(uuid4())
+    run_id = str(uuid4())
+    engine = create_catalog_engine(catalogd_paths()[0])
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                LiveSessionCatalog.__table__.insert().values(
+                    session_id=str(session_id),
+                    provider=provider,
+                    environment="development",
+                    device_id=DEVICE_ID,
+                    started_at=started_at,
+                    primary_thread_id=thread_id,
+                    created_at=started_at,
+                    updated_at=started_at,
+                )
+            )
+            connection.execute(
+                LiveSessionThread.__table__.insert().values(
+                    id=thread_id,
+                    session_id=str(session_id),
+                    provider=provider,
+                    branch_kind="root",
+                    is_primary=1,
+                    created_at=started_at,
+                    updated_at=started_at,
+                )
+            )
+            connection.execute(
+                LiveSessionRun.__table__.insert().values(
+                    id=run_id,
+                    thread_id=thread_id,
+                    provider=provider,
+                    host_id=DEVICE_ID,
+                    launch_origin="longhouse_spawned",
+                    started_at=started_at,
+                )
+            )
+    finally:
+        engine.dispose()
+    return thread_id, run_id
 
 
 def _legacy_lease(session_id, *, provider: str, machine_id: str) -> dict[str, object]:
@@ -1074,6 +1124,7 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(live_catalo
 def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(live_catalog, live_catalog_client):
     session_id = uuid4()
     headers = _headers(live_catalog)
+    _thread_id, run_id = _seed_open_run(session_id)
 
     attach = live_catalog_client.post(
         "/agents/heartbeat",
@@ -1096,6 +1147,16 @@ def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(live
     payload = _lease_payload(leases[0])
     assert payload["control_state"] == "offline"
     assert payload["reason"] == "missing_from_snapshot"
+
+    # Detaching control is not ending the run. A snapshot that omits a session
+    # is evidence about the control path only -- the Machine Agent stopped
+    # reporting it. Treating that silence as process exit is exactly the
+    # "missing evidence invents a terminal state" failure, and it is what makes
+    # a late phase signal look like a reopen. The run stays open, unjudged.
+    runs = _catalog_rows(LiveSessionRun.__table__)
+    assert [row["id"] for row in runs] == [str(run_id)]
+    assert runs[0]["ended_at"] is None
+    assert runs[0]["exit_status"] is None
 
 
 def test_heartbeat_empty_resolved_sessions_does_not_detach_other_device_control(live_catalog, live_catalog_client):
