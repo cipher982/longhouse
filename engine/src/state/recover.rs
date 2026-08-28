@@ -1,10 +1,10 @@
-//! Salvage a shipper state database whose page 1 is destroyed.
+//! Salvage a structurally corrupt shipper state database.
 //!
-//! A corrupt page 1 takes out the SQLite header and the `sqlite_master` b-tree
-//! root together, so the file stops opening entirely even though every other
-//! page is intact. The observed failure on `cinder` was exactly that: 204 MB of
-//! readable b-tree content behind sixteen unreadable bytes, and 290,944 logged
-//! `file is not a database` retries.
+//! Corruption can destroy page 1 and make the whole file unreadable, or damage
+//! deeper table/index pages while leaving `sqlite_master` readable. Both have
+//! occurred on `cinder`: the former hid 204 MB of readable b-tree content
+//! behind sixteen unreadable bytes; the latter passed a schema probe while
+//! ordinary reads failed with `SQLITE_CORRUPT` and `SQLITE_IOERR_SHORT_READ`.
 //!
 //! Wiping and starting fresh is the tempting move and the wrong one. The
 //! storage-v2 cursors live here, and the host rejects a rewound range with
@@ -15,9 +15,10 @@
 //!
 //! # Why the recovered DDL, and not the current schema
 //!
-//! `.recover` emits rows as positional `c0..cN` into `lost_and_found`, and the
-//! obvious move — insert them into the tables `open_db` would create — silently
-//! scrambles every row. `ALTER TABLE` appended `file_identity` and
+//! When the schema is gone, `.recover` emits rows as positional `c0..cN` into
+//! `lost_and_found`. When the schema survives, it recreates ordinary tables.
+//! In both cases, inserting into the tables `open_db` would create can silently
+//! scramble every row. `ALTER TABLE` appended `file_identity` and
 //! `acked_cursor_fingerprint` to the *end* of `file_state` on disk, while the
 //! current `CREATE TABLE` lists them in the *middle*:
 //!
@@ -94,11 +95,13 @@ impl RecoveryReport {
     }
 }
 
-/// True when the database cannot be opened and read at all.
+/// True when SQLite reports structural corruption in the database.
 ///
-/// Recovery refuses to run against a healthy database — salvage is strictly a
-/// response to a file SQLite will not accept, never a routine maintenance pass.
-pub fn is_unreadable(db_path: &Path) -> bool {
+/// A damaged leaf or index page can leave `sqlite_master` readable while normal
+/// queries fail with `SQLITE_CORRUPT`. Check the full b-tree structure rather
+/// than treating a readable schema as proof that the database is healthy.
+/// Recovery still refuses locks, permissions errors, and other transient I/O.
+pub fn needs_recovery(db_path: &Path) -> bool {
     fn is_corruption(error: &rusqlite::Error) -> bool {
         // Only SQLite saying "this is not a database" or "this database is
         // malformed" earns a destructive repair. A lock held by a live agent, a
@@ -111,12 +114,12 @@ pub fn is_unreadable(db_path: &Path) -> bool {
     }
 
     match Connection::open(db_path) {
-        Ok(conn) => match conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
-            row.get::<_, i64>(0)
-        }) {
-            Ok(_) => false,
-            Err(error) => is_corruption(&error),
-        },
+        Ok(conn) => {
+            match conn.query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0)) {
+                Ok(result) => result != "ok",
+                Err(error) => is_corruption(&error),
+            }
+        }
         Err(error) => is_corruption(&error),
     }
 }
@@ -248,9 +251,18 @@ fn synthetic_header(page_size: u16) -> [u8; 100] {
 /// One table's on-disk shape, as `.recover` found it.
 struct RecoveredSchema {
     table: String,
-    root_page: i64,
     ddl: String,
     columns: Vec<String>,
+    rows: RecoveredRows,
+}
+
+#[derive(Clone, Copy)]
+enum RecoveredRows {
+    /// The schema survived, so `.recover` recreated the table directly.
+    Table,
+    /// The schema was unreadable, so `.recover` attributed raw records by the
+    /// original root page instead.
+    LostAndFound { root_page: i64 },
 }
 
 /// Read the `sqlite_master` records the recovery walk salvaged.
@@ -258,19 +270,21 @@ struct RecoveredSchema {
 /// These carry the on-disk column order, which is the whole point: the current
 /// `CREATE TABLE` in `db.rs` is not it.
 fn recovered_schemas(conn: &Connection) -> Result<HashMap<String, RecoveredSchema>> {
-    let mut stmt = conn
-        .prepare("SELECT c1, c3, c4 FROM lost_and_found WHERE c0 = 'table' AND c1 IS NOT NULL")?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, String>(2)?,
-        ))
-    })?;
-
     let mut schemas = HashMap::new();
-    for row in rows {
-        let (table, root_page, ddl) = row?;
+
+    // Partial corruption can leave page 1 and sqlite_master intact. In that
+    // case `.recover` emits ordinary CREATE/INSERT statements and the loaded
+    // salvage contains real tables. Prefer those rows: their original DDL
+    // preserves the on-disk column order, just like the lost_and_found path.
+    let mut direct = conn.prepare(
+        "SELECT name, sql FROM sqlite_master
+         WHERE type = 'table' AND sql IS NOT NULL",
+    )?;
+    let direct_rows = direct.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in direct_rows {
+        let (table, ddl) = row?;
         if !RECOVERED_TABLES.contains(&table.as_str()) {
             continue;
         }
@@ -282,9 +296,53 @@ fn recovered_schemas(conn: &Connection) -> Result<HashMap<String, RecoveredSchem
             table.clone(),
             RecoveredSchema {
                 table,
-                root_page,
                 ddl,
                 columns,
+                rows: RecoveredRows::Table,
+            },
+        );
+    }
+
+    // A destroyed schema page has no direct tables. Fall back to the raw
+    // records `.recover` places in lost_and_found, without replacing a direct
+    // table when both forms are present.
+    let has_lost_and_found: bool = conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_master
+             WHERE type = 'table' AND name = 'lost_and_found'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_lost_and_found {
+        return Ok(schemas);
+    }
+    let mut stmt = conn
+        .prepare("SELECT c1, c3, c4 FROM lost_and_found WHERE c0 = 'table' AND c1 IS NOT NULL")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (table, root_page, ddl) = row?;
+        if !RECOVERED_TABLES.contains(&table.as_str()) || schemas.contains_key(&table) {
+            continue;
+        }
+        let columns = parse_ddl_columns(&ddl);
+        if columns.is_empty() {
+            continue;
+        }
+        schemas.insert(
+            table.clone(),
+            RecoveredSchema {
+                table,
+                ddl,
+                columns,
+                rows: RecoveredRows::LostAndFound { root_page },
             },
         );
     }
@@ -427,9 +485,9 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     if !db_path.exists() {
         bail!("no state database at {}", db_path.display());
     }
-    if !is_unreadable(db_path) {
+    if !needs_recovery(db_path) {
         bail!(
-            "{} opens and reads normally; recovery is only for a database SQLite rejects",
+            "{} passes SQLite quick_check; recovery is only for a structurally corrupt database",
             db_path.display()
         );
     }
@@ -682,13 +740,24 @@ fn recover_table(
     }
 
     let column_count = schema.columns.len();
-    let selected = (0..column_count)
-        .map(|index| format!("c{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut stmt = salvaged.prepare(&format!(
-        "SELECT nfield, {selected} FROM lost_and_found WHERE rootpgno = ?1 ORDER BY pgno, id"
-    ))?;
+    let query = match schema.rows {
+        RecoveredRows::Table => format!(
+            "SELECT {column_count}, {} FROM {}",
+            schema.columns.join(", "),
+            schema.table
+        ),
+        RecoveredRows::LostAndFound { .. } => {
+            let selected = (0..column_count)
+                .map(|index| format!("c{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "SELECT nfield, {selected} FROM lost_and_found \
+                 WHERE rootpgno = ?1 ORDER BY pgno, id"
+            )
+        }
+    };
+    let mut stmt = salvaged.prepare(&query)?;
 
     let mut attributed = 0usize;
     let mut recovered = 0usize;
@@ -715,7 +784,10 @@ fn recover_table(
         )
     };
 
-    let mut rows = stmt.query([schema.root_page])?;
+    let mut rows = match schema.rows {
+        RecoveredRows::Table => stmt.query([])?,
+        RecoveredRows::LostAndFound { root_page } => stmt.query([root_page])?,
+    };
     let mut seen_short_rows = false;
     while let Some(row) = rows.next()? {
         attributed += 1;
@@ -833,14 +905,24 @@ fn run_recovery_walk(source: &Path, destination: &Path) -> Result<()> {
     }
     child.wait().context("waiting for the recovery loader")?;
 
-    // The loader always reports errors for the destroyed schema page, so its
-    // exit status says nothing. What matters is whether the one table recovery
-    // actually reads came out the other side.
+    // The loader can report errors for corrupt pages, so its exit status alone
+    // says nothing. What matters is whether either the raw recovery table or a
+    // directly recreated target table came out the other side.
     let salvaged = Connection::open(destination).context("opening the salvage database")?;
-    let rows: i64 = salvaged
-        .query_row("SELECT count(*) FROM lost_and_found", [], |row| row.get(0))
-        .context("the recovery walk produced no lost_and_found table")?;
-    if rows == 0 {
+    let raw_rows = salvaged
+        .query_row("SELECT count(*) FROM lost_and_found", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or(0);
+    let direct_tables: i64 = salvaged.query_row(
+        "SELECT count(*) FROM sqlite_master
+         WHERE type = 'table'
+           AND name IN ('source_epoch_registry', 'source_epoch_lane_state',
+                        'file_state', 'session_binding')",
+        [],
+        |row| row.get(0),
+    )?;
+    if raw_rows == 0 && direct_tables == 0 {
         bail!("the recovery walk recovered no rows");
     }
     Ok(())
@@ -941,13 +1023,39 @@ mod tests {
     }
 
     #[test]
+    fn recovers_direct_table_rows_when_the_schema_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        let salvage_path = dir.path().join("salvage.db");
+        seed_legacy_shape(&salvage_path);
+        let salvage = Connection::open(&salvage_path).unwrap();
+        let schemas = recovered_schemas(&salvage).unwrap();
+        let schema = schemas.get("file_state").unwrap();
+        assert!(matches!(schema.rows, RecoveredRows::Table));
+
+        let rebuilt_path = dir.path().join("rebuilt.db");
+        let mut rebuilt = Connection::open(rebuilt_path).unwrap();
+        let report = recover_table(&salvage, &mut rebuilt, schema, false).unwrap();
+        assert_eq!(report.attributed, 1);
+        assert_eq!(report.recovered, 1);
+        assert_eq!(report.rejected, 0);
+        let recovered_session: String = rebuilt
+            .query_row(
+                "SELECT session_id FROM file_state WHERE path = '/tmp/a.jsonl'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(recovered_session, "sess-1");
+    }
+
+    #[test]
     fn refuses_a_healthy_database() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("healthy.db");
         seed_legacy_shape(&path);
-        assert!(!is_unreadable(&path));
+        assert!(!needs_recovery(&path));
         let error = recover_state_database(&path, true).unwrap_err().to_string();
-        assert!(error.contains("opens and reads normally"), "{error}");
+        assert!(error.contains("passes SQLite quick_check"), "{error}");
     }
 
     #[test]
@@ -961,6 +1069,37 @@ mod tests {
         file.write_all(&[0u8; 16]).unwrap();
         file.flush().unwrap();
         drop(file);
-        assert!(is_unreadable(&path));
+        assert!(needs_recovery(&path));
+    }
+
+    #[test]
+    fn detects_corruption_beyond_the_readable_schema() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partially-corrupt.db");
+        let root_page = {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "PRAGMA journal_mode=DELETE;
+                 CREATE TABLE damaged (value TEXT);
+                 INSERT INTO damaged VALUES ('still has a readable schema');",
+            )
+            .unwrap();
+            conn.query_row(
+                "SELECT rootpage FROM sqlite_master WHERE name = 'damaged'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+        };
+
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start((root_page as u64 - 1) * 4096))
+            .unwrap();
+        file.write_all(&[0xff]).unwrap();
+        file.flush().unwrap();
+
+        assert!(needs_recovery(&path));
     }
 }

@@ -1659,10 +1659,10 @@ fn collect_native_repair_execution_with_runner<F>(
     dry_run: bool,
     platform: NativeServicePlatform,
     home: &Path,
-    restart_runner: F,
+    mut restart_runner: F,
 ) -> anyhow::Result<NativeRepairExecution>
 where
-    F: FnOnce(&NativeRestartCommand) -> Result<(), String>,
+    F: FnMut(&NativeRestartCommand) -> Result<(), String>,
 {
     let status_path = engine_status_path(state_root)?;
     let machine_path = machine_state_path(state_root)?;
@@ -1776,20 +1776,21 @@ where
         ));
     };
 
-    // A state database SQLite refuses to open is a different fault with a
+    // A structurally corrupt state database is a different fault with a
     // different remedy, and restarting into it just resumes the failure loop —
     // the observed machine logged 290,944 identical open failures that way.
-    //
-    // Recovery is safe to run before the restart here precisely because the
-    // database is unopenable: no writer can be holding it, so there is nothing
-    // to race. Recovery refuses to run on any database that does open, which is
-    // what keeps that guarantee true rather than assumed.
     let corrupt_state_db = state_database_needs_recovery(&status_path);
     if let Some(db_path) = corrupt_state_db {
+        let Some((stop_command, start_command)) =
+            recovery_service_commands(platform, Path::new(&service.path))
+        else {
+            unreachable!("supported repair platform must have recovery service commands")
+        };
         return Ok(native_repair_state_recovery(
             dry_run,
             platform,
-            &command,
+            &stop_command,
+            &start_command,
             &db_path,
             machine_state,
             service,
@@ -1871,7 +1872,8 @@ where
     }
 }
 
-/// The shipper database when it is present and unreadable, otherwise `None`.
+/// The shipper database when it is present and structurally corrupt, otherwise
+/// `None`.
 ///
 /// Resolved from the engine status path rather than the raw `state_root`, which
 /// is `None` for the ordinary invocation — the status file already sits in the
@@ -1881,7 +1883,7 @@ fn state_database_needs_recovery(status_path: &Path) -> Option<PathBuf> {
     if !db_path.exists() {
         return None;
     }
-    crate::state::recover::is_unreadable(&db_path).then_some(db_path)
+    crate::state::recover::needs_recovery(&db_path).then_some(db_path)
 }
 
 /// Recover the state database, then restart the agent onto it.
@@ -1889,52 +1891,46 @@ fn state_database_needs_recovery(status_path: &Path) -> Option<PathBuf> {
 fn native_repair_state_recovery<F>(
     dry_run: bool,
     platform: NativeServicePlatform,
-    command: &NativeRestartCommand,
+    stop_command: &NativeRestartCommand,
+    start_command: &NativeRestartCommand,
     db_path: &Path,
     machine_state: NativeMachineStateStatus,
     service: NativeRepairServiceStatus,
     before_health: NativeFastLocalHealth,
     status_path: &Path,
-    restart_runner: F,
+    mut command_runner: F,
 ) -> NativeRepairExecution
 where
-    F: FnOnce(&NativeRestartCommand) -> Result<(), String>,
+    F: FnMut(&NativeRestartCommand) -> Result<(), String>,
 {
     if dry_run {
-        let planned = match crate::state::recover::recover_state_database(db_path, true) {
-            Ok(report) => NativeRepairExecutionAction {
-                id: "recover_state_database",
-                label: "Recover the unreadable shipper state database",
-                status: "planned",
-                platform: platform.as_str(),
-                command: Some(format!(
-                    "recover {} ({} rows recoverable)",
-                    db_path.display(),
-                    report.total_recovered()
-                )),
-                error: None,
-            },
-            Err(error) => NativeRepairExecutionAction {
-                id: "recover_state_database",
-                label: "Recover the unreadable shipper state database",
-                status: "blocked",
-                platform: platform.as_str(),
-                command: Some(format!("recover {}", db_path.display())),
-                error: Some(error.to_string()),
-            },
-        };
         return native_repair_execution_result(
             true,
             "dry_run_planned",
-            "Longhouse can recover the unreadable shipper state database and restart the agent",
+            "Longhouse can stop the Machine Agent, recover its corrupt state database, and start it again",
             vec![
-                planned,
                 NativeRepairExecutionAction {
-                    id: "restart_machine_agent_service",
-                    label: "Restart existing Machine Agent service",
+                    id: "stop_machine_agent_service",
+                    label: "Stop existing Machine Agent service",
                     status: "planned",
                     platform: platform.as_str(),
-                    command: Some(command.display.clone()),
+                    command: Some(stop_command.display.clone()),
+                    error: None,
+                },
+                NativeRepairExecutionAction {
+                    id: "recover_state_database",
+                    label: "Recover the corrupt shipper state database",
+                    status: "planned",
+                    platform: platform.as_str(),
+                    command: Some(format!("recover {} after service stop", db_path.display())),
+                    error: None,
+                },
+                NativeRepairExecutionAction {
+                    id: "start_machine_agent_service",
+                    label: "Start existing Machine Agent service",
+                    status: "planned",
+                    platform: platform.as_str(),
+                    command: Some(start_command.display.clone()),
                     error: None,
                 },
             ],
@@ -1943,11 +1939,42 @@ where
             before_health,
             None,
             vec![
-                "Dry run only; the state database was not modified.",
+                "Dry run only; the service was not stopped and the state database was not modified.",
                 "The corrupt database is kept alongside the recovered one, never deleted.",
             ],
         );
     }
+
+    let stopped_action = match command_runner(stop_command) {
+        Ok(()) => NativeRepairExecutionAction {
+            id: "stop_machine_agent_service",
+            label: "Stop existing Machine Agent service",
+            status: "completed",
+            platform: platform.as_str(),
+            command: Some(stop_command.display.clone()),
+            error: None,
+        },
+        Err(error) => {
+            return native_repair_execution_result(
+                false,
+                "failed",
+                "Longhouse could not stop the Machine Agent safely",
+                vec![NativeRepairExecutionAction {
+                    id: "stop_machine_agent_service",
+                    label: "Stop existing Machine Agent service",
+                    status: "failed",
+                    platform: platform.as_str(),
+                    command: Some(stop_command.display.clone()),
+                    error: Some(error),
+                }],
+                machine_state,
+                Some(service),
+                before_health,
+                None,
+                vec!["The database was not modified because the writer could not be stopped."],
+            );
+        }
+    };
 
     let recovery = match crate::state::recover::recover_state_database(db_path, false) {
         Ok(report) => report,
@@ -1956,14 +1983,17 @@ where
                 false,
                 "failed",
                 "Longhouse could not recover the shipper state database",
-                vec![NativeRepairExecutionAction {
-                    id: "recover_state_database",
-                    label: "Recover the unreadable shipper state database",
-                    status: "failed",
-                    platform: platform.as_str(),
-                    command: Some(format!("recover {}", db_path.display())),
-                    error: Some(error.to_string()),
-                }],
+                vec![
+                    stopped_action,
+                    NativeRepairExecutionAction {
+                        id: "recover_state_database",
+                        label: "Recover the corrupt shipper state database",
+                        status: "failed",
+                        platform: platform.as_str(),
+                        command: Some(format!("recover {}", db_path.display())),
+                        error: Some(error.to_string()),
+                    },
+                ],
                 machine_state,
                 Some(service),
                 before_health,
@@ -1971,8 +2001,7 @@ where
                 vec![
                     "Recovery installs nothing until every check passes, and restores the \
                      original if the final swap fails.",
-                    "Check the reported error before retrying; a database in use is refused \
-                     rather than recovered.",
+                    "The service remains stopped so it cannot retry against a corrupt database.",
                 ],
             );
         }
@@ -1980,7 +2009,7 @@ where
 
     let recovered_action = NativeRepairExecutionAction {
         id: "recover_state_database",
-        label: "Recover the unreadable shipper state database",
+        label: "Recover the corrupt shipper state database",
         status: "completed",
         platform: platform.as_str(),
         command: Some(format!(
@@ -1991,7 +2020,7 @@ where
         error: None,
     };
 
-    match restart_runner(command) {
+    match command_runner(start_command) {
         Ok(()) => {
             let after_health = collect_native_fast_local_health(status_path);
             native_repair_execution_result(
@@ -1999,13 +2028,14 @@ where
                 "completed",
                 "Longhouse recovered the state database and restarted the Machine Agent",
                 vec![
+                    stopped_action,
                     recovered_action,
                     NativeRepairExecutionAction {
-                        id: "restart_machine_agent_service",
-                        label: "Restart existing Machine Agent service",
+                        id: "start_machine_agent_service",
+                        label: "Start existing Machine Agent service",
                         status: "completed",
                         platform: platform.as_str(),
-                        command: Some(command.display.clone()),
+                        command: Some(start_command.display.clone()),
                         error: None,
                     },
                 ],
@@ -2024,13 +2054,14 @@ where
             "failed",
             "Longhouse recovered the state database but could not restart the Machine Agent",
             vec![
+                stopped_action,
                 recovered_action,
                 NativeRepairExecutionAction {
-                    id: "restart_machine_agent_service",
-                    label: "Restart existing Machine Agent service",
+                    id: "start_machine_agent_service",
+                    label: "Start existing Machine Agent service",
                     status: "failed",
                     platform: platform.as_str(),
-                    command: Some(command.display.clone()),
+                    command: Some(start_command.display.clone()),
                     error: Some(error),
                 },
             ],
@@ -3596,6 +3627,63 @@ fn restart_command(platform: NativeServicePlatform) -> Option<NativeRestartComma
             ],
             display: "systemctl --user restart longhouse-shipper".to_string(),
         }),
+        NativeServicePlatform::Unsupported => None,
+    }
+}
+
+/// Commands that create a real no-writer window around database recovery.
+///
+/// `kickstart -k` is intentionally not used here: launchd can start the next
+/// process before recovery has swapped the file. Booting the job out and
+/// bootstrapping the same inspected plist makes the boundary explicit.
+fn recovery_service_commands(
+    platform: NativeServicePlatform,
+    service_path: &Path,
+) -> Option<(NativeRestartCommand, NativeRestartCommand)> {
+    match platform {
+        NativeServicePlatform::Macos => {
+            let target = format!("gui/{}/com.longhouse.shipper", current_uid());
+            Some((
+                NativeRestartCommand {
+                    program: "launchctl",
+                    args: vec!["bootout".to_string(), target.clone()],
+                    display: format!("launchctl bootout {}", shell_quote(&target)),
+                },
+                NativeRestartCommand {
+                    program: "launchctl",
+                    args: vec![
+                        "bootstrap".to_string(),
+                        format!("gui/{}", current_uid()),
+                        service_path.display().to_string(),
+                    ],
+                    display: format!(
+                        "launchctl bootstrap {} {}",
+                        shell_quote(&format!("gui/{}", current_uid())),
+                        shell_quote(&service_path.display().to_string())
+                    ),
+                },
+            ))
+        }
+        NativeServicePlatform::Linux => Some((
+            NativeRestartCommand {
+                program: "systemctl",
+                args: vec![
+                    "--user".to_string(),
+                    "stop".to_string(),
+                    "longhouse-shipper".to_string(),
+                ],
+                display: "systemctl --user stop longhouse-shipper".to_string(),
+            },
+            NativeRestartCommand {
+                program: "systemctl",
+                args: vec![
+                    "--user".to_string(),
+                    "start".to_string(),
+                    "longhouse-shipper".to_string(),
+                ],
+                display: "systemctl --user start longhouse-shipper".to_string(),
+            },
+        )),
         NativeServicePlatform::Unsupported => None,
     }
 }
@@ -5463,7 +5551,6 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         .unwrap();
     }
 
-    #[test]
     /// A corrupt state database must not be answered with a restart. The
     /// observed machine logged 290,944 identical open failures doing exactly
     /// that, because restarting reopens the same unreadable file.
@@ -5497,9 +5584,62 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         );
     }
 
-    /// The inverse, and the guarantee that makes recover-before-restart safe:
-    /// a database that opens is never a recovery candidate, so recovery can
-    /// never race a live writer.
+    #[test]
+    fn native_repair_stops_before_recovering_and_starts_afterward() {
+        use std::io::Write;
+
+        let home = tempfile::tempdir().unwrap();
+        let state_root = home.path().join(".longhouse");
+        let agent = state_root.join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        write_configured_machine_state(&state_root);
+        write_macos_service(home.path(), &state_root);
+
+        let db_path = agent.join("longhouse-shipper.db");
+        drop(rusqlite::Connection::open(&db_path).unwrap());
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&db_path)
+            .unwrap();
+        file.write_all(&[0u8; 16]).unwrap();
+        file.flush().unwrap();
+
+        let execution = collect_native_repair_execution_with_runner(
+            Some(&state_root),
+            true,
+            NativeServicePlatform::Macos,
+            home.path(),
+            |_| panic!("dry run must not touch the service"),
+        )
+        .unwrap();
+
+        let action_ids = execution
+            .actions
+            .iter()
+            .map(|action| action.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            action_ids,
+            vec![
+                "stop_machine_agent_service",
+                "recover_state_database",
+                "start_machine_agent_service"
+            ]
+        );
+        assert!(execution.actions[0]
+            .command
+            .as_deref()
+            .unwrap()
+            .contains("launchctl bootout"));
+        assert!(execution.actions[2]
+            .command
+            .as_deref()
+            .unwrap()
+            .contains("launchctl bootstrap"));
+    }
+
+    /// A database that passes SQLite's structural check remains outside the
+    /// recovery path.
     #[test]
     fn native_repair_leaves_a_readable_database_alone() {
         let home = tempfile::tempdir().unwrap();
@@ -5515,6 +5655,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         assert!(state_database_needs_recovery(&agent.join("engine-status.json")).is_none());
     }
 
+    #[test]
     fn native_repair_execution_rejects_unconfigured_machine_before_service_touch() {
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
