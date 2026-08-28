@@ -267,3 +267,60 @@ def test_machine_stream_survives_transient_catalog_saturation(monkeypatch):
     assert delta["event"] == "session_delta"
     assert json.loads(delta["data"])["session_id"] == session_id
     assert calls == 2
+
+
+def test_machine_stream_retries_initial_replay_when_catalog_is_unavailable(monkeypatch):
+    session_id = "633a0114-de2d-4b3d-b1b9-dfa7f314e300"
+    session = SimpleNamespace(
+        id=session_id,
+        device_id="cinder",
+        session_state=SimpleNamespace(commit_seq=93),
+    )
+    calls = 0
+    sleeps = []
+
+    class Request:
+        async def is_disconnected(self):
+            return False
+
+    def list_snapshot(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise CatalogReadError("catalog_unavailable", "The live catalog is temporarily unavailable.")
+        return SimpleNamespace(sessions=[SimpleNamespace(head=session)])
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(live_catalog_timeline, "list_live_catalog_timeline", list_snapshot)
+    monkeypatch.setattr(live_catalog_timeline.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "project_machine_session_delta",
+        lambda projected, **_kwargs: {
+            "session_id": projected.id,
+            "device_id": projected.device_id,
+            "source": "runtime_host",
+        },
+    )
+
+    async def read_events():
+        stream = live_catalog_timeline.stream_live_catalog_machine_sessions(
+            Request(),
+            params=SimpleNamespace(device_id="cinder"),
+            skip_initial_replay=False,
+            owner_id=1,
+        )
+        try:
+            return await anext(stream), await anext(stream)
+        finally:
+            await stream.aclose()
+
+    connected, delta = asyncio.run(read_events())
+
+    assert connected["event"] == "connected"
+    assert delta["event"] == "session_delta"
+    assert json.loads(delta["data"])["session_id"] == session_id
+    assert calls == 2
+    assert sleeps == [1.0]

@@ -827,11 +827,22 @@ async def stream_live_catalog_machine_sessions(
     yield {"event": "connected", "data": json.dumps({"source": "runtime_host"})}
 
     if not skip_initial_replay:
-        response = await asyncio.to_thread(
-            list_live_catalog_timeline,
-            params=params,
-            owner_id=owner_id,
-        )
+        while True:
+            try:
+                response = await asyncio.to_thread(
+                    list_live_catalog_timeline,
+                    params=params,
+                    owner_id=owner_id,
+                )
+                break
+            except CatalogReadError:
+                # The connected event has already started the response. During
+                # Runtime Host startup catalogd can be briefly unavailable;
+                # retry the bounded replay in place so the desktop does not
+                # amplify startup pressure with a reconnect loop.
+                if await request.is_disconnected():
+                    return
+                await asyncio.sleep(1.0)
         for card in response.sessions:
             initial_commit_seq = card.head.session_state.commit_seq
             delta = project_machine_session_delta(card.head, commit_seq=initial_commit_seq, canonical=True)
