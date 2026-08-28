@@ -17,6 +17,52 @@ impl<'a> SessionBinding<'a> {
         Self { conn }
     }
 
+    /// Bind a transcript path to a managed session ID, recording which provider
+    /// thread the binding was made for.
+    ///
+    /// A path-keyed binding cannot, on its own, distinguish one written
+    /// deliberately for a forked child from one a managed parent left on the
+    /// next file that appeared. Recording the thread id makes that decidable:
+    /// a binding whose `provider_session_id` equals the transcript's own id was
+    /// made *for this thread*, and nothing else was.
+    pub fn bind_for_thread(
+        &self,
+        path: &str,
+        session_id: &str,
+        provider: &str,
+        provider_session_id: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO session_binding (path, session_id, provider, provider_session_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(path) DO UPDATE SET
+                 session_id = ?2,
+                 provider = ?3,
+                 provider_session_id = ?4,
+                 updated_at = ?5",
+            rusqlite::params![path, session_id, provider, provider_session_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// Look up the managed session id together with the provider thread it was
+    /// bound for. `None` in the second position means the binding predates
+    /// thread recording, or was written by a path that does not know its thread
+    /// — treat that as "not an exact binding", never as a match.
+    pub fn get_with_thread(&self, path: &str) -> Result<Option<(String, Option<String>)>> {
+        let result = self.conn.query_row(
+            "SELECT session_id, provider_session_id FROM session_binding WHERE path = ?",
+            [path],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        );
+        match result {
+            Ok(found) => Ok(Some(found)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Bind a transcript path to a managed session ID.
     /// Upserts — later binds overwrite earlier ones.
     pub fn bind(&self, path: &str, session_id: &str, provider: &str) -> Result<()> {

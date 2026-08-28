@@ -1200,13 +1200,14 @@ fn resolve_payload_session_id<'a>(
     }
 
     // Managed-local Codex roots deliberately override the ingest UUID so the
-    // transcript binds to the Longhouse-owned session row. Forked subagent
-    // transcripts are different: they carry their own native session_meta id
-    // plus forked_from_id, and forcing them onto the parent Longhouse UUID
-    // collapses every child transcript into the parent session.
+    // transcript binds to the Longhouse-owned session row. Children are
+    // different: they carry their own native session_meta id, and forcing them
+    // onto the parent Longhouse UUID collapses every child transcript into the
+    // parent session. A fork Longhouse started is the exception — it has a
+    // binding naming its own thread, so its override is the child's id, not an
+    // inherited parent's.
     if provider.eq_ignore_ascii_case("codex")
-        && (parse_result.metadata.forked_from_session_id.is_some()
-            || parse_result.metadata.is_sidechain)
+        && !parse_result.metadata.honors_managed_binding()
         && override_session_id != parse_result.metadata.session_id
     {
         return &parse_result.metadata.session_id;

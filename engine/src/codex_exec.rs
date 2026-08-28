@@ -1736,9 +1736,16 @@ impl CodexExecRuntimeSink {
                 match crate::state::db::open_db(Some(db_path)) {
                     Ok(conn) => {
                         let binding = crate::state::session_binding::SessionBinding::new(&conn);
-                        if let Err(err) =
-                            binding.bind(&source_path.to_string_lossy(), &self.session_id, "codex")
-                        {
+                        // Record the thread this binding was made for. Without
+                        // it the shipper cannot tell a fork Longhouse started
+                        // from one a managed parent left behind, and it must
+                        // assume the latter.
+                        if let Err(err) = binding.bind_for_thread(
+                            &source_path.to_string_lossy(),
+                            &self.session_id,
+                            "codex",
+                            Some(provider_thread_id),
+                        ) {
                             eprintln!("[codex-exec] persist transcript binding failed: {err}");
                         }
                     }

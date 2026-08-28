@@ -338,6 +338,20 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         conn.execute_batch("ALTER TABLE file_state ADD COLUMN acked_cursor_fingerprint TEXT;")?;
     }
 
+    // A binding records which Longhouse session owns a transcript path. It does
+    // not record which provider thread it was made for, and without that a
+    // binding inherited from a managed parent is indistinguishable from one
+    // written deliberately for a forked child. Longhouse-initiated forks record
+    // the thread id they bound, so the shipper can tell "bound for this thread"
+    // from "inherited by the file that happened to appear next".
+    let session_binding_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(session_binding)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !session_binding_columns.contains("provider_session_id") {
+        conn.execute_batch("ALTER TABLE session_binding ADD COLUMN provider_session_id TEXT;")?;
+    }
+
     let live_file_state_columns: std::collections::HashSet<String> = conn
         .prepare("PRAGMA table_info(live_file_state)")?
         .query_map([], |row| row.get::<_, String>(1))?

@@ -132,6 +132,32 @@ pub struct SessionMetadata {
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
     pub is_sidechain: bool,
+    /// True when a path binding exists that names *this* provider thread, so
+    /// the managed session it points at genuinely owns this transcript. A
+    /// binding a managed parent left on whatever file appeared next does not
+    /// qualify. Set by the shipper after the binding is read, never by parsing.
+    pub managed_binding_is_exact: bool,
+}
+
+impl SessionMetadata {
+    /// A conversation someone forked, as opposed to a worker the model spawned.
+    /// Codex marks both with a parent id; only the subagent is a sidechain.
+    pub fn is_plain_fork(&self) -> bool {
+        self.forked_from_session_id.is_some() && !self.is_sidechain
+    }
+
+    /// Whether this transcript belongs behind its parent rather than in the
+    /// timeline. Provider subagents always do. A plain fork does only when no
+    /// binding names this thread — that is, when Longhouse did not start it.
+    pub fn is_hidden_child(&self) -> bool {
+        self.is_sidechain || (self.is_plain_fork() && !self.managed_binding_is_exact)
+    }
+
+    /// Whether a managed session id supplied for this path may be trusted to
+    /// name the session that owns this transcript.
+    pub fn honors_managed_binding(&self) -> bool {
+        !self.is_sidechain && (!self.is_plain_fork() || self.managed_binding_is_exact)
+    }
 }
 
 pub struct ParseResult {
@@ -847,26 +873,34 @@ fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
         .as_ref()
         .filter(|candidate| Uuid::parse_str(candidate).is_ok())
         .cloned();
-    if forked_from_session_id.is_some() {
+
+    // Codex stamps `forked_from_id` on both a provider subagent and an ordinary
+    // fork, and only the subagent carries `source.subAgent`. Reading
+    // `forked_from_id` first therefore classified every fork as a hidden
+    // sidechain — which is right for a worker the model spawned and wrong for a
+    // conversation someone deliberately branched. The source is the
+    // discriminator, so it has to be consulted first.
+    if let Some(source) = payload
+        .source
+        .as_ref()
+        .and_then(|source| parse_codex_subagent_source_str(source.get()))
+    {
         return CodexPayloadParentage {
-            forked_from_session_id,
+            forked_from_session_id: source
+                .parent_thread_id
+                .filter(|candidate| Uuid::parse_str(candidate).is_ok())
+                .or(forked_from_session_id),
             is_sidechain: true,
         };
     }
 
-    let Some(source) = payload
-        .source
-        .as_ref()
-        .and_then(|source| parse_codex_subagent_source_str(source.get()))
-    else {
-        return CodexPayloadParentage::default();
-    };
-
+    // A plain fork keeps its parent pointer and is not a sidechain. Whether it
+    // is *visible* is decided later, by whether a binding names this thread:
+    // Longhouse-initiated forks are sessions of their own, and a fork taken by
+    // hand outside Longhouse stays hidden as it does today.
     CodexPayloadParentage {
-        forked_from_session_id: source
-            .parent_thread_id
-            .filter(|candidate| Uuid::parse_str(candidate).is_ok()),
-        is_sidechain: true,
+        forked_from_session_id,
+        is_sidechain: false,
     }
 }
 
@@ -4370,7 +4404,11 @@ mod tests {
             result.metadata.forked_from_session_id.as_deref(),
             Some(parent_id)
         );
-        assert!(result.metadata.is_sidechain);
+        // A plain fork is not a sidechain: only a provider subagent is, and it
+        // says so with `source.subAgent`. Whether this fork is visible is the
+        // shipper's call, from whether a binding names this thread.
+        assert!(!result.metadata.is_sidechain);
+        assert!(result.metadata.is_plain_fork());
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].session_id, child_id);
     }
@@ -4518,7 +4556,11 @@ mod tests {
             result.metadata.forked_from_session_id.as_deref(),
             Some(parent_id)
         );
-        assert!(result.metadata.is_sidechain);
+        // A plain fork is not a sidechain: only a provider subagent is, and it
+        // says so with `source.subAgent`. Whether this fork is visible is the
+        // shipper's call, from whether a binding names this thread.
+        assert!(!result.metadata.is_sidechain);
+        assert!(result.metadata.is_plain_fork());
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].session_id, child_id);
     }
@@ -4551,7 +4593,11 @@ mod tests {
             result.metadata.forked_from_session_id.as_deref(),
             Some(parent_id)
         );
-        assert!(result.metadata.is_sidechain);
+        // A plain fork is not a sidechain: only a provider subagent is, and it
+        // says so with `source.subAgent`. Whether this fork is visible is the
+        // shipper's call, from whether a binding names this thread.
+        assert!(!result.metadata.is_sidechain);
+        assert!(result.metadata.is_plain_fork());
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].session_id, child_id);
     }

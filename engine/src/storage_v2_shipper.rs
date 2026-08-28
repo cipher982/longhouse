@@ -179,9 +179,16 @@ fn prepare_next_envelope_with_limit(
     let canonical_path = stable_source_path(path);
     let path_text = canonical_path.to_string_lossy();
     let opaque_source_id = opaque_source_id(&path_text);
+    // Read the binding together with the thread it was made for. A binding that
+    // names this transcript's own thread was written deliberately for it; one
+    // that names something else was inherited, and cannot be trusted to say who
+    // owns this file.
+    let binding =
+        crate::state::session_binding::SessionBinding::new(conn).get_with_thread(&path_text)?;
+    let binding_thread = binding.as_ref().and_then(|(_, thread)| thread.clone());
     let durable_session_id = match session_id_override {
         Some(value) => Some(value.to_string()),
-        None => crate::state::session_binding::SessionBinding::new(conn).get(&path_text)?,
+        None => binding.map(|(session_id, _)| session_id),
     };
     if let Some(pending) =
         pending_source_envelope::load_for_source(conn, provider, &opaque_source_id)?
@@ -259,7 +266,14 @@ fn prepare_next_envelope_with_limit(
     else {
         return Ok(None);
     };
-    let parse_result = parser::parse_session_file(path, position)?;
+    let mut parse_result = parser::parse_session_file(path, position)?;
+    // A binding is "exact" when it names the very thread this transcript
+    // records. That is what separates a fork Longhouse started — it bound the
+    // child's path to the child's session at fork time — from one a managed
+    // parent left on the next file that appeared.
+    parse_result.metadata.managed_binding_is_exact = binding_thread
+        .as_deref()
+        .is_some_and(|thread| thread == parse_result.metadata.session_id);
     if framing == RawSourceFraming::LfDelimited
         && raw_batch.range_end > parse_result.last_good_offset
     {
@@ -3606,16 +3620,17 @@ fn session_facts(
         last_activity_at: last_activity_at.max(started_at).to_rfc3339(),
         ended_at: metadata.ended_at.map(|value| value.to_rfc3339()),
         origin_kind: metadata.origin_kind.clone(),
-        hidden_from_default_timeline: metadata.is_sidechain,
+        hidden_from_default_timeline: metadata.is_hidden_child(),
         launch_actor: metadata.launch_actor.clone(),
         launch_surface: metadata.launch_surface.clone(),
         is_subagent: metadata.is_sidechain,
+        // A plain fork keeps its parent pointer whether or not it is hidden, so
+        // the timeline can show where it came from.
         // Provider identity, deliberately unresolved. `forked_from_session_id`
         // is the parent as the provider names it; mapping that to a Longhouse
         // session is the host's job, because a session id here may have come
         // from a managed binding override rather than from the transcript.
-        parent_provider_session_id: metadata
-            .is_sidechain
+        parent_provider_session_id: (metadata.is_sidechain || metadata.is_plain_fork())
             .then(|| {
                 metadata
                     .parent_provider_session_id
@@ -3676,8 +3691,7 @@ fn resolve_session_id(
         return canonical_session_id(parsed);
     };
     let resolved = if provider.eq_ignore_ascii_case("codex")
-        && (parse_result.metadata.forked_from_session_id.is_some()
-            || parse_result.metadata.is_sidechain)
+        && !parse_result.metadata.honors_managed_binding()
         && override_id != parsed
     {
         parsed
@@ -5376,6 +5390,104 @@ mod tests {
             0
         );
         assert_eq!(pending_source_envelope::count(&conn).unwrap(), 1);
+    }
+
+    fn codex_forked_child_lines() -> String {
+        concat!(
+            r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"dddddddd-1111-2222-3333-444455556666","forked_from_id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#,
+            "\n",
+            r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from the fork"}]}}"#,
+            "\n",
+        )
+        .to_string()
+    }
+
+    const FORK_CHILD_THREAD: &str = "dddddddd-1111-2222-3333-444455556666";
+
+    /// A fork Longhouse started binds the child's path to the child's session
+    /// and records the thread it bound. That binding names this transcript's own
+    /// thread, so it is the child's identity and must be honored.
+    #[test]
+    fn codex_fork_bound_for_its_own_thread_is_owned_and_visible() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-02-15T10-00-00-dddd1111.jsonl");
+        fs::write(&path, codex_forked_child_lines()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let child_longhouse_id = "019d2869-1111-7222-8333-aaaaaaaaaaaa";
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind_for_thread(
+                &stable_source_path(&path).to_string_lossy(),
+                child_longhouse_id,
+                "codex",
+                Some(FORK_CHILD_THREAD),
+            )
+            .unwrap();
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "codex", None)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(prepared.envelope.session_id, child_longhouse_id);
+        assert!(!prepared.envelope.session.is_subagent);
+        assert!(!prepared.envelope.session.hidden_from_default_timeline);
+    }
+
+    /// A fork taken by hand inherits whatever binding the managed parent left
+    /// behind. That binding names the parent's thread, not this one, so it says
+    /// nothing about who owns this transcript: keep the provider's own id and
+    /// stay behind the parent, exactly as before this split existed.
+    #[test]
+    fn codex_fork_bound_for_another_thread_keeps_its_own_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-02-15T10-00-00-inherited.jsonl");
+        fs::write(&path, codex_forked_child_lines()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind_for_thread(
+                &stable_source_path(&path).to_string_lossy(),
+                "019d2869-1111-7222-8333-aaaaaaaaaaaa",
+                "codex",
+                Some("cccccccc-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "codex", None)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(prepared.envelope.session_id, FORK_CHILD_THREAD);
+        assert!(prepared.envelope.session.hidden_from_default_timeline);
+    }
+
+    /// A binding written before threads were recorded cannot prove anything.
+    /// Absence of evidence is not an exact match.
+    #[test]
+    fn codex_fork_with_threadless_binding_stays_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-2026-02-15T10-00-00-legacy.jsonl");
+        fs::write(&path, codex_forked_child_lines()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(
+                &stable_source_path(&path).to_string_lossy(),
+                "019d2869-1111-7222-8333-aaaaaaaaaaaa",
+                "codex",
+            )
+            .unwrap();
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "codex", None)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(prepared.envelope.session_id, FORK_CHILD_THREAD);
+        assert!(prepared.envelope.session.hidden_from_default_timeline);
     }
 
     #[test]
