@@ -2153,7 +2153,8 @@ class CatalogDaemon:
         if type(owner_id) is not int or owner_id <= 0:
             return self._error(request, "invalid_request", "owner_id must be a positive integer")
         assert self._store is not None
-        result = await self._run_read_store(
+        result = await self._coalesced_session_detail_read(
+            "session.shadow_state.read.v2",
             self._store.read_shadow_session_state,
             session_id=session_id,
             owner_id=owner_id,

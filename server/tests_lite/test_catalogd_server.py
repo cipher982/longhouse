@@ -331,6 +331,35 @@ async def test_identical_session_detail_reads_share_one_inflight_snapshot(daemon
 
 
 @pytest.mark.asyncio
+async def test_identical_shadow_session_detail_reads_share_one_inflight_snapshot(daemon_paths, monkeypatch):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path, max_concurrency=8)
+    calls = 0
+
+    def slow_shadow_session(*, session_id, owner_id):
+        nonlocal calls
+        calls += 1
+        time.sleep(0.1)
+        return {"found": False, "session_id": session_id, "owner_id": owner_id}
+
+    assert daemon._store is not None
+    monkeypatch.setattr(daemon._store, "read_shadow_session_state", slow_shadow_session)
+    session_id = "11111111-1111-4111-8111-111111111111"
+    params = {"session_id": session_id, "owner_id": 1}
+    try:
+        identical = await asyncio.gather(
+            *(client.call("session.shadow_state.read.v2", params) for _ in range(8)),
+        )
+        assert identical == [{"found": False, "session_id": session_id, "owner_id": 1}] * 8
+        assert calls == 1
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_device_auth_is_typed_read_only_and_reports_commit_seq(daemon_paths):
     database_path, socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
