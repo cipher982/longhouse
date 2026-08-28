@@ -62,7 +62,7 @@ def test_registration_covers_each_launch_provider_with_least_authority_credentia
     assert registration["providers"] == list(lifecycle.PROVIDERS)
     assert registration["subject_kind"] == "provider_release"
     assert registration["provider_artifact_required"] is True
-    assert registration["producer_revision"] == 10
+    assert registration["producer_revision"] == 11
     assert registration["credential_binding_ids"] == []
     for provider in lifecycle.PROVIDERS:
         assert registration["credential_binding_ids_by_provider"][provider] == [
@@ -85,6 +85,29 @@ def test_artifact_manifest_covers_nested_shipper_diagnostics(tmp_path):
         "cleanup-receipt.json",
         "shipper/engine-logs/engine.log",
     }
+
+
+def test_artifact_manifest_stops_shipper_before_hashing_mutable_log(tmp_path):
+    log = tmp_path / "shipper" / "engine-logs" / "engine.log"
+    log.parent.mkdir(parents=True)
+    log.write_bytes(b"before-stop\n")
+
+    class AppendingShipper:
+        stopped = False
+
+        def stop(self):
+            self.stopped = True
+            with log.open("ab") as stream:
+                stream.write(b"stopped\n")
+
+    shipper = AppendingShipper()
+
+    manifest = lifecycle._artifact_manifest_after_shipper_stopped(tmp_path, shipper)
+
+    assert shipper.stopped is True
+    entry = next(item for item in manifest if item["path"] == "shipper/engine-logs/engine.log")
+    assert entry["size"] == log.stat().st_size
+    assert entry["sha256"] == lifecycle._sha256_file(log)
 
 
 def test_schema_gates_every_console_adapter_on_its_typed_release_assertion():

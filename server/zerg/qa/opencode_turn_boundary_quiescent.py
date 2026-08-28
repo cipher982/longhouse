@@ -71,6 +71,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.opencode_qualification_profile import prepare_opencode_qualification_profile
 from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
 from zerg.qa.provider_native_resume import SPECS
@@ -94,9 +95,9 @@ _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
 
 REGISTRATION = ProducerRegistration(
     producer_id="opencode.turn_boundary_quiescent.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id="opencode_turn_boundary_quiescent",
-    scenario_revision=1,
+    scenario_revision=2,
     # The schema declares no "variant" key for this assertion cell, so the
     # authored variant is None (zerg.qa.resume_assurance.execution_variant_key
     # only treats a non-empty *string* as an authored variant; cell.get(
@@ -125,6 +126,7 @@ REGISTRATION = ProducerRegistration(
     network_policy="shared_provider_egress",
     required_artifacts=(
         "provider_binary_receipt",
+        "opencode_model_profile_receipt",
         "transcript_shipper_receipt",
         "launch_state_receipt",
         "turn_activity_receipt",
@@ -304,6 +306,8 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
     try:
         home = _isolated_provider_home()
         environment["HOME"] = str(home)
+        model_profile = prepare_opencode_qualification_profile(home, environment)
+        _write_json(root / "opencode-model-profile-receipt.json", model_profile)
         shipper = _start_transcript_shipper("opencode", args, home=home, environment=environment, evidence_root=root)
         _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
 

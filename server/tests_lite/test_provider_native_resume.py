@@ -122,6 +122,8 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.evidence_classes == ("live_token",)
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
+        assert registration.producer_revision == (4 if provider in {"cursor", "opencode"} else 3)
+        assert registration.scenario_revision == (5 if provider in {"cursor", "opencode"} else 4)
         assert {
             "transcript_shipper_receipt",
             "initial_seed_send",
@@ -139,6 +141,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
             assert cursor_only <= set(registration.required_artifacts)
         else:
             assert cursor_only.isdisjoint(registration.required_artifacts)
+        assert ("opencode_model_profile_receipt" in registration.required_artifacts) is (provider == "opencode")
 
 
 def test_cursor_resume_bootstrap_uses_a_unique_marker() -> None:
@@ -1452,7 +1455,7 @@ def test_post_resume_correlation_requires_strict_assistant_proof(provider: str, 
     assert _post_resume_response_correlated(provider, correlation) is expected
 
 
-def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Path) -> None:
+def test_cursor_bootstrap_hook_sequence_accepts_bound_marker_inside_provider_response(tmp_path: Path) -> None:
     state = {"session_id": "session-1", "provider_session_id": "cursor-thread-1", "run_id": "run-1"}
     marker = "LH_CURSOR_BOOTSTRAP_abc123"
     longhouse_home = tmp_path / "longhouse"
@@ -1475,7 +1478,7 @@ def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Pat
                             "session_id": "cursor-thread-1",
                             "conversation_id": "cursor-thread-1",
                             "generation_id": "generation-1",
-                            "prompt": _cursor_bootstrap_prompt(marker),
+                            "prompt": _cursor_bootstrap_prompt(marker) + "\n",
                         },
                     }
                 ),
@@ -1489,7 +1492,7 @@ def test_cursor_bootstrap_hook_sequence_requires_a_foreground_turn(tmp_path: Pat
                             "session_id": "cursor-thread-1",
                             "conversation_id": "cursor-thread-1",
                             "generation_id": "generation-1",
-                            "text": marker,
+                            "text": f"Completed: `{marker}`",
                         },
                     }
                 ),
@@ -1625,6 +1628,7 @@ def test_cursor_bootstrap_hook_sequence_does_not_accept_session_start(tmp_path: 
         ("conversation_id", "other-thread"),
         ("generation_id", ""),
         ("prompt", "Reply with exactly the wrong marker"),
+        ("text", "the requested marker is absent"),
     ],
 )
 def test_cursor_bootstrap_hook_sequence_rejects_unbound_response(tmp_path: Path, field: str, value: str) -> None:
@@ -1646,7 +1650,7 @@ def test_cursor_bootstrap_hook_sequence_rejects_unbound_response(tmp_path: Path,
         "generation_id": "generation-1",
         "text": marker,
     }
-    target = before_payload if field == "prompt" else after_payload if field == "generation_id" else None
+    target = before_payload if field == "prompt" else after_payload if field in {"generation_id", "text"} else None
     if target is not None:
         target[field] = value
     else:
@@ -3389,6 +3393,7 @@ def test_run_native_resume_refreshes_failure_manifest_after_finally_cleanup(
     args.provider_bin = provider_bin
     args.variant = "clean_exit"
     args.live_send_timeout_secs = 1
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "deepseek/deepseek-v4-flash")
 
     class FakeProcess:
         process = SimpleNamespace(poll=lambda: None)

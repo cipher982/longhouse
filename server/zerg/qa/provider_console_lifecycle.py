@@ -76,7 +76,7 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=10,
+    producer_revision=11,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     scenario_revision=3,
@@ -149,6 +149,17 @@ def _artifact_manifest(root: Path) -> list[dict[str, object]]:
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name != "result.json"
     ]
+
+
+def _artifact_manifest_after_shipper_stopped(
+    root: Path,
+    shipper: TranscriptShipper | None,
+) -> list[dict[str, object]]:
+    """Seal evidence only after its last background writer has exited."""
+
+    if shipper is not None:
+        shipper.stop()
+    return _artifact_manifest(root)
 
 
 def _expected_variant(provider: str) -> str:
@@ -1026,7 +1037,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "assertions": {ASSERTION_ID: assertion},
             "provider_binary": binary_receipt,
             "observation": observation,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": _artifact_manifest_after_shipper_stopped(root, shipper),
         }
     finally:
         if not cleanup_written:

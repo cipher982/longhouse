@@ -467,9 +467,9 @@ def registration_for(provider: str) -> ProducerRegistration:
     spec = SPECS[provider]
     return ProducerRegistration(
         producer_id=spec.producer_id,
-        producer_revision=3,
+        producer_revision=4 if provider in {"cursor", "opencode"} else 3,
         scenario_id="helm_cold_resume",
-        scenario_revision=4,
+        scenario_revision=5 if provider in {"cursor", "opencode"} else 4,
         assertion_cells=(
             ("native_provider_resume_proven", "clean_exit"),
             ("native_provider_resume_proven", "process_loss"),
@@ -493,6 +493,7 @@ def registration_for(provider: str) -> ProducerRegistration:
         network_policy="shared_provider_egress",
         required_artifacts=(
             "provider_binary_receipt",
+            *(("opencode_model_profile_receipt",) if provider == "opencode" else ()),
             "transcript_shipper_receipt",
             "resume_intent_receipt",
             "initial_bridge_state",
@@ -3162,9 +3163,19 @@ def _wait_cursor_hook_sequence(
             generation_id = str(payload.get("generation_id") or "").strip()
             if not generation_id:
                 continue
-            if name == "beforeSubmitPrompt" and payload.get("prompt") == expected_prompt:
+            # Cursor preserves the submitted content but its hook encoder can
+            # retain terminal whitespace around a PTY-originated prompt.  The
+            # prompt remains exact after boundary normalization; do not loosen
+            # this to substring matching because it is the causal turn anchor.
+            hook_prompt = str(payload.get("prompt") or "").strip()
+            if name == "beforeSubmitPrompt" and hook_prompt == expected_prompt.strip():
                 matching_befores.append((event, event_position))
-            elif name == "afterAgentResponse" and str(payload.get("text") or "").strip() == marker:
+            # The marker, generation id, launch binding and event ordering are
+            # the proof.  Requiring the entire assistant payload to equal the
+            # marker rejects truthful Cursor responses that wrap it in prose or
+            # markdown even though the downstream transcript oracle likewise
+            # correlates by marker containment.
+            elif name == "afterAgentResponse" and marker in str(payload.get("text") or ""):
                 matching_afters.append((event, event_position))
         before_generations = {str((event.get("payload") or {}).get("generation_id")) for event, _ in matching_befores}
         if len(before_generations) > 1:
@@ -3700,6 +3711,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         environment["HOME"] = str(home)
         environment["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
         environment["CURSOR_HOME"] = str(home / ".cursor")
+        if spec.provider == "opencode":
+            from zerg.qa.opencode_qualification_profile import prepare_opencode_qualification_profile
+
+            model_profile = prepare_opencode_qualification_profile(home, environment)
+            _write_json(root / "opencode-model-profile-receipt.json", model_profile)
         if spec.provider == "cursor":
             # Cursor CLI loads project hooks from <cwd>/.cursor/hooks.json.
             # Use a disposable project root so the factory never modifies the

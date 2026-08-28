@@ -104,9 +104,9 @@ REGISTRATION = ProducerRegistration(
     # coordination tool invocation rather than by keyword-matching the model's
     # prose. Different evidence for the same assertion, so the scenario revision
     # moves and proofs from revision 6 do not satisfy it.
-    producer_revision=11,
+    producer_revision=12,
     scenario_id=_AWARENESS_CREATE_SCENARIO,
-    scenario_revision=9,
+    scenario_revision=10,
     scenario_ids=(_AWARENESS_CREATE_SCENARIO, _DIRECTED_INPUT_SCENARIO),
     # No `variant:` is authored for any of these three assertions in
     # schemas/managed_providers.yml, so every cell's variant is None -- not
@@ -753,8 +753,14 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
 
 
 def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Path) -> dict[str, Any]:
-    source_ready_marker = f"LONGHOUSE_CURSOR_SOURCE_READY_{uuid4().hex[:10]}"
-    target_ready_marker = f"LONGHOUSE_CURSOR_TARGET_READY_{uuid4().hex[:10]}"
+    # Cursor's interactive model has a demonstrated failure mode where it
+    # completes a turn without committing an assistant response for long,
+    # machine-shaped marker instructions.  Native Resume uses the same compact
+    # marker shape for this reason.  These tokens still carry enough entropy to
+    # bind each live turn without asking the provider to reproduce a UUID-like
+    # identifier.
+    source_ready_marker = f"LH_CURSOR_SRC_{uuid4().hex[:10]}"
+    target_ready_marker = f"LH_CURSOR_TGT_{uuid4().hex[:10]}"
     source_prompt = _cursor_bootstrap_prompt(source_ready_marker)
     target_prompt = _cursor_bootstrap_prompt(target_ready_marker)
     machine: _CursorMachine | None = None
@@ -771,19 +777,25 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
         source = _launch_cursor_session(args, root, machine, label="di-source", prompt=source_prompt)
         launch_receipts["source"] = _session_launch_receipt("source", source)
         _write_session_launch_receipts(root, launch_receipts)
+        # The proof needs two simultaneously live sessions, not two overlapping
+        # bootstrap turns.  Starting the target while the source's argv prompt
+        # is still active left either bootstrap stuck in Working in the live
+        # candidate runs.  Finish each real turn before starting the next; both
+        # Helm sessions remain live for the actual directed-input proof.
+        source_ready_reply = _wait_marker_reply(
+            args.api_url,
+            args.agents_token,
+            source.session_id,
+            source_ready_marker,
+            timeout=args.live_timeout_secs,
+        )
+        _wait_first_turn_settled(args.api_url, args.agents_token, source.session_id, timeout=args.live_timeout_secs)
         try:
             target_launch_attempted = True
             target = _launch_cursor_session(args, root, machine, label="di-target", prompt=target_prompt)
             launch_receipts["target"] = _session_launch_receipt("target", target)
             _write_session_launch_receipts(root, launch_receipts)
             try:
-                source_ready_reply = _wait_marker_reply(
-                    args.api_url,
-                    args.agents_token,
-                    source.session_id,
-                    source_ready_marker,
-                    timeout=args.live_timeout_secs,
-                )
                 target_ready_reply = _wait_marker_reply(
                     args.api_url,
                     args.agents_token,
@@ -791,7 +803,6 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                     target_ready_marker,
                     timeout=args.live_timeout_secs,
                 )
-                _wait_first_turn_settled(args.api_url, args.agents_token, source.session_id, timeout=args.live_timeout_secs)
                 _wait_first_turn_settled(args.api_url, args.agents_token, target.session_id, timeout=args.live_timeout_secs)
                 prior_target_tail = _wait_session_tail(
                     args.api_url,
@@ -803,7 +814,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
 
                 source_token = _mint_coordination_token(args.api_url, args.agents_token, source.session_id, timeout=args.live_timeout_secs)
                 target_token = _mint_coordination_token(args.api_url, args.agents_token, target.session_id, timeout=args.live_timeout_secs)
-                marker = f"LONGHOUSE_CURSOR_COORD_DIRECTED_{uuid4().hex[:10]}"
+                marker = f"LH_CURSOR_DI_{uuid4().hex[:10]}"
                 directed_prompt = f"Reply with exactly {marker}"
                 client_request_id = uuid4().hex
                 create_attempts: list[dict[str, Any]] = []

@@ -90,6 +90,8 @@ def _deterministic_wait_until(predicate, *, timeout, description):  # noqa: ANN0
 
 def test_registration_shape() -> None:
     assert m.REGISTRATION.providers == ("cursor",)
+    assert m.REGISTRATION.producer_revision == 12
+    assert m.REGISTRATION.scenario_revision == 10
     assert m.REGISTRATION.modes == ("helm",)
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     # Cursor has only 3 of the 4 coordination capabilities in
@@ -231,7 +233,7 @@ def test_run_coordination_awareness_create_passes_when_the_model_calls_the_tool(
 
     result = m.run_coordination(args)
 
-    assert result["status"] == "pass"
+    assert result["status"] == "pass", result
     assert result["provider"] == "cursor"
     assert result["variant"] is None
     assert result["scenario_id"] == "cursor_coordination_awareness_create"
@@ -357,17 +359,28 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
     tokens = iter(["source-coordination-token", "target-coordination-token"])
     shipper = _install_fake_machine(monkeypatch, tmp_path)
     launched_machines: list[m._CursorMachine] = []
+    steps: list[str] = []
+    launched_prompts: list[str] = []
 
     monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
 
-    def launch_on_machine(_args, _root, machine, **_kwargs):  # noqa: ANN001 - test double
+    def launch_on_machine(_args, _root, machine, **kwargs):  # noqa: ANN001 - test double
         launched_machines.append(machine)
+        launched_prompts.append(kwargs["prompt"])
+        steps.append(f"launch:{kwargs['label']}")
         return next(sessions)
 
     monkeypatch.setattr(m, "_launch_cursor_session", launch_on_machine)
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
-    monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: a[3])
-    monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
+    def wait_marker(*args, **_kwargs):  # noqa: ANN001 - test double
+        steps.append(f"reply:{args[2]}")
+        return args[3]
+
+    def wait_settled(*args, **_kwargs):  # noqa: ANN001 - test double
+        steps.append(f"settled:{args[2]}")
+
+    monkeypatch.setattr(m, "_wait_marker_reply", wait_marker)
+    monkeypatch.setattr(m, "_wait_first_turn_settled", wait_settled)
     monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
     monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
     monkeypatch.setattr(
@@ -390,6 +403,7 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
         assert coordination_token == "source-coordination-token"
         assert source_session_id == "source-session"
         assert target_session_id == "target-session"
+        assert text.startswith("Reply with exactly LH_CURSOR_DI_")
         assert client_request_id
         return {"id": 7, "source_session_id": "source-session", "input_receipt": {"status": "delivered", "id": 1}}
 
@@ -403,7 +417,7 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
 
     result = m.run_coordination(args)
 
-    assert result["status"] == "pass"
+    assert result["status"] == "pass", result
     assert result["variant"] is None
     assert result["scenario_id"] == "cursor_coordination_directed_input"
     assert result["observation_scope"] == "scenario"
@@ -420,6 +434,16 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
     assert shipper.stop_calls == 1
     assert len(launched_machines) == 2
     assert launched_machines[0] is launched_machines[1]
+    assert launched_prompts[0].startswith("Reply with exactly LH_CURSOR_SRC_")
+    assert launched_prompts[1].startswith("Reply with exactly LH_CURSOR_TGT_")
+    assert steps[:6] == [
+        "launch:di-source",
+        "reply:source-session",
+        "settled:source-session",
+        "launch:di-target",
+        "reply:target-session",
+        "settled:target-session",
+    ]
 
     source_cleanup = json.loads((args.evidence_root / "cleanup-receipt-source.json").read_text())
     target_cleanup = json.loads((args.evidence_root / "cleanup-receipt-target.json").read_text())

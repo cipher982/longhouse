@@ -34,6 +34,9 @@ def test_registration_matches_the_schema_declared_cell_exactly() -> None:
     assert m.REGISTRATION.providers == ("opencode",)
     assert m.REGISTRATION.executable is True
     assert m.REGISTRATION.executable_module == "zerg.qa.opencode_turn_boundary_quiescent"
+    assert m.REGISTRATION.producer_revision == 3
+    assert m.REGISTRATION.scenario_revision == 2
+    assert "opencode_model_profile_receipt" in m.REGISTRATION.required_artifacts
     # The schema-declared oracle_source is intentionally reproduced verbatim
     # even though (per the module docstring) it does not contain this
     # assertion's judgment; this test locks that specific, documented
@@ -210,6 +213,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
 def _install_common_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, correlation_timed_out: bool) -> None:
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "deepseek/deepseek-v4-flash")
     monkeypatch.setattr(m, "_isolated_provider_home", lambda: home)
     monkeypatch.setattr(m, "_start_transcript_shipper", lambda *a, **k: _FakeShipper())
     monkeypatch.setattr(m, "_launch_command", lambda *a, **k: ["longhouse", "opencode"])
