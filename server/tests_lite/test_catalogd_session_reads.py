@@ -801,6 +801,24 @@ def test_catalog_gateway_waits_through_cold_session_read_lane_burst(monkeypatch)
     assert sum(sleeps) == pytest.approx(2.625)
 
 
+def test_catalog_gateway_uses_full_session_budget_after_transport_timeouts(monkeypatch):
+    attempts: list[float] = []
+
+    def fake_call(_socket_path, method, *, params, timeout_seconds):
+        assert method == "session.read.v2"
+        assert params == {"session_id": "session-1", "owner_id": 1}
+        attempts.append(timeout_seconds)
+        if len(attempts) < 4:
+            raise catalog_read_gateway.CatalogUnavailable("cold snapshot timed out")
+        return {"found": True}
+
+    monkeypatch.setattr(catalog_read_gateway, "catalogd_paths", lambda: (Path("/tmp/live.db"), Path("/tmp/catalog.sock")))
+    monkeypatch.setattr(catalog_read_gateway, "call_catalogd_sync", fake_call)
+
+    assert catalog_read_gateway.session_snapshot("session-1", owner_id=1) == {"found": True}
+    assert attempts == [1.0, 1.0, 1.0, 1.0]
+
+
 @pytest.mark.asyncio
 async def test_active_owner_read_is_catalog_owned(daemon_paths):
     database_path, socket_path = daemon_paths

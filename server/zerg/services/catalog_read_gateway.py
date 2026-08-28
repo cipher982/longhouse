@@ -26,6 +26,7 @@ _DEFAULT_ATTEMPT_SECONDS = 0.35
 # brief queue-free lane collision instead of returning a cold-start 503.
 _SESSION_SNAPSHOT_DEADLINE_SECONDS = 4.25
 _SESSION_SNAPSHOT_ATTEMPT_SECONDS = 1.0
+_SESSION_SNAPSHOT_TRANSPORT_ATTEMPTS = 4
 # The real 5,000-session hosted timeline measures about 0.39s at p50 and
 # 0.7-0.8s during browser QA. The old 0.35s attempt budget timed out ordinary
 # successful work and amplified load with an immediate retry. Keep this
@@ -209,6 +210,7 @@ def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
         method,
         (_DEFAULT_DEADLINE_SECONDS, _DEFAULT_ATTEMPT_SECONDS),
     )
+    transport_attempt_limit = _SESSION_SNAPSHOT_TRANSPORT_ATTEMPTS if method in {"session.read.v2", "session.read.batch.v2"} else 2
     deadline = time.monotonic() + deadline_seconds
     last_unavailable: CatalogUnavailable | None = None
     transport_attempts = 0
@@ -239,7 +241,7 @@ def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
         except CatalogUnavailable as exc:
             last_unavailable = exc
             transport_attempts += 1
-            if transport_attempts >= 2:
+            if transport_attempts >= transport_attempt_limit:
                 break
     raise CatalogReadError("catalog_unavailable", "The live catalog is temporarily unavailable.") from last_unavailable
 
