@@ -1103,7 +1103,7 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(live_catalo
         json={
             "version": "0.6.0",
             "daemon_pid": 42,
-            "managed_sessions": [_legacy_lease(session_id, provider="claude", machine_id=DEVICE_ID)],
+            "managed_sessions": [_legacy_lease(session_id, provider="claude", machine_id="self-reported-host")],
         },
     )
     assert response.status_code == 204, response.text
@@ -1113,7 +1113,13 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(live_catalo
     assert leases[0]["session_id"] == str(session_id)
     assert leases[0]["provider"] == "claude"
     assert leases[0]["state"] == "attached"
+    # The payload names a different host than the device token that signed the
+    # request. Identity comes from the token; machine_id is a label the client
+    # asserts about itself and never an authority. Keeping the two values
+    # distinct is the whole proof -- with both set to DEVICE_ID a server that
+    # trusted machine_id would pass this test unchanged.
     assert leases[0]["device_id"] == DEVICE_ID
+    assert leases[0]["machine_id"] == "self-reported-host"
     assert _lease_payload(leases[0])["control_state"] == "online"
 
     retained_lease = json.loads(_one_stamp()["raw_json"])["managed_sessions"][0]
