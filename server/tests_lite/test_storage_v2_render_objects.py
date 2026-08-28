@@ -321,7 +321,7 @@ async def test_multi_page_semantic_repair_uses_final_catalog_completion(monkeypa
             raise AssertionError(method)
 
     class RenderWorkers:
-        async def read(self, path, expected_hash, *, lane):
+        async def read(self, path, expected_hash, *, lane, queue_timeout_seconds=None):
             assert lane == "background"
             spec = first if path == "object-1" else second
             return SimpleNamespace(spec=spec, object_hash=expected_hash)
@@ -465,7 +465,7 @@ async def test_storage_semantics_seed_from_prior_raw_envelope(tmp_path):
     )
 
     class RawReader:
-        async def read(self, object_path, object_hash, tenant_id):
+        async def read(self, object_path, object_hash, tenant_id, **_kwargs):
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     class Catalog:
@@ -667,7 +667,7 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
             }
 
     class RawReader:
-        async def read(self, object_path, object_hash, tenant_id):
+        async def read(self, object_path, object_hash, tenant_id, **_kwargs):
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     catalog = Catalog()
@@ -752,7 +752,7 @@ async def test_storage_semantics_replays_current_raw_in_order(tmp_path, command_
     )
 
     class RawReader:
-        async def read(self, object_path, object_hash, tenant_id):
+        async def read(self, object_path, object_hash, tenant_id, **_kwargs):
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     class Catalog:
@@ -852,7 +852,7 @@ async def test_storage_semantic_recovery_skips_full_stream_scan_without_sequence
     class RawReader:
         reads = 0
 
-        async def read(self, object_path, object_hash, tenant_id):
+        async def read(self, object_path, object_hash, tenant_id, **_kwargs):
             self.reads += 1
             assert object_path == current_sealed.object_path
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
@@ -949,7 +949,7 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
     )
 
     class RawReader:
-        async def read(self, object_path, object_hash, tenant_id):
+        async def read(self, object_path, object_hash, tenant_id, **_kwargs):
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     class Catalog:

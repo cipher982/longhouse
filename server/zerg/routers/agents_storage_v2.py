@@ -79,6 +79,7 @@ from zerg.storage_v2.render_objects import validate_render_object_spec
 from zerg.utils.server_timing import ServerTimingRecorder
 
 _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
+_SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS = 4.25
 
 router = APIRouter(prefix="/agents/storage/v2", tags=["agents"])
 logger = logging.getLogger(__name__)
@@ -1661,7 +1662,15 @@ async def read_storage_v2_session_events_page(
             object_read_started = monotonic()
             try:
                 decoded_batch = await asyncio.gather(
-                    *(workers.read(str(item["object_path"]), str(item["object_hash"]), lane="user") for item in batch_manifests)
+                    *(
+                        workers.read(
+                            str(item["object_path"]),
+                            str(item["object_hash"]),
+                            lane="user",
+                            queue_timeout_seconds=_SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS,
+                        )
+                        for item in batch_manifests
+                    )
                 )
             finally:
                 object_read_duration_ms += (monotonic() - object_read_started) * 1000.0

@@ -43,6 +43,7 @@ _MAX_SEQUENCE_REPLAY_VALUE_BYTES = 16 * 1024 * 1024
 _MAX_SEQUENCE_CAVEAT_RECORDS = 4_096
 _MAX_SEQUENCE_CAVEAT_BYTES = 8 * 1024 * 1024
 _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
+_SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS = 4.25
 
 
 async def recover_render_interaction_kinds(
@@ -99,6 +100,7 @@ async def recover_render_interaction_kinds(
             str(manifest["object_path"]),
             str(manifest["object_hash"]),
             str(manifest["tenant_id"]),
+            queue_timeout_seconds=_SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # worker errors are provider-independent recovery failures
         raise StorageV2SemanticRecoveryError(f"raw companion {source_envelope_id} could not be read") from exc
@@ -329,6 +331,7 @@ async def _seed_sequence_context_from_prior_raw(
                 str(item["object_path"]),
                 str(item["object_hash"]),
                 str(item["tenant_id"]),
+                queue_timeout_seconds=_SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS,
             )
         except Exception as exc:  # provider-independent raw recovery failure
             raise StorageV2SemanticRecoveryError(f"raw companion {envelope} could not be read") from exc
@@ -424,6 +427,7 @@ async def _seed_sequence_context_from_all_raw(
                 str(item["object_path"]),
                 str(item["object_hash"]),
                 str(item["tenant_id"]),
+                queue_timeout_seconds=_SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS,
             )
         except Exception as exc:  # provider-independent raw recovery failure
             raise StorageV2SemanticRecoveryError(f"raw companion {envelope_id} could not be read") from exc

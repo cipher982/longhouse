@@ -74,7 +74,8 @@ class _InlineRenderPool:
         assert lane in {"live", "repair"}
         return seal_render_object(self.root, spec)
 
-    async def read(self, object_path, expected_object_hash, *, lane):
+    async def read(self, object_path, expected_object_hash, *, lane, queue_timeout_seconds=None):
+        assert queue_timeout_seconds == 4.25
         assert lane == "user"
         return read_render_object(self.root, object_path, expected_object_hash=expected_object_hash)
 
