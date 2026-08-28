@@ -2382,17 +2382,11 @@ export interface paths {
         put?: never;
         /**
          * Ingest Session
-         * @description Ingest a session with events.
+         * @description Reject v1 transcript ingest.
          *
-         *     Creates or updates a session and inserts events, handling deduplication
-         *     automatically via event hashing.
-         *
-         *     This endpoint is called by the shipper to sync local session files
-         *     (e.g., ~/.claude/projects/...) to Zerg.
-         *
-         *     Features:
-         *     - Accepts gzip-compressed payloads (Content-Encoding: gzip)
-         *     - Triggers async background summary/embedding/turn-loop work after successful ingest
+         *     A Runtime Host accepts transcript ingest only through storage-v2; shippers
+         *     still calling this route are told to upgrade rather than silently writing
+         *     to the archive.
          */
         post: operations["ingest_session_agents_ingest_post"];
         delete?: never;
@@ -4121,11 +4115,10 @@ export interface paths {
         };
         /**
          * Health Db
-         * @description Database readiness check - verifies critical tables are initialized.
+         * @description Database readiness check - verifies the catalog is answering.
          *
-         *     Returns ready/initializing/error. Schema detail (which table is missing,
-         *     the verified table list) is operator-only; untrusted callers get a bare
-         *     status so this isn't a public schema-disclosure surface.
+         *     Returns ready/error. The catalog ping payload is operator-only; untrusted
+         *     callers get a bare status so this isn't a public schema-disclosure surface.
          */
         get: operations["health_db_check"];
         put?: never;
@@ -4167,8 +4160,9 @@ export interface paths {
          * Readyz Check
          * @description Readiness probe: returns 503 when core dependencies are unavailable.
          *
-         *     Uses a raw SQLite connection with a short timeout so it never blocks behind
-         *     a long write transaction.
+         *     Readiness is catalog readiness: catalogd owns the database, so a compatible
+         *     ping over its socket is the whole check. The probe carries a short timeout
+         *     so it never blocks behind a long write transaction.
          */
         get: operations["readyz_check_get"];
         put?: never;
