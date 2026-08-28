@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import errno
 import hashlib
+import http
 import json
 import os
 import pty
@@ -55,6 +56,8 @@ _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
 _TRANSCRIPT_SHIP_MAX_ATTEMPTS = 3
 _STORAGE_LANE_BUSY_MAX_SLEEP_SECS = 10.0
 _STORAGE_LANE_BUSY_RE = re.compile(r"storage-v2 repair lane busy; retry after (?P<milliseconds>\d+)ms")
+_HTTP_STATUS_ERROR_RE = re.compile(r"HTTP status [^\r\n]*\((?P<status>[45]\d{2}) [^)]+\)")
+_TRANSCRIPT_CAPABILITY_RETRY_SLEEP_SECS = 1.0
 _SAFE_DIAGNOSTIC_DETAIL_RE = re.compile(r"^[a-z0-9][a-z0-9_.:+-]{0,127}$")
 _CURSOR_DIAGNOSTIC_PAYLOAD_KEYS = frozenset({"generation_id", "status", "phase", "is_interrupt", "text"})
 _MAX_RETAINED_TERMINAL_BYTES = 64 * 1024
@@ -269,6 +272,20 @@ class TranscriptShipper:
                     result["retry_sleep_secs"] = retry_delay_secs
                 elif "source_epoch_conflict_unresolved" in stderr:
                     attempt_retry_reason = "source_epoch_conflict_unresolved"
+                elif "storage-v2 capability request returned non-2xx" in stderr:
+                    result["failure_code"] = "storage_v2_capability_request_failed"
+                    status_match = _HTTP_STATUS_ERROR_RE.search(stderr)
+                    status = int(status_match.group("status")) if status_match is not None else None
+                    if status is not None:
+                        result["http_status"] = status
+                        try:
+                            result["http_status_phrase"] = http.HTTPStatus(status).phrase
+                        except ValueError:
+                            pass
+                    if status in {429, 502, 503, 504}:
+                        attempt_retry_reason = "storage_v2_capability_unavailable"
+                        retry_delay_secs = _TRANSCRIPT_CAPABILITY_RETRY_SLEEP_SECS
+                        result["retry_sleep_secs"] = retry_delay_secs
             if attempt_retry_reason is not None:
                 result["retry_reason"] = attempt_retry_reason
             attempts.append(result)
@@ -467,7 +484,7 @@ def registration_for(provider: str) -> ProducerRegistration:
     spec = SPECS[provider]
     return ProducerRegistration(
         producer_id=spec.producer_id,
-        producer_revision=4 if provider in {"cursor", "opencode"} else 3,
+        producer_revision=5 if provider == "cursor" else 4 if provider == "opencode" else 3,
         scenario_id="helm_cold_resume",
         scenario_revision=5 if provider in {"cursor", "opencode"} else 4,
         assertion_cells=(
@@ -1961,6 +1978,19 @@ def _post_resume_response_correlated(provider: str, correlation: dict[str, Any])
         and new_assistant_events > 0
         and (provider == "claude" or correlation.get("marker_observed_in_assistant"))
     )
+
+
+def _require_transcript_ship(receipt: dict[str, Any], *, label: str) -> None:
+    """Reject infrastructure failure before judging transcript convergence."""
+
+    if receipt.get("status") == "pass":
+        return
+    reason = str(receipt.get("failure_code") or receipt.get("retry_reason") or receipt.get("error") or "unknown")
+    status = receipt.get("http_status")
+    phrase = str(receipt.get("http_status_phrase") or "").strip()
+    if isinstance(status, int) and not isinstance(status, bool):
+        reason = f"{reason}: {status}{f' {phrase}' if phrase else ''}"
+    raise RuntimeError(f"{label} transcript ship failed: {reason}")
 
 
 def _cursor_idle_then_flush(
@@ -3820,7 +3850,9 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             # redrawing the input surface. Revalidate the provider-owned PTY
             # prompt immediately before the initial seed injection.
             _wait_cursor_tui_ready(initial, root / "initial.tty")
-            _write_json(root / "initial-bootstrap-transcript-ship-receipt.json", shipper.flush("initial-bootstrap"))
+            initial_bootstrap_ship_receipt = shipper.flush("initial-bootstrap")
+            _write_json(root / "initial-bootstrap-transcript-ship-receipt.json", initial_bootstrap_ship_receipt)
+            _require_transcript_ship(initial_bootstrap_ship_receipt, label="initial-bootstrap")
             bootstrap_tail = _wait_session_tail(args.api_url, args.agents_token, initial_state["session_id"])
             initial_prior_assistant_event_digests = _assistant_event_digests(bootstrap_tail)
             # Keep the provider-owned store and engine projection boundary
@@ -3876,6 +3908,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         else:
             initial_ship_receipt = shipper.flush("initial")
         _write_json(root / "initial-transcript-ship-receipt.json", initial_ship_receipt)
+        if spec.provider == "cursor":
+            _require_transcript_ship(initial_ship_receipt, label="initial")
         initial_tail, initial_response_correlation = _wait_assistant_response_after_marker(
             args.api_url,
             args.agents_token,
@@ -3918,7 +3952,10 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
         # that exact enrolled shipper DB before asking the host for Resume;
         # otherwise the catalog can still report run_active/contract_missing
         # even though the provider owner is already dead.
-        _write_json(root / "post-stop-transcript-ship-receipt.json", shipper.flush("post-stop"))
+        post_stop_ship_receipt = shipper.flush("post-stop")
+        _write_json(root / "post-stop-transcript-ship-receipt.json", post_stop_ship_receipt)
+        if spec.provider == "cursor":
+            _require_transcript_ship(post_stop_ship_receipt, label="post-stop")
         stale_marker = _resume_marker(provider, "STALE")
         try:
             _control_send(
@@ -4016,6 +4053,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 diagnostic_path=root / "cursor-idle-timeout-resume-bootstrap.json",
             )
             _write_json(root / "resume-bootstrap-transcript-ship-receipt.json", bootstrap_ship_receipt)
+            _require_transcript_ship(bootstrap_ship_receipt, label="resume-bootstrap")
             bootstrap_tail, bootstrap_response_correlation = _wait_assistant_response_after_marker(
                 args.api_url,
                 args.agents_token,
@@ -4128,18 +4166,6 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 _write_json(root / "post-resume-response-correlation.json", response_correlation)
                 raise RuntimeError(f"provider transcript did not correlate post-resume {provider} marker {post_marker}")
             post_resume_ship_receipt = shipper.flush("post-resume")
-            # Re-read after the forced scan so the retained final correlation
-            # remains the authority even if the first observation raced the
-            # shipper restart.
-            resumed_tail, response_correlation = _wait_assistant_response_after_marker(
-                args.api_url,
-                args.agents_token,
-                resumed_state["session_id"],
-                post_marker,
-                prior_assistant_event_digests=prior_assistant_event_digests,
-                require_assistant_marker=spec.provider != "claude",
-                timeout=args.live_send_timeout_secs,
-            )
         else:
             post_resume_ship_receipt = (
                 _cursor_idle_then_flush(
@@ -4155,16 +4181,24 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 if spec.provider == "cursor"
                 else shipper.flush("post-resume")
             )
-            resumed_tail, response_correlation = _wait_assistant_response_after_marker(
-                args.api_url,
-                args.agents_token,
-                resumed_state["session_id"],
-                post_marker,
-                prior_assistant_event_digests=prior_assistant_event_digests,
-                require_assistant_marker=spec.provider != "claude",
-                timeout=args.live_send_timeout_secs,
-            )
         _write_json(root / "post-resume-transcript-ship-receipt.json", post_resume_ship_receipt)
+        if spec.provider == "cursor":
+            # A failed forced scan is harness/runtime evidence, not a provider
+            # transcript finding. Preserve the receipt and stop here so a 5xx
+            # capability outage cannot be rewritten as "marker absent".
+            _require_transcript_ship(post_resume_ship_receipt, label="post-resume")
+        # Re-read after the forced scan so the retained final correlation
+        # remains the authority even if the first observation raced the
+        # shipper restart.
+        resumed_tail, response_correlation = _wait_assistant_response_after_marker(
+            args.api_url,
+            args.agents_token,
+            resumed_state["session_id"],
+            post_marker,
+            prior_assistant_event_digests=prior_assistant_event_digests,
+            require_assistant_marker=spec.provider != "claude",
+            timeout=args.live_send_timeout_secs,
+        )
         _write_json(root / "post-resume-response-correlation.json", response_correlation)
         post_resume_response_correlated = _post_resume_response_correlated(provider, response_correlation)
         post_resume_provider_activity = response_correlation["new_assistant_events"] > 0

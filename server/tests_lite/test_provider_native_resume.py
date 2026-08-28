@@ -122,7 +122,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.evidence_classes == ("live_token",)
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
-        assert registration.producer_revision == (4 if provider in {"cursor", "opencode"} else 3)
+        assert registration.producer_revision == (5 if provider == "cursor" else 4 if provider == "opencode" else 3)
         assert registration.scenario_revision == (5 if provider in {"cursor", "opencode"} else 4)
         assert {
             "transcript_shipper_receipt",
@@ -438,6 +438,102 @@ def test_transcript_shipper_retries_storage_lane_backpressure_once(
     assert receipt["attempts"] == 2
     assert receipt["retry_reason"] == "storage_lane_busy"
     assert receipt["events_shipped"] == 1
+
+
+def test_transcript_shipper_retries_a_storage_capability_502_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "Error: storage-v2 capability request returned non-2xx\n\n"
+                    "Caused by:\n    HTTP status server error (502 Bad Gateway) for url "
+                    "(https://runtime.example/api/agents/storage/v2/capabilities)"
+                ),
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"protocol": "storage-v2", "events_shipped": 2}),
+                stderr="",
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
+    shipper = TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("post-resume")
+
+    assert receipt["status"] == "pass"
+    assert receipt["attempts"] == 2
+    assert receipt["retry_reason"] == "storage_v2_capability_unavailable"
+    assert receipt["retry_sleep_secs"] == 1.0
+    assert receipt["events_shipped"] == 2
+    assert sleeps == [1.0]
+
+
+def test_transcript_shipper_retains_a_repeated_storage_capability_502(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr = (
+        "Error: storage-v2 capability request returned non-2xx\n"
+        "HTTP status server error (502 Bad Gateway) for url "
+        "(https://runtime.example/api/agents/storage/v2/capabilities)"
+    )
+    calls = 0
+
+    def fail(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fail)
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", lambda _seconds: None)
+    shipper = TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("post-resume")
+
+    assert calls == 2
+    assert receipt["status"] == "fail"
+    assert receipt["failure_code"] == "storage_v2_capability_request_failed"
+    assert receipt["http_status"] == 502
+    assert receipt["http_status_phrase"] == "Bad Gateway"
+    assert receipt["retry_reasons"] == [
+        "storage_v2_capability_unavailable",
+        "storage_v2_capability_unavailable",
+    ]
 
 
 def test_transcript_shipper_retries_mixed_backpressure_then_lineage_reconciliation(
@@ -1959,6 +2055,22 @@ def test_codex_native_resume_rejects_a_failed_transcript_ship_immediately() -> N
 
 def test_codex_native_resume_accepts_a_passing_transcript_ship() -> None:
     codex_native_resume._require_transcript_ship({"status": "pass"}, label="post-resume")
+
+
+def test_cursor_native_resume_preserves_storage_capability_failure_before_transcript_judgment() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="post-resume transcript ship failed: storage_v2_capability_request_failed: 502 Bad Gateway",
+    ):
+        provider_native_resume._require_transcript_ship(
+            {
+                "status": "fail",
+                "failure_code": "storage_v2_capability_request_failed",
+                "http_status": 502,
+                "http_status_phrase": "Bad Gateway",
+            },
+            label="post-resume",
+        )
 
 
 def test_codex_resume_contract_snapshot_matches_machine_scanner_layout(tmp_path: Path) -> None:
