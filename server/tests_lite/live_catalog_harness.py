@@ -183,7 +183,14 @@ class _RenderReader:
     def __init__(self, root: Path) -> None:
         self.root = root
 
-    async def read(self, object_path: str, object_hash: str, *, lane: str):
+    async def read(
+        self,
+        object_path: str,
+        object_hash: str,
+        *,
+        lane: str,
+        queue_timeout_seconds: float | None = None,
+    ):
         return read_render_object(self.root, object_path, expected_object_hash=object_hash)
 
 
@@ -191,7 +198,14 @@ class _RawReader:
     def __init__(self, root: Path) -> None:
         self.root = root
 
-    async def read(self, object_path: str, object_hash: str, tenant_id: str):
+    async def read(
+        self,
+        object_path: str,
+        object_hash: str,
+        tenant_id: str,
+        *,
+        queue_timeout_seconds: float | None = None,
+    ):
         return read_raw_object(self.root, object_path, expected_object_hash=object_hash)
 
 

@@ -46,7 +46,7 @@ class FakeRawWorkers:
         self.decoded = decoded
         self.calls: list[tuple[str, str, str]] = []
 
-    async def read(self, object_path, object_hash, tenant_id):
+    async def read(self, object_path, object_hash, tenant_id, *, queue_timeout_seconds=None):
         self.calls.append((object_path, object_hash, tenant_id))
         return self.decoded
 

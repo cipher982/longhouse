@@ -166,7 +166,14 @@ class _RenderPool:
         self.generation_id = generation_id
         self.read_count = 0
 
-    async def read(self, object_path: str, object_hash: str, *, lane: str) -> DecodedRenderObject:
+    async def read(
+        self,
+        object_path: str,
+        object_hash: str,
+        *,
+        lane: str,
+        queue_timeout_seconds: float | None = None,
+    ) -> DecodedRenderObject:
         assert lane == "user"
         self.read_count += 1
         index = int(object_path.rsplit("/", 1)[-1])
