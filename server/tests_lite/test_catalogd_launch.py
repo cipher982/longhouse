@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
@@ -67,7 +68,7 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
     }
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": launch})
         assert created["created"] is True
@@ -119,7 +120,7 @@ async def test_catalogd_rejects_provider_session_identity_bound_to_another_threa
     )
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": first})
         assert created["created"] is True
@@ -165,7 +166,7 @@ async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_pat
     )
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         initial = await client.call("session.launch.local.create.v2", {"launch": launch})
         ended_at = datetime.now(UTC)
@@ -359,7 +360,7 @@ async def test_catalogd_resume_rejects_provider_thread_mismatch(daemon_paths):
     )
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         initial = await client.call("session.launch.local.create.v2", {"launch": launch})
         now = datetime.now(UTC)
@@ -419,7 +420,7 @@ async def test_catalogd_confirms_registered_local_launch_exactly_once(daemon_pat
     )
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": launch})
         outcome = {
@@ -467,7 +468,7 @@ async def test_catalogd_aborts_registered_local_launch_and_releases_control(daem
     )
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": launch})
         aborted = await client.call(
@@ -553,7 +554,7 @@ async def test_catalogd_local_launch_replays_when_retry_timestamps_differ(daemon
     )
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": first})
         assert created["created"] is True
@@ -583,7 +584,7 @@ async def test_catalogd_local_launch_replays_after_archive_drains_outbox(daemon_
     )
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": launch})
         assert created["created"] is True
@@ -602,7 +603,7 @@ async def test_catalogd_local_launch_replays_after_archive_drains_outbox(daemon_
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         replay = await client.call("session.launch.local.create.v2", {"launch": launch})
         assert replay["created"] is False
@@ -649,7 +650,7 @@ async def test_catalogd_local_launch_accepts_empty_attach_command(daemon_paths, 
     )
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": launch})
         assert created["created"] is True
@@ -688,7 +689,7 @@ async def test_catalogd_local_launch_rejects_invalid_attach_command(daemon_paths
         launch["plan"]["attach_command"] = None
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         with pytest.raises(CatalogRemoteError) as exc_info:
             await client.call("session.launch.local.create.v2", {"launch": launch})
@@ -711,7 +712,7 @@ async def test_catalogd_local_launch_rejects_missing_attach_command(daemon_paths
     del launch["plan"]["attach_command"]
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
     try:
         with pytest.raises(CatalogRemoteError) as exc_info:
             await client.call("session.launch.local.create.v2", {"launch": launch})
