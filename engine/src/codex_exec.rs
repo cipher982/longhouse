@@ -10,7 +10,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::io::Write as _;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -322,6 +322,12 @@ pub struct CodexExecRunConfig {
     pub launch_actor: Option<String>,
     pub launch_surface: Option<String>,
     pub resume_thread_id: Option<String>,
+    /// Parent thread to fork from on this turn. Distinct from
+    /// `resume_thread_id` because the two mean opposite things to the provider:
+    /// a resume continues one thread, a fork produces a second one. Conflating
+    /// them is how the first branching design ended up appending two
+    /// conversations to a single rollout.
+    pub fork_thread_id: Option<String>,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
 }
@@ -511,6 +517,7 @@ async fn spawn_initialized_codex_worker(
         launch_actor: launch_actor.map(str::to_string),
         launch_surface: launch_surface.map(str::to_string),
         resume_thread_id: None,
+        fork_thread_id: None,
         machine_name: String::new(),
         local_db_path: None,
     };
@@ -712,6 +719,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let approval_policy = config.approval_policy.clone();
     let sandbox = config.sandbox.clone();
     let resume_thread_id = config.resume_thread_id.clone();
+    let fork_thread_id = config.fork_thread_id.clone();
     tokio::spawn(async move {
         let mut run_result = run_app_server_turn(
             &mut worker.child,
@@ -722,6 +730,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             approval_policy.as_deref(),
             sandbox.as_deref(),
             resume_thread_id.as_deref(),
+            fork_thread_id.as_deref(),
             warm_hit,
             leased_at,
         )
@@ -969,6 +978,42 @@ fn codex_exec_recovery_terminal_event(
     })
 }
 
+/// Which app-server method starts this turn.
+///
+/// Fork outranks resume: a turn carrying a fork parent is a branch's first
+/// turn, and it must produce a second thread rather than continue the first.
+fn app_server_thread_method(
+    fork_thread_id: Option<&str>,
+    resume_thread_id: Option<&str>,
+) -> &'static str {
+    match (fork_thread_id, resume_thread_id) {
+        (Some(_), _) => "thread/fork",
+        (None, Some(_)) => "thread/resume",
+        (None, None) => "thread/start",
+    }
+}
+
+/// Refuse a branch whose fork silently behaved like a resume.
+///
+/// If an upstream change ever degrades `thread/fork`, the child would adopt the
+/// parent's thread, two Longhouse sessions would claim one rollout, and the
+/// alias uniqueness index would reject the second binding with nothing louder
+/// than a logged warning. Fail the run instead: a failed branch is recoverable,
+/// a silently merged one is not.
+fn ensure_fork_produced_a_new_thread(
+    fork_thread_id: Option<&str>,
+    provider_thread_id: &str,
+) -> Result<()> {
+    if let Some(parent_thread_id) = fork_thread_id {
+        if provider_thread_id == parent_thread_id {
+            bail!(
+                "Codex thread/fork returned the parent thread {parent_thread_id}; refusing to run a branch that would share the parent's rollout"
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn run_app_server_turn(
     child: &mut Child,
     mut rpc: AppServerRpc,
@@ -978,22 +1023,19 @@ async fn run_app_server_turn(
     approval_policy: Option<&str>,
     sandbox: Option<&str>,
     resume_thread_id: Option<&str>,
+    fork_thread_id: Option<&str>,
     warm_hit: bool,
     leased_at: std::time::Instant,
 ) -> Result<Option<i32>> {
     let mut projection = AppServerProjection::default();
 
-    let method = if resume_thread_id.is_some() {
-        "thread/resume"
-    } else {
-        "thread/start"
-    };
+    let method = app_server_thread_method(fork_thread_id, resume_thread_id);
     let mut thread_params = json!({
         "cwd": cwd.to_string_lossy(),
         "approvalPolicy": approval_policy,
         "sandbox": sandbox,
     });
-    if let Some(thread_id) = resume_thread_id {
+    if let Some(thread_id) = fork_thread_id.or(resume_thread_id) {
         thread_params["threadId"] = Value::String(thread_id.to_string());
     }
     let thread_response = rpc
@@ -1001,6 +1043,8 @@ async fn run_app_server_turn(
         .await?;
     let provider_thread_id = json_string(&thread_response, &["thread", "id"])
         .context("Codex app-server thread response omitted thread.id")?;
+
+    ensure_fork_produced_a_new_thread(fork_thread_id, &provider_thread_id)?;
     let thread_path = json_string(&thread_response, &["thread", "path"])
         .or_else(|| codex_rollout_path(&provider_thread_id).map(|path| path.display().to_string()));
     sink.post_provider_binding(&provider_thread_id, thread_path.as_deref())
@@ -2071,6 +2115,47 @@ fn find_codex_rollout_path(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn fork_outranks_resume_when_both_are_present() {
+        // A branch's first turn carries the parent to fork from. If resume won,
+        // the branch would continue the parent's thread instead of leaving it
+        // alone, which is the whole failure this design exists to avoid.
+        assert_eq!(
+            app_server_thread_method(Some("parent-thread"), Some("some-thread")),
+            "thread/fork"
+        );
+        assert_eq!(
+            app_server_thread_method(None, Some("own-thread")),
+            "thread/resume"
+        );
+        assert_eq!(app_server_thread_method(None, None), "thread/start");
+    }
+
+    #[test]
+    fn a_fork_that_returns_the_parent_thread_is_refused() {
+        let parent = "dddddddd-1111-2222-3333-444455556666";
+        let error = ensure_fork_produced_a_new_thread(Some(parent), parent)
+            .expect_err("a fork returning its parent must not be allowed to run");
+        assert!(error.to_string().contains(parent));
+        assert!(error.to_string().contains("refusing"));
+    }
+
+    #[test]
+    fn a_fork_that_returns_a_new_thread_proceeds() {
+        assert!(ensure_fork_produced_a_new_thread(
+            Some("dddddddd-1111-2222-3333-444455556666"),
+            "eeeeeeee-1111-2222-3333-444455556666",
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn identity_is_only_checked_for_forks() {
+        // A resume returning the thread it resumed is correct, not a fault.
+        assert!(ensure_fork_produced_a_new_thread(None, "same-thread").is_ok());
+    }
+
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -2097,6 +2182,7 @@ mod tests {
             launch_actor: None,
             launch_surface: None,
             resume_thread_id: None,
+            fork_thread_id: None,
             machine_name: "cinder".to_string(),
             local_db_path: None,
         }

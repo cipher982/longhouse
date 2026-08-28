@@ -1138,6 +1138,8 @@ async fn execute_command(
                 resume_thread_id: resume_target
                     .as_ref()
                     .map(|target| target.thread_id.clone()),
+                // run_once has no branch path; only served Console turns fork.
+                fork_thread_id: None,
                 machine_name: config.machine_name.clone(),
                 local_db_path,
             })
@@ -1569,6 +1571,10 @@ async fn execute_turn_start(
     }
     let message = payload_required_string(payload, "message")?;
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
+    // A branch's first turn carries the parent thread to fork from. Only the
+    // first: once the child owns a thread of its own, later turns resume it
+    // like any other Console session, and re-sending this would fork again.
+    let fork_provider_thread_id = payload_optional_string(payload, "fork_from_provider_thread_id");
     // One default for every Console provider. The per-provider branch this
     // replaced defaulted Antigravity to `remote_approve`, which
     // `antigravity_print` then rejects outright -- a turn that omitted the
@@ -1879,6 +1885,7 @@ async fn execute_turn_start(
                 launch_actor,
                 launch_surface,
                 resume_thread_id: resume_provider_thread_id,
+                fork_thread_id: fork_provider_thread_id,
                 machine_name: config.machine_name.clone(),
                 local_db_path,
             })
