@@ -27,8 +27,9 @@ def runtime_host_request(
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = json.dumps(body, sort_keys=True).encode() if body is not None else None
+    endpoint = path if path.startswith("/api/") else f"/api/agents/{path.lstrip('/')}"
     request = urllib.request.Request(
-        f"{api_url.rstrip('/')}/api/agents/{path.lstrip('/')}",
+        f"{api_url.rstrip('/')}{endpoint}",
         headers={
             "X-Agents-Token": agents_token,
             "Accept": "application/json",
@@ -93,14 +94,17 @@ def hide_and_verify_canary_isolation(
             "limit": 100,
         }
     )
-    active_query = urllib.parse.urlencode({"project": project, "limit": 200})
+    open_query = urllib.parse.urlencode({"project": project, "limit": 100})
     workspace_query = urllib.parse.urlencode({"limit": 50, "days_back": 180})
     deadline = time.monotonic() + timeout_seconds
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
         direct = request(f"sessions/{session_id}", "GET", None)
         default = request(f"sessions?{query}", "GET", None)
-        active = request(f"sessions/active?{active_query}", "GET", None)
+        # The removed /api/agents/sessions/active route depended on the archive
+        # database and never served on a real catalogd Runtime Host.  The live
+        # timeline is the actual open-session product surface.
+        open_sessions = request(f"/api/timeline/sessions?{open_query}", "GET", None)
         workspaces = request(
             f"machines/{urllib.parse.quote(device_id, safe='')}/workspaces?{workspace_query}",
             "GET",
@@ -108,7 +112,7 @@ def hide_and_verify_canary_isolation(
         )
         axes = {
             "default_timeline_absent": session_id not in _ids(default),
-            "open_absent": session_id not in _ids(active),
+            "open_absent": session_id not in _ids(open_sessions),
             "title_debt_absent": int(direct.get("user_messages") or 0) == 0,
             "workspace_suggestion_absent": cwd not in _workspace_paths(workspaces),
             "direct_retrieval_succeeds": str(direct.get("id") or "") == session_id,
