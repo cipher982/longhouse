@@ -371,7 +371,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let launchSurface: String?
     let summaryStatus: String?
     let firstUserMessage: String?
-    let matchEventId: Int?
+    let matchEventId: JSONValue?
     let matchSnippet: String?
     let matchRole: String?
     let matchScore: Double?

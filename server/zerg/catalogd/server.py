@@ -175,6 +175,12 @@ class CatalogDaemon:
         checkpoint_interval_seconds: float = 30.0,
         runtime_boot_id: str | None = None,
     ) -> None:
+        self._e2e_reset_enabled = os.getenv("ENVIRONMENT", "").strip() == "test:e2e" and os.getenv("TESTING", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         self.database_path = database_path.expanduser().resolve()
         self.socket_path = socket_path.expanduser().resolve()
         self.lock_path = self.database_path.with_suffix(f"{self.database_path.suffix}.catalogd.lock")
@@ -457,6 +463,13 @@ class CatalogDaemon:
             return self._error(request, "deadline_exceeded", "request deadline exceeded", retryable=True)
         if self._engine is None or self._meta is None or self._store is None:
             return self._error(request, "catalog_unavailable", "catalog is not ready", retryable=True)
+        if request.method == "test.user_data.reset.v2" and self._e2e_reset_enabled:
+            if request.params:
+                return self._error(request, "invalid_request", "test.user_data.reset.v2 accepts no parameters")
+            return CatalogRpcResponse(
+                id=request.id,
+                result=await self._run_store(self._store.reset_e2e_user_data),
+            )
         if request.method == "auth.device.validate.v2":
             return await self._authenticate_device(request)
         if request.method == "auth.device.resolve.v2":

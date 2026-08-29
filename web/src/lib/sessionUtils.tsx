@@ -11,7 +11,10 @@ import { resolveSessionRuntimeState } from "./sessionRuntime";
 // Time / date helpers
 // ---------------------------------------------------------------------------
 
-export function formatRelativeTime(dateStr: string, nowMs: number = Date.now()): string {
+export function formatRelativeTime(
+  dateStr: string,
+  nowMs: number = Date.now(),
+): string {
   const date = parseUTC(dateStr);
   const diffMs = nowMs - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
@@ -25,13 +28,20 @@ export function formatRelativeTime(dateStr: string, nowMs: number = Date.now()):
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function getDateKey(dateStr: string, nowMs: number = Date.now()): string {
+export function getDateKey(
+  dateStr: string,
+  nowMs: number = Date.now(),
+): string {
   const date = parseUTC(dateStr);
   const now = new Date(nowMs);
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
-  const sessionDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const sessionDate = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  );
 
   if (sessionDate.getTime() === today.getTime()) return "Today";
   if (sessionDate.getTime() === yesterday.getTime()) return "Yesterday";
@@ -48,7 +58,7 @@ export function getDateKey(dateStr: string, nowMs: number = Date.now()): string 
 
 export function buildSessionDetailPath(
   session: Pick<AgentSession, "id" | "provider" | "match_event_id">,
-  matchEventId?: number | null,
+  matchEventId?: AgentSession["match_event_id"],
 ): string {
   const params = new URLSearchParams();
   if (matchEventId != null) {
@@ -80,7 +90,10 @@ export function getProjectLabel(session: AgentSession): string {
     if (folder && folder.length >= 2) return folder;
   }
   if (session.git_repo) {
-    const name = session.git_repo.replace(/\.git$/, "").split("/").pop();
+    const name = session.git_repo
+      .replace(/\.git$/, "")
+      .split("/")
+      .pop();
     if (name) return name;
   }
   return session.provider;
@@ -94,7 +107,9 @@ export interface SessionCardText {
   subheading: string | null;
 }
 
-function isGeneratedSessionTitle(value: string | null | undefined): value is string {
+function isGeneratedSessionTitle(
+  value: string | null | undefined,
+): value is string {
   const title = compactText(value);
   if (!title) return false;
   const normalized = title.toLowerCase();
@@ -106,7 +121,11 @@ function isGeneratedSessionTitle(value: string | null | undefined): value is str
 
 export function getSessionCardText(
   session: AgentSession,
-  options: { titleMaxChars?: number; subheadingMaxChars?: number; preferGenerated?: boolean } = {},
+  options: {
+    titleMaxChars?: number;
+    subheadingMaxChars?: number;
+    preferGenerated?: boolean;
+  } = {},
 ): SessionCardText {
   const titleMaxChars = options.titleMaxChars ?? 96;
   const subheadingMaxChars = options.subheadingMaxChars ?? 180;
@@ -121,7 +140,9 @@ export function getSessionCardText(
     return {
       title: truncateText(resolved, titleMaxChars),
       titleSource: "generated",
-      subheading: firstUser ? truncateText(firstUser, subheadingMaxChars) : null,
+      subheading: firstUser
+        ? truncateText(firstUser, subheadingMaxChars)
+        : null,
     };
   }
 
@@ -129,7 +150,9 @@ export function getSessionCardText(
     return {
       title: truncateText(compactText(session.summary_title), titleMaxChars),
       titleSource: "generated",
-      subheading: firstUser ? truncateText(firstUser, subheadingMaxChars) : null,
+      subheading: firstUser
+        ? truncateText(firstUser, subheadingMaxChars)
+        : null,
     };
   }
 
@@ -144,9 +167,10 @@ export function getSessionCardText(
   const project = getProjectLabel(session);
   const provider = formatProviderName(session.provider);
   return {
-    title: project && project !== session.provider
-      ? `New ${provider} session in ${project}`
-      : `New ${provider} session`,
+    title:
+      project && project !== session.provider
+        ? `New ${provider} session in ${project}`
+        : `New ${provider} session`,
     titleSource: "fallback",
     subheading: null,
   };
@@ -165,19 +189,27 @@ export function getDriftTitle(
   // The headline may be truncated ("Foo bar…"); treat the drift as an echo when
   // it equals or starts with the headline's text so a long anchor that matches
   // the live title doesn't surface a redundant "now: …" line.
-  const head = compactText(headline).replace(/[…]+$/, "").replace(/\.\.\.$/, "").trim();
+  const head = compactText(headline)
+    .replace(/[…]+$/, "")
+    .replace(/\.\.\.$/, "")
+    .trim();
   if (head && (drift === head || drift.startsWith(head))) return null;
   return drift;
 }
 
-export function getBranchLabel(value: string | null | undefined): string | null {
+export function getBranchLabel(
+  value: string | null | undefined,
+): string | null {
   if (!isValidTitle(value)) return null;
   const branch = value!.trim();
   if (branch.toUpperCase() === "HEAD") return null;
   return branch;
 }
 
-export function getSessionFallbackSummary(session: AgentSession, maxChars = 180): string {
+export function getSessionFallbackSummary(
+  session: AgentSession,
+  maxChars = 180,
+): string {
   const firstUser = compactText(session.first_user_message);
   if (firstUser) {
     return truncateText(firstUser, maxChars);
@@ -233,7 +265,7 @@ export function renderHighlightedText(text: string, query: string) {
       </mark>
     ) : (
       part
-    )
+    ),
   );
 }
 
@@ -284,7 +316,8 @@ export function getRuntimeDisplayCopy(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
 ): RuntimeDisplayCopy {
   return {
-    headline: runtime.stateFacts.presentation.primary?.label ?? "Activity unknown",
+    headline:
+      runtime.stateFacts.presentation.primary?.label ?? "Activity unknown",
     detail: runtime.stateFacts.presentation.transcript?.label ?? null,
   };
 }
@@ -330,38 +363,54 @@ export function parsePositiveIntParam(
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 }
 
-export function readSessionsUrlState(searchParams: URLSearchParams): SessionsUrlState {
+export function readSessionsUrlState(
+  searchParams: URLSearchParams,
+): SessionsUrlState {
   const mode = searchParams.get("mode");
   const aiSearch =
     mode === "hybrid" ||
     mode === "semantic" ||
     mode === "smart" ||
     searchParams.get("semantic") === "1";
-  const deviceId = searchParams.get("device_id") || searchParams.get("environment") || "";
+  const deviceId =
+    searchParams.get("device_id") || searchParams.get("environment") || "";
 
   return {
     project: searchParams.get("project") || "",
     provider: searchParams.get("provider") || "",
     deviceId,
     hideAutonomous: searchParams.get("hide_autonomous") !== "false",
-    daysBack: parsePositiveIntParam(searchParams.get("days_back"), DEFAULT_DAYS_BACK),
+    daysBack: parsePositiveIntParam(
+      searchParams.get("days_back"),
+      DEFAULT_DAYS_BACK,
+    ),
     searchQuery: searchParams.get("query") || "",
     aiSearch,
-    sortOrder: searchParams.get("sort") === "recent" ? "recent" : DEFAULT_SORT_ORDER,
-    limit: parsePositiveIntParam(searchParams.get("limit"), PAGE_SIZE, PAGE_SIZE, 100),
+    sortOrder:
+      searchParams.get("sort") === "recent" ? "recent" : DEFAULT_SORT_ORDER,
+    limit: parsePositiveIntParam(
+      searchParams.get("limit"),
+      PAGE_SIZE,
+      PAGE_SIZE,
+      100,
+    ),
   };
 }
 
-export function buildSessionsSearchParams(state: SessionsUrlState): URLSearchParams {
+export function buildSessionsSearchParams(
+  state: SessionsUrlState,
+): URLSearchParams {
   const params = new URLSearchParams();
 
   if (state.project) params.set("project", state.project);
   if (state.provider) params.set("provider", state.provider);
   if (state.deviceId) params.set("device_id", state.deviceId);
-  if (state.daysBack !== DEFAULT_DAYS_BACK) params.set("days_back", String(state.daysBack));
+  if (state.daysBack !== DEFAULT_DAYS_BACK)
+    params.set("days_back", String(state.daysBack));
   if (state.searchQuery) params.set("query", state.searchQuery);
   if (state.aiSearch) params.set("mode", "hybrid");
-  if (state.searchQuery && state.sortOrder !== DEFAULT_SORT_ORDER) params.set("sort", state.sortOrder);
+  if (state.searchQuery && state.sortOrder !== DEFAULT_SORT_ORDER)
+    params.set("sort", state.sortOrder);
   if (!state.hideAutonomous) params.set("hide_autonomous", "false");
   if (state.limit !== PAGE_SIZE) params.set("limit", String(state.limit));
 

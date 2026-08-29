@@ -205,6 +205,53 @@ def test_include_test_reveals_only_test_environment_hidden_rows_in_search_and_wo
         connection.close()
 
 
+def test_e2e_reset_clears_the_entire_derived_search_corpus(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "test:e2e")
+    monkeypatch.setenv("TESTING", "1")
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    try:
+        _publish_visibility_fixture(
+            store,
+            session_id=str(uuid4()),
+            environment="test:e2e",
+            hidden=False,
+            test_scope_visible=False,
+            order_time_us=int(datetime.now(UTC).timestamp() * 1_000_000),
+        )
+        assert store.ping()["published_sessions"] == 1
+
+        reset = store.reset_e2e_user_data()
+
+        assert reset["reset"] is True
+        assert store.ping()["published_sessions"] == 0
+        assert store.search(**_search_params("needle"))["results"] == []
+        assert connection.execute("SELECT COUNT(*) FROM events_fts").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM searchable_fts").fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_searchd_does_not_register_e2e_reset_without_both_test_flags(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "test:e2e")
+    monkeypatch.delenv("TESTING", raising=False)
+    socket_parent = Path("/tmp") / f"lhs-reset-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    socket_path = socket_parent / "s"
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("test.user_data.reset.v2")
+        assert exc_info.value.code == "unknown_method"
+    finally:
+        await client.close()
+        await daemon.close()
+        socket_parent.rmdir()
+
+
 def test_worklog_export_bounds_oversized_messages_without_splitting_utf8():
     content = "a" * (128 * 1024) + "💾"
 

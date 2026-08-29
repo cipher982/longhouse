@@ -104,7 +104,8 @@ def _managed_session_token_allowed(request: Request, token: ManagedSessionToken)
 def _validate_device_token_for_request(token: str) -> DeviceToken | None:
     """Validate a device token without holding a DB session for the request lifetime."""
 
-    if live_store_configured() and not get_settings().testing:
+    settings = get_settings()
+    if live_store_configured() and (not settings.testing or settings.environment == "test:e2e"):
         return _validate_device_token_through_catalogd(token)
 
     from zerg.routers.device_tokens import validate_device_token

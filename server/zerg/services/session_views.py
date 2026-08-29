@@ -1050,7 +1050,7 @@ class SessionResponse(UTCBaseModel):
         ),
     )
     first_user_message: Optional[str] = Field(None, description="First user message (truncated)")
-    match_event_id: Optional[int] = Field(None, description="Matching event id for search queries")
+    match_event_id: Optional[int | str] = Field(None, description="Matching event id for search queries")
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
     match_role: Optional[str] = Field(None, description="Role for matching event")
     match_score: Optional[float] = Field(None, description="Semantic similarity score (0-1) when result is from vector search")
@@ -1174,7 +1174,7 @@ class MachineSessionResponse(UTCBaseModel):
     thread_root_session_id: Optional[str] = Field(None, description="Logical thread root session UUID")
     thread_head_session_id: Optional[str] = Field(None, description="Current writable head session UUID")
     continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID")
-    match_event_id: Optional[int] = Field(None, description="Matching event id when this came from a search")
+    match_event_id: Optional[int | str] = Field(None, description="Matching event id when this came from a search")
     match_snippet: Optional[str] = Field(None, description="Snippet of matching content")
     match_role: Optional[str] = Field(None, description="Role of the matching event")
     match_score: Optional[float] = Field(None, description="Match score when the result came from vector search")

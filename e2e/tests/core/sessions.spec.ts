@@ -9,13 +9,31 @@
 import { randomUUID } from "crypto";
 import type { APIRequestContext } from "@playwright/test";
 import { test, expect, type Page } from "../fixtures";
+import { ingestStorageV2Session } from "../storage-v2-fixtures";
 
-async function ensureDemoProviders(page: Page): Promise<void> {
-  // There is no runtime demo-seed route any more. POST /api/timeline/demo
-  // answered 404 on every Runtime Host before it was deleted, so this helper's
-  // seeding branch could only ever have thrown; the suite's data comes from
-  // its own fixtures. Landing on the hero empty state is a real failure now
-  // and the provider assertions below say so.
+async function ensureDemoProviders(
+  page: Page,
+  request: APIRequestContext,
+): Promise<void> {
+  // Filter controls intentionally disappear on the real empty state. Seed the
+  // minimum product data this UI contract needs through storage-v2. Reuse the
+  // shared fixture once it exists: repeatedly appending throwaway sessions
+  // creates a search-projector backlog that has nothing to do with filtering.
+  const filtersResponse = await request.get(
+    "/api/timeline/filters?days_back=90",
+  );
+  const filters = filtersResponse.ok() ? await filtersResponse.json() : null;
+  const hasClaude =
+    Array.isArray(filters?.providers) && filters.providers.includes("claude");
+  if (!hasClaude) {
+    await ingestSession(request, {
+      provider: "claude",
+      project: `filter-controls-${randomUUID().slice(0, 8)}`,
+      ended_at: null,
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10_000 });
+  }
 
   // Open filter popover to check available providers
   const filterBtn = page.locator('button[aria-controls="filter-panel"]');
@@ -77,49 +95,25 @@ async function ingestSession(
   const sessionId = overrides.id || randomUUID();
   const timestamp = overrides.started_at || new Date().toISOString();
 
-  const ingest = await request.post("/api/agents/ingest", {
-    headers: {
-      ...(overrides.agents_token
-        ? { "X-Agents-Token": overrides.agents_token }
-        : {}),
-      "X-Longhouse-Ship-Trace": JSON.stringify({
-        schema: "ship_trace.v1",
-        work_context: "live_transcript",
-        trace_id: `e2e:${sessionId}`,
-      }),
-    },
-    data: {
-      id: sessionId,
-      provider: overrides.provider || "claude",
-      environment: overrides.environment || "e2e-machine",
-      project: overrides.project || "sessions-e2e",
-      device_id: overrides.device_id || "e2e-device",
-      cwd: "/tmp",
-      git_repo: null,
-      git_branch: null,
-      provider_session_id:
-        overrides.provider_session_id || `claude-session-${sessionId}`,
-      thread_root_session_id: overrides.thread_root_session_id,
-      continued_from_session_id: overrides.continued_from_session_id,
-      continuation_kind: overrides.continuation_kind,
-      origin_label: overrides.origin_label,
-      branched_from_event_id: overrides.branched_from_event_id,
-      started_at: timestamp,
-      ended_at:
-        overrides.ended_at === undefined ? timestamp : overrides.ended_at,
-      events: overrides.events || [
-        {
-          role: "user",
-          content_text: "hello",
-          timestamp,
-          source_path: "/tmp/session.jsonl",
-          source_offset: 0,
-        },
-      ],
-    },
+  await ingestStorageV2Session(request, {
+    sessionId,
+    provider: overrides.provider || "claude",
+    environment: overrides.environment || "e2e-machine",
+    project: overrides.project || "sessions-e2e",
+    cwd: "/tmp",
+    providerSessionId:
+      overrides.provider_session_id || `claude-session-${sessionId}`,
+    startedAt: timestamp,
+    endedAt: overrides.ended_at === undefined ? timestamp : overrides.ended_at,
+    agentsToken: overrides.agents_token,
+    events: overrides.events || [
+      {
+        role: "user",
+        content_text: "hello",
+        timestamp,
+      },
+    ],
   });
-
-  expect(ingest.ok()).toBe(true);
   return sessionId;
 }
 
@@ -176,6 +170,35 @@ async function ingestRuntimeEvents(
   ).toBe(true);
 }
 
+async function waitForLexicalSearch(
+  request: APIRequestContext,
+  query: string,
+  sessionId: string,
+  project?: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const params = new URLSearchParams({
+          query,
+          mode: "lexical",
+          limit: "100",
+        });
+        if (project) params.set("project", project);
+        const response = await request.get(`/api/timeline/sessions?${params}`);
+        if (!response.ok()) return null;
+        const body = await response.json();
+        const card = body.sessions?.find(
+          (candidate: { detail?: { id?: string } }) =>
+            candidate.detail?.id === sessionId,
+        );
+        return card?.detail?.match_event_id ?? null;
+      },
+      { timeout: 30_000 },
+    )
+    .not.toBeNull();
+}
+
 test.describe("Sessions Page", () => {
   test("Sessions tab renders and shows list or empty state", async ({
     page,
@@ -202,7 +225,7 @@ test.describe("Sessions Page", () => {
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Seed demos first so toolbar is visible (hero state has no toolbar)
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Toolbar should be visible
     const toolbar = page.locator(".sessions-toolbar");
@@ -228,7 +251,7 @@ test.describe("Sessions Page", () => {
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
     const claudeBtn = page.locator(
       '[data-filter-section="provider"] [data-filter-option="claude"]',
     );
@@ -243,7 +266,7 @@ test.describe("Sessions Page", () => {
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Seed demo data if empty so the toolbar (with the search input) renders.
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Type in search
     const searchInput = page.locator('input[type="search"]');
@@ -261,30 +284,23 @@ test.describe("Sessions Page", () => {
     const timestamp = new Date().toISOString();
     const magicToken = "krypton-needle";
 
-    const ingest = await request.post("/api/agents/ingest", {
-      data: {
-        id: sessionId,
-        provider: "claude",
-        environment: "development",
-        project: "fts-e2e",
-        device_id: "e2e-device",
-        cwd: "/tmp",
-        git_repo: null,
-        git_branch: null,
-        started_at: timestamp,
-        events: [
-          {
-            role: "user",
-            content_text: `Find ${magicToken} in this session`,
-            timestamp,
-            source_path: "/tmp/session.jsonl",
-            source_offset: 0,
-          },
-        ],
-      },
+    await ingestSession(request, {
+      id: sessionId,
+      provider: "claude",
+      environment: "development",
+      project: "fts-e2e",
+      started_at: timestamp,
+      events: [
+        {
+          role: "user",
+          content_text: `Find ${magicToken} in this session`,
+          timestamp,
+          source_path: "/tmp/session.jsonl",
+          source_offset: 0,
+        },
+      ],
     });
-
-    expect(ingest.ok()).toBe(true);
+    await waitForLexicalSearch(request, magicToken, sessionId);
 
     await page.goto("/timeline", { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
@@ -365,6 +381,7 @@ test.describe("Sessions Page", () => {
         },
       ],
     });
+    await waitForLexicalSearch(request, magicToken, rootId, project);
 
     await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
@@ -754,9 +771,8 @@ test.describe("Sessions Page", () => {
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
     await page.waitForFunction(
       () =>
-        (
-          window as typeof window & { __timelineStreamOpen?: boolean }
-        ).__timelineStreamOpen === true,
+        (window as typeof window & { __timelineStreamOpen?: boolean })
+          .__timelineStreamOpen === true,
       undefined,
       { timeout: 10_000 },
     );
@@ -776,18 +792,21 @@ test.describe("Sessions Page", () => {
     await expect(recentRow).toBeVisible();
     await expect(recentRow).toContainText(`recent-stream-session-${suffix}`);
 
-    await ingestRuntimeEvents(request, [
-      {
-        session_id: olderId,
-        source: "e2e",
-        kind: "phase_signal",
-        phase: "running",
-        tool_name: "bash",
-        occurred_at: new Date().toISOString(),
-        freshness_ms: 600_000,
-        dedupe_key: `stream-running-${suffix}`,
-      },
-    ]);
+    await ingestSession(request, {
+      id: olderId,
+      project,
+      started_at: olderTimestamp,
+      ended_at: null,
+      events: [
+        {
+          role: "assistant",
+          content_text: `older-stream-update-${suffix}`,
+          timestamp: new Date().toISOString(),
+          source_path: "/tmp/runtime-old.jsonl",
+          source_offset: 1,
+        },
+      ],
+    });
 
     await page.waitForFunction(
       (sessionId) =>
@@ -798,8 +817,8 @@ test.describe("Sessions Page", () => {
       { timeout: 15_000 },
     );
 
-    // The stream reconciles the older row without promoting the retired
-    // legacy phase signal. Order stays anchored to start time: no jitter.
+    // The stream reconciles an append without duplicating the row. Order stays
+    // anchored to start time: no jitter.
     await expect(olderRow).toHaveAttribute("data-status", "inactive");
     await expect(olderRow).toHaveAttribute("data-closed", "false");
     await expect(olderRow).toHaveCount(1);
@@ -815,7 +834,7 @@ test.describe("Filter Chips and Popover", () => {
     request,
   }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Select provider filter via popover
     await page
@@ -859,7 +878,7 @@ test.describe("Filter Chips and Popover", () => {
     });
 
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Select provider
     await page
@@ -889,7 +908,7 @@ test.describe("Filter Chips and Popover", () => {
 
   test("Escape closes the filter popover", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Popover is open (ensureDemoProviders opened it)
     await expect(page.locator("#filter-panel")).toBeVisible();
@@ -902,7 +921,7 @@ test.describe("Filter Chips and Popover", () => {
 
   test("clicking outside the popover closes it", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     await expect(page.locator("#filter-panel")).toBeVisible();
 
@@ -914,7 +933,7 @@ test.describe("Filter Chips and Popover", () => {
 
   test("non-default days filter creates a chip", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Select 30d in the popover
     const days30 = page.locator(
@@ -1172,23 +1191,15 @@ test.describe("Session Detail Page", () => {
       };
     });
 
-    const ingest = await request.post("/api/agents/ingest", {
-      data: {
-        id: sessionId,
-        provider: "claude",
-        environment: "development",
-        project: "scroll-gutter-e2e",
-        device_id: "e2e-device",
-        cwd: "/tmp",
-        git_repo: null,
-        git_branch: null,
-        started_at: new Date(now).toISOString(),
-        ended_at: new Date(now + 79_000).toISOString(),
-        events,
-      },
+    await ingestSession(request, {
+      id: sessionId,
+      provider: "claude",
+      environment: "development",
+      project: "scroll-gutter-e2e",
+      started_at: new Date(now).toISOString(),
+      ended_at: new Date(now + 79_000).toISOString(),
+      events,
     });
-
-    expect(ingest.ok()).toBe(true);
 
     await page.goto(`/timeline/${sessionId}`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
@@ -1419,7 +1430,7 @@ test.describe("Machine Filter", () => {
     });
 
     const resp = await request.get("/api/timeline/filters?days_back=1");
-    expect(resp.ok()).toBe(true);
+    expect(resp.ok(), `${resp.status()} ${await resp.text()}`).toBe(true);
 
     const data = await resp.json();
     expect(data).toHaveProperty("machines");
@@ -1443,7 +1454,7 @@ test.describe("Machine Filter", () => {
 
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Filter popover should have a machine section with the ingested machine name
     const filterPanel = page.locator("#filter-panel");
@@ -1465,7 +1476,7 @@ test.describe("Machine Filter", () => {
 
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     const filterPanel = page.locator("#filter-panel");
 

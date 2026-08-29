@@ -1,10 +1,10 @@
 // Simple, clean Playwright configuration - just read ports from .env
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
-import { fileURLToPath } from 'url';
-import { devices } from '@playwright/test';
-import { ciPortCacheKey } from './port-cache-key.js';
+import fs from "fs";
+import path from "path";
+import os from "os";
+import { fileURLToPath } from "url";
+import { devices } from "@playwright/test";
+import { ciPortCacheKey } from "./port-cache-key.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 function findDotEnv(startDir) {
   let dir = startDir;
   for (let i = 0; i < 8; i++) {
-    const candidate = path.join(dir, '.env');
+    const candidate = path.join(dir, ".env");
     if (fs.existsSync(candidate)) return candidate;
     const parent = path.dirname(dir);
     if (parent === dir) break;
@@ -26,24 +26,26 @@ const envPath = findDotEnv(__dirname);
 
 function loadDotEnv(filePath) {
   if (!fs.existsSync(filePath)) return;
-  const envContent = fs.readFileSync(filePath, 'utf8');
-  envContent.split('\n').forEach(rawLine => {
+  const envContent = fs.readFileSync(filePath, "utf8");
+  envContent.split("\n").forEach((rawLine) => {
     const line = rawLine.trim();
-    if (!line || line.startsWith('#')) return;
-    const idx = line.indexOf('=');
+    if (!line || line.startsWith("#")) return;
+    const idx = line.indexOf("=");
     if (idx <= 0) return;
     const key = line.slice(0, idx).trim();
     let value = line.slice(idx + 1).trim();
-    const isQuoted = (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"));
+    const isQuoted =
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"));
     if (!isQuoted) {
       // Strip inline comments for common `.env` style: KEY=value # comment
-      value = value.replace(/\s+#.*$/, '').trim();
+      value = value.replace(/\s+#.*$/, "").trim();
     }
     if (isQuoted) {
       value = value.slice(1, -1);
     }
     // Skip port vars - E2E generates its own random ports unless explicitly overridden
-    if (key === 'BACKEND_PORT' || key === 'FRONTEND_PORT') return;
+    if (key === "BACKEND_PORT" || key === "FRONTEND_PORT") return;
     if (process.env[key] === undefined) {
       process.env[key] = value;
     }
@@ -56,7 +58,10 @@ if (envPath && fs.existsSync(envPath)) {
 
 // Generate random high ports for E2E - avoids conflicts with dev servers and parallel worktrees
 // Cache file is keyed by directory hash so parallel runs in different dirs don't collide
-const dirHash = Buffer.from(__dirname).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+const dirHash = Buffer.from(__dirname)
+  .toString("base64")
+  .replace(/[^a-zA-Z0-9]/g, "")
+  .slice(0, 12);
 const ciRunKey = ciPortCacheKey(process.env);
 const portCacheFile = ciRunKey
   ? path.join(os.tmpdir(), `pw-ports-${dirHash}-${ciRunKey}.json`)
@@ -68,13 +73,16 @@ function getRandomPorts() {
     try {
       const stat = fs.statSync(portCacheFile);
       const ageMs = Date.now() - stat.mtimeMs;
-      if (ageMs < 10 * 60 * 1000) { // 10 minutes
-        const cached = JSON.parse(fs.readFileSync(portCacheFile, 'utf8'));
+      if (ageMs < 10 * 60 * 1000) {
+        // 10 minutes
+        const cached = JSON.parse(fs.readFileSync(portCacheFile, "utf8"));
         if (cached.backend && cached.frontend) {
           return { backend: cached.backend, frontend: cached.frontend };
         }
       }
-    } catch { /* regenerate if cache is corrupt */ }
+    } catch {
+      /* regenerate if cache is corrupt */
+    }
   }
 
   // Generate new random ports (range: 30000-59999)
@@ -89,10 +97,16 @@ function getRandomPorts() {
 // Port priority: explicit env var > random generation
 // E2E_BACKEND_PORT/E2E_FRONTEND_PORT or BACKEND_PORT/FRONTEND_PORT override random
 const randomPorts = getRandomPorts();
-let BACKEND_PORT = process.env.E2E_BACKEND_PORT ? parseInt(process.env.E2E_BACKEND_PORT)
-  : (process.env.BACKEND_PORT ? parseInt(process.env.BACKEND_PORT) : randomPorts.backend);
-let FRONTEND_PORT = process.env.E2E_FRONTEND_PORT ? parseInt(process.env.E2E_FRONTEND_PORT)
-  : (process.env.FRONTEND_PORT ? parseInt(process.env.FRONTEND_PORT) : randomPorts.frontend);
+let BACKEND_PORT = process.env.E2E_BACKEND_PORT
+  ? parseInt(process.env.E2E_BACKEND_PORT)
+  : process.env.BACKEND_PORT
+    ? parseInt(process.env.BACKEND_PORT)
+    : randomPorts.backend;
+let FRONTEND_PORT = process.env.E2E_FRONTEND_PORT
+  ? parseInt(process.env.E2E_FRONTEND_PORT)
+  : process.env.FRONTEND_PORT
+    ? parseInt(process.env.FRONTEND_PORT)
+    : randomPorts.frontend;
 
 // Export to env so fixtures.ts and spawn-test-backend.js can access them
 process.env.BACKEND_PORT = String(BACKEND_PORT);
@@ -103,16 +117,22 @@ process.env.PLAYWRIGHT_FRONTEND_BASE = frontendBaseUrl;
 
 // Define worker count first so we can use it later
 // Pinned defaults for reproducible test runs:
-// - Local: 4 Playwright workers (more stable with remote Postgres + shared runners)
-// - CI: 4 Playwright workers (conservative for shared runners)
-// Higher worker counts cause lock contention during parallel DB resets.
+// The broad suite may still parallelize independent browser-only cases. The
+// launch-gating Make targets pin one worker because their real catalog reset
+// is intentionally process-wide, matching SQLite's single-owner topology.
 // Override with PLAYWRIGHT_WORKERS env var if needed.
-const envWorkerCount = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-const defaultLocalWorkerCount = 4;  // Lower contention for remote Postgres
+const envWorkerCount = Number.parseInt(
+  process.env.PLAYWRIGHT_WORKERS ?? "",
+  10,
+);
+const defaultLocalWorkerCount = 4; // Lower contention for remote Postgres
 const defaultCIWorkerCount = 4;
-const workerCount = Number.isFinite(envWorkerCount) && envWorkerCount > 0
-  ? envWorkerCount
-  : (process.env.CI ? defaultCIWorkerCount : defaultLocalWorkerCount);
+const workerCount =
+  Number.isFinite(envWorkerCount) && envWorkerCount > 0
+    ? envWorkerCount
+    : process.env.CI
+      ? defaultCIWorkerCount
+      : defaultLocalWorkerCount;
 
 const frontendServer = {
   // React dev server for Playwright runs
@@ -121,28 +141,28 @@ const frontendServer = {
   port: FRONTEND_PORT,
   reuseExistingServer: !process.env.CI,
   timeout: 180_000,
-  cwd: path.resolve(__dirname, '../web'),
+  cwd: path.resolve(__dirname, "../web"),
   env: {
     ...process.env,
     VITE_PROXY_TARGET: `http://127.0.0.1:${BACKEND_PORT}`,
     VITE_WS_BASE_URL: `ws://127.0.0.1:${BACKEND_PORT}`,
     // E2E should bypass auth gating.
-    VITE_AUTH_ENABLED: 'false',
-    VITE_E2E: 'true',
+    VITE_AUTH_ENABLED: "false",
+    VITE_E2E: "true",
   },
 };
 
 const config = {
-  testDir: './tests',
+  testDir: "./tests",
 
   use: {
     baseURL: frontendBaseUrl,
     headless: true,
     viewport: { width: 1280, height: 800 },
 
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
 
     navigationTimeout: 30_000,
     actionTimeout: 10_000,
@@ -152,12 +172,13 @@ const config = {
   // Keep screenshot assertions aligned with the visual_compare spec.
   expect: {
     toHaveScreenshot: {
-      pathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{-projectName}-darwin{ext}',
+      pathTemplate:
+        "{testDir}/{testFilePath}-snapshots/{arg}{-projectName}-darwin{ext}",
     },
   },
 
-  globalSetup: './test-setup.js',
-  globalTeardown: './test-teardown.js',
+  globalSetup: "./test-setup.js",
+  globalTeardown: "./test-teardown.js",
 
   fullyParallel: true,
   workers: workerCount,
@@ -166,44 +187,46 @@ const config = {
   // Reporter configuration: minimal by default, verbose with VERBOSE=1
   // Minimal mode: 3-4 lines stdout, full details in test-results/summary.json
   // Verbose mode: Full Playwright output for debugging
-  reporter: process.env.VERBOSE ? [
-    ['list'],  // Full test-by-test output
-    ['html', { open: 'never' }],
-    ['junit', { outputFile: 'test-results/junit.xml' }]
-  ] : [
-    ['./reporters/minimal-reporter.ts', { outputDir: 'test-results' }],
-    ['html', { open: 'never' }],
-    ['junit', { outputFile: 'test-results/junit.xml' }]
-  ],
+  reporter: process.env.VERBOSE
+    ? [
+        ["list"], // Full test-by-test output
+        ["html", { open: "never" }],
+        ["junit", { outputFile: "test-results/junit.xml" }],
+      ]
+    : [
+        ["./reporters/minimal-reporter.ts", { outputDir: "test-results" }],
+        ["html", { open: "never" }],
+        ["junit", { outputFile: "test-results/junit.xml" }],
+      ],
 
   projects: [
     // Core suite: launch-surface tests only, no retries allowed.
     // Keep non-launch execution experiments out of this project.
     // Run with: make test-e2e (core + a11y) or make test-e2e-core (core-only) or bunx playwright test --project=core
     {
-      name: 'core',
-      testDir: './tests/core',
-      retries: 0,  // Core suite must pass on first try
+      name: "core",
+      testDir: "./tests/core",
+      retries: 0, // Core suite must pass on first try
       timeout: 60000,
-      use: { ...devices['Desktop Chrome'] },
+      use: { ...devices["Desktop Chrome"] },
     },
     // Full suite: All non-core tests, with retries (core suite has its own project with retries=0)
     // Run with: make test-e2e-single TEST="--project=chromium <spec>" or bunx playwright test --project=chromium
     {
-      name: 'chromium',
-      testDir: './tests',
-      testIgnore: ['**/core/**'],
-      use: { ...devices['Desktop Chrome'] },
+      name: "chromium",
+      testDir: "./tests",
+      testIgnore: ["**/core/**"],
+      use: { ...devices["Desktop Chrome"] },
     },
     {
-      name: 'mobile',
-      testDir: './tests/mobile',
-      use: { ...devices['iPhone 13'] },
+      name: "mobile",
+      testDir: "./tests/mobile",
+      use: { ...devices["iPhone 13"] },
     },
     {
-      name: 'mobile-small',
-      testDir: './tests/mobile',
-      use: { ...devices['iPhone SE'] },
+      name: "mobile-small",
+      testDir: "./tests/mobile",
+      use: { ...devices["iPhone SE"] },
     },
   ],
 
@@ -217,7 +240,7 @@ const config = {
       cwd: __dirname,
       reuseExistingServer: false,
       timeout: 120_000, // Backend needs time for schema setup
-      gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
+      gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
       env: {
         ...process.env,
         BACKEND_PORT: String(BACKEND_PORT),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -33,6 +34,7 @@ _WORKLOG_SNAPSHOT_TTL_SECONDS = 120.0
 _WORKLOG_SNAPSHOT_LIMIT = 8
 _EMBEDDING_SOURCE_PAGE_BYTES = 6 * 1024 * 1024
 _RECALL_TRUNCATION_MARKER = " …[truncated]"
+_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 
 _PUBLISH_AGGREGATES_SQL = """
     SELECT
@@ -745,6 +747,34 @@ class SearchStore:
         self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (_searchable_cutoff_us(),))
         self.connection.execute("PRAGMA optimize=0x10002")
         self._last_optimize_mono = time.monotonic()
+
+    def reset_e2e_user_data(self) -> dict[str, object]:
+        """Clear the derived search corpus for one isolated browser-test run."""
+
+        if os.getenv("ENVIRONMENT", "").strip() != "test:e2e" or os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV:
+            raise ValueError("E2E search reset is available only in test:e2e")
+        tables = (
+            "session_index",
+            "searchable_events",
+            "searchable_text",
+            "projection_membership",
+            "events",
+            "indexed_objects",
+            "episode_embeddings",
+            "embedding_publications",
+        )
+        cleared: dict[str, int] = {}
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            for table in tables:
+                cursor = self.connection.execute(f"DELETE FROM {table}")
+                cleared[table] = max(0, cursor.rowcount)
+            self.connection.execute("COMMIT")
+        except BaseException:
+            self.connection.execute("ROLLBACK")
+            raise
+        self._worklog_snapshots.clear()
+        return {"reset": True, "rows_cleared": cleared}
 
     def prune_inactive_embedding_spaces(self, *, active_model: str) -> dict[str, int]:
         """Delete vectors that cannot be read by the single active space."""

@@ -187,6 +187,8 @@ async def lifespan(app: FastAPI):
     from zerg.services.factory_assurance_title_binding import factory_assurance_title_enabled
 
     factory_title_assurance = factory_assurance_title_enabled()
+    e2e_catalog = _settings.testing and _settings.environment == "test:e2e"
+    owns_test_catalog = factory_title_assurance or e2e_catalog
     try:
         with _timed_startup_step("configure_observability"):
             configure_observability()
@@ -245,9 +247,10 @@ async def lifespan(app: FastAPI):
                 logger.info("Storage telemetry refresh loop started")
             except Exception:
                 logger.exception("Failed to start storage telemetry refresh loop (non-fatal)")
-        elif factory_title_assurance:
-            # The hermetic title oracle needs the real catalog owner and real
-            # storage lanes, but none of the unrelated production projectors.
+        elif owns_test_catalog:
+            # The hermetic title oracle and browser E2E runtime need the real
+            # catalog owner and storage lanes, but none of the unrelated
+            # production projectors.
             with _timed_startup_step("catalogd_supervisor"):
                 from zerg.services.catalogd_supervisor import start_catalogd_supervisor
 
@@ -260,7 +263,19 @@ async def lifespan(app: FastAPI):
                     get_raw_object_worker_pool().start(),
                     get_render_object_worker_pool().start(),
                 )
-            logger.info("Factory assurance catalog and storage-v2 lanes are ready")
+            if e2e_catalog:
+                with _timed_startup_step("searchd_supervisor"):
+                    from zerg.services.searchd_supervisor import start_searchd_supervisor
+
+                    app.state.searchd_ping = await start_searchd_supervisor()
+                from zerg.services.search_v2_projector import start_search_v2_projector
+                from zerg.services.semantic_v2_projector import start_semantic_v2_projector
+
+                app.state.semantic_v2_projector_started = start_semantic_v2_projector()
+                app.state.search_v2_projector_started = start_search_v2_projector()
+                logger.info("Browser E2E catalog, storage, and search lanes are ready")
+            else:
+                logger.info("Factory assurance catalog and storage-v2 lanes are ready")
         elif live_store_configured():
             with _timed_startup_step("initialize_live_database"):
                 initialize_live_database()
@@ -293,7 +308,7 @@ async def lifespan(app: FastAPI):
         # Factory title assurance is deliberately a test Runtime Host, but it
         # must exercise the real background worker. This is the only normal
         # production loop re-enabled by the startup-bound assurance gate.
-        if not _settings.testing or factory_title_assurance:
+        if not _settings.testing or owns_test_catalog:
             try:
                 from zerg.services.storage_session_titles import run_storage_title_reconciler
 
@@ -326,7 +341,7 @@ async def lifespan(app: FastAPI):
         logger.info("Application startup complete elapsed_ms=%.1f", elapsed_ms)
     except Exception as e:
         logger.error(f"Error during startup: {e}")
-        if not _settings.testing or factory_title_assurance:
+        if not _settings.testing or owns_test_catalog:
             await _stop_storage_title_services(app)
             await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
@@ -402,7 +417,7 @@ async def lifespan(app: FastAPI):
 
         await topic_manager.shutdown()
 
-        if not _settings.testing or factory_title_assurance:
+        if not _settings.testing or owns_test_catalog:
             await _stop_storage_title_services(app)
             await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)

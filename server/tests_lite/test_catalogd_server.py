@@ -78,6 +78,23 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
 
 
 @pytest.mark.asyncio
+async def test_catalogd_does_not_register_e2e_reset_without_both_test_flags(daemon_paths, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "test:e2e")
+    monkeypatch.delenv("TESTING", raising=False)
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("test.user_data.reset.v2")
+        assert exc_info.value.code == "unknown_method"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_ping_does_not_queue_behind_catalog_write_lane(daemon_paths):
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)

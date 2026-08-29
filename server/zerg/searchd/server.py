@@ -71,6 +71,12 @@ class _ReadWorker:
 
 class SearchDaemon:
     def __init__(self, *, database_path: Path, socket_path: Path) -> None:
+        self._e2e_reset_enabled = os.getenv("ENVIRONMENT", "").strip() == "test:e2e" and os.getenv("TESTING", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         self.database_path = database_path.expanduser().resolve()
         self.socket_path = socket_path.expanduser().resolve()
         self.lock_path = self.database_path.with_suffix(f"{self.database_path.suffix}.searchd.lock")
@@ -272,6 +278,13 @@ class SearchDaemon:
         ):
             return self._error(request, "catalog_unavailable", "search index is not ready", retryable=True)
         try:
+            if request.method == "test.user_data.reset.v2" and self._e2e_reset_enabled:
+                if request.params:
+                    return self._error(request, "invalid_request", "test.user_data.reset.v2 accepts no parameters")
+                return self._result(
+                    request,
+                    await self._run_with_dense_refresh(self._store.reset_e2e_user_data),
+                )
             if request.method == "search.ping.v2":
                 ping = await self._run_interactive_read(
                     lambda store: store.ping(),

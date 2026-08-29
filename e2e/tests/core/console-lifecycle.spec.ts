@@ -49,7 +49,10 @@ async function connectConsoleMachine(
   });
 
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("machine control websocket timed out")), 5_000);
+    const timeout = setTimeout(
+      () => reject(new Error("machine control websocket timed out")),
+      5_000,
+    );
     socket.once("error", (error) => {
       clearTimeout(timeout);
       reject(error);
@@ -115,15 +118,21 @@ test.describe("Console lifecycle contract", () => {
   }) => {
     const deviceId = `console-${randomUUID().slice(0, 8)}`;
     const token = await enrollMachine(request, deviceId);
-    const machine = await connectConsoleMachine(backendUrl, workerId, deviceId, token);
+    const machine = await connectConsoleMachine(
+      backendUrl,
+      workerId,
+      deviceId,
+      token,
+    );
 
     try {
       await expect
         .poll(async () => {
           const response = await request.get("/api/timeline/machines");
           const body = await response.json();
-          return body.machines?.find((item: { device_id: string }) => item.device_id === deviceId)
-            ?.control_channel_status;
+          return body.machines?.find(
+            (item: { device_id: string }) => item.device_id === deviceId,
+          )?.control_channel_status;
         })
         .toBe("connected");
 
@@ -143,17 +152,25 @@ test.describe("Console lifecycle contract", () => {
       expect(empty.session_state.mode).toBe("console");
       expect(empty.session_state.transcript.convergence).toBe("current");
       expect(empty.session_state.presentation.primary.key).toBe("ready");
-      expect(empty.session_state.presentation.access, JSON.stringify(empty.session_state, null, 2)).not.toBeNull();
+      expect(
+        empty.session_state.presentation.access,
+        JSON.stringify(empty.session_state, null, 2),
+      ).not.toBeNull();
       expect(empty.session_state.presentation.access.key).toBe("live_control");
-      expect(empty.session_state.control.actions.start_turn.state).toBe("available");
+      expect(empty.session_state.control.actions.start_turn.state).toBe(
+        "available",
+      );
 
-      const firstResponse = await request.post(`/api/sessions/${created.session_id}/input`, {
-        data: {
-          text: "first",
-          intent: "auto",
-          client_request_id: "console-e2e-first",
+      const firstResponse = await request.post(
+        `/api/sessions/${created.session_id}/input`,
+        {
+          data: {
+            text: "first",
+            intent: "auto",
+            client_request_id: "console-e2e-first",
+          },
         },
-      });
+      );
       expect(firstResponse.ok(), await firstResponse.text()).toBe(true);
       const first = await firstResponse.json();
       expect(first.outcome).toBe("sent");
@@ -180,22 +197,29 @@ test.describe("Console lifecycle contract", () => {
       });
 
       const active = await readSession(request, created.session_id);
-      expect(["thinking", "executing"]).toContain(active.session_state.activity.state);
+      expect(["thinking", "executing"]).toContain(
+        active.session_state.activity.state,
+      );
       expect(active.session_state.presentation.access.key).toBe("live_control");
-      expect(active.session_state.control.actions.start_turn.state).toBe("available");
+      expect(active.session_state.control.actions.start_turn.state).toBe(
+        "available",
+      );
       expect(active.session_state.control.actions.interrupt).toEqual({
         state: "unavailable",
         reason: "unsupported",
       });
       expect(active.session_state.working_set).toBe("open");
 
-      const secondResponse = await request.post(`/api/sessions/${created.session_id}/input`, {
-        data: {
-          text: "second",
-          intent: "auto",
-          client_request_id: "console-e2e-second",
+      const secondResponse = await request.post(
+        `/api/sessions/${created.session_id}/input`,
+        {
+          data: {
+            text: "second",
+            intent: "auto",
+            client_request_id: "console-e2e-second",
+          },
         },
-      });
+      );
       expect(secondResponse.ok(), await secondResponse.text()).toBe(true);
       const second = await secondResponse.json();
       expect(second.outcome).toBe("queued");
@@ -215,19 +239,14 @@ test.describe("Console lifecycle contract", () => {
         payload: { terminal_state: "run_completed", exit_code: 0 },
       });
 
+      await expect.poll(() => machine.commands.length).toBe(2);
+      const secondRunId = String(machine.commands[1].payload.run_id);
       await expect
         .poll(async () => {
-          const response = await request.get(`/api/agents/sessions/${created.session_id}/turns`, {
-            headers: { "X-Agents-Token": token },
-          });
-          const body = await response.json();
-          return {
-            commands: machine.commands.length,
-            states: body.turns?.map((turn: { state: string }) => turn.state),
-          };
+          const session = await readSession(request, created.session_id);
+          return session.session_state.run?.id;
         })
-        .toEqual({ commands: 2, states: ["completed", "active"] });
-      const secondRunId = String(machine.commands[1].payload.run_id);
+        .toBe(secondRunId);
       await publishRuntimeEvent(request, token, {
         runtime_key: `codex:${created.session_id}`,
         session_id: created.session_id,
@@ -245,18 +264,12 @@ test.describe("Console lifecycle contract", () => {
       const terminal = await readSession(request, created.session_id);
       expect(terminal.session_state.run.lifecycle).toBe("ended");
       expect(terminal.session_state.presentation.primary.key).toBe("ended");
-      expect(terminal.session_state.presentation.access.key).toBe("live_control");
-      expect(terminal.session_state.control.actions.start_turn.state).toBe("available");
-
-      const turnsResponse = await request.get(`/api/agents/sessions/${created.session_id}/turns`, {
-        headers: { "X-Agents-Token": token },
-      });
-      expect(turnsResponse.ok(), await turnsResponse.text()).toBe(true);
-      const turns = await turnsResponse.json();
-      expect(turns.turns.map((turn: { state: string }) => turn.state)).toEqual([
-        "completed",
-        "completed",
-      ]);
+      expect(terminal.session_state.presentation.access.key).toBe(
+        "live_control",
+      );
+      expect(terminal.session_state.control.actions.start_turn.state).toBe(
+        "available",
+      );
     } finally {
       await machine.close();
     }

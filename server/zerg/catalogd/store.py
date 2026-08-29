@@ -21,6 +21,7 @@ from uuid import uuid5
 
 from sqlalchemy import Engine
 from sqlalchemy import Float
+from sqlalchemy import MetaData
 from sqlalchemy import and_
 from sqlalchemy import case
 from sqlalchemy import cast
@@ -703,6 +704,37 @@ def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, 
 
 
 class CatalogStore:
+    def reset_e2e_user_data(self) -> dict[str, object]:
+        """Clear browser-test product state while retaining its authority.
+
+        Catalogd remains the only SQLite owner.  The E2E Runtime Host keeps the
+        dev user, device tokens, and runner identities created by Playwright;
+        every session/fact/interaction row is removed between tests.
+        """
+
+        if os.getenv("ENVIRONMENT", "").strip() != "test:e2e" or os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV:
+            raise ValueError("E2E catalog reset is available only in test:e2e")
+        metadata = MetaData()
+        metadata.reflect(bind=self.engine)
+        preserved = {"catalog_meta", "users", "device_tokens", "runners"}
+        cleared: list[str] = []
+        with self.engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            try:
+                for table in reversed(metadata.sorted_tables):
+                    if table.name in preserved:
+                        continue
+                    connection.execute(table.delete())
+                    cleared.append(table.name)
+                connection.commit()
+            finally:
+                connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        from zerg.catalogd.schema import initialize_catalog_schema
+
+        initialize_catalog_schema(self.engine)
+        self._shadow_parity_delta_count = None
+        return {"reset": True, "tables_cleared": sorted(cleared)}
+
     def ensure_known_projector_states(self) -> dict[str, int]:
         """Backfill projector identities and preserve the search-derived chain.
 

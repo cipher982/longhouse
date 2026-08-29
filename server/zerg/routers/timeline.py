@@ -179,6 +179,7 @@ async def _search_storage_v2_timeline(
         rank = abs(float(row.get("rank") or 0.0))
         session = session.model_copy(
             update={
+                "match_event_id": str(row.get("event_id") or "") or None,
                 "match_snippet": snippet,
                 "match_score": 1.0 / (1.0 + rank),
             }
@@ -585,6 +586,7 @@ async def preview_timeline_session(
 async def get_timeline_filters(
     response: Response,
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
+    current_user=Depends(get_current_browser_user),
 ):
     response.headers["Cache-Control"] = "private, max-age=60"
 
@@ -610,6 +612,7 @@ async def get_timeline_filters(
                 mode="lexical",
                 context_mode="forensic",
             ),
+            owner_id=_browser_owner_id(current_user),
         )
         for session in listed.sessions:
             if session.project:

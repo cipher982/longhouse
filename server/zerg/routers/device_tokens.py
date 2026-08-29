@@ -43,6 +43,11 @@ get_write_serializer = get_catalog_write_serializer
 router = APIRouter(prefix="/devices", tags=["devices"])
 
 
+def _catalog_device_tokens_enabled() -> bool:
+    settings = get_settings()
+    return live_store_configured() and (not settings.testing or settings.environment == "test:e2e")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -192,7 +197,7 @@ async def create_device_token(
     plain_token = generate_device_token()
     token_hash = hash_token(plain_token)
 
-    if live_store_configured() and not get_settings().testing:
+    if _catalog_device_tokens_enabled():
         from zerg.catalogd.client import CatalogRemoteError
         from zerg.catalogd.client import CatalogUnavailable
         from zerg.services.catalogd_supervisor import get_catalogd_client
@@ -304,7 +309,7 @@ async def list_device_tokens(
     By default, only shows valid (non-revoked) tokens.
     Use include_revoked=true to see revoked tokens as well.
     """
-    if live_store_configured() and not get_settings().testing:
+    if _catalog_device_tokens_enabled():
         from zerg.catalogd.client import CatalogRemoteError
         from zerg.catalogd.client import CatalogUnavailable
         from zerg.services.catalogd_supervisor import get_catalogd_client
@@ -391,7 +396,7 @@ async def register_apns_device(
     normalized_token = str(request.device_token or "").strip().lower()
     build_id = str(request.app_build_id or "").strip() or None
     now = datetime.now(timezone.utc)
-    if live_store_configured() and not get_settings().testing:
+    if _catalog_device_tokens_enabled():
         result = await _catalog_mutation(
             "notification.apns.device.upsert.v2",
             {
@@ -486,7 +491,7 @@ async def register_apns_live_activity(
     session_id = str(request.session_id or "").strip()
     build_id = str(request.app_build_id or "").strip() or None
     now = datetime.now(timezone.utc)
-    if live_store_configured() and not get_settings().testing:
+    if _catalog_device_tokens_enabled():
         result = await _catalog_mutation(
             "notification.apns.live_activity.upsert.v2",
             {
@@ -601,7 +606,7 @@ async def end_apns_live_activity(
 
     activity_id = str(request.activity_id or "").strip()
     now = datetime.now(timezone.utc)
-    if live_store_configured() and not get_settings().testing:
+    if _catalog_device_tokens_enabled():
         await _catalog_mutation(
             "notification.apns.live_activity.end.v2",
             {
@@ -645,7 +650,7 @@ async def revoke_device_token(
     A revoked token can no longer be used for authentication.
     This action cannot be undone.
     """
-    if live_store_configured() and not get_settings().testing:
+    if _catalog_device_tokens_enabled():
         from zerg.catalogd.client import CatalogRemoteError
         from zerg.catalogd.client import CatalogUnavailable
         from zerg.services.catalogd_supervisor import get_catalogd_client
@@ -726,7 +731,7 @@ async def get_device_token(
     current_user=Depends(get_current_user),
 ) -> TokenResponse:
     """Get details of a specific device token."""
-    if live_store_configured() and not get_settings().testing:
+    if _catalog_device_tokens_enabled():
         from zerg.catalogd.client import CatalogRemoteError
         from zerg.catalogd.client import CatalogUnavailable
         from zerg.services.catalogd_supervisor import get_catalogd_client

@@ -163,7 +163,7 @@ export interface paths {
         put?: never;
         /**
          * Configure Test Session Runtime
-         * @description Patch session runtime metadata for TESTING-only E2E scenarios.
+         * @description Materialize managed runtime facts through the canonical E2E catalog.
          */
         post: operations["configure_test_session_runtime_admin_test_sessions__session_id__runtime_post"];
         delete?: never;
@@ -4379,11 +4379,27 @@ export interface components {
          */
         ConfigureTestSessionRuntimeRequest: {
             /**
-             * Execution Home
-             * @default managed_local
+             * Provider
+             * @default codex
              * @enum {string}
              */
-            execution_home: "unmanaged_local" | "managed_local" | "managed_hosted" | "cloud_takeover";
+            provider: "claude" | "codex" | "cursor" | "opencode" | "antigravity" | "pi";
+            /**
+             * Project
+             * @default e2e
+             */
+            project: string;
+            /**
+             * Cwd
+             * @default /tmp
+             */
+            cwd: string;
+            /**
+             * Execution Home
+             * @default managed_local
+             * @constant
+             */
+            execution_home: "managed_local";
             /** Managed Transport */
             managed_transport?: ("claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process") | null;
             /** Source Runner Id */
@@ -4392,11 +4408,8 @@ export interface components {
             source_runner_name?: string | null;
             /** Managed Session Name */
             managed_session_name?: string | null;
-            /**
-             * Clear Ended At
-             * @default true
-             */
-            clear_ended_at: boolean;
+            /** Observed At */
+            observed_at?: string | null;
         };
         /** ConsoleSessionCreate */
         ConsoleSessionCreate: {
@@ -5891,7 +5904,7 @@ export interface components {
              * Match Event Id
              * @description Matching event id when this came from a search
              */
-            match_event_id?: number | null;
+            match_event_id?: number | string | null;
             /**
              * Match Snippet
              * @description Snippet of matching content
@@ -9282,7 +9295,7 @@ export interface components {
              * Match Event Id
              * @description Matching event id for search queries
              */
-            match_event_id?: number | null;
+            match_event_id?: number | string | null;
             /**
              * Match Snippet
              * @description Snippet of matching content

@@ -55,9 +55,15 @@ export interface AgentSession {
   anchor_title?: string | null;
   /** Server-resolved headline to render verbatim (no client fallback ladder). */
   timeline_title?: string | null;
-  summary_status?: "ready" | "pending" | "failed" | "unavailable" | (string & {}) | null;
+  summary_status?:
+    | "ready"
+    | "pending"
+    | "failed"
+    | "unavailable"
+    | (string & {})
+    | null;
   first_user_message: string | null;
-  match_event_id?: number | null;
+  match_event_id?: AgentEventId | null;
   match_snippet?: string | null;
   match_role?: string | null;
   match_score?: number | null;
@@ -140,7 +146,11 @@ export interface SessionTranscriptPreview {
   is_complete: boolean;
   content_cursor?: string | null;
   is_stale: boolean;
-  stale_reason?: "freshness_window_expired" | "missing_preview_timestamp" | "superseded_by_durable" | null;
+  stale_reason?:
+    | "freshness_window_expired"
+    | "missing_preview_timestamp"
+    | "superseded_by_durable"
+    | null;
 }
 
 export type RuntimeTruthTier = components["schemas"]["TruthTier"];
@@ -168,7 +178,17 @@ export type SessionRuntimeDisplay =
 
 export interface TimelineBadgePresentation {
   label: string;
-  tone: "neutral" | "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed" | (string & {});
+  tone:
+    | "neutral"
+    | "inactive"
+    | "active"
+    | "thinking"
+    | "running"
+    | "blocked"
+    | "stalled"
+    | "idle"
+    | "closed"
+    | (string & {});
 }
 
 export interface TimelineStatusPresentation extends TimelineBadgePresentation {
@@ -179,7 +199,16 @@ export interface TimelineStatusPresentation extends TimelineBadgePresentation {
 export interface TimelineCardPresentation {
   ownership: TimelineBadgePresentation;
   status: TimelineStatusPresentation;
-  border_tone: "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed" | (string & {});
+  border_tone:
+    | "inactive"
+    | "active"
+    | "thinking"
+    | "running"
+    | "blocked"
+    | "stalled"
+    | "idle"
+    | "closed"
+    | (string & {});
 }
 
 export interface SessionControl {
@@ -188,7 +217,11 @@ export interface SessionControl {
   attach_command?: string | null;
 }
 
-export type SendDisabledReason = "session_closed" | "control_offline" | "input_not_supported" | "read_only";
+export type SendDisabledReason =
+  | "session_closed"
+  | "control_offline"
+  | "input_not_supported"
+  | "read_only";
 
 export interface SessionCapabilities {
   live_control_available: boolean;
@@ -205,7 +238,13 @@ export interface SessionCapabilities {
   composer_placeholder?: string;
   composer_disabled_reason?: string | null;
   send_disabled_reason?: SendDisabledReason | null;
-  control_label?: "live" | "reattach" | "console" | "search-only" | "imported" | null;
+  control_label?:
+    | "live"
+    | "reattach"
+    | "console"
+    | "search-only"
+    | "imported"
+    | null;
   observe_only?: boolean;
   search_only?: boolean;
   staleness_reason?: string | null;
@@ -221,7 +260,7 @@ export interface SessionCapabilities {
    * True when this session accepts image attachments on input. Today this is
    * codex_app_server + live_control_available; the server is the source of
    * truth so the web client doesn't have to know the transport set.
-  */
+   */
   attach_images?: boolean;
 }
 
@@ -306,7 +345,13 @@ export interface AgentSessionTranscriptAction {
   id: string;
   kind: "turn_interrupted" | string;
   provider?: string | null;
-  source: "user" | "remote_control" | "provider" | "system" | "unknown" | string;
+  source:
+    | "user"
+    | "remote_control"
+    | "provider"
+    | "system"
+    | "unknown"
+    | string;
   provider_reason?: string | null;
   event_id?: number | null;
 }
@@ -447,7 +492,12 @@ export interface AgentEventInputOrigin {
 
 export type AgentEventId = string | number;
 
-export type ToolPresentationDisposition = "exact" | "parsed" | "generic" | "unknown" | "invalid";
+export type ToolPresentationDisposition =
+  | "exact"
+  | "parsed"
+  | "generic"
+  | "unknown"
+  | "invalid";
 export type ToolPresentationTier = "noise" | "context" | "action";
 export type ToolPresentationAggregate = "search" | "read" | "list" | "wait";
 
@@ -590,11 +640,18 @@ export interface TimelineSessionStreamOptions {
   skipInitialReplay?: boolean;
 }
 
-function dispatchTimelineStreamEvent(kind: string, payload: Record<string, unknown> = {}) {
+function dispatchTimelineStreamEvent(
+  kind: string,
+  payload: Record<string, unknown> = {},
+) {
   if (typeof window === "undefined") {
     return;
   }
-  window.dispatchEvent(new CustomEvent("longhouse:timeline-stream", { detail: { kind, ...payload } }));
+  window.dispatchEvent(
+    new CustomEvent("longhouse:timeline-stream", {
+      detail: { kind, ...payload },
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -602,9 +659,14 @@ function dispatchTimelineStreamEvent(kind: string, payload: Record<string, unkno
 // ---------------------------------------------------------------------------
 
 export function getTimelineSessionAnchor(
-  session: Pick<AgentSession, "timeline_anchor_at" | "last_activity_at" | "started_at">,
+  session: Pick<
+    AgentSession,
+    "timeline_anchor_at" | "last_activity_at" | "started_at"
+  >,
 ): string {
-  return session.timeline_anchor_at || session.last_activity_at || session.started_at;
+  return (
+    session.timeline_anchor_at || session.last_activity_at || session.started_at
+  );
 }
 
 export function getTimelineCardAnchor(
@@ -613,7 +675,9 @@ export function getTimelineCardAnchor(
   return card.timeline_anchor_at || getTimelineSessionAnchor(card.head);
 }
 
-function buildGroupedQueryTimelineCards(sessions: AgentSession[]): TimelineSessionCard[] {
+function buildGroupedQueryTimelineCards(
+  sessions: AgentSession[],
+): TimelineSessionCard[] {
   const cardsByThread = new Map<string, TimelineSessionCard>();
   const orderedThreadIds: string[] = [];
 
@@ -636,7 +700,9 @@ function buildGroupedQueryTimelineCards(sessions: AgentSession[]): TimelineSessi
     }
 
     const sessionHasExplicitMatch =
-      session.match_event_id != null || !!session.match_snippet || session.match_score != null;
+      session.match_event_id != null ||
+      !!session.match_snippet ||
+      session.match_score != null;
     const currentDetailHasExplicitMatch =
       existing.detail.match_event_id != null ||
       !!existing.detail.match_snippet ||
@@ -646,7 +712,8 @@ function buildGroupedQueryTimelineCards(sessions: AgentSession[]): TimelineSessi
         ? session
         : existing.detail;
     const nextHead =
-      session.id === existing.detail.thread_head_session_id || session.is_writable_head
+      session.id === existing.detail.thread_head_session_id ||
+      session.is_writable_head
         ? session
         : existing.head;
     const nextRoot =
@@ -659,15 +726,19 @@ function buildGroupedQueryTimelineCards(sessions: AgentSession[]): TimelineSessi
       head: nextHead,
       detail: nextDetail,
       root: nextRoot,
-      continuation_count: Math.max(existing.continuation_count, session.thread_continuation_count || 1),
+      continuation_count: Math.max(
+        existing.continuation_count,
+        session.thread_continuation_count || 1,
+      ),
       started_origin_label:
-        (session.id === existing.detail.thread_root_session_id
+        session.id === existing.detail.thread_root_session_id
           ? session.origin_label || session.environment
-          : existing.started_origin_label),
+          : existing.started_origin_label,
       head_origin_label:
-        (session.id === existing.detail.thread_head_session_id || session.is_writable_head
+        session.id === existing.detail.thread_head_session_id ||
+        session.is_writable_head
           ? session.origin_label || session.environment
-          : existing.head_origin_label),
+          : existing.head_origin_label,
     });
   }
 
@@ -676,21 +747,23 @@ function buildGroupedQueryTimelineCards(sessions: AgentSession[]): TimelineSessi
     .filter((card): card is TimelineSessionCard => card != null);
 }
 
-function isTimelineSessionCard(value: AgentSession | TimelineSessionCard): value is TimelineSessionCard {
+function isTimelineSessionCard(
+  value: AgentSession | TimelineSessionCard,
+): value is TimelineSessionCard {
   return (
-    typeof value === "object"
-    && value !== null
-    && "thread_id" in value
-    && typeof value.thread_id === "string"
-    && "head" in value
-    && typeof value.head === "object"
-    && value.head !== null
-    && "detail" in value
-    && typeof value.detail === "object"
-    && value.detail !== null
-    && "root" in value
-    && typeof value.root === "object"
-    && value.root !== null
+    typeof value === "object" &&
+    value !== null &&
+    "thread_id" in value &&
+    typeof value.thread_id === "string" &&
+    "head" in value &&
+    typeof value.head === "object" &&
+    value.head !== null &&
+    "detail" in value &&
+    typeof value.detail === "object" &&
+    value.detail !== null &&
+    "root" in value &&
+    typeof value.root === "object" &&
+    value.root !== null
   );
 }
 
@@ -718,16 +791,16 @@ export async function fetchAgentSessions(
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}${queryString ? `?${queryString}` : ""}`;
 
-  const groupedQueryMode = !!filters.query || (filters.mode != null && filters.mode !== "lexical");
+  const groupedQueryMode =
+    !!filters.query || (filters.mode != null && filters.mode !== "lexical");
   if (groupedQueryMode) {
     // Storage-v2 returns canonical thread cards while the legacy/self-hosted
     // compatibility path still returns raw session hits. Normalize either wire
     // contract exactly once; re-grouping an already-threaded card nests the card
     // inside `head` and strips the AgentSession runtime contract from the UI.
-    const rawResponse = await request<AgentSessionsListResponse | TimelineSessionsListResponse>(
-      path,
-      { method: "GET" },
-    );
+    const rawResponse = await request<
+      AgentSessionsListResponse | TimelineSessionsListResponse
+    >(path, { method: "GET" });
     const sourceSessions = rawResponse.sessions;
     const sessions = sourceSessions.every(isTimelineSessionCard)
       ? sourceSessions
@@ -737,7 +810,8 @@ export async function fetchAgentSessions(
       total: rawResponse.total,
       has_real_sessions: rawResponse.has_real_sessions,
       query_grouping_mode: "grouped_results",
-      query_grouping_has_more: (filters.offset || 0) + sourceSessions.length < rawResponse.total,
+      query_grouping_has_more:
+        (filters.offset || 0) + sourceSessions.length < rawResponse.total,
       query_grouping_source_count: sourceSessions.length,
     };
   }
@@ -745,7 +819,9 @@ export async function fetchAgentSessions(
   return request<TimelineSessionsListResponse>(path, { method: "GET" });
 }
 
-function buildTimelineSessionsParams(filters: AgentSessionFilters = {}): URLSearchParams {
+function buildTimelineSessionsParams(
+  filters: AgentSessionFilters = {},
+): URLSearchParams {
   const params = new URLSearchParams();
 
   if (filters.project) params.set("project", filters.project);
@@ -756,7 +832,8 @@ function buildTimelineSessionsParams(filters: AgentSessionFilters = {}): URLSear
   if (filters.query) params.set("query", filters.query);
   if (filters.limit) params.set("limit", String(filters.limit));
   if (filters.offset) params.set("offset", String(filters.offset));
-  if (filters.mode && filters.mode !== "lexical") params.set("mode", filters.mode);
+  if (filters.mode && filters.mode !== "lexical")
+    params.set("mode", filters.mode);
   if (filters.sort) params.set("sort", filters.sort);
   if (filters.hide_autonomous === false) params.set("hide_autonomous", "false");
 
@@ -780,12 +857,15 @@ export function connectTimelineSessionsStream(
   if (options.skipInitialReplay) {
     params.set("skip_initial_replay", "true");
   }
-  const workerId = typeof window !== "undefined" ? window.__TEST_WORKER_ID__ : undefined;
+  const workerId =
+    typeof window !== "undefined" ? window.__TEST_WORKER_ID__ : undefined;
   if (workerId !== undefined) {
     params.set("worker", String(workerId));
   }
   const queryString = params.toString();
-  const url = buildUrl(`${TIMELINE_SESSIONS_PREFIX}/stream${queryString ? `?${queryString}` : ""}`);
+  const url = buildUrl(
+    `${TIMELINE_SESSIONS_PREFIX}/stream${queryString ? `?${queryString}` : ""}`,
+  );
   const eventSource = new EventSource(url, { withCredentials: true });
 
   eventSource.addEventListener("connected", () => {
@@ -814,7 +894,9 @@ export function connectTimelineSessionsStream(
   eventSource.addEventListener("session_remove", (event: MessageEvent) => {
     const data = parseStreamEventData<TimelineSessionRemoveEvent>(event);
     if (data?.thread_id) {
-      dispatchTimelineStreamEvent("session_remove", { thread_id: data.thread_id });
+      dispatchTimelineStreamEvent("session_remove", {
+        thread_id: data.thread_id,
+      });
       handlers.onSessionRemove?.(data);
     }
   });
@@ -875,14 +957,20 @@ export interface SessionWorkspaceStreamHandlers {
 export function connectSessionWorkspaceStream(
   sessionId: string,
   handlers: SessionWorkspaceStreamHandlers = {},
-  options: { skipInitial?: boolean; knownWorkspaceFingerprint?: string | null } = {},
+  options: {
+    skipInitial?: boolean;
+    knownWorkspaceFingerprint?: string | null;
+  } = {},
 ): () => void {
   const params = new URLSearchParams();
   if (options.skipInitial) {
     params.set("skip_initial", "true");
   }
   if (options.knownWorkspaceFingerprint) {
-    params.set("known_workspace_fingerprint", options.knownWorkspaceFingerprint);
+    params.set(
+      "known_workspace_fingerprint",
+      options.knownWorkspaceFingerprint,
+    );
   }
   const queryString = params.toString();
   const url = buildUrl(
@@ -913,10 +1001,15 @@ export function connectSessionWorkspaceStream(
         catalog_commit_seq: data.catalog_commit_seq ?? null,
         pubsub_seq: data.pubsub_seq,
         client_received_at_ms: Date.now(),
-        has_transcript_preview: Object.prototype.hasOwnProperty.call(data, "transcript_preview"),
+        has_transcript_preview: Object.prototype.hasOwnProperty.call(
+          data,
+          "transcript_preview",
+        ),
         transcript_preview_event_id: data.transcript_preview?.event_id ?? null,
-        transcript_preview_origin: data.transcript_preview?.event_origin ?? null,
-        transcript_preview_text_length: data.transcript_preview?.text?.length ?? null,
+        transcript_preview_origin:
+          data.transcript_preview?.event_origin ?? null,
+        transcript_preview_text_length:
+          data.transcript_preview?.text?.length ?? null,
       });
       handlers.onWorkspaceChanged?.(data);
     }
@@ -1080,7 +1173,8 @@ export async function fetchAgentSessionProjection(
 
   if (options.limit) params.set("limit", String(options.limit));
   if (options.offset) params.set("offset", String(options.offset));
-  if (options.anchor && options.anchor !== "start") params.set("anchor", options.anchor);
+  if (options.anchor && options.anchor !== "start")
+    params.set("anchor", options.anchor);
   if (options.branch_mode) params.set("branch_mode", options.branch_mode);
   if (options.cursor) params.set("cursor", options.cursor);
 
@@ -1135,14 +1229,18 @@ export async function createSessionShare(
   );
 }
 
-export async function revokeSessionShare(shareId: number): Promise<SessionShareResolveResponse> {
+export async function revokeSessionShare(
+  shareId: number,
+): Promise<SessionShareResolveResponse> {
   return request<SessionShareResolveResponse>(
     `${TIMELINE_API_PREFIX}/session-shares/${shareId}`,
     { method: "DELETE" },
   );
 }
 
-export async function resolveSessionShare(token: string): Promise<SessionShareResolveResponse> {
+export async function resolveSessionShare(
+  token: string,
+): Promise<SessionShareResolveResponse> {
   return request<SessionShareResolveResponse>(
     `${TIMELINE_API_PREFIX}/session-shares/${encodeURIComponent(token)}/resolve`,
     {
@@ -1152,7 +1250,9 @@ export async function resolveSessionShare(token: string): Promise<SessionShareRe
   );
 }
 
-export async function fetchSessionSharePreview(token: string): Promise<SessionSharePreviewResponse> {
+export async function fetchSessionSharePreview(
+  token: string,
+): Promise<SessionSharePreviewResponse> {
   return request<SessionSharePreviewResponse>(
     `/public/session-shares/${encodeURIComponent(token)}/preview`,
     {
@@ -1257,8 +1357,10 @@ export interface SemanticSearchResponse {
 export type RecallSearchResult = components["schemas"]["RecallSearchResult"];
 export type RecallExpandedTurn = components["schemas"]["RecallExpandedTurn"];
 export type RecallResponse = components["schemas"]["RecallResponse"];
-export type RecallCoverageSummary = components["schemas"]["RecallCoverageSummary"];
-export type RecallContextResponse = components["schemas"]["RecallContextResponse"];
+export type RecallCoverageSummary =
+  components["schemas"]["RecallCoverageSummary"];
+export type RecallContextResponse =
+  components["schemas"]["RecallContextResponse"];
 
 export interface RecallFilters {
   query: string;
@@ -1319,7 +1421,8 @@ export async function fetchRecallContext(
   options: { before?: number; after?: number; max_content_bytes?: number } = {},
 ): Promise<RecallContextResponse> {
   const params = new URLSearchParams({ ref });
-  if (options.before !== undefined) params.set("before", String(options.before));
+  if (options.before !== undefined)
+    params.set("before", String(options.before));
   if (options.after !== undefined) params.set("after", String(options.after));
   if (options.max_content_bytes !== undefined)
     params.set("max_content_bytes", String(options.max_content_bytes));
@@ -1360,10 +1463,13 @@ export async function setSessionTimelineVisibility(
   sessionId: string,
   hidden: boolean,
 ): Promise<{ session_id: string; hidden: boolean }> {
-  return request(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}/timeline-visibility`, {
-    method: "PATCH",
-    body: JSON.stringify({ hidden }),
-  });
+  return request(
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/timeline-visibility`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ hidden }),
+    },
+  );
 }
 
 export async function setSessionLoopMode(

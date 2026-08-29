@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { test, expect } from "../fixtures";
+import { ingestStorageV2Session } from "../storage-v2-fixtures";
 import { resetDatabase } from "../test-utils";
 
 type IngestEvent = {
@@ -24,44 +25,36 @@ async function ingestSessionEvents(
     startedAt: string;
   },
 ): Promise<void> {
-  const response = await request.post("/api/agents/ingest", {
-    data: {
-      id: options.sessionId,
-      provider: "claude",
-      environment: "e2e-machine",
-      project: options.project,
-      device_id: `device-${options.sessionId.slice(0, 8)}`,
-      device_name: "Cinder",
-      cwd: "/tmp/longhouse-test",
-      git_repo: null,
-      git_branch: null,
-      provider_session_id: `claude-${options.sessionId}`,
-      started_at: options.startedAt,
-      ended_at: null,
-      events: options.events,
-    },
+  await ingestStorageV2Session(request, {
+    sessionId: options.sessionId,
+    provider: "claude",
+    environment: "e2e-machine",
+    project: options.project,
+    cwd: "/tmp/longhouse-test",
+    providerSessionId: `claude-${options.sessionId}`,
+    startedAt: options.startedAt,
+    endedAt: null,
+    events: options.events,
   });
-
-  expect(
-    response.ok(),
-    `session ingest failed: ${response.status()} ${await response.text()}`,
-  ).toBe(true);
 }
 
 async function configureManagedLocalSession(
   request: APIRequestContext,
   sessionId: string,
+  project: string,
 ): Promise<void> {
   const response = await request.post(
     `/api/admin/test/sessions/${sessionId}/runtime`,
     {
       data: {
+        provider: "claude",
+        project,
+        cwd: "/tmp/longhouse-test",
         execution_home: "managed_local",
         managed_transport: "claude_channel_bridge",
         source_runner_id: 77,
         source_runner_name: "Cinder",
         managed_session_name: `lh-e2e-${sessionId.slice(0, 8)}`,
-        clear_ended_at: true,
       },
     },
   );
@@ -72,19 +65,60 @@ async function configureManagedLocalSession(
   ).toBe(true);
 }
 
-async function getRecentRenderBeacons(
+async function publishInteraction(
   request: APIRequestContext,
-  sessionId: string,
-): Promise<Record<string, unknown>[]> {
-  const response = await request.get(
-    `/api/telemetry/client-render/recent?session_id=${sessionId}`,
-  );
+  options: {
+    sessionId: string;
+    kind: "pause_request" | "pause_resolution";
+    occurredAt: string;
+    requestKey: string;
+    toolCallId: string;
+    responseText?: string;
+  },
+): Promise<void> {
+  const response = await request.post("/api/agents/runtime/events/batch", {
+    data: {
+      events: [
+        {
+          runtime_key: `claude:${options.sessionId}`,
+          session_id: options.sessionId,
+          provider: "claude",
+          device_id: "Cinder",
+          source: "e2e",
+          kind: options.kind,
+          tool_name: "AskUserQuestion",
+          occurred_at: options.occurredAt,
+          dedupe_key: `${options.kind}:${options.requestKey}`,
+          payload:
+            options.kind === "pause_request"
+              ? {
+                  request_key: options.requestKey,
+                  provider_request_id: options.toolCallId,
+                  kind: "structured_question",
+                  tool_name: "AskUserQuestion",
+                  title: "How should I fix the drag feel?",
+                  summary: "Waiting for your answer.",
+                  request_payload: {
+                    question: "How should I fix the drag feel?",
+                    choices: ["Use dnd-kit", "Keep inset line"],
+                  },
+                  can_respond: true,
+                  single_active: true,
+                }
+              : {
+                  request_key: options.requestKey,
+                  provider_request_id: options.toolCallId,
+                  status: "resolved",
+                  response_text: options.responseText,
+                },
+        },
+      ],
+    },
+  });
   expect(
     response.ok(),
-    `recent render beacons failed: ${response.status()} ${await response.text()}`,
+    `interaction event failed: ${response.status()} ${await response.text()}`,
   ).toBe(true);
-  const body = (await response.json()) as { items?: Record<string, unknown>[] };
-  return body.items ?? [];
 }
 
 async function installWorkspaceFrameProbe(
@@ -147,6 +181,7 @@ test.describe("Session hot plane", () => {
     const blockedAt = new Date(Date.now() - 30_000).toISOString();
     const answerAt = new Date().toISOString();
     const sourcePath = `/tmp/${sessionId}.jsonl`;
+    const requestKey = `e2e:${sessionId}:toolu_ask_user`;
 
     await ingestSessionEvents(request, {
       sessionId,
@@ -175,7 +210,14 @@ test.describe("Session hot plane", () => {
         },
       ],
     });
-    await configureManagedLocalSession(request, sessionId);
+    await configureManagedLocalSession(request, sessionId, project);
+    await publishInteraction(request, {
+      sessionId,
+      kind: "pause_request",
+      occurredAt: blockedAt,
+      requestKey,
+      toolCallId: "toolu_ask_user",
+    });
 
     await installWorkspaceFrameProbe(page, sessionId);
     await page.goto(`/timeline/${sessionId}`, {
@@ -201,6 +243,25 @@ test.describe("Session hot plane", () => {
         },
       ],
     });
+    await publishInteraction(request, {
+      sessionId,
+      kind: "pause_resolution",
+      occurredAt: answerAt,
+      requestKey,
+      toolCallId: "toolu_ask_user",
+      responseText: "Use dnd-kit",
+    });
+
+    await expect
+      .poll(async () => {
+        const response = await request.get(
+          `/api/timeline/sessions/${sessionId}`,
+        );
+        expect(response.ok(), await response.text()).toBe(true);
+        const session = await response.json();
+        return session.session_state?.interaction ?? null;
+      })
+      .toBeNull();
 
     await expect(
       page
@@ -226,25 +287,5 @@ test.describe("Session hot plane", () => {
         { timeout: 5_000 },
       )
       .toBeGreaterThan(0);
-
-    await expect
-      .poll(async () => getRecentRenderBeacons(request, sessionId), {
-        timeout: 5_000,
-      })
-      .toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            session_id: sessionId,
-            surface: "web",
-            emitted_at_ms: Date.parse(answerAt),
-          }),
-        ]),
-      );
-    const renderBeacon = (await getRecentRenderBeacons(request, sessionId))[0];
-    expect(renderBeacon).toMatchObject({
-      session_id: sessionId,
-      surface: "web",
-      emitted_at_ms: Date.parse(answerAt),
-    });
   });
 });

@@ -361,13 +361,13 @@ test-e2e-core: ## @internal Core E2E — no retries
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
-		bunx playwright test --project=core --retries=0 --workers=2
+		bunx playwright test --project=core --retries=0 --workers=1
 
 test-e2e-a11y: ## @internal Accessibility checks
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
-		bunx playwright test --project=chromium tests/accessibility.spec.ts
+		bunx playwright test --project=chromium --workers=1 tests/accessibility.spec.ts
 
 test-e2e-single: ## @internal Run one E2E spec (TEST=tests/foo.spec.ts)
 	@$(MAKE) ensure-playwright-browser

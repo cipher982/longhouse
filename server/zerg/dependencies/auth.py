@@ -64,10 +64,12 @@ def _no_auth_db():
     yield None
 
 
-# Select the dependency graph once at startup. This preserves ordinary `get_db`
-# overrides in unit tests without resolving that dependency at all in runtime
-# processes, including AUTH_DISABLED/demo deployments.
-_auth_compat_db = get_db if (_settings.testing or os.getenv("NODE_ENV") == "test") else _no_auth_db
+# Select the dependency graph once at startup. Ordinary focused tests retain
+# their explicit ``get_db`` override, while the browser E2E Runtime Host uses
+# the real catalog owner and must not open the retired archive dependency just
+# because it also carries TESTING=1.
+_e2e_catalog_auth = _settings.testing and _settings.environment == "test:e2e"
+_auth_compat_db = get_db if ((_settings.testing or os.getenv("NODE_ENV") == "test") and not _e2e_catalog_auth) else _no_auth_db
 
 
 def _get_strategy():  # noqa: D401 – internal helper
