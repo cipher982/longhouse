@@ -68,8 +68,8 @@ def test_registration_matches_the_schemas_declared_cell() -> None:
     assert m.REGISTRATION.scenario_id == "claude_coordination_awareness_create"
     assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_ID, None),)
     assert m.REGISTRATION.evidence_classes == ("live_token",)
-    assert m.REGISTRATION.producer_revision == 3
-    assert m.REGISTRATION.scenario_revision == 2
+    assert m.REGISTRATION.producer_revision == 4
+    assert m.REGISTRATION.scenario_revision == 3
     assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
     assert m.REGISTRATION.required_cleanup == ("claude_helm_process_exited",)
     assert m._EXECUTION_VARIANT == execution_variant_key(
@@ -93,6 +93,7 @@ def _install_session_fakes(monkeypatch: pytest.MonkeyPatch, *, tool_invocation: 
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
     monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
     monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
+    monkeypatch.setattr(m, "read_coordination_token", lambda *_a, **_k: "coordination-token")
     monkeypatch.setattr(m, "await_assistant_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
     monkeypatch.setattr(m, "find_tool_invocation", lambda *_a, **_k: tool_invocation)
     monkeypatch.setattr(m, "close_session", lambda _session: {"exit_code": 0, "alive_after_close": False})
@@ -137,6 +138,9 @@ def test_run_awareness_create_passes_when_the_model_actually_calls_peers(tmp_pat
     assert cleanup["required_cleanup"] == {"claude_helm_process_exited": True}
     assert len(fake_session.submitted) == 1
     assert "Call your peers tool now" in fake_session.submitted[0]
+    launch_receipt = json.loads((args.evidence_root / "session-launch-receipt.json").read_text(encoding="utf-8"))
+    assert launch_receipt["coordination_authority_available"] is True
+    assert "coordination-token" not in json.dumps(launch_receipt)
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
@@ -150,6 +154,19 @@ def test_run_awareness_create_fails_when_no_tool_call_is_observed(tmp_path: Path
 
     assert result["status"] == "fail"
     assert result["assertions"] == {m._ASSERTION_ID: False}
+
+
+def test_run_awareness_create_rejects_a_launch_without_coordination_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = _args(tmp_path)
+    _shipper, fake_session = _install_session_fakes(monkeypatch, tool_invocation=None)
+    monkeypatch.setattr(m, "read_coordination_token", lambda *_a, **_k: None)
+
+    result = m.run_awareness_create_scenario(args)
+
+    assert result["failure_code"] == "runtime_host_coordination_authority_unavailable"
+    assert fake_session.submitted == []
+    launch_receipt = json.loads((args.evidence_root / "session-launch-receipt.json").read_text(encoding="utf-8"))
+    assert launch_receipt["coordination_authority_available"] is False
 
 
 def test_run_awareness_create_fails_when_the_tool_call_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

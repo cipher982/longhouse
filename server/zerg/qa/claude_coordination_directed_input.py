@@ -31,6 +31,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.claude_live_session_support import RuntimeHostCoordinationAuthorityUnavailable
 from zerg.qa.claude_live_session_support import RuntimeHostHTTPError
 from zerg.qa.claude_live_session_support import ScenarioError
 from zerg.qa.claude_live_session_support import api_json
@@ -72,9 +73,9 @@ _CELL_BY_VARIANT: dict[str, str] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_directed_input.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=(
         (_ASSERTION_SEND, None),
         (_ASSERTION_RECEIVE, None),
@@ -169,7 +170,16 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             terminal_path=root / "sender-terminal.log",
             launch_timeout_secs=args.launch_timeout_secs,
         )
-        write_json(root / "sender-session-launch-receipt.json", {"session_id": sender_session_id})
+        sender_token = read_coordination_token(longhouse_home, sender_session_id)
+        write_json(
+            root / "sender-session-launch-receipt.json",
+            {
+                "session_id": sender_session_id,
+                "coordination_authority_available": sender_token is not None,
+            },
+        )
+        if sender_token is None:
+            raise RuntimeHostCoordinationAuthorityUnavailable("managed Claude sender launched without Runtime Host coordination authority")
 
         receiver_workspace = isolation_root / "workspace-receiver"
         receiver_workspace.mkdir(parents=True, exist_ok=True)
@@ -181,18 +191,18 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             terminal_path=root / "receiver-terminal.log",
             launch_timeout_secs=args.launch_timeout_secs,
         )
-        write_json(root / "receiver-session-launch-receipt.json", {"session_id": receiver_session_id})
-
-        sender_token = wait_until(
-            lambda: read_coordination_token(longhouse_home, sender_session_id),
-            timeout=30,
-            description="sender coordination token bootstrap",
+        receiver_token = read_coordination_token(longhouse_home, receiver_session_id)
+        write_json(
+            root / "receiver-session-launch-receipt.json",
+            {
+                "session_id": receiver_session_id,
+                "coordination_authority_available": receiver_token is not None,
+            },
         )
-        receiver_token = wait_until(
-            lambda: read_coordination_token(longhouse_home, receiver_session_id),
-            timeout=30,
-            description="receiver coordination token bootstrap",
-        )
+        if receiver_token is None:
+            raise RuntimeHostCoordinationAuthorityUnavailable(
+                "managed Claude receiver launched without Runtime Host coordination authority"
+            )
 
         receiver_control = wait_until(
             lambda: local_managed_control_fact(longhouse_home, receiver_session_id),
@@ -387,7 +397,11 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_class": "live_token",
             "generated_at": now_iso(),
             "status": "fail",
-            "failure_code": "claude_coordination_directed_input_failed",
+            "failure_code": (
+                "runtime_host_coordination_authority_unavailable"
+                if isinstance(exc, RuntimeHostCoordinationAuthorityUnavailable)
+                else "claude_coordination_directed_input_failed"
+            ),
             "error": error_detail,
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "assertions": {requested_assertion_id: False},

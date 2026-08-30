@@ -68,8 +68,8 @@ def test_registration_covers_both_schema_declared_cells() -> None:
     assert m.REGISTRATION.scenario_id == "claude_coordination_directed_input"
     assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_SEND, None), (m._ASSERTION_RECEIVE, None))
     assert m.REGISTRATION.evidence_classes == ("live_token",)
-    assert m.REGISTRATION.producer_revision == 3
-    assert m.REGISTRATION.scenario_revision == 2
+    assert m.REGISTRATION.producer_revision == 4
+    assert m.REGISTRATION.scenario_revision == 3
     assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
     assert m.REGISTRATION.required_cleanup == ("claude_helm_processes_exited",)
     assert len(m._CELL_BY_VARIANT) == 2
@@ -160,6 +160,10 @@ def test_run_passes_the_send_cell_when_the_receipt_links(tmp_path: Path, monkeyp
     cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text(encoding="utf-8"))
     assert cleanup["status"] == "pass"
     assert cleanup["required_cleanup"] == {"claude_helm_processes_exited": True}
+    for name in ("sender-session-launch-receipt.json", "receiver-session-launch-receipt.json"):
+        launch_receipt = json.loads((args.evidence_root / name).read_text(encoding="utf-8"))
+        assert launch_receipt["coordination_authority_available"] is True
+        assert "coord-token" not in json.dumps(launch_receipt)
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
@@ -177,6 +181,20 @@ def test_run_passes_the_receive_cell_on_the_same_underlying_observation(tmp_path
 
     assert result["status"] == "pass"
     assert result["assertions"][m._ASSERTION_RECEIVE] is True
+
+
+def test_run_rejects_a_sender_launch_without_coordination_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_SEND, scenario_id=m._SCENARIO_ID, variant=None)
+    args = _args(tmp_path, variant)
+    created: dict[str, Any] = {}
+    _install_session_and_api_fakes(monkeypatch, created=created, receipt_record=None, inbox_record=None)
+    monkeypatch.setattr(m, "read_coordination_token", lambda *_a, **_k: None)
+
+    result = m.run_directed_input_scenario(args)
+
+    assert result["failure_code"] == "runtime_host_coordination_authority_unavailable"
+    assert (args.evidence_root / "sender-session-launch-receipt.json").is_file()
+    assert not (args.evidence_root / "receiver-session-launch-receipt.json").exists()
 
 
 def test_run_fails_the_send_cell_when_no_receipt_ever_links(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

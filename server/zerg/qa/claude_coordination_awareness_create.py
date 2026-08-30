@@ -25,6 +25,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.claude_live_session_support import RuntimeHostCoordinationAuthorityUnavailable
 from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import await_assistant_marker
 from zerg.qa.claude_live_session_support import claude_launch_environment
@@ -34,6 +35,7 @@ from zerg.qa.claude_live_session_support import find_tool_invocation
 from zerg.qa.claude_live_session_support import isolation_paths
 from zerg.qa.claude_live_session_support import launch_claude_session
 from zerg.qa.claude_live_session_support import now_iso
+from zerg.qa.claude_live_session_support import read_coordination_token
 from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
@@ -62,9 +64,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_awareness_create.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("claude",),
     platforms=("linux",),
@@ -145,7 +147,17 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
             terminal_path=root / "terminal.log",
             launch_timeout_secs=args.launch_timeout_secs,
         )
-        write_json(root / "session-launch-receipt.json", {"session_id": session_id, "workspace": str(workspace)})
+        coordination_authority_available = read_coordination_token(longhouse_home, session_id) is not None
+        write_json(
+            root / "session-launch-receipt.json",
+            {
+                "session_id": session_id,
+                "workspace": str(workspace),
+                "coordination_authority_available": coordination_authority_available,
+            },
+        )
+        if not coordination_authority_available:
+            raise RuntimeHostCoordinationAuthorityUnavailable("managed Claude launched without Runtime Host coordination authority")
 
         # Coordination-channel messages are attributed, untrusted peer input;
         # asking Claude to obey one as a command correctly triggers its safety
@@ -238,7 +250,11 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "evidence_class": "live_token",
             "generated_at": now_iso(),
             "status": "fail",
-            "failure_code": "claude_coordination_awareness_create_failed",
+            "failure_code": (
+                "runtime_host_coordination_authority_unavailable"
+                if isinstance(exc, RuntimeHostCoordinationAuthorityUnavailable)
+                else "claude_coordination_awareness_create_failed"
+            ),
             "error": f"{type(exc).__name__}: {exc}",
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
             "artifact_manifest": artifact_manifest(root),

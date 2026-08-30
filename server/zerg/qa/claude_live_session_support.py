@@ -58,6 +58,16 @@ class ScenarioError(RuntimeError):
     """A scenario postcondition was not observed in time (not a bare crash)."""
 
 
+class RuntimeHostCoordinationAuthorityUnavailable(ScenarioError):
+    """The managed launch started without the coordination MCP authority.
+
+    A background registration retry can recover the Runtime Host session, but
+    it cannot retrofit MCP configuration into an already-running Claude
+    process.  Coordination scenarios must therefore abandon this launch and
+    let the assurance runner retry the whole scenario.
+    """
+
+
 class RuntimeHostHTTPError(RuntimeError):
     def __init__(self, status: int, detail: str) -> None:
         self.status = status
