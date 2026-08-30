@@ -114,6 +114,23 @@ async function ingestSession(
       },
     ],
   });
+  // Storage-v2 accepts the envelope before the catalog projector necessarily
+  // exposes the session. Most tests navigate immediately, and route handlers
+  // that decorate the workspace response cannot safely consume a transient
+  // 404. Return only once the canonical detail surface owns this session.
+  await expect
+    .poll(
+      async () => {
+        const response = await request.get(
+          `/api/timeline/sessions/${sessionId}/workspace?limit=1`,
+        );
+        if (!response.ok()) return false;
+        const body = await response.json();
+        return body.session?.id === sessionId && !!body.session?.session_state;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
   return sessionId;
 }
 
