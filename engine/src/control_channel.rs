@@ -404,6 +404,7 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
         "tail_output",
         "runtime_phase",
         "transcript_binding",
+        "fork_thread",
     ];
     let evidence_levels = [
         "none",
@@ -3259,6 +3260,7 @@ mod tests {
                 "tail_output",
                 "runtime_phase",
                 "transcript_binding",
+                "fork_thread",
             ] {
                 let supported = provider[operation].as_bool().unwrap();
                 let level = evidence[operation]["level"].as_str().unwrap();
