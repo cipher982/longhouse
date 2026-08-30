@@ -110,6 +110,7 @@ __all__ = [
     "PARSER_REVISION",
     "RPC_TIMEOUT_SECONDS",
     "SeededSession",
+    "floored_rpc_timeout",
     "live_catalog",
     "live_catalog_client",
     "provision_live_catalog",
@@ -270,6 +271,47 @@ def _live_root() -> Path:
 def _reset_storage_worker_pools() -> None:
     raw_object_workers._pool = None
     render_object_workers._pool = None
+
+
+def floored_rpc_timeout(timeout_seconds: float | None) -> float | None:
+    """The floor itself, separated so it can be asserted rather than inferred.
+
+    ``None`` keeps the client's own default. Anything at or above the floor is
+    left alone. Only a tighter explicit budget is raised.
+    """
+
+    if timeout_seconds is None or timeout_seconds >= RPC_TIMEOUT_SECONDS:
+        return timeout_seconds
+    return RPC_TIMEOUT_SECONDS
+
+
+def _floor_client_rpc_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Raise any explicit per-call RPC timeout to the harness floor.
+
+    Production call sites pass tight literals -- ``timeout_seconds=1.0`` on
+    ``session.input.recent.list.v2``, and 25 others under a second -- which are
+    right for a long-lived daemon on its own host. Here the daemon started
+    milliseconds ago and shares a machine with several thousand other tests, so
+    a healthy call exceeds one second on a loaded CI runner and the route
+    reports the timeout as "unavailable".
+
+    ``_widen_catalog_read_budgets`` cannot reach these: it scales the module
+    globals in ``catalog_read_gateway``, and these calls go straight to
+    ``CatalogClient.call`` with the number written at the call site.
+
+    This is a budget, never a behaviour: the RPC, its retry rule and its error
+    mapping are untouched. Production numbers are untouched too -- the floor
+    exists only inside a provisioned catalog.
+    """
+
+    original_call = CatalogClient.call
+
+    async def _floored(self, method, params=None, *, timeout_seconds=None):
+        return await original_call(
+            self, method, params, timeout_seconds=floored_rpc_timeout(timeout_seconds)
+        )
+
+    monkeypatch.setattr(CatalogClient, "call", _floored)
 
 
 def _widen_catalog_read_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -730,6 +772,7 @@ def provision_live_catalog(
         monkeypatch.setattr(catalogd_supervisor, "_supervisor", _PerCallSupervisor(catalog_socket))
         monkeypatch.setattr(searchd_supervisor, "_supervisor", _PerCallSupervisor(search_socket))
         _widen_catalog_read_budgets(monkeypatch)
+        _floor_client_rpc_timeouts(monkeypatch)
         # The storage worker pools are process-wide and capture the object root
         # and an event loop when first built. Each catalog owns a different
         # root, so they are rebuilt per catalog and torn down with it.
