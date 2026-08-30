@@ -1040,3 +1040,21 @@ def test_every_provider_declares_a_readiness_probe_disposition() -> None:
         probe = item.get("auth_probe")
         assert probe is not None, f"{item['provider']} declares no auth_probe"
         _validate_auth_probe(item)
+
+
+def test_fork_capability_reaches_the_runtime_contract():
+    """A declared capability nothing loads is a gate that always refuses.
+
+    fork_thread was added to the schema and the generated manifest before the
+    runtime dataclass knew the field, so contract_for_provider("codex").fork_thread
+    read False through getattr and branch availability would have been dead on
+    arrival while every artifact claimed the capability was implemented.
+    """
+
+    codex = contract_for_provider("codex")
+    claude = contract_for_provider("claude")
+    assert codex is not None and claude is not None
+    # Resume and fork are different upstream surfaces; both providers resume.
+    assert codex.can_resume is True and claude.can_resume is True
+    assert codex.fork_thread is True
+    assert claude.fork_thread is False

@@ -7379,14 +7379,20 @@ class CatalogStore:
             # session is this side's job, through the alias table, and it can
             # legitimately fail: a child routinely ships before its parent. Keep
             # the provider id either way so a later arrival can bind it.
-            if bool(session_facts.get("is_subagent")):
-                parent_provider_id = str(session_facts.get("parent_provider_session_id") or "").strip() or None
+            # A parent pointer and a hidden worker are two different facts, and
+            # gating the first on the second meant a plain fork -- which the
+            # shipper now sends with a parent and `is_subagent` false -- lost its
+            # parent on arrival. Persist the edge whenever one is offered; let
+            # `is_subagent` say only whether this row is a worker.
+            parent_provider_id = str(session_facts.get("parent_provider_session_id") or "").strip() or None
+            if parent_provider_id:
                 session_values["subagent_parent_provider_session_id"] = parent_provider_id
-                session_values["subagent_parent_session_id"] = (
-                    _resolve_session_id_by_provider_session_id(connection, provider=provider, provider_session_id=parent_provider_id)
-                    if parent_provider_id
-                    else None
+                session_values["subagent_parent_session_id"] = _resolve_session_id_by_provider_session_id(
+                    connection, provider=provider, provider_session_id=parent_provider_id
                 )
+            if bool(session_facts.get("is_subagent")):
+                session_values.setdefault("subagent_parent_provider_session_id", None)
+                session_values.setdefault("subagent_parent_session_id", None)
                 session_values["subagent_parent_tool_call_id"] = str(session_facts.get("parent_tool_call_id") or "").strip() or None
                 session_values["subagent_run_id"] = str(session_facts.get("workflow_run_id") or "").strip() or None
                 session_values["is_subagent"] = 1

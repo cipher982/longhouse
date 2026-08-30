@@ -1824,3 +1824,18 @@ def test_catalog_only_pending_session_projects_without_a_timeline_card(tmp_path)
     assert response.session_state.launch is not None
     assert response.session_state.launch.state == "pending"
     assert response.user_messages == 0
+
+
+def test_supported_operations_reads_fork_capability_rather_than_inferring_it():
+    """Branch availability must not be inferred from resume availability.
+
+    A provider build that continues a conversation is not thereby proven able to
+    branch one, and a release can gain or lose either surface alone.
+    """
+
+    from zerg.services.live_catalog_timeline import _supported_operations
+
+    assert "resume" in _supported_operations("codex")
+    assert "resume" in _supported_operations("claude")
+    assert "fork_thread" in _supported_operations("codex")
+    assert "fork_thread" not in _supported_operations("claude")

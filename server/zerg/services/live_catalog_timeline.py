@@ -68,7 +68,7 @@ def _supported_operations(provider: str | None) -> set[str]:
     # Branching forks the parent's thread rather than resuming it, so a build
     # that can resume is not thereby proven able to fork. Read the capability
     # the schema declares instead of inferring it from can_resume.
-    if getattr(contract, "fork_thread", False):
+    if contract.fork_thread:
         operations.add("fork_thread")
     return operations
 

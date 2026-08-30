@@ -3591,6 +3591,63 @@ async def test_restore_generation_requires_retired_current_and_durable_target(da
 
 
 @pytest.mark.asyncio
+async def test_plain_fork_keeps_its_parent_edge_without_becoming_a_subagent(daemon_paths):
+    """A branch records where it came from and still shows up.
+
+    Codex marks a provider subagent and an ordinary fork with the same parent
+    id, so the shipper sends a parent for both and distinguishes them with
+    is_subagent. Catalogd used to persist the parent only inside the subagent
+    branch, which meant a fork -- the thing session branching creates -- arrived
+    with its lineage silently dropped. A parent pointer and a hidden worker are
+    two different facts.
+    """
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    child_id = uuid4()
+    fork_facts = {
+        "is_subagent": False,
+        "parent_provider_session_id": "codex-parent-thread",
+    }
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        epoch = uuid4()
+        record = b"branch\n"
+        raw = _raw_params(
+            epoch=epoch,
+            session_id=child_id,
+            start=0,
+            end=len(record),
+            records=(record,),
+            sealed_at=now,
+            provider="codex",
+            opaque_source_id="rollout-branch.jsonl",
+            subagent=fork_facts,
+        )
+        raw.update(
+            render_state="ready",
+            render_manifest=_render_manifest(
+                uuid4(), source_epoch=epoch, seed=b"branch", opaque_source_id="rollout-branch.jsonl", provider="codex"
+            ),
+        )
+        await client.call("storage.raw_object.commit.v2", raw)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        session_row = db.get(StorageSession, str(child_id))
+        assert session_row.subagent_parent_provider_session_id == "codex-parent-thread"
+        # Not a worker, so not hidden: a branch is a session of its own.
+        assert session_row.is_subagent == 0
+        assert session_row.hidden_from_default_timeline == 0
+
+
+@pytest.mark.asyncio
 async def test_subagent_ingest_stays_hidden_across_reingest(daemon_paths):
     """A worker transcript must not land in the timeline as a session.
 

@@ -120,6 +120,10 @@ class ManagedProviderContract:
     can_resume: bool = False
     console_adapter: str | None = None
     turn_start: bool = False
+    #: Whether this build can branch a conversation, which is a different
+    #: upstream surface from resuming one. Declared per provider rather than
+    #: inferred from can_resume: a release can gain or lose either alone.
+    fork_thread: bool = False
     live_proof: bool = False
     # Expected machine-control channel operation names. The engine still owns
     # the live supports[] handshake; this field documents the provider ceiling.
@@ -277,6 +281,7 @@ def managed_provider_contract_from_item(item: dict[str, object]) -> ManagedProvi
         can_resume=bool(item.get("can_resume", False)),
         console_adapter=(str(item["console_adapter"]) if item.get("console_adapter") else None),
         turn_start=bool(item.get("turn_start", False)),
+        fork_thread=bool(item.get("fork_thread", False)),
         live_proof=bool(item.get("live_proof", False)),
         machine_control_supports=tuple(str(value) for value in item.get("machine_control_supports") or ()),
         operation_evidence={
