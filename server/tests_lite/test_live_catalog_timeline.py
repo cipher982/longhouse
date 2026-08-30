@@ -1839,3 +1839,37 @@ def test_supported_operations_reads_fork_capability_rather_than_inferring_it():
     assert "resume" in _supported_operations("claude")
     assert "fork_thread" in _supported_operations("codex")
     assert "fork_thread" not in _supported_operations("claude")
+
+
+def test_branch_lineage_projects_from_the_live_thread_edge():
+    """A branch must read as a child before its first ingest.
+
+    The storage-v2 lineage columns do not exist until a session ships, so the
+    live thread edge written at create time is the only place a branch's
+    parentage lives while the user is watching it start. The served path used to
+    return None for both fields regardless.
+    """
+
+    from zerg.services.live_catalog_timeline import _continuation_kind
+    from zerg.services.live_catalog_timeline import _continued_from_session_id
+
+    branch = {
+        "primary_thread": {
+            "parent_thread_id": "11111111-1111-4111-8111-111111111111",
+            "parent_session_id": "22222222-2222-4222-8222-222222222222",
+            "branch_kind": "fork",
+        }
+    }
+    assert _continued_from_session_id(branch) == "22222222-2222-4222-8222-222222222222"
+    assert _continuation_kind(branch) == "fork"
+
+    # An ordinary session continues nothing, and "root" is not a continuation
+    # kind -- the archive projection makes the same exception, and the two must
+    # not disagree about what root means.
+    root = {"primary_thread": {"branch_kind": "root"}}
+    assert _continued_from_session_id(root) is None
+    assert _continuation_kind(root) is None
+
+    # A session whose facts carry no thread at all must not raise.
+    assert _continued_from_session_id({}) is None
+    assert _continuation_kind({}) is None

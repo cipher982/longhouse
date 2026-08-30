@@ -12473,6 +12473,7 @@ _THREAD_FIELDS = frozenset(
         "cwd",
         "provider_config_json",
         "parent_thread_id",
+        "parent_session_id",
         "parent_event_id",
         "branch_kind",
         "origin_kind",

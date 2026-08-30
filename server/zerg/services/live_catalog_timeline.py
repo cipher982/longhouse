@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from time import monotonic
@@ -52,6 +53,31 @@ from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
 from zerg.utils.time import normalize_utc
+
+
+def _primary_thread_facts(catalog_facts: Mapping[str, Any]) -> Mapping[str, Any]:
+    thread = catalog_facts.get("primary_thread")
+    return thread if isinstance(thread, Mapping) else {}
+
+
+def _continued_from_session_id(catalog_facts: Mapping[str, Any]) -> str | None:
+    """The session this one continues, from the live thread edge."""
+
+    value = str(_primary_thread_facts(catalog_facts).get("parent_session_id") or "").strip()
+    return value or None
+
+
+def _continuation_kind(catalog_facts: Mapping[str, Any]) -> str | None:
+    """How this session continues its parent; None for an ordinary root.
+
+    Mirrors `_continuation_kind_for_thread` on the archive path so the two
+    projections cannot disagree about what `root` means.
+    """
+
+    branch_kind = str(_primary_thread_facts(catalog_facts).get("branch_kind") or "").strip()
+    if branch_kind and branch_kind != "root":
+        return branch_kind
+    return None
 
 
 def _supported_operations(provider: str | None) -> set[str]:
@@ -553,6 +579,13 @@ def _response_from_catalog(
         thread_root_session_id=str(session.session_id),
         thread_head_session_id=str(session.session_id),
         thread_continuation_count=1,
+        # The live thread carries the edge from create time, which is the only
+        # place a branch's parentage exists until its first ingest. The legacy
+        # archive projection reads the same two columns off SessionThread; this
+        # path served None for both, so a branch looked unrelated to its parent
+        # for exactly as long as the user was watching it start.
+        continued_from_session_id=_continued_from_session_id(catalog_facts),
+        continuation_kind=_continuation_kind(catalog_facts),
         origin_label=session.environment,
         home_label=capability_flags.home_label,
         is_writable_head=runtime_display.lifecycle != "closed",

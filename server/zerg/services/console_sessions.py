@@ -35,6 +35,9 @@ async def create_empty_console_session(
     launch_surface: str = "console",
     session_id: UUID | None = None,
     thread_id: UUID | None = None,
+    parent_thread_id: UUID | None = None,
+    parent_session_id: UUID | None = None,
+    branch_kind: str = "root",
 ) -> CreatedConsoleSession:
     """Persist an empty thread and its execution target without starting a run."""
 
@@ -61,6 +64,9 @@ async def create_empty_console_session(
         "launch_actor": launch_actor,
         "launch_surface": launch_surface,
         "started_at": now.isoformat(),
+        "parent_thread_id": str(parent_thread_id) if parent_thread_id else None,
+        "parent_session_id": str(parent_session_id) if parent_session_id else None,
+        "branch_kind": branch_kind,
     }
     client = get_catalogd_client()
     if client is None:

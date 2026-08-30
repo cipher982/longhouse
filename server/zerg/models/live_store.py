@@ -417,6 +417,11 @@ class LiveSessionThread(LiveBase):
     cwd = Column(Text, nullable=True)
     provider_config_json = Column(Text, nullable=True)
     parent_thread_id = Column(String(36), nullable=True, index=True)
+    # The parent thread's session, denormalized beside the thread edge it
+    # belongs to. The served timeline needs the parent *session* to render a
+    # child, and resolving thread -> session per row on that path would add a
+    # join to the hottest read in the product.
+    parent_session_id = Column(String(36), nullable=True, index=True)
     parent_event_id = Column(Integer, nullable=True)
     branch_kind = Column(String(20), nullable=False, server_default=text("'root'"))
     origin_kind = Column(String(64), nullable=True, index=True)

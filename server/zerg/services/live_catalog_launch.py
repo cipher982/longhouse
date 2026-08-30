@@ -116,7 +116,14 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
                 device_id=device_id,
                 cwd=cwd,
                 provider_config_json=json.dumps(data.get("provider_config") or {}, sort_keys=True),
-                branch_kind="root",
+                # A branch records where it came from at create time. The
+                # storage-v2 lineage columns do not exist until first ingest, so
+                # without this edge a branch would be invisible as a child for
+                # its entire first turn -- which is exactly the screen the user
+                # is looking at when they start one.
+                parent_thread_id=data.get("parent_thread_id") or None,
+                parent_session_id=data.get("parent_session_id") or None,
+                branch_kind=str(data.get("branch_kind") or "root"),
                 is_primary=1,
                 created_at=started_at,
                 updated_at=started_at,
