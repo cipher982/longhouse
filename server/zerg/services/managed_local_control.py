@@ -20,7 +20,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
-from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
@@ -32,6 +31,7 @@ from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_E
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
+from zerg.services.managed_local_event_polling import latest_durable_head_event_id
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
@@ -194,7 +194,7 @@ def validate_managed_local_chat_done_payload(
 
 def get_managed_local_latest_event_id(*, db: Session, session_id: UUID) -> int:
     """Return the latest stored event id for a managed-local session."""
-    return int(AgentsStore(db).get_latest_event_id(session_id) or 0)
+    return latest_durable_head_event_id(db, session_id)
 
 
 def get_managed_local_latest_hook_observation_id(*, db: Session, session_id: UUID) -> int:

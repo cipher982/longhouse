@@ -278,7 +278,6 @@ def test_production_create_routes_mutation_through_catalogd(tmp_path):
 
     with (
         patch("zerg.routers.device_tokens.live_store_configured", return_value=True),
-        patch("zerg.routers.device_tokens.get_settings", return_value=SimpleNamespace(testing=False)),
         patch("zerg.services.catalogd_supervisor.get_catalogd_client", return_value=_CatalogClient()),
         patch("zerg.routers.device_tokens.get_write_serializer", side_effect=AssertionError("must not mutate in API")),
     ):
@@ -321,7 +320,6 @@ def test_production_list_routes_read_through_catalogd(tmp_path):
 
     with (
         patch("zerg.routers.device_tokens.live_store_configured", return_value=True),
-        patch("zerg.routers.device_tokens.get_settings", return_value=SimpleNamespace(testing=False)),
         patch("zerg.services.catalogd_supervisor.get_catalogd_client", return_value=_CatalogClient()),
     ):
         client = TestClient(api_app)
@@ -390,7 +388,6 @@ def test_production_revoke_routes_mutation_through_catalogd(tmp_path):
 
     with (
         patch("zerg.routers.device_tokens.live_store_configured", return_value=True),
-        patch("zerg.routers.device_tokens.get_settings", return_value=SimpleNamespace(testing=False)),
         patch("zerg.services.catalogd_supervisor.get_catalogd_client", return_value=_CatalogClient()),
         patch("zerg.routers.device_tokens.get_write_serializer", side_effect=AssertionError("must not mutate in API")),
     ):

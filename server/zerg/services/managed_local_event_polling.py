@@ -11,11 +11,12 @@ import logging
 import time
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session as SQLAlchemySession
 
 from zerg.models.agents import AgentEvent
-from zerg.services.agents import AgentsStore
+from zerg.models.agents import AgentSessionBranch
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_turns import get_session_turn_snapshot
@@ -127,10 +128,29 @@ def hydrate_turn_events_from_snapshot(
     return snapshot, events
 
 
+def latest_durable_head_event_id(db: SQLAlchemySession, session_id: UUID) -> int:
+    """Latest durable transcript event id on the session's head branch.
+
+    Managed-local turn baselines are compared against events fetched without a
+    branch filter, so the head-branch scope here is what keeps a rewound branch
+    from advancing the baseline past events the caller will still be shown.
+    """
+    head_branch_row = (
+        db.query(AgentSessionBranch.id)
+        .filter(AgentSessionBranch.session_id == session_id)
+        .filter(AgentSessionBranch.is_head == 1)
+        .order_by(AgentSessionBranch.id.desc())
+        .first()
+    )
+    stmt = db.query(func.max(AgentEvent.id)).filter(AgentEvent.session_id == session_id)
+    if head_branch_row is not None:
+        stmt = stmt.filter(AgentEvent.branch_id == int(head_branch_row[0]))
+    return int(stmt.filter(durable_transcript_event_predicate()).scalar() or 0)
+
+
 def get_managed_local_latest_event_id(*, db_bind, session_id: UUID) -> int:
     with SQLAlchemySession(bind=db_bind) as poll_db:
-        latest = AgentsStore(poll_db).get_latest_event_id(session_id)
-        return int(latest or 0)
+        return latest_durable_head_event_id(poll_db, session_id)
 
 
 def managed_local_events_include_expected_turn(*, events: list[AgentEvent], expected_user_message: str) -> bool:

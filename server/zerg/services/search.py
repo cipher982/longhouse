@@ -6,11 +6,8 @@ import math
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from typing import Optional
-
-from sqlalchemy.orm import Session as DBSession
 
 from zerg.models.agents import AgentSession
 
@@ -29,41 +26,6 @@ class SessionFilters:
     hide_autonomous: bool = True  # Exclude autonomous sessions (Task sub-agents and sessions with no user messages)
     include_automation: bool = False
     context_mode: str = "forensic"
-
-
-def lexical_search(
-    q: str,
-    db: DBSession,
-    filters: SessionFilters,
-    limit: int,
-    over_fetch: bool = False,
-) -> list[AgentSession]:
-    """FTS5 full-text search. Returns sessions ordered by BM25 rank (best first).
-
-    When over_fetch=True, fetches min(limit * 3, 200) results for RRF fusion.
-    """
-    from zerg.services.agents import AgentsStore
-
-    fetch_limit = min(limit * 3, 200) if over_fetch else limit
-    since = datetime.now(timezone.utc) - timedelta(days=filters.days_back)
-
-    store = AgentsStore(db)
-    sessions, _ = store.list_sessions(
-        project=filters.project,
-        provider=filters.provider,
-        environment=filters.environment,
-        include_test=filters.include_test,
-        device_id=filters.device_id,
-        since=since,
-        query=q,
-        limit=fetch_limit,
-        offset=0,
-        exclude_user_states=filters.exclude_user_states,
-        hide_autonomous=filters.hide_autonomous,
-        include_automation=filters.include_automation,
-        context_mode=filters.context_mode,
-    )
-    return sessions
 
 
 _RRF_K = 60

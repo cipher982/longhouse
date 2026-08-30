@@ -27,7 +27,6 @@ from zerg.services.session_pause_requests import serialize_pause_request_project
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import runtime_key_for_session
-from zerg.services.session_workspace import build_session_mobile_tail
 
 
 def test_agents_ingest_sqlite(tmp_path):
@@ -224,7 +223,7 @@ def test_managed_claude_ask_user_question_transcript_creates_answerable_pause_re
         assert projection["questions"][0]["id"] == "success"
 
 
-def test_claude_hook_then_transcript_mobile_tail_exposes_structured_question(tmp_path):
+def test_claude_hook_then_transcript_exposes_structured_pause_question(tmp_path):
     db_path = tmp_path / "claude_hook_transcript_tail.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
@@ -296,9 +295,6 @@ def test_claude_hook_then_transcript_mobile_tail_exposes_structured_question(tmp
         db.commit()
 
         assert load_active_pause_request_map(db, [session_id]) == {}
-        hook_tail = build_session_mobile_tail(db=db, session_id=session_id, limit=50)
-        assert hook_tail.session.runtime_display.pause_request is None
-        assert hook_tail.workspace_revision.pause_request_count == 0
 
         structured_questions = [
             {
@@ -358,19 +354,8 @@ def test_claude_hook_then_transcript_mobile_tail_exposes_structured_question(tmp
         assert projection["questions"][0]["id"] == "scope"
         assert projection["questions"][0]["options"][0]["label"] == "Full auth-broker login orchestrator"
         assert projection["questions"][0]["id"] != "terminal_answer"
-
-        tail = build_session_mobile_tail(db=db, session_id=session_id, limit=50)
-        tail_pause = tail.session.runtime_display.pause_request
-        assert tail_pause is not None
-        assert tail_pause.can_respond is True
-        assert tail_pause.title == "Scope"
-        assert tail_pause.questions[0].id == "scope"
-        assert tail_pause.questions[0].options[1].label == "iMessage code reader first"
-        assert tail.workspace_revision.pause_request_count == 1
-
-        ask_event = next(item.event for item in tail.projection.items if item.event and item.event.tool_name == "AskUserQuestion")
-        assert ask_event.content_text == "Before I build, two scoping decisions:"
-        assert ask_event.tool_input_json["questions"][0]["options"][2]["value"] == "cookie_durability"
+        assert projection["questions"][0]["options"][1]["label"] == "iMessage code reader first"
+        assert projection["questions"][0]["options"][2]["value"] == "cookie_durability"
 
 
 def test_claude_ask_user_question_tool_result_resolves_transcript_pause_request(tmp_path):

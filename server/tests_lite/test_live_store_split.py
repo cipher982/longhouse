@@ -78,7 +78,6 @@ from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_runtime import session_input_block_reason
 from zerg.services.session_runtime import session_is_closed_for_input
 from zerg.services.session_views import latest_live_launch_readiness
-from zerg.services.session_workspace import build_session_workspace
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
@@ -343,7 +342,14 @@ def test_archive_and_live_runtime_state_columns_stay_in_sync():
     assert live_columns == archive_columns
 
 
-def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archive_convergence(tmp_path, monkeypatch):
+def test_hot_pause_request_reaches_the_timeline_card_before_archive_convergence(tmp_path, monkeypatch):
+    """A hot pause request must paint on the timeline card from catalog facts alone.
+
+    This used to also compare the card against ``build_session_workspace`` over an
+    archive store. That projection is gone: both detail routes serve
+    ``build_storage_v2_workspace``, so the archive half compared production
+    against code no route could reach.
+    """
     archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
     archive_engine = archive_engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=archive_engine)
@@ -494,15 +500,10 @@ def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archi
             offset=params.offset,
         )
     )
-    with archive_factory() as db:
-        workspace = build_session_workspace(db=db, session_id=session_id)
-
     list_session = timeline.sessions[0].head
-    assert workspace.session.runtime_display.pause_request == list_session.runtime_display.pause_request
-    assert workspace.session.session_state.pending_interaction == list_session.session_state.pending_interaction
-    assert workspace.session.session_state.transcript == list_session.session_state.transcript
-    assert workspace.session.runtime_display.pause_request is not None
-    assert workspace.session.runtime_display.pause_request.questions[0].question == "Choose"
+    assert list_session.runtime_display.pause_request is not None
+    assert list_session.runtime_display.pause_request.questions[0].question == "Choose"
+    assert list_session.session_state.pending_interaction is not None
 
 
 def test_live_input_receipt_is_idempotent_by_client_request_id(tmp_path):
@@ -1693,10 +1694,10 @@ def test_live_control_lease_feeds_managed_control_overlay(live: LiveCatalog, tmp
 
     ``load_managed_control_state_map`` still takes an archive session for its
     connection lane, but under a live catalog nothing supplies one: its only
-    caller, ``build_session_workspace``, is switched off by
-    ``get_legacy_workspace_session_factory``. An empty archive session is the
-    faithful stand-in, and it makes the point -- the overlay below can only
-    have come from catalogd's lease facts.
+    caller, ``build_session_workspace``, has been deleted along with the rest of
+    the archive workspace projection. An empty archive session is the faithful
+    stand-in, and it makes the point -- the overlay below can only have come
+    from catalogd's lease facts.
     """
 
     owner = live.create_user("control@live-store-split.test")

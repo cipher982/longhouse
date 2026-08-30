@@ -243,21 +243,26 @@ async def test_machine_session_reads_use_storage_v2_without_legacy_db(monkeypatc
         return _workspace(session_id)
 
     monkeypatch.setattr(agents_sessions, "build_storage_v2_workspace", build_workspace)
+    # These four reads are served entirely from the catalog. They take no archive
+    # session at all, so no environment -- TESTING included -- can hand them one.
     for endpoint in (
         agents_sessions.get_session_thread,
         agents_sessions.get_session_events,
         agents_sessions.get_session_projection,
         agents_sessions.session_tail,
+        agents_sessions.get_session_workspace,
     ):
-        dependency = inspect.signature(endpoint).parameters["db"].default.dependency
-        assert dependency is agents_sessions.machine_session_read_db_dependency
+        assert "db" not in inspect.signature(endpoint).parameters, endpoint.__name__
+    # The dependency used to be picked at import time by `get_settings().testing`,
+    # so whichever value TESTING held when this module first loaded decided the
+    # archive lane for the whole process. The module no longer holds the seam.
+    assert "get_settings" not in vars(agents_sessions)
     assert list(agents_sessions._session_detail_db()) == [None]
     auth = SimpleNamespace(owner_id=42)
 
     thread = await agents_sessions.get_session_thread(
         session_id=session_id,
         response=Response(),
-        db=None,
         _auth=auth,
         _single=None,
         owner_id=None,
@@ -274,7 +279,6 @@ async def test_machine_session_reads_use_storage_v2_without_legacy_db(monkeypatc
         limit=20,
         offset=0,
         cursor=None,
-        db=None,
         _auth=auth,
         _single=None,
     )
@@ -287,14 +291,12 @@ async def test_machine_session_reads_use_storage_v2_without_legacy_db(monkeypatc
         limit=20,
         offset=0,
         cursor=None,
-        db=None,
         _auth=auth,
         _single=None,
     )
     tail = await agents_sessions.session_tail(
         session_id=session_id,
         limit=20,
-        db=None,
         _auth=auth,
         _single=None,
     )
@@ -332,7 +334,6 @@ async def test_storage_v2_machine_reads_reject_legacy_offset(monkeypatch):
             limit=20,
             offset=1,
             cursor=None,
-            db=None,
             _auth=SimpleNamespace(owner_id=42),
             _single=None,
         )

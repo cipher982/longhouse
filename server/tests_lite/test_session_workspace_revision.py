@@ -25,8 +25,6 @@ from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_pause_requests import resolve_pause_request
 from zerg.services.session_pause_requests import upsert_pause_request
-from zerg.services.session_workspace import build_session_mobile_tail
-from zerg.services.session_workspace import build_session_workspace
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 
 
@@ -341,22 +339,3 @@ def test_workspace_revision_does_not_track_non_anchor_title_inputs(tmp_path):
         changed = load_session_workspace_revision(db, session_id)
         assert changed is not None
         assert changed.fingerprint == initial.fingerprint
-
-
-def test_workspace_responses_include_matching_revision(tmp_path):
-    sf = _make_db(tmp_path, name="session_workspace_revision_response.db")
-    now = datetime.now(timezone.utc)
-
-    with sf() as db:
-        session = _seed_session(db)
-        db.add(AgentEvent(session_id=str(session.id), role="assistant", content_text="hello", timestamp=now))
-        db.commit()
-        session_id = session.id
-
-        workspace = build_session_workspace(db=db, session_id=session_id, limit=10)
-        mobile_tail = build_session_mobile_tail(db=db, session_id=session_id, limit=10)
-
-        assert workspace.workspace_revision.fingerprint
-        assert mobile_tail.workspace_revision.fingerprint == workspace.workspace_revision.fingerprint
-        assert mobile_tail.workspace_revision.latest_event_id == workspace.workspace_revision.latest_event_id
-        assert mobile_tail.workspace_revision.thread_session_count == 1

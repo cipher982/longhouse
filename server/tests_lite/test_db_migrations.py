@@ -2,13 +2,8 @@
 
 import json
 import os
-from datetime import datetime
-from datetime import timezone
-from unittest.mock import patch
-from uuid import uuid4
 
 from sqlalchemy import text
-from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -21,10 +16,6 @@ from zerg.database import make_engine
 from zerg.db_migrations import apply_heavy_migrations
 from zerg.db_migrations import ensure_migration_ledger
 from zerg.db_migrations import plan_heavy_migrations
-from zerg.models.agents import AgentSession
-from zerg.services.agents import AgentsStore
-from zerg.services.agents import EventIngest
-from zerg.services.agents import SessionIngest
 
 
 def _migrate_agents_columns(engine):
@@ -855,69 +846,6 @@ def test_provider_interaction_semantics_backfill_replays_reversed_claude_envelop
     assert [row.interaction_context_key for row in rows] == [prompt_id, prompt_id]
 
 
-def test_projection_repair_handles_preclassified_stale_title(tmp_path):
-    db_path = tmp_path / "preclassified_provider_semantics.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    initialize_database(engine)
-    factory = sessionmaker(bind=engine)
-    db = factory()
-    store = AgentsStore(db)
-    session_id = uuid4()
-    timestamp = datetime(2026, 8, 1, tzinfo=timezone.utc)
-    caveat = "<local-command-caveat>native local command</local-command-caveat>"
-    command = "<command-name>/effort</command-name><command-args>high</command-args>"
-    output = "<local-command-stdout>Set effort level to high</local-command-stdout>"
-    prompt = "Build the feature"
-
-    def event(content: str, offset: int, *, is_meta: bool = False) -> EventIngest:
-        row = {
-            "type": "user",
-            "promptId": "prompt-effort-1",
-            "message": {"role": "user", "content": content},
-        }
-        if is_meta:
-            row["isMeta"] = True
-        return EventIngest(
-            role="user",
-            content_text=content,
-            raw_json=json.dumps(row),
-            timestamp=timestamp,
-            source_path="/claude/session.jsonl",
-            source_offset=offset,
-        )
-
-    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation"):
-        store.ingest_session(
-            SessionIngest(
-                id=session_id,
-                provider="claude",
-                environment="test",
-                project="longhouse",
-                device_id="cinder",
-                cwd="/tmp/longhouse",
-                started_at=timestamp,
-                events=[event(caveat, 0, is_meta=True), event(command, 1), event(output, 2), event(prompt, 3)],
-            )
-        )
-
-    session = db.query(AgentSession).filter_by(id=session_id).one()
-    session.first_user_message_preview = command
-    session.summary_title = "Effort level settings"
-    session.anchor_title = "Effort level settings"
-    db.commit()
-
-    run_items = apply_heavy_migrations(engine)
-    repair_run = next(
-        item for item in run_items if item.name == "20260802_provider_interaction_semantic_projection_repair"
-    )
-    assert repair_run.status == "applied"
-
-    db.expire_all()
-    repaired = db.query(AgentSession).filter_by(id=session_id).one()
-    assert repaired.user_messages == 1
-    assert repaired.first_user_message_preview == prompt
-    assert repaired.summary_title == "Build the feature"
-    assert repaired.anchor_title is None
 def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
     db_path = tmp_path / "legacy_apply.db"
     engine = make_engine(f"sqlite:///{db_path}")
@@ -953,7 +881,6 @@ def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
         ("20260304_events_branch_backfill", "succeeded"),
         ("20260304_source_lines_branch_revision_rebuild", "succeeded"),
         ("20260801_provider_interaction_semantics_backfill", "succeeded"),
-        ("20260802_provider_interaction_semantic_projection_repair", "succeeded"),
     ]
 
     normalized_sql = "".join(ch for ch in _table_sql(engine, "source_lines").lower() if not ch.isspace())

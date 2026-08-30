@@ -26,7 +26,6 @@ from sse_starlette.sse import EventSourceResponse
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
-from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
@@ -89,8 +88,6 @@ from zerg.services.session_views import StartupContextResponse
 from zerg.services.session_views import WallResponse
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import project_machine_session
-from zerg.services.session_workspace import build_session_workspace
-from zerg.services.session_workspace import get_legacy_workspace_session_factory
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_DAYS_BACK
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_LIMIT
 from zerg.services.startup_context import STARTUP_CONTEXT_MAX_DAYS_BACK
@@ -189,7 +186,6 @@ def _session_detail_db():
 
 
 session_detail_db_dependency = get_db if _catalog_db_dependency is get_db else _session_detail_db
-machine_session_read_db_dependency = get_db if get_settings().testing else _session_detail_db
 
 
 @router.get("/sessions/stream")
@@ -845,7 +841,6 @@ async def session_tail(
             "_content_truncated and _content_full_chars so the caller can re-request it."
         ),
     ),
-    db: Session | None = Depends(machine_session_read_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict:
@@ -1286,7 +1281,6 @@ def session_detail_payload(
 async def get_session_thread(
     session_id: UUID,
     response: Response,
-    db: Session | None = Depends(machine_session_read_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
     owner_id: int | None = Depends(_no_viewer_owner_id),
@@ -1325,7 +1319,6 @@ async def get_session_events(
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next page"),
-    db: Session | None = Depends(machine_session_read_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> EventsListResponse:
@@ -1403,7 +1396,6 @@ async def get_session_projection(
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next page"),
-    db: Session | None = Depends(machine_session_read_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionProjectionResponse:
@@ -1439,7 +1431,6 @@ async def get_session_workspace(
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
-    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     _auth: DeviceToken | ManagedSessionToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionWorkspaceResponse | dict[str, object]:
@@ -1447,41 +1438,21 @@ async def get_session_workspace(
     timing = ServerTimingRecorder(surface="session_detail")
     response.headers["Cache-Control"] = "no-store"
     owner_value = getattr(_auth, "owner_id", None)
-    if owner_value is None and not get_settings().testing:
+    if owner_value is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Storage-v2 reads require an owner-scoped token",
         )
-    storage_workspace = None
-    if owner_value is not None:
-        storage_workspace = await build_storage_v2_workspace(
-            session_id=session_id,
-            owner_id=int(owner_value),
-            branch_mode=branch_mode,
-            limit=limit,
-            cursor=cursor,
-            timing=timing,
-        )
-    if storage_workspace is None and not get_settings().testing:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
+    storage_workspace = await build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=int(owner_value),
+        branch_mode=branch_mode,
+        limit=limit,
+        cursor=cursor,
+        timing=timing,
+    )
     if storage_workspace is None:
-        assert legacy_session_factory is not None
-
-        def build_legacy_workspace() -> SessionWorkspaceResponse:
-            with legacy_session_factory() as db:
-                owner_id = _resolve_agents_owner_id(db, _auth if isinstance(_auth, DeviceToken) else None)
-                return build_session_workspace(
-                    db=db,
-                    session_id=session_id,
-                    branch_mode=branch_mode,
-                    limit=limit,
-                    timing=timing,
-                    owner_id=owner_id,
-                )
-
-        result = await asyncio.to_thread(build_legacy_workspace)
-        timing.apply(response)
-        return result
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
     timing.apply(response)
     return storage_workspace
 

@@ -106,7 +106,6 @@ async def _get_events(session_id, *, roles, limit, anchor="start"):
         limit=limit,
         offset=0,
         cursor=None,
-        db=None,
         _auth=SimpleNamespace(owner_id=42),
         _single=None,
     )

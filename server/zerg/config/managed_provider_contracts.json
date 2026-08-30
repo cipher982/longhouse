@@ -1975,7 +1975,7 @@
         "antigravity.send",
         "antigravity.turn_start"
       ],
-      "adapter_digest": "0dd83c92f3fb4c97888e6b5ccfa75ff29779f5a139816176f948513c63ca0e3f"
+      "adapter_digest": "df2da5bef01bf2a30a62390253160c399d84ab08055cc5dff1cf5ad9b380249d"
     },
     {
       "provider": "cursor",
@@ -2433,7 +2433,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "405f6df67f01760c53f65889ef3dd1d8ed7d79f3b2d92f732fcf35f76a83c46e"
+      "adapter_digest": "90d38578f6a0854dd974cf79b3ae6b9b538526caaf19b0ca3311ce7fda3bc6de"
     },
     {
       "provider": "pi",

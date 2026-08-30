@@ -25,29 +25,22 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import model_validator
-from sqlalchemy import and_
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.generated.provider_brands import provider_display_name
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import MediaObject
-from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
-from zerg.models.agents import SessionMediaRef
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_console_turn_capabilities
-from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.provisional_events import TranscriptPreview
-from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.send_affordance import OFFLINE_HOST_STATES
 from zerg.services.send_affordance import SendDisabledReason
 from zerg.services.send_affordance import project_send_affordance
@@ -75,8 +68,6 @@ from zerg.services.session_state_contract import build_archive_session_state_fac
 from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_title import resolve_timeline_title
 from zerg.services.session_title import resolve_title_provenance
-from zerg.services.session_turns import hash_user_text
-from zerg.services.tool_presentation import project_tool_presentation
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import UTCBaseModel
@@ -105,62 +96,6 @@ def _json_obj(raw: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def _codex_first_input_text(payload: dict[str, Any]) -> str | None:
-    content = payload.get("content")
-    if not isinstance(content, list):
-        return None
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") != "input_text":
-            continue
-        text = item.get("text")
-        return text if isinstance(text, str) else None
-    return None
-
-
-def _classify_codex_turn_interrupted(event: AgentEvent) -> str | None:
-    raw = _json_obj(decode_raw_json(event))
-    if raw is None:
-        role = str(getattr(event, "role", "") or "").lower()
-        if role == "system" and event.content_text == _CODEX_TURN_INTERRUPTED_TEXT:
-            return "interrupted"
-        return None
-
-    payload = raw.get("payload")
-    if not isinstance(payload, dict):
-        return None
-
-    if raw.get("type") == "event_msg" and payload.get("type") == "turn_aborted":
-        reason = payload.get("reason")
-        return "interrupted" if reason == "interrupted" else None
-
-    if raw.get("type") != "response_item":
-        return None
-    if payload.get("type") != "message" or payload.get("role") != "user":
-        return None
-    first_text = _codex_first_input_text(payload)
-    if isinstance(first_text, str) and first_text.lstrip().startswith(_CODEX_TURN_ABORTED_PREFIX):
-        return "marker_only"
-    return None
-
-
-def build_session_action_response(event: AgentEvent) -> TranscriptActionResponse | None:
-    """Project provider lifecycle/control evidence as a transcript action."""
-    provider_reason = _classify_codex_turn_interrupted(event)
-    if provider_reason is None:
-        return None
-
-    return TranscriptActionResponse(
-        id=f"event:{event.id}:turn_interrupted",
-        kind="turn_interrupted",
-        provider="codex",
-        source="user",
-        provider_reason=provider_reason,
-        event_id=event.id,
-    )
 
 
 def _coerce_session_loop_mode(value: str | None) -> SessionLoopMode:
@@ -2806,265 +2741,6 @@ def build_live_launch_placeholder_response(
     )
 
 
-def build_active_session_response(
-    store: AgentsStore,
-    session: AgentSession,
-    *,
-    last_activity_at: datetime,
-    runtime_overlay: SessionRuntimeView | None,
-    last_user_message: str | None,
-    last_assistant_message: str | None,
-    attention: str,
-    now: datetime,
-    binding_overlay=None,
-    control_overlay=None,
-    kernel_capabilities=None,
-    pause_request: dict[str, Any] | None = None,
-    launch_attempt: SessionLaunchAttempt | None = None,
-    owner_id: int | None = None,
-) -> ActiveSessionResponse:
-    kernel_projection = project_session_kernel_fields(store.db, session, capabilities=kernel_capabilities)
-    resolved_kernel_capabilities = kernel_projection.capabilities
-    capability_flags = resolved_kernel_capabilities
-    _started = (
-        session.started_at.replace(tzinfo=timezone.utc) if session.started_at and session.started_at.tzinfo is None else session.started_at
-    )
-    _ended = session.ended_at.replace(tzinfo=timezone.utc) if session.ended_at and session.ended_at.tzinfo is None else session.ended_at
-    end_time = _ended or now
-    duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0
-    message_count = (session.user_messages or 0) + (session.assistant_messages or 0)
-    from zerg.services.session_preferences import load_session_preferences
-
-    preferences = load_session_preferences(session.id, owner_id=owner_id, standalone_session=session)
-    launch_lifecycle = project_launch_lifecycle(launch_attempt)
-    session_state = build_archive_session_state_facts(
-        session=session,
-        capabilities=capability_flags,
-        launch_state=launch_lifecycle.state if launch_lifecycle is not None else None,
-        launch_error_code=launch_lifecycle.error_code if launch_lifecycle is not None else None,
-        launch_error_message=launch_lifecycle.error_message if launch_lifecycle is not None else None,
-        execution_lifetime=launch_lifecycle.execution_lifetime if launch_lifecycle is not None else None,
-        last_activity_at=last_activity_at,
-        user_messages=int(session.user_messages or 0),
-        assistant_messages=int(session.assistant_messages or 0),
-        pause_request=pause_request,
-    )
-    runtime_display = build_compat_runtime_display_response(
-        session_state=session_state,
-        pause_request=pause_request,
-        now=now,
-    )
-    runtime_aliases = _archive_runtime_aliases(
-        session_state=session_state,
-        runtime_display=runtime_display,
-        last_activity_at=last_activity_at,
-    )
-    response_capabilities = project_compat_capabilities_from_state(
-        build_session_capabilities_response(
-            session=session,
-            capability_flags=capability_flags,
-            runtime_display=runtime_display,
-            runtime_facts=None,
-            kernel_capabilities=resolved_kernel_capabilities,
-            launch_lifecycle=launch_lifecycle,
-            session_mode=session_state.mode,
-        ),
-        session_state,
-    )
-    return ActiveSessionResponse(
-        id=str(session.id),
-        project=session.project,
-        provider=session.provider,
-        cwd=session.cwd,
-        git_branch=session.git_branch,
-        started_at=session.started_at,
-        ended_at=session.ended_at,
-        last_activity_at=last_activity_at,
-        timeline_anchor_at=runtime_aliases["timeline_anchor_at"],
-        runtime_phase=runtime_aliases["runtime_phase"],
-        phase_started_at=runtime_aliases["phase_started_at"],
-        last_progress_at=runtime_aliases["last_progress_at"],
-        runtime_source=runtime_aliases["runtime_source"],
-        terminal_state=runtime_aliases["terminal_state"],
-        runtime_version=runtime_aliases["runtime_version"],
-        status=runtime_aliases["status"] or ("completed" if session.ended_at is not None else "active"),
-        attention=attention,
-        duration_minutes=duration_minutes,
-        last_user_message=last_user_message,
-        last_assistant_message=last_assistant_message,
-        message_count=message_count,
-        tool_calls=session.tool_calls or 0,
-        presence_state=runtime_aliases["presence_state"],
-        presence_tool=runtime_aliases["presence_tool"],
-        presence_updated_at=runtime_aliases["presence_updated_at"],
-        last_live_at=runtime_aliases["last_live_at"],
-        display_phase=runtime_aliases["display_phase"],
-        active_tool=runtime_aliases["active_tool"],
-        confidence=runtime_aliases["confidence"],
-        user_state=preferences.user_state,
-        home_label=capability_flags.home_label,
-        control=build_session_control_response(
-            session,
-            db=store.db,
-            capability_flags=capability_flags,
-            control_projection=kernel_projection.control,
-        ),
-        capabilities=response_capabilities,
-        session_state=session_state,
-        runtime_display=runtime_display,
-        loop_mode=_coerce_session_loop_mode(preferences.loop_mode),
-    )
-
-
-def build_event_response(
-    store: AgentsStore,
-    event: AgentEvent,
-    *,
-    boundary: int | None,
-    head_branch_id: int | None,
-    input_origin_map: dict[int, InputOriginResponse | None] | None = None,
-    tool_call_state_map: dict[int, ToolCallState] | None = None,
-    media_ref_map: dict[int, list[EventMediaRefResponse]] | None = None,
-    mobile_payload: bool = False,
-    provider: str | None = None,
-) -> EventResponse:
-    content_text = event.content_text
-    raw_content_text = None
-    if event.role == "user" and content_text is not None:
-        display_text = strip_claude_channel_wrapper(content_text)
-        if display_text != content_text:
-            content_text = display_text
-            raw_content_text = event.content_text
-    is_head_branch = head_branch_id is None or event.branch_id in {None, head_branch_id}
-    tool_output_text = event.tool_output_text
-    tool_output_truncated = False
-    tool_output_original_chars: int | None = None
-    if mobile_payload and tool_output_text is not None and len(tool_output_text) > MOBILE_TOOL_OUTPUT_MAX_CHARS:
-        tool_output_original_chars = len(tool_output_text)
-        tool_output_text = tool_output_text[:MOBILE_TOOL_OUTPUT_MAX_CHARS]
-        tool_output_truncated = True
-
-    tool_call_state = tool_call_state_map.get(int(event.id)) if tool_call_state_map is not None else None
-
-    return EventResponse(
-        id=event.id,
-        role=event.role,
-        content_text=content_text,
-        raw_content_text=raw_content_text,
-        input_origin=(_event_input_origin_response(store, event, input_origin_map=input_origin_map) if is_head_branch else None),
-        tool_name=event.tool_name,
-        tool_input_json=event.tool_input_json,
-        tool_output_text=tool_output_text,
-        tool_output_truncated=tool_output_truncated,
-        tool_output_original_chars=tool_output_original_chars,
-        tool_call_id=event.tool_call_id,
-        tool_presentation=project_tool_presentation(
-            event.tool_name,
-            event.tool_input_json,
-            provider=provider,
-        ),
-        timestamp=event.timestamp,
-        in_active_context=store.is_event_in_active_context(event, boundary) if boundary is not None else True,
-        branch_id=event.branch_id,
-        is_head_branch=is_head_branch,
-        event_origin=event.event_origin or "durable",
-        provisional_state=event.provisional_state,
-        provisional_cursor=event.provisional_cursor,
-        provisional_complete=bool(event.provisional_complete),
-        reconciled_event_id=event.reconciled_event_id,
-        tool_call_state=tool_call_state,
-        media_refs=media_ref_map.get(int(event.id), []) if media_ref_map is not None else [],
-    )
-
-
-def build_event_media_ref_map(db, events: list[AgentEvent]) -> dict[int, list[EventMediaRefResponse]]:
-    """Return media refs keyed by AgentEvent id for a projected event page."""
-
-    if not events:
-        return {}
-
-    event_by_id = {int(event.id): event for event in events if getattr(event, "id", None) is not None}
-    event_ids = set(event_by_id)
-    # Map each source coordinate to the events projected from it, remembering each
-    # event's semantic identity (event_hash). One provider source line can project
-    # into several events at the same byte offset in two distinct ways:
-    #   1. Same logical event repeated -- re-ingestion duplicates on one branch, or
-    #      branch-copies of an identical line across branches (same event_hash).
-    #   2. Genuinely different events from one line -- e.g. assistant text plus a
-    #      tool-use call, or several tool-result events (different event_hash).
-    # A coordinate-only media ref (event_id is NULL, e.g. legacy backfill) may bind
-    # to case 1 because every candidate is the same image-bearing line, but must NOT
-    # guess in case 2 where the offset is shared by unrelated events.
-    events_by_source: dict[tuple[Any, str, int], list[tuple[int, Optional[str]]]] = {}
-    for event_id, event in event_by_id.items():
-        if event.source_path and event.source_offset is not None:
-            key = (event.session_id, event.source_path, int(event.source_offset))
-            events_by_source.setdefault(key, []).append((event_id, event.event_hash))
-    session_ids = {event.session_id for event in events}
-    offsets = {int(event.source_offset) for event in events if event.source_offset is not None}
-    source_paths = {event.source_path for event in events if event.source_path}
-    if not event_ids and not (session_ids and offsets and source_paths):
-        return {}
-
-    filters = []
-    if event_ids:
-        filters.append(SessionMediaRef.event_id.in_(event_ids))
-    if session_ids and offsets and source_paths:
-        filters.append(
-            and_(
-                SessionMediaRef.session_id.in_(session_ids),
-                SessionMediaRef.source_offset.in_(offsets),
-                SessionMediaRef.source_path.in_(source_paths),
-            )
-        )
-    rows = (
-        db.query(SessionMediaRef, MediaObject)
-        .outerjoin(MediaObject, MediaObject.sha256 == SessionMediaRef.media_sha256)
-        .filter(or_(*filters))
-        .order_by(SessionMediaRef.id.asc())
-        .all()
-    )
-
-    result: dict[int, list[EventMediaRefResponse]] = {}
-    seen: set[tuple[int, str, int]] = set()
-    for ref, media in rows:
-        matched_ids: list[int] = []
-        if ref.event_id is not None and int(ref.event_id) in event_by_id:
-            matched_ids.append(int(ref.event_id))
-        elif ref.source_path and ref.source_offset is not None:
-            candidates = events_by_source.get((ref.session_id, ref.source_path, int(ref.source_offset)), [])
-            # Bind when every candidate event shares one semantic identity (the same
-            # image-bearing line, duplicated or branch-copied). Refuse to guess when
-            # the coordinate is shared by distinct events. A lone candidate with a
-            # NULL event_hash still binds -- it is unambiguous by count.
-            distinct_hashes = {event_hash for _eid, event_hash in candidates}
-            if len(candidates) == 1 or len(distinct_hashes) == 1:
-                matched_ids.extend(event_id for event_id, _hash in candidates)
-
-        for event_id in sorted(set(matched_ids)):
-            key = (event_id, ref.media_sha256, int(ref.id))
-            if key in seen:
-                continue
-            seen.add(key)
-            result.setdefault(event_id, []).append(_event_media_ref_response(ref, media))
-    return result
-
-
-def _event_media_ref_response(ref: SessionMediaRef, media: MediaObject | None) -> EventMediaRefResponse:
-    return EventMediaRefResponse(
-        sha256=ref.media_sha256,
-        media_state=ref.media_state,
-        mime_type=media.mime_type if media is not None else None,
-        byte_size=int(media.byte_size) if media is not None and media.byte_size is not None else None,
-        blob_url=f"/api/media/{ref.media_sha256}/blob",
-        thumb_url=f"/api/media/{ref.media_sha256}/thumb" if media is not None and media.thumbnail_sha256 else None,
-        source_path=ref.source_path,
-        source_offset=int(ref.source_offset) if ref.source_offset is not None else None,
-        json_pointer=ref.json_pointer,
-        original_kind=ref.original_kind,
-    )
-
-
 def is_session_closed(session: AgentSession) -> bool:
     """Whether the durable session itself was explicitly closed.
 
@@ -3136,134 +2812,6 @@ def build_tool_call_state_map(
         else:
             result[int(event.id)] = ToolCallState.RUNNING
     return result
-
-
-def _event_input_origin_response(
-    store: AgentsStore,
-    event: AgentEvent,
-    *,
-    input_origin_map: dict[int, InputOriginResponse | None] | None,
-) -> InputOriginResponse | None:
-    if input_origin_map is not None:
-        return input_origin_map.get(int(event.id))
-    return build_event_input_origin_map(store, [event]).get(int(event.id))
-
-
-def build_event_input_origin_map(store: AgentsStore, events: list[AgentEvent]) -> dict[int, InputOriginResponse | None]:
-    user_events = {int(event.id): event for event in events if str(getattr(event, "role", "") or "").strip().lower() == "user"}
-    origins: dict[int, InputOriginResponse | None] = {event_id: InputOriginResponse(authored_via="terminal") for event_id in user_events}
-    if not user_events:
-        return origins
-
-    session_ids = {event.session_id for event in user_events.values()}
-    turns = (
-        store.db.query(SessionTurn, SessionInput)
-        .outerjoin(
-            SessionInput,
-            and_(
-                SessionInput.id == SessionTurn.session_input_id,
-                SessionInput.session_id == SessionTurn.session_id,
-            ),
-        )
-        .filter(
-            SessionTurn.user_event_id.in_(list(user_events)),
-            SessionTurn.session_id.in_({event.session_id for event in user_events.values()}),
-        )
-        .order_by(SessionTurn.id.asc())
-        .all()
-    )
-    seen_event_ids: set[int] = set()
-    for turn, session_input in turns:
-        user_event_id = int(getattr(turn, "user_event_id", 0) or 0)
-        if user_event_id in seen_event_ids or user_event_id not in user_events:
-            continue
-        seen_event_ids.add(user_event_id)
-        if getattr(turn, "session_input_id", None) is None:
-            continue
-        if session_input is None:
-            logger.warning(
-                "Session turn %s links missing SessionInput %s for user event %s",
-                getattr(turn, "id", None),
-                getattr(turn, "session_input_id", None),
-                user_event_id,
-            )
-            continue
-        origins[user_event_id] = InputOriginResponse(
-            authored_via="longhouse",
-            session_input_id=int(session_input.id),
-            client_request_id=session_input.client_request_id,
-        )
-
-    unclaimed_user_events = {event_id: event for event_id, event in user_events.items() if event_id not in seen_event_ids}
-    if not unclaimed_user_events:
-        return origins
-
-    pending_turns = (
-        store.db.query(SessionTurn, SessionInput)
-        .join(
-            SessionInput,
-            and_(
-                SessionInput.id == SessionTurn.session_input_id,
-                SessionInput.session_id == SessionTurn.session_id,
-            ),
-        )
-        .filter(
-            SessionTurn.session_id.in_(session_ids),
-            SessionTurn.user_event_id.is_(None),
-            SessionTurn.session_input_id.isnot(None),
-            SessionTurn.expected_user_text_hash.isnot(None),
-            SessionTurn.state != "failed",
-        )
-        .order_by(SessionTurn.id.asc())
-        .all()
-    )
-    if not pending_turns:
-        return origins
-
-    matches_by_turn_id: dict[int, list[int]] = {}
-    turn_rows: dict[int, tuple[SessionTurn, SessionInput]] = {}
-    matched_turns_by_event_id: dict[int, list[int]] = {}
-    for turn, session_input in pending_turns:
-        turn_id = int(getattr(turn, "id", 0) or 0)
-        expected_hash = str(getattr(turn, "expected_user_text_hash", "") or "")
-        if turn_id <= 0 or not expected_hash:
-            continue
-        baseline_event_id = int(getattr(turn, "baseline_event_id", 0) or 0)
-        candidate_ids: list[int] = []
-        for event_id, event in unclaimed_user_events.items():
-            if event.session_id != turn.session_id:
-                continue
-            if baseline_event_id > 0 and event_id <= baseline_event_id:
-                continue
-            content_text = str(getattr(event, "content_text", "") or "")
-            normalized_user_text = strip_claude_channel_wrapper(content_text)
-            if hash_user_text(normalized_user_text) != expected_hash:
-                continue
-            candidate_ids.append(event_id)
-            matched_turns_by_event_id.setdefault(event_id, []).append(turn_id)
-        if candidate_ids:
-            matches_by_turn_id[turn_id] = candidate_ids
-            turn_rows[turn_id] = (turn, session_input)
-
-    for turn_id, candidate_ids in matches_by_turn_id.items():
-        if len(candidate_ids) != 1:
-            continue
-        event_id = candidate_ids[0]
-        if len(matched_turns_by_event_id.get(event_id, [])) != 1:
-            continue
-        _, session_input = turn_rows[turn_id]
-        origins[event_id] = InputOriginResponse(
-            authored_via="longhouse",
-            session_input_id=int(session_input.id),
-            client_request_id=session_input.client_request_id,
-        )
-    return origins
-
-
-def build_event_input_origin_response(store: AgentsStore, event: AgentEvent) -> InputOriginResponse | None:
-    if str(getattr(event, "role", "") or "").strip().lower() != "user":
-        return None
-    return build_event_input_origin_map(store, [event]).get(int(event.id))
 
 
 def build_session_turn_response(turn: SessionTurn) -> SessionTurnResponse:

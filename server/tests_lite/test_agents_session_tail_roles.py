@@ -260,7 +260,6 @@ async def _storage_v2_tail(
         session_id=session_id,
         limit=limit,
         roles=roles,
-        db=None,
         _auth=_Auth(),
         _single=None,
     )

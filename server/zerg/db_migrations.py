@@ -637,8 +637,7 @@ def _apply_provider_interaction_semantics_backfill(conn: Connection) -> str:
                 updates,
             )
         updated += len(updates)
-    repaired, title_repaired = _repair_session_semantic_projections(conn)
-    return f"updated_rows={updated}; repaired_sessions={repaired}; " f"repaired_titles={title_repaired}; claude_reclassification=v1"
+    return f"updated_rows={updated}; claude_reclassification=v1"
 
 
 def _apply_provider_interaction_semantics_reclassification(conn: Connection) -> str:
@@ -646,78 +645,6 @@ def _apply_provider_interaction_semantics_reclassification(conn: Connection) -> 
 
     details = _apply_provider_interaction_semantics_backfill(conn)
     return f"corrected_prior_backfill; {details}"
-
-
-def _repair_session_semantic_projections(conn: Connection) -> tuple[int, int]:
-    """Reconcile denormalized session reads after facts become authoritative.
-
-    The semantic columns alone do not repair sessions ingested before this
-    migration: counts, hot previews, timeline cards, and a title generated from
-    a provider-local row can all already be stale. Recompute those projections
-    in the same explicit migration transaction. A title is replaced only when
-    its old first-message preview is provably one of the newly excluded local
-    rows; otherwise existing user-visible title state is preserved.
-    """
-
-    from sqlalchemy import func
-    from sqlalchemy import or_
-    from sqlalchemy.orm import Session as OrmSession
-
-    from zerg.models.agents import AgentEvent
-    from zerg.models.agents import AgentSession
-    from zerg.services.agents.store import AgentsStore
-    from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-    from zerg.services.session_title import sanitize_timeline_title
-
-    repaired = 0
-    title_repaired = 0
-    timeline_cards_available = _table_exists(conn, "timeline_cards")
-    with OrmSession(
-        bind=conn,
-        expire_on_commit=False,
-        join_transaction_mode="create_savepoint",
-    ) as session:
-        store = AgentsStore(session)
-        sessions = session.query(AgentSession).order_by(AgentSession.id.asc()).yield_per(256)
-        for agent_session in sessions:
-            head_branch_id = store.get_head_branch_id(agent_session.id)
-            if head_branch_id is None:
-                continue
-            old_first_preview = str(agent_session.first_user_message_preview or "").strip()
-            old_preview_was_local = bool(
-                old_first_preview
-                and session.query(AgentEvent.id)
-                .filter(AgentEvent.session_id == agent_session.id)
-                .filter(AgentEvent.branch_id == head_branch_id)
-                .filter(AgentEvent.role == "user")
-                .filter(
-                    or_(
-                        AgentEvent.content_text == old_first_preview,
-                        func.substr(AgentEvent.content_text, 1, len(old_first_preview)) == old_first_preview,
-                    )
-                )
-                .filter(AgentEvent.interaction_kind.in_(("local_control", "local_control_output", "conversation_boundary")))
-                .first()
-                is not None
-            )
-
-            store._sync_session_counts_to_head(agent_session.id, head_branch_id)
-            new_first_preview = str(agent_session.first_user_message_preview or "").strip()
-            if old_preview_was_local and new_first_preview != old_first_preview:
-                # This is the precise stale-title case: the previous title
-                # obligation was anchored to a row the semantic boundary just
-                # removed. Replace it with the deterministic prompt fallback;
-                # a future title worker may upgrade it to an AI title.
-                agent_session.anchor_title = None
-                agent_session.summary_title = sanitize_timeline_title(new_first_preview, max_words=6)
-                agent_session.title_retry_at = None
-                agent_session.title_last_error = None
-                title_repaired += 1
-            if timeline_cards_available:
-                upsert_timeline_card_from_session(session, agent_session)
-            repaired += 1
-        session.commit()
-    return repaired, title_repaired
 
 
 def _migration_succeeded(conn: Connection, name: str) -> bool:
@@ -777,23 +704,6 @@ def _needs_provider_interaction_semantics_reclassification(conn: Connection) -> 
     return True, f"Claude raw rows requiring reclassification={raw_rows}"
 
 
-def _needs_provider_interaction_semantic_projection_repair(conn: Connection) -> tuple[bool, str]:
-    name = "20260802_provider_interaction_semantic_projection_repair"
-    if _migration_succeeded(conn, name):
-        return False, "semantic session projections already repaired"
-    if not _table_exists(conn, "sessions") or not _table_exists(conn, "events"):
-        return False, "session/event tables missing"
-    session_count = int(conn.execute(text("SELECT COUNT(*) FROM sessions")).scalar() or 0)
-    if session_count <= 0:
-        return False, "no sessions require projection repair"
-    return True, f"sessions eligible for semantic projection repair={session_count}"
-
-
-def _apply_provider_interaction_semantic_projection_repair(conn: Connection) -> str:
-    repaired, title_repaired = _repair_session_semantic_projections(conn)
-    return f"repaired_sessions={repaired}; repaired_titles={title_repaired}"
-
-
 _HEAVY_MIGRATIONS: tuple[_HeavyMigration, ...] = (
     _HeavyMigration(
         name="20260304_events_branch_backfill",
@@ -824,11 +734,5 @@ _HEAVY_MIGRATIONS: tuple[_HeavyMigration, ...] = (
         description="Replay Claude raw envelopes for databases with the pre-replay semantic backfill",
         needs=_needs_provider_interaction_semantics_reclassification,
         apply=_apply_provider_interaction_semantics_reclassification,
-    ),
-    _HeavyMigration(
-        name="20260802_provider_interaction_semantic_projection_repair",
-        description="Reconcile denormalized session projections after semantic classification",
-        needs=_needs_provider_interaction_semantic_projection_repair,
-        apply=_apply_provider_interaction_semantic_projection_repair,
     ),
 )

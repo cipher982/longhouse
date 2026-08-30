@@ -3,11 +3,11 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from unittest.mock import patch
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session as SASession
@@ -34,25 +34,36 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models import User
-from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import AgentSessionBranch
-from zerg.models.agents import SessionInput
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveSessionCatalog
-from zerg.services.agents.store import AgentsStore
 from zerg.services.catalogd_supervisor import catalogd_paths
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-from zerg.services.session_turns import hash_user_text
-from zerg.services.session_workspace import get_legacy_workspace_session_factory
 
 OWNER_EMAIL = "owner@example.com"
 # Enough sessions that a clamped page is provably shorter than the corpus.
 _OVER_CAP_SESSIONS = 105
+
+
+@pytest.fixture(autouse=True)
+def _restore_api_app_dependency_overrides():
+    """An override installed here must not outlive this test.
+
+    ``api_app`` is a process-global, so an override left behind keeps answering
+    for every later test in the run. ``_make_client`` below clears the whole map
+    and installs its own, which is exactly the shape that silently re-points
+    authentication for hundreds of unrelated tests, so each test puts back what
+    it found.
+    """
+
+    saved = dict(api_app.dependency_overrides)
+    try:
+        yield
+    finally:
+        api_app.dependency_overrides.clear()
+        api_app.dependency_overrides.update(saved)
 
 
 def _set_browser_cookie(client: TestClient, catalog: LiveCatalog, *, owner_id: int) -> None:
@@ -157,7 +168,6 @@ def _make_client(session_local) -> TestClient:
             yield db
 
     api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[get_legacy_workspace_session_factory] = lambda: session_local
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     return TestClient(api_app)
 
@@ -220,770 +230,129 @@ def test_timeline_session_events_anchor_tail_accepts_browser_session_cookie(live
     assert "anchor" in response.json()["detail"]
 
 
-def test_timeline_session_workspace_bootstraps_session_thread_and_projection(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert response.headers["cache-control"] == "no-store"
-        assert payload["session"]["id"] == session_id
-        assert payload["thread"]["head_session_id"] == session_id
-        assert payload["thread"]["sessions"][0]["id"] == session_id
-        assert payload["projection"]["focus_session_id"] == session_id
-        assert payload["projection"]["total"] == 0
-        assert "load_thread;dur=" in response.headers["server-timing"]
-        assert "load_projection;dur=" in response.headers["server-timing"]
-        assert "build_projection;dur=" in response.headers["server-timing"]
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_workspace_projects_claude_channel_display_text(tmp_path):
-    session_local = _make_db(tmp_path)
-    raw_text = '<channel source="longhouse">\ncontinue the migration\n</channel>'
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        event = AgentEvent(
-            session_id=session_id,
-            role="user",
-            content_text=raw_text,
-            timestamp=datetime.now(timezone.utc),
-        )
-        db.add(event)
-        db.commit()
-        event_id = event.id
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
-
-        assert response.status_code == 200
-        payload = response.json()
-        events = [item["event"] for item in payload["projection"]["items"] if item["kind"] == "event"]
-        assert events == [
-            {
-                "id": event_id,
-                "role": "user",
-                "content_text": "continue the migration",
-                "raw_content_text": raw_text,
-                "input_origin": {
-                    "authored_via": "terminal",
-                    "session_input_id": None,
-                    "client_request_id": None,
-                },
-                "tool_name": None,
-                "tool_input_json": None,
-                "tool_output_text": None,
-                "tool_output_truncated": False,
-                "tool_output_original_chars": None,
-                "tool_call_id": None,
-                "tool_presentation": None,
-                "timestamp": events[0]["timestamp"],
-                "in_active_context": True,
-                "branch_id": None,
-                "is_head_branch": True,
-                "event_origin": "durable",
-                "provisional_state": None,
-                "provisional_cursor": None,
-                "provisional_complete": False,
-                "reconciled_event_id": None,
-                "tool_call_state": None,
-                "media_refs": [],
-            }
-        ]
-
-        with session_local() as db:
-            stored = db.query(AgentEvent).filter(AgentEvent.id == event_id).one()
-            assert stored.content_text == raw_text
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_workspace_uses_page_bounded_tool_state(tmp_path, monkeypatch):
-    session_local = _make_db(tmp_path)
-    base = datetime.now(timezone.utc)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        call = AgentEvent(
-            session_id=session_id,
-            role="assistant",
-            tool_name="Bash",
-            tool_call_id="toolu_page",
-            tool_input_json={"command": "true"},
-            timestamp=base,
-        )
-        result = AgentEvent(
-            session_id=session_id,
-            role="tool",
-            tool_call_id="toolu_page",
-            tool_output_text="ok",
-            timestamp=base + timedelta(seconds=1),
-        )
-        db.add_all([call, result])
-        db.commit()
-
-    def fail_full_ledger_tool_scan(*args, **kwargs):
-        raise AssertionError("workspace first paint must not load full-session tool events")
-
-    monkeypatch.setattr(AgentsStore, "get_session_tool_call_events", fail_full_ledger_tool_scan)
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
-
-        assert response.status_code == 200
-        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
-        call_event = next(event for event in events if event["role"] == "assistant")
-        assert call_event["tool_call_state"] == "completed"
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_mobile_tail_returns_compact_tail_and_detects_drift(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        base = datetime.now(timezone.utc)
-        events = [
-            AgentEvent(session_id=session_id, role="user", content_text="event 1", timestamp=base),
-            AgentEvent(session_id=session_id, role="assistant", content_text="event 2", timestamp=base + timedelta(seconds=1)),
-            AgentEvent(
-                session_id=session_id,
-                role="tool",
-                tool_name="Bash",
-                tool_output_text="x" * 2500,
-                timestamp=base + timedelta(seconds=2),
-            ),
-            AgentEvent(session_id=session_id, role="assistant", content_text="event 4", timestamp=base + timedelta(seconds=3)),
-        ]
-        db.add_all(events)
-        db.commit()
-        event_ids = [event.id for event in events]
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/mobile-tail?limit=2")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert response.headers["cache-control"] == "no-store"
-        assert "load_runtime;dur=" in response.headers["server-timing"]
-        assert "runtime_state;dur=" in response.headers["server-timing"]
-        assert "provisional_preview;dur=" in response.headers["server-timing"]
-        assert "pending_turns;dur=" in response.headers["server-timing"]
-        assert "thread" not in payload
-        assert payload["session"]["id"] == session_id
-        assert payload["snapshot_event_id"] == event_ids[-1]
-        assert payload["projection"]["total"] == 4
-        assert payload["projection"]["page_offset"] == 2
-        tail_events = [item["event"] for item in payload["projection"]["items"] if item["kind"] == "event"]
-        assert [event["id"] for event in tail_events] == event_ids[-2:]
-        assert len(tail_events[0]["tool_output_text"]) == 2000
-        assert tail_events[0]["tool_output_truncated"] is True
-        assert tail_events[0]["tool_output_original_chars"] == 2500
-
-        with _force_browser_jwt_mode():
-            response = client.get(
-                f"/timeline/sessions/{session_id}/mobile-tail?limit=2&offset=2&snapshot_event_id={payload['snapshot_event_id']}"
-            )
-
-        assert response.status_code == 200
-        older_events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
-        assert [event["id"] for event in older_events] == event_ids[:2]
-
-        with session_local() as db:
-            db.add(
-                AgentEvent(
-                    session_id=session_id,
-                    role="assistant",
-                    content_text="event 5",
-                    timestamp=base + timedelta(seconds=4),
-                )
-            )
-            db.commit()
-
-        with _force_browser_jwt_mode():
-            response = client.get(
-                f"/timeline/sessions/{session_id}/mobile-tail?limit=2&offset=2&snapshot_event_id={payload['snapshot_event_id']}"
-            )
-
-        assert response.status_code == 409
-        assert response.json()["detail"]["error_code"] == "projection_drift"
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_mobile_tail_skips_provisional_preview_for_ended_session(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        base = datetime.now(timezone.utc)
-        db.add(AgentEvent(session_id=session_id, role="assistant", content_text="done", timestamp=base))
-        db.commit()
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            with patch(
-                "zerg.services.session_workspace.load_active_provisional_preview_map",
-                side_effect=AssertionError("ended sessions should not scan provisional preview observations"),
-            ):
-                response = client.get(f"/timeline/sessions/{session_id}/mobile-tail?limit=1")
-
-        assert response.status_code == 200
-        assert response.json()["session"]["transcript_preview"] is None
-        assert "provisional_preview;dur=" in response.headers["server-timing"]
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_workspace_projects_longhouse_input_origin(tmp_path):
-    session_local = _make_db(tmp_path)
-    submitted_at = datetime.now(timezone.utc)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        event = AgentEvent(
-            session_id=session_id,
-            role="user",
-            content_text="sent from phone",
-            timestamp=submitted_at,
-        )
-        db.add(event)
-        db.flush()
-        session_input = SessionInput(
-            session_id=session_id,
-            body="sent from phone",
-            owner_id=1,
-            intent="auto",
-            status="delivered",
-            client_request_id="ios-origin-1",
-            delivery_request_id="delivery-origin-1",
-            delivered_at=submitted_at,
-        )
-        db.add(session_input)
-        db.flush()
-        db.add(
-            SessionTurn(
-                session_id=session_id,
-                request_id="delivery-origin-1",
-                session_input_id=session_input.id,
-                state="send_accepted",
-                user_event_id=event.id,
-                user_submitted_at=submitted_at,
-                send_accepted_at=submitted_at,
-            )
-        )
-        assistant_event = AgentEvent(
-            session_id=session_id,
-            role="assistant",
-            content_text="ack",
-            timestamp=submitted_at + timedelta(seconds=1),
-        )
-        db.add(assistant_event)
-        db.commit()
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
-
-        assert response.status_code == 200
-        payload = response.json()
-        events = [item["event"] for item in payload["projection"]["items"] if item["kind"] == "event"]
-        assert len(events) == 2
-        assert events[0]["input_origin"] == {
-            "authored_via": "longhouse",
-            "session_input_id": 1,
-            "client_request_id": "ios-origin-1",
-        }
-        assert events[1]["input_origin"] is None
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_workspace_projects_pending_longhouse_input_origin(tmp_path):
-    session_local = _make_db(tmp_path)
-    submitted_at = datetime.now(timezone.utc)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        baseline = AgentEvent(
-            session_id=session_id,
-            role="assistant",
-            content_text="previous turn",
-            timestamp=submitted_at - timedelta(seconds=1),
-        )
-        event = AgentEvent(
-            session_id=session_id,
-            role="user",
-            content_text="sent from phone",
-            timestamp=submitted_at,
-        )
-        db.add_all([baseline, event])
-        db.flush()
-        session_input = SessionInput(
-            session_id=session_id,
-            body="sent from phone",
-            owner_id=1,
-            intent="auto",
-            status="delivered",
-            client_request_id="ios-pending-origin-1",
-            delivery_request_id="delivery-pending-origin-1",
-            delivered_at=submitted_at,
-        )
-        db.add(session_input)
-        db.flush()
-        db.add(
-            SessionTurn(
-                session_id=session_id,
-                request_id="delivery-pending-origin-1",
-                session_input_id=session_input.id,
-                state="created",
-                expected_user_text_hash=hash_user_text("sent from phone"),
-                baseline_event_id=baseline.id,
-                user_event_id=None,
-                user_submitted_at=submitted_at,
-            )
-        )
-        event_id = int(event.id)
-        input_id = int(session_input.id)
-        db.commit()
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
-
-        assert response.status_code == 200
-        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
-        user_event = next(event for event in events if event["id"] == event_id)
-        assert user_event["input_origin"] == {
-            "authored_via": "longhouse",
-            "session_input_id": input_id,
-            "client_request_id": "ios-pending-origin-1",
-        }
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_mobile_tail_projects_pending_longhouse_input_origin(tmp_path):
-    session_local = _make_db(tmp_path)
-    submitted_at = datetime.now(timezone.utc)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        baseline = AgentEvent(
-            session_id=session_id,
-            role="assistant",
-            content_text="previous turn",
-            timestamp=submitted_at - timedelta(seconds=1),
-        )
-        event = AgentEvent(
-            session_id=session_id,
-            role="user",
-            content_text="sent from phone",
-            timestamp=submitted_at,
-        )
-        db.add_all([baseline, event])
-        db.flush()
-        session_input = SessionInput(
-            session_id=session_id,
-            body="sent from phone",
-            owner_id=1,
-            intent="auto",
-            status="delivered",
-            client_request_id="ios-pending-tail-origin-1",
-            delivery_request_id="delivery-pending-tail-origin-1",
-            delivered_at=submitted_at,
-        )
-        db.add(session_input)
-        db.flush()
-        db.add(
-            SessionTurn(
-                session_id=session_id,
-                request_id="delivery-pending-tail-origin-1",
-                session_input_id=session_input.id,
-                state="created",
-                expected_user_text_hash=hash_user_text("sent from phone"),
-                baseline_event_id=baseline.id,
-                user_event_id=None,
-                user_submitted_at=submitted_at,
-            )
-        )
-        event_id = int(event.id)
-        input_id = int(session_input.id)
-        db.commit()
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/mobile-tail?limit=2")
-
-        assert response.status_code == 200
-        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
-        user_event = next(event for event in events if event["id"] == event_id)
-        assert user_event["input_origin"] == {
-            "authored_via": "longhouse",
-            "session_input_id": input_id,
-            "client_request_id": "ios-pending-tail-origin-1",
-        }
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_workspace_keeps_ambiguous_pending_input_origin_terminal(tmp_path):
-    session_local = _make_db(tmp_path)
-    submitted_at = datetime.now(timezone.utc)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        baseline = AgentEvent(
-            session_id=session_id,
-            role="assistant",
-            content_text="previous turn",
-            timestamp=submitted_at - timedelta(seconds=1),
-        )
-        first_event = AgentEvent(
-            session_id=session_id,
-            role="user",
-            content_text="repeat this",
-            timestamp=submitted_at,
-        )
-        second_event = AgentEvent(
-            session_id=session_id,
-            role="user",
-            content_text="repeat this",
-            timestamp=submitted_at + timedelta(seconds=1),
-        )
-        db.add_all([baseline, first_event, second_event])
-        db.flush()
-        for index in (1, 2):
-            session_input = SessionInput(
-                session_id=session_id,
-                body="repeat this",
-                owner_id=1,
-                intent="auto",
-                status="delivered",
-                client_request_id=f"ios-ambiguous-origin-{index}",
-                delivery_request_id=f"delivery-ambiguous-origin-{index}",
-                delivered_at=submitted_at,
-            )
-            db.add(session_input)
-            db.flush()
-            db.add(
-                SessionTurn(
-                    session_id=session_id,
-                    request_id=f"delivery-ambiguous-origin-{index}",
-                    session_input_id=session_input.id,
-                    state="created",
-                    expected_user_text_hash=hash_user_text("repeat this"),
-                    baseline_event_id=baseline.id,
-                    user_event_id=None,
-                    user_submitted_at=submitted_at + timedelta(milliseconds=index),
-                )
-            )
-        first_event_id = int(first_event.id)
-        second_event_id = int(second_event.id)
-        db.commit()
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
-
-        assert response.status_code == 200
-        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
-        for event_id in (first_event_id, second_event_id):
-            user_event = next(event for event in events if event["id"] == event_id)
-            assert user_event["input_origin"] == {
-                "authored_via": "terminal",
-                "session_input_id": None,
-                "client_request_id": None,
-            }
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_workspace_suppresses_pending_origin_identity_off_head(tmp_path):
-    session_local = _make_db(tmp_path)
-    submitted_at = datetime.now(timezone.utc)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        old_branch = AgentSessionBranch(session_id=session_id, branch_reason="root", is_head=0)
-        head_branch = AgentSessionBranch(session_id=session_id, branch_reason="rewrite", is_head=1)
-        db.add_all([old_branch, head_branch])
-        db.flush()
-        old_event = AgentEvent(
-            session_id=session_id,
-            branch_id=old_branch.id,
-            role="user",
-            content_text="sent from phone",
-            timestamp=submitted_at,
-        )
-        head_event = AgentEvent(
-            session_id=session_id,
-            branch_id=head_branch.id,
-            role="assistant",
-            content_text="new head",
-            timestamp=submitted_at + timedelta(seconds=1),
-        )
-        db.add_all([old_event, head_event])
-        db.flush()
-        session_input = SessionInput(
-            session_id=session_id,
-            body="sent from phone",
-            owner_id=1,
-            intent="auto",
-            status="delivered",
-            client_request_id="ios-pending-off-head-1",
-            delivery_request_id="delivery-pending-off-head-1",
-            delivered_at=submitted_at,
-        )
-        db.add(session_input)
-        db.flush()
-        db.add(
-            SessionTurn(
-                session_id=session_id,
-                request_id="delivery-pending-off-head-1",
-                session_input_id=session_input.id,
-                state="created",
-                expected_user_text_hash=hash_user_text("sent from phone"),
-                baseline_event_id=0,
-                user_event_id=None,
-                user_submitted_at=submitted_at,
-            )
-        )
-        old_event_id = int(old_event.id)
-        head_event_id = int(head_event.id)
-        db.commit()
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?branch_mode=all&limit=50")
-
-        assert response.status_code == 200
-        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
-        old = next(event for event in events if event["id"] == old_event_id)
-        head = next(event for event in events if event["id"] == head_event_id)
-        assert old["is_head_branch"] is False
-        assert old["input_origin"] is None
-        assert head["is_head_branch"] is True
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_workspace_suppresses_origin_identity_off_head(tmp_path):
-    session_local = _make_db(tmp_path)
-    submitted_at = datetime.now(timezone.utc)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-        old_branch = AgentSessionBranch(session_id=session_id, branch_reason="root", is_head=0)
-        head_branch = AgentSessionBranch(session_id=session_id, branch_reason="rewrite", is_head=1)
-        db.add_all([old_branch, head_branch])
-        db.flush()
-        old_event = AgentEvent(
-            session_id=session_id,
-            branch_id=old_branch.id,
-            role="user",
-            content_text="sent from phone",
-            timestamp=submitted_at,
-        )
-        head_event = AgentEvent(
-            session_id=session_id,
-            branch_id=head_branch.id,
-            role="assistant",
-            content_text="new head",
-            timestamp=submitted_at + timedelta(seconds=1),
-        )
-        db.add_all([old_event, head_event])
-        db.flush()
-        session_input = SessionInput(
-            session_id=session_id,
-            body="sent from phone",
-            owner_id=1,
-            intent="auto",
-            status="delivered",
-            client_request_id="ios-off-head-1",
-            delivery_request_id="delivery-off-head-1",
-            delivered_at=submitted_at,
-        )
-        db.add(session_input)
-        db.flush()
-        db.add(
-            SessionTurn(
-                session_id=session_id,
-                request_id="delivery-off-head-1",
-                session_input_id=session_input.id,
-                state="send_accepted",
-                user_event_id=old_event.id,
-                user_submitted_at=submitted_at,
-                send_accepted_at=submitted_at,
-            )
-        )
-        old_event_id = int(old_event.id)
-        head_event_id = int(head_event.id)
-        db.commit()
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?branch_mode=all&limit=50")
-
-        assert response.status_code == 200
-        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
-        old = next(event for event in events if event["id"] == old_event_id)
-        head = next(event for event in events if event["id"] == head_event_id)
-        assert old["is_head_branch"] is False
-        assert old["input_origin"] is None
-        assert head["is_head_branch"] is True
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_and_agents_session_workspace_return_same_body(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        session_id = _seed_session(db)
-
-    client = _make_client(session_local)
-    api_app.dependency_overrides[verify_agents_token] = lambda: None
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            timeline_response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
-            agents_response = client.get(f"/agents/sessions/{session_id}/workspace?limit=50")
-
-        assert timeline_response.status_code == 200
-        assert agents_response.status_code == 200
-        assert timeline_response.json() == agents_response.json()
-        assert timeline_response.headers["cache-control"] == "no-store"
-        assert agents_response.headers["cache-control"] == "no-store"
-        assert "load_projection;dur=" in timeline_response.headers["server-timing"]
-        assert "load_projection;dur=" in agents_response.headers["server-timing"]
-        assert "build_projection;dur=" in timeline_response.headers["server-timing"]
-        assert "build_projection;dur=" in agents_response.headers["server-timing"]
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
-
-def test_timeline_workspace_does_not_claim_live_control_without_runner_truth(tmp_path):
-    session_local = _make_db(tmp_path)
-    now = datetime.now(timezone.utc)
-    with session_local() as db:
-        _seed_user(db)
-        session = AgentSession(
-            id=uuid4(),
-            provider="claude",
-            environment="development",
-            project="timeline-auth",
-            device_id="cinder",
-            cwd="/tmp/timeline-auth",
-            git_repo=None,
-            git_branch="main",
-            started_at=now,
-            ended_at=None,
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        db.add(session)
-        db.flush()
-        db.refresh(session)
-        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-
-        seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge", state="detached")
-        db.add(
-            SessionRuntimeState(
-                runtime_key=f"claude:{session.id}",
-                session_id=session.id,
-                provider="claude",
-                device_id="cinder",
-                phase="idle",
-                phase_source="semantic",
-                phase_started_at=now,
-                last_runtime_signal_at=now,
-                last_progress_at=now,
-                last_live_at=now,
-                timeline_anchor_at=now,
-                freshness_expires_at=now + timedelta(minutes=5),
-                runtime_version=1,
-            )
-        )
-        db.commit()
-        session_id = str(session.id)
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
-
-        assert response.status_code == 200
-        capabilities = response.json()["session"]["capabilities"]
-        assert capabilities["live_control_available"] is False
-        assert capabilities["reply_to_live_session_available"] is False
-        assert capabilities["can_queue_next_input"] is False
-        assert capabilities["display_label"] == "Search only"
-        assert capabilities["host_reattach_available"] is False
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
+def test_timeline_session_workspace_bootstraps_session_thread_and_projection(live_catalog, live_catalog_client):  # noqa: F811
+    """One round trip returns the focused session, its thread and its first page."""
+
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    seeded = live_catalog.commit_session(
+        owner_id=owner,
+        device_id="cinder",
+        project="timeline-auth",
+        texts=("first turn", "second turn"),
+    )
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
+
+    response = live_catalog_client.get(f"/timeline/sessions/{seeded.session_id}/workspace", params={"limit": 50})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert response.headers["cache-control"] == "no-store"
+    assert payload["session"]["id"] == str(seeded.session_id)
+    assert payload["thread"]["head_session_id"] == str(seeded.session_id)
+    assert [row["id"] for row in payload["thread"]["sessions"]] == [str(seeded.session_id)]
+    assert payload["projection"]["focus_session_id"] == str(seeded.session_id)
+    assert payload["projection"]["total"] == 2
+    assert [item["event"]["content_text"] for item in payload["projection"]["items"]] == [
+        "first turn",
+        "second turn",
+    ]
+    assert "catalog_session;dur=" in response.headers["server-timing"]
+    assert "storage_manifest;dur=" in response.headers["server-timing"]
+
+
+def test_timeline_session_workspace_404s_for_a_session_the_catalog_does_not_hold(
+    live_catalog,  # noqa: F811
+    live_catalog_client,  # noqa: F811
+):
+    """No archive fallback remains: an unknown session is a 404, not a legacy read."""
+
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
+
+    response = live_catalog_client.get(f"/timeline/sessions/{uuid4()}/workspace", params={"limit": 50})
+
+    assert response.status_code == 404, response.text
+    assert "not found" in response.json()["detail"]
+
+
+def test_timeline_and_agents_session_workspace_return_same_body(live_catalog, live_catalog_client):  # noqa: F811
+    """The browser veneer and the machine surface must not drift apart."""
+
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    token = live_catalog.create_device_token(owner_id=owner, device_id="cinder")
+    seeded = live_catalog.commit_session(owner_id=owner, device_id="cinder", project="timeline-auth")
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
+
+    timeline_response = live_catalog_client.get(
+        f"/timeline/sessions/{seeded.session_id}/workspace",
+        params={"limit": 50},
+    )
+    agents_response = live_catalog_client.get(
+        f"/agents/sessions/{seeded.session_id}/workspace",
+        params={"limit": 50},
+        headers={"X-Agents-Token": token},
+    )
+
+    assert timeline_response.status_code == 200, timeline_response.text
+    assert agents_response.status_code == 200, agents_response.text
+    assert timeline_response.json() == agents_response.json()
+    assert timeline_response.headers["cache-control"] == "no-store"
+    assert agents_response.headers["cache-control"] == "no-store"
+
+
+def test_timeline_session_projection_pages_the_catalog_transcript(live_catalog, live_catalog_client):  # noqa: F811
+    """The browser projection route pages storage-v2, with no archive lane behind it."""
+
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    seeded = live_catalog.commit_session(
+        owner_id=owner,
+        device_id="cinder",
+        project="timeline-auth",
+        texts=("turn one", "turn two", "turn three"),
+    )
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
+
+    response = live_catalog_client.get(
+        f"/timeline/sessions/{seeded.session_id}/projection",
+        params={"limit": 2, "anchor": "tail"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["focus_session_id"] == str(seeded.session_id)
+    assert payload["total"] == 3
+    assert [item["event"]["content_text"] for item in payload["items"]] == ["turn two", "turn three"]
+
+    missing = live_catalog_client.get(f"/timeline/sessions/{uuid4()}/projection")
+    assert missing.status_code == 404, missing.text
+
+
+def test_timeline_session_mobile_tail_returns_the_catalog_tail(live_catalog, live_catalog_client):  # noqa: F811
+    """The iOS tail route reads storage-v2 and stamps the revision it read."""
+
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    seeded = live_catalog.commit_session(
+        owner_id=owner,
+        device_id="cinder",
+        project="timeline-auth",
+        texts=("turn one", "turn two", "turn three"),
+    )
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
+
+    response = live_catalog_client.get(
+        f"/timeline/sessions/{seeded.session_id}/mobile-tail",
+        params={"limit": 2},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert response.headers["cache-control"] == "no-store"
+    assert payload["session"]["id"] == str(seeded.session_id)
+    assert [item["event"]["content_text"] for item in payload["projection"]["items"]] == ["turn two", "turn three"]
+    assert payload["snapshot_event_id"] == payload["workspace_revision"]["latest_event_id"]
+
+    missing = live_catalog_client.get(f"/timeline/sessions/{uuid4()}/mobile-tail")
+    assert missing.status_code == 404, missing.text
 
 
 def test_timeline_machine_workspaces_accept_browser_session_cookie(live_catalog, live_catalog_client):  # noqa: F811

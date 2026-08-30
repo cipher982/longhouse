@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -7,6 +8,10 @@ import pytest
 from fastapi import HTTPException
 from starlette.responses import Response
 
+from zerg.routers import timeline as timeline_router
+from zerg.routers.timeline import get_timeline_session_events
+from zerg.routers.timeline import get_timeline_session_mobile_tail
+from zerg.routers.timeline import get_timeline_session_projection
 from zerg.routers.timeline import get_timeline_session_workspace
 from zerg.services.storage_v2_export import build_storage_v2_raw_export
 from zerg.storage_v2.raw_objects import RawRecord
@@ -68,17 +73,33 @@ async def test_raw_export_streams_verified_objects_in_source_order(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_production_workspace_never_falls_back_to_legacy_sqlite(monkeypatch):
+async def test_workspace_never_falls_back_to_legacy_sqlite(monkeypatch):
+    """A missing storage-v2 workspace is a 404 on every deployment, tests included.
+
+    The legacy archive branch used to be reachable whenever ``TESTING`` was set,
+    which made the test suite the only executor of a path production could never
+    take. There is no second branch left to fall into: none of these routes even
+    accepts an archive session factory, so no environment variable can re-open
+    one.
+    """
+
     session_id = UUID("11111111-2222-3333-4444-555555555555")
 
     async def missing_workspace(**_kwargs):
         return None
 
     monkeypatch.setattr("zerg.routers.timeline.build_storage_v2_workspace", missing_workspace)
-    monkeypatch.setattr("zerg.routers.timeline.get_settings", lambda: SimpleNamespace(testing=False))
 
-    def forbidden_legacy_factory():
-        raise AssertionError("production must not open legacy SQLite")
+    for endpoint in (
+        get_timeline_session_workspace,
+        get_timeline_session_events,
+        get_timeline_session_projection,
+        get_timeline_session_mobile_tail,
+    ):
+        parameters = inspect.signature(endpoint).parameters
+        assert "legacy_session_factory" not in parameters, endpoint.__name__
+
+    assert "get_settings" not in vars(timeline_router)
 
     with pytest.raises(HTTPException) as error:
         await get_timeline_session_workspace(
@@ -89,7 +110,6 @@ async def test_production_workspace_never_falls_back_to_legacy_sqlite(monkeypatc
             cursor=None,
             shared_by=None,
             share_token=None,
-            legacy_session_factory=forbidden_legacy_factory,
             current_user=SimpleNamespace(id=7),
         )
 

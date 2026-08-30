@@ -30,7 +30,6 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.main import api_app
-from zerg.services.session_workspace import get_legacy_workspace_session_factory
 from zerg.storage_v2.render_objects import DecodedRenderObject
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderRecord
@@ -247,7 +246,6 @@ async def test_large_session_workspace_tail_is_bounded_and_independent_of_catalo
         else (None, None, "1"),
     )
     api_app.dependency_overrides[get_current_browser_user] = lambda: SimpleNamespace(id=1)
-    api_app.dependency_overrides[get_legacy_workspace_session_factory] = lambda: None
 
     try:
         assert await asyncio.to_thread(mutation_started.wait, 1)
@@ -265,7 +263,6 @@ async def test_large_session_workspace_tail_is_bounded_and_independent_of_catalo
         assert not blocked.done()
     finally:
         api_app.dependency_overrides.pop(get_current_browser_user, None)
-        api_app.dependency_overrides.pop(get_legacy_workspace_session_factory, None)
         release_mutation.set()
         await blocked
         await catalog.close()

@@ -9,8 +9,6 @@ from __future__ import annotations
 from collections.abc import Collection
 from collections.abc import Sequence
 from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
 from typing import Any
 from uuid import UUID
 
@@ -24,109 +22,12 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
-from zerg.services.agents import AgentsStore
-from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_capabilities_from_rows
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_runtime import build_runtime_view
-from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_views import WallSessionResponse
-
-
-def query_wall_sessions(
-    db: Session,
-    *,
-    repo: str | None = None,
-    project: str | None = None,
-    days: int = 7,
-    limit: int = 50,
-    include_automation: bool = False,
-) -> list[WallSessionResponse]:
-    """Return raw wall sessions for repo/project coordination queries."""
-    store = AgentsStore(db)
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    fetch_limit = limit * 4 if repo else limit
-
-    sessions, _total = store.list_sessions(
-        project=project,
-        provider=None,
-        environment=None,
-        include_test=False,
-        device_id=None,
-        since=since,
-        query=None,
-        limit=fetch_limit,
-        offset=0,
-        include_automation=include_automation,
-        anchor_on_activity=True,
-    )
-
-    if repo:
-        repo_lower = repo.lower()
-        sessions = [
-            session
-            for session in sessions
-            if (session.git_repo and repo_lower in session.git_repo.lower()) or (session.cwd and repo_lower in session.cwd.lower())
-        ]
-    sessions = sessions[:limit]
-
-    session_ids = [session.id for session in sessions]
-    last_activity = store.get_last_activity_map(session_ids)
-    last_user_msg = store.get_last_timestamp_by_role_map(session_ids, "user")
-    last_tool_call = store.get_last_tool_call_map(session_ids)
-    runtime_state_map = load_runtime_state_map(db, session_ids)
-    kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
-    now = datetime.now(timezone.utc)
-    items: list[WallSessionResponse] = []
-    for session in sessions:
-        kernel_capabilities = kernel_capabilities_map.get(session.id)
-        runtime_overlay = resolve_runtime_overlay(
-            session,
-            last_activity_at=last_activity.get(session.id),
-            runtime_state_map=runtime_state_map,
-            now=now,
-        )
-        has_live_presence = runtime_overlay.presence_state is not None
-        presence_state = runtime_overlay.presence_state
-
-        items.append(
-            WallSessionResponse(
-                session_id=str(session.id),
-                device_name=getattr(session, "device_name", None)
-                or (session.device_id.replace("shipper-", "") if session.device_id else None),
-                device_id=session.device_id,
-                cwd=session.cwd,
-                git_repo=session.git_repo,
-                git_branch=session.git_branch,
-                project=session.project,
-                provider=session.provider,
-                summary_title=getattr(session, "summary_title", None),
-                started_at=session.started_at,
-                last_event_at=last_activity.get(session.id),
-                last_user_message_at=last_user_msg.get(session.id),
-                last_tool_call_at=last_tool_call.get(session.id),
-                has_live_presence=has_live_presence,
-                presence_state=presence_state,
-                kernel_control_label=(kernel_capabilities.control_label if kernel_capabilities is not None else None),
-                kernel_live_control_available=(
-                    bool(kernel_capabilities.live_control_available) if kernel_capabilities is not None else False
-                ),
-                kernel_host_reattach_available=(
-                    bool(kernel_capabilities.host_reattach_available) if kernel_capabilities is not None else False
-                ),
-                kernel_observe_only=(bool(kernel_capabilities.observe_only) if kernel_capabilities is not None else False),
-                kernel_search_only=(bool(kernel_capabilities.search_only) if kernel_capabilities is not None else False),
-                kernel_staleness_reason=(kernel_capabilities.staleness_reason if kernel_capabilities is not None else None),
-                user_messages=session.user_messages or 0,
-                assistant_messages=session.assistant_messages or 0,
-                tool_calls=session.tool_calls or 0,
-            )
-        )
-
-    return items
 
 
 def project_storage_v2_wall(

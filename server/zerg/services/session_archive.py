@@ -15,13 +15,11 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogUnavailable
-from zerg.services.agents import AgentsStore
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.raw_object_workers import get_raw_object_worker_pool
-from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_kernel_projection import project_session_lineage_fields
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.utils.time import UTCBaseModel
@@ -94,65 +92,6 @@ def _encode_jsonl_payload(jsonl_bytes: bytes) -> tuple[str, str]:
     compressed = gzip.compress(jsonl_bytes, mtime=0)
     encoded = base64.b64encode(compressed).decode("ascii")
     return raw_sha, encoded
-
-
-def build_session_archive_bundle(
-    db: Session,
-    session_id: UUID,
-    *,
-    branch_mode: str = "head",
-) -> SessionArchiveBundleResponse | None:
-    """Build a versioned archive bundle for the current head transcript."""
-    if branch_mode != "head":
-        raise ValueError("branch_mode must be 'head' for archive bundle export")
-
-    result = AgentsStore(db).export_session_jsonl(session_id, branch_mode=branch_mode)
-    if result is None:
-        return None
-
-    jsonl_bytes, session = result
-    payload_sha, encoded_payload = _encode_jsonl_payload(jsonl_bytes)
-    kernel_projection = project_session_kernel_fields(db, session)
-    lineage_projection = kernel_projection.lineage
-    capabilities = kernel_projection.capabilities
-
-    return SessionArchiveBundleResponse(
-        bundle_version=BUNDLE_VERSION,
-        exported_at=datetime.now(timezone.utc),
-        session=SessionArchiveSessionResponse(
-            id=str(session.id),
-            provider=session.provider,
-            provider_session_id=kernel_projection.provider_session_id,
-            project=session.project,
-            device_id=session.device_id,
-            device_name=session.device_name,
-            cwd=session.cwd,
-            git_repo=session.git_repo,
-            git_branch=session.git_branch,
-            started_at=session.started_at,
-            ended_at=session.ended_at,
-            last_activity_at=session.last_activity_at,
-            thread_root_session_id=lineage_projection.thread_root_session_id,
-            continued_from_session_id=lineage_projection.continued_from_session_id,
-            continuation_kind=lineage_projection.continuation_kind,
-            origin_label=lineage_projection.origin_label,
-            execution_home=capabilities.execution_home.value,
-            managed_transport=(capabilities.managed_transport.value if capabilities.managed_transport else None),
-            summary_title=session.summary_title,
-            summary=session.summary,
-            transcript_revision=int(getattr(session, "transcript_revision", 0) or 0),
-            summary_revision=int(getattr(session, "summary_revision", 0) or 0),
-            embedding_revision=int(getattr(session, "embedding_revision", 0) or 0),
-            is_sidechain=lineage_projection.is_sidechain,
-        ),
-        archive=SessionArchivePayloadResponse(
-            format="jsonl",
-            branch_mode=branch_mode,
-            sha256=payload_sha,
-            bytes=len(jsonl_bytes),
-            jsonl_b64_gzip=encoded_payload,
-        ),
-    )
 
 
 def build_session_archive_manifest_item(db: Session, session) -> SessionArchiveManifestItemResponse:
@@ -324,7 +263,6 @@ __all__ = [
     "SessionArchiveManifestItemResponse",
     "SessionArchiveManifestResponse",
     "build_session_archive_manifest_item",
-    "build_session_archive_bundle",
     "build_storage_v2_archive_bundle",
     "build_storage_v2_archive_manifest",
 ]

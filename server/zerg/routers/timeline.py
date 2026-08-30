@@ -33,7 +33,6 @@ from sse_starlette.sse import EventSourceResponse
 
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
-from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
@@ -58,8 +57,6 @@ from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
-from zerg.services.session_shares import SessionShareError
-from zerg.services.session_shares import resolve_session_share
 from zerg.services.session_views import FiltersResponse
 from zerg.services.session_views import RecallContextResponse
 from zerg.services.session_views import RecallResponse
@@ -83,11 +80,6 @@ from zerg.services.session_views import SessionTimelineVisibilityRequest
 from zerg.services.session_views import SessionTimelineVisibilityResponse
 from zerg.services.session_views import SessionTurnEnvelopeResponse
 from zerg.services.session_views import SessionTurnsListResponse
-from zerg.services.session_views import SessionWorkspaceResponse
-from zerg.services.session_workspace import build_session_mobile_tail
-from zerg.services.session_workspace import build_session_workspace
-from zerg.services.session_workspace import get_legacy_workspace_session_factory
-from zerg.services.session_workspace import resolve_session_sharer
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 from zerg.services.storage_v2_export import build_storage_v2_raw_export
 from zerg.services.storage_v2_workspace import build_storage_v2_workspace
@@ -862,7 +854,6 @@ async def get_timeline_session_events(
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
-    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder(surface="session_detail")
@@ -875,34 +866,8 @@ async def get_timeline_session_events(
         anchor=anchor,
         timing=timing,
     )
-    if storage_workspace is None and not get_settings().testing:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if storage_workspace is None:
-        assert legacy_session_factory is not None
-
-        def build_legacy_events():
-            with legacy_session_factory() as db:
-                return asyncio.run(
-                    _sessions_router.get_session_events(
-                        session_id=session_id,
-                        thread_id=thread_id,
-                        roles=roles,
-                        tool_name=tool_name,
-                        query=query,
-                        context_mode=context_mode,
-                        branch_mode=branch_mode,
-                        anchor=anchor,
-                        limit=limit,
-                        offset=offset,
-                        db=db,
-                        _auth=None,
-                        _single=None,
-                    )
-                )
-
-        result = await asyncio.to_thread(build_legacy_events)
-        timing.apply(response)
-        return result
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     projection = storage_workspace["projection"]
     role_filter = {value.strip() for value in roles.split(",") if value.strip()} if roles else None
     events = [item["event"] for item in projection["items"] if item.get("kind") == "event" and item.get("event")]
@@ -939,7 +904,6 @@ async def get_timeline_session_projection(
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
-    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     current_user=Depends(get_current_browser_user),
 ):
     storage_workspace = await build_storage_v2_workspace(
@@ -950,29 +914,8 @@ async def get_timeline_session_projection(
         cursor=cursor,
         anchor=anchor,
     )
-    if storage_workspace is None and not get_settings().testing:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if storage_workspace is None:
-        assert legacy_session_factory is not None
-
-        def build_legacy_projection():
-            with legacy_session_factory() as db:
-                return asyncio.run(
-                    _sessions_router.get_session_projection(
-                        session_id=session_id,
-                        thread_id=thread_id,
-                        branch_mode=branch_mode,
-                        anchor=anchor,
-                        limit=limit,
-                        offset=offset,
-                        response=response,
-                        db=db,
-                        _auth=None,
-                        _single=None,
-                    )
-                )
-
-        return await asyncio.to_thread(build_legacy_projection)
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     return storage_workspace["projection"]
 
 
@@ -996,9 +939,13 @@ async def get_timeline_session_workspace(
         None,
         description="Signed share token. When valid, this supersedes unsigned shared_by attribution.",
     ),
-    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     current_user=Depends(get_current_browser_user),
 ):
+    # ``shared_by``/``share_token`` are accepted and currently unused: sharer
+    # attribution only ever resolved inside the deleted archive branch, and the
+    # routes that mint a share token are shelved in ``routers/session_shares.py``.
+    # They stay on the signature because the web client still sends them; making
+    # the pill work again is a storage-v2 change, not a query-parameter change.
     timing = ServerTimingRecorder(surface="session_detail")
     response.headers["Cache-Control"] = "no-store"
     storage_workspace = await build_storage_v2_workspace(
@@ -1009,43 +956,8 @@ async def get_timeline_session_workspace(
         cursor=cursor,
         timing=timing,
     )
-    if storage_workspace is None and not get_settings().testing:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if storage_workspace is None:
-        assert legacy_session_factory is not None
-
-        def build_legacy_workspace() -> SessionWorkspaceResponse:
-            with legacy_session_factory() as db:
-                sharer = None
-                if share_token:
-                    try:
-                        resolved_share = resolve_session_share(
-                            db,
-                            token=share_token,
-                            actor_user_id=int(current_user.id),
-                            expected_session_id=session_id,
-                            record_access=False,
-                        )
-                    except SessionShareError as exc:
-                        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-                    sharer = resolved_share.sharer
-                elif shared_by is not None:
-                    sharer = resolve_session_sharer(db, shared_by)
-                if sharer is not None and int(current_user.id) == sharer.id:
-                    sharer = None
-                return build_session_workspace(
-                    db=db,
-                    session_id=session_id,
-                    branch_mode=branch_mode,
-                    limit=limit,
-                    timing=timing,
-                    owner_id=int(current_user.id),
-                    sharer=sharer,
-                )
-
-        result = await asyncio.to_thread(build_legacy_workspace)
-        timing.apply(response)
-        return result
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     timing.apply(response)
     return storage_workspace
 
@@ -1066,7 +978,6 @@ async def get_timeline_session_mobile_tail(
         description="Previous snapshot marker for older-page drift detection",
     ),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
-    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder(surface="session_detail")
@@ -1079,33 +990,8 @@ async def get_timeline_session_mobile_tail(
         cursor=cursor,
         timing=timing,
     )
-    if storage_workspace is None and not get_settings().testing:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if storage_workspace is None:
-        assert legacy_session_factory is not None
-
-        def build_legacy_tail() -> SessionMobileTailResponse:
-            legacy_snapshot_event_id: int | None = None
-            if snapshot_event_id is not None:
-                try:
-                    legacy_snapshot_event_id = int(snapshot_event_id)
-                except ValueError as exc:
-                    raise HTTPException(status_code=422, detail="snapshot_event_id must be a legacy integer") from exc
-            with legacy_session_factory() as db:
-                return build_session_mobile_tail(
-                    db=db,
-                    session_id=session_id,
-                    branch_mode=branch_mode,
-                    limit=limit,
-                    offset=offset,
-                    snapshot_event_id=legacy_snapshot_event_id,
-                    timing=timing,
-                    owner_id=int(current_user.id),
-                )
-
-        result = await asyncio.to_thread(build_legacy_tail)
-        timing.apply(response)
-        return result
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     timing.apply(response)
     return {
         "session": storage_workspace["session"],

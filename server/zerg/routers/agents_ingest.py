@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session
 
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.config import get_settings
-from zerg.database import catalog_db_dependency
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
@@ -30,20 +29,10 @@ from zerg.services.agents import SessionIngest
 from zerg.services.session_views import IngestResponse
 
 logger = logging.getLogger(__name__)
-_catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 SHIP_TRACE_HEADER = "X-Longhouse-Ship-Trace"
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
-
-
-def _legacy_ingest_db_dependency():
-    """Avoid opening SQLite when the production storage-v2 cutover rejects v1."""
-
-    yield None
-
-
-ingest_db_dependency = _catalog_db_dependency if get_settings().testing else _legacy_ingest_db_dependency
 
 
 def _unix_ms() -> int:
@@ -877,7 +866,6 @@ def _decompress_bounded_zstd(body: bytes) -> bytes:
 async def ingest_session(
     request: Request,
     response: Response,
-    db: Session | None = Depends(ingest_db_dependency),
     auth_token: DeviceToken | ManagedSessionToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> IngestResponse:

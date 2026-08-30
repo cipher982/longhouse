@@ -57,11 +57,12 @@ _SESSION_PAGE = 500
 # The Runtime Host keeps a second, older copy of the same transcripts: the
 # archive database (``events``, ``source_lines``, ``archive_chunks`` and the
 # other session-keyed tables under ``zerg.models.agents``), its content-addressed
-# archive media blobs, and the per-session archive chunk directory. Ingest still
-# writes it (``AgentsStore.ingest_session``), and nothing in this service or in
-# ``storage.session.delete.v2`` removes any of it -- catalogd owns the live
-# database only. Until an archive purge exists, every deletion is incomplete and
-# has to say so.
+# archive media blobs, and the per-session archive chunk directory. Nothing
+# writes it any more -- ``POST /agents/ingest`` answers 426 and transcripts land
+# through storage-v2 -- but nothing in this service or in
+# ``storage.session.delete.v2`` removes what is already there either: catalogd
+# owns the live database only. Until an archive purge exists, every deletion of
+# a pre-storage-v2 session is incomplete and has to say so.
 _ARCHIVE_TIER_UNREACHABLE = (
     "your transcript rows in the archive database were not deleted: events, source_lines, "
     "archive_chunks, the archive media blobs, and the per-session archive chunk directory are a "
