@@ -340,11 +340,10 @@ export default function SessionsPage() {
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((thread: TimelineSessionCard) => {
     const detailSession = thread.detail;
-    const matchEventId = debouncedQuery ? detailSession.match_event_id : null;
-    navigate(buildSessionDetailPath(detailSession, matchEventId), {
+    navigate(buildSessionDetailPath(detailSession, detailSession.match_event_id), {
       state: { from: location.pathname + location.search },
     });
-  }, [navigate, location, debouncedQuery]);
+  }, [navigate, location]);
 
   // Load more sessions
   const handleLoadMore = useCallback(() => {

@@ -804,6 +804,27 @@ describe("SessionsPage", () => {
     });
   });
 
+  it("opens the matched event carried by a timeline result", async () => {
+    const navigate = vi.fn();
+    vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigate);
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        sessions: [makeTimelineCard({ match_event_id: "event-42" })],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderSessionsPage();
+
+    fireEvent.click(await screen.findByTestId("session-row"));
+
+    expect(navigate).toHaveBeenCalledWith("/timeline/session-1?event_id=event-42", {
+      state: { from: "/timeline" },
+    });
+  });
+
   it("keeps pagination in the URL-owned filter contract", async () => {
     const user = userEvent.setup();
     renderSessionsPage("/timeline?project=zerg");

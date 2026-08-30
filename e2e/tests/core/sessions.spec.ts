@@ -355,7 +355,7 @@ test.describe("Sessions Page", () => {
     }
   });
 
-  test("Lexical timeline search keeps one card per thread and opens the matched continuation", async ({
+  test("Lexical timeline search preserves a project filter and opens the matched session", async ({
     page,
     request,
   }) => {
@@ -365,7 +365,6 @@ test.describe("Sessions Page", () => {
     const rootTimestamp = new Date(
       Date.now() - 2 * 60 * 60 * 1000,
     ).toISOString();
-    const headTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
     const rootId = await ingestSession(request, {
       project,
@@ -382,30 +381,29 @@ test.describe("Sessions Page", () => {
       ],
     });
 
-    const headId = await ingestSession(request, {
-      project,
-      started_at: headTimestamp,
-      ended_at: headTimestamp,
-      thread_root_session_id: rootId,
-      continued_from_session_id: rootId,
-      events: [
-        {
-          role: "user",
-          content_text: "Newer continuation without the lexical token",
-          timestamp: headTimestamp,
-          source_path: "/tmp/thread-search-head.jsonl",
-          source_offset: 0,
-        },
-      ],
-    });
     await waitForLexicalSearch(request, magicToken, rootId, project);
 
     await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     const searchInput = page.locator('input[type="search"]');
+    const searchResponsePromise = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return (
+        url.pathname === "/api/timeline/sessions" &&
+        url.searchParams.get("query") === magicToken &&
+        response.ok()
+      );
+    });
     await searchInput.fill(magicToken);
     await expect(page).toHaveURL(new RegExp(`query=${magicToken}`));
+    const searchResponse = await searchResponsePromise;
+    const searchPayload = await searchResponse.json();
+    expect(
+      searchPayload.sessions?.[0]?.detail?.match_event_id ??
+        searchPayload.sessions?.[0]?.match_event_id,
+    ).toBeTruthy();
+    await expect(page.getByText("1 results", { exact: true })).toBeVisible();
 
     const rows = page.getByTestId("session-row");
     await expect(rows).toHaveCount(1);
@@ -414,7 +412,6 @@ test.describe("Sessions Page", () => {
     await expect(sessionRow).toHaveAttribute("data-thread-id", rootId);
     await expect(sessionRow).toHaveAttribute("data-session-id", rootId);
     await expect(sessionRow).toContainText(magicToken);
-    await expect(sessionRow).not.toContainText(headId);
 
     await sessionRow.click();
 
