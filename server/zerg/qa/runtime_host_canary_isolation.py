@@ -27,7 +27,7 @@ def runtime_host_request(
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = json.dumps(body, sort_keys=True).encode() if body is not None else None
-    endpoint = path if path.startswith("/api/") else f"/api/agents/{path.lstrip('/')}"
+    endpoint = f"/api/agents/{path.lstrip('/')}"
     request = urllib.request.Request(
         f"{api_url.rstrip('/')}{endpoint}",
         headers={
@@ -101,10 +101,11 @@ def hide_and_verify_canary_isolation(
     while time.monotonic() < deadline:
         direct = request(f"sessions/{session_id}", "GET", None)
         default = request(f"sessions?{query}", "GET", None)
-        # The removed /api/agents/sessions/active route depended on the archive
-        # database and never served on a real catalogd Runtime Host.  The live
-        # timeline is the actual open-session product surface.
-        open_sessions = request(f"/api/timeline/sessions?{open_query}", "GET", None)
+        # The canonical machine list is a flat projection of the same live
+        # catalog timeline served to the browser.  Read it with the factory's
+        # machine credential so this assertion exercises a route that accepts
+        # X-Agents-Token and exposes session ids directly.
+        open_sessions = request(f"sessions?{open_query}", "GET", None)
         workspaces = request(
             f"machines/{urllib.parse.quote(device_id, safe='')}/workspaces?{workspace_query}",
             "GET",
