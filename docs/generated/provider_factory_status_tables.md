@@ -7,7 +7,7 @@
 | codex | release_poll | staged_release | runs — 2 qualification scenarios + 32 harness scenarios |
 | codex | push | generated_fake | runs — 1 scenario |
 | codex | weekly_cron | generated_fake | runs — 32 scenarios |
-| codex | manual | observed_install | never runs — remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'console_adapter_release_contract_preserved:interrupt_unsupported', 'coordination_instructions_model_visible_after_compaction', 'helm_launch_visibility_preserved', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss'] |
+| codex | manual | observed_install | never runs — remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'branch_fork_produces_a_new_thread', 'console_adapter_release_contract_preserved:interrupt_unsupported', 'coordination_instructions_model_visible_after_compaction', 'helm_launch_visibility_preserved', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss'] |
 | claude | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | claude | push | generated_fake | runs — 4 scenarios |
 | claude | weekly_cron | generated_fake | runs — 32 scenarios |

@@ -8,6 +8,7 @@ ASSERTIONS_BY_SCENARIO = {
     "helm_cold_resume": ("cold_resume_registers_continuous_thread",),
     "helm_live_reattach": ("live_reattach_does_not_spawn_owner",),
     "console_thread_continue": ("console_continuation_is_distinct",),
+    "console_thread_fork": ("branch_fork_produces_a_new_thread",),
     "resume_identity_continuity": ("session_thread_and_machine_identity_continue",),
     "resume_attempt_idempotency": ("resume_attempt_is_idempotent",),
     "resume_single_owner": ("one_local_provider_owner_wins",),
@@ -87,6 +88,22 @@ def assertions_for(scenario_id: str, observation: Mapping[str, object]) -> dict[
                 and observation.get("same_provider_thread") is True
                 and observation.get("turn_created") is True
                 and observation.get("console_run_created") is True
+            )
+        }
+    if scenario_id == "console_thread_fork":
+        # The mirror image of console_thread_continue. A branch's first turn
+        # must land on a *different* provider thread while still carrying the
+        # parent's context, and the child's own thread is what its later turns
+        # continue. A fork that returned the parent thread would put two
+        # Longhouse sessions on one rollout, so same_provider_thread being
+        # False is the assertion, not an incidental detail.
+        return {
+            "branch_fork_produces_a_new_thread": (
+                observation.get("mode") == "console"
+                and observation.get("same_provider_thread") is False
+                and observation.get("parent_context_recalled") is True
+                and observation.get("child_binding_names_child_thread") is True
+                and observation.get("second_turn_continues_child") is True
             )
         }
     if scenario_id == "resume_identity_continuity":

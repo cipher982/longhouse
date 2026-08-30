@@ -137,6 +137,27 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+    # Branching is its own operation, not a flavour of resume. Its assertion is
+    # the mirror image of the Console continuation one: a continuation must land
+    # on the same provider thread, a branch must land on a different one. Held
+    # separately from the shared Helm-resume assertion block, because only Codex
+    # can fork today and aliasing that block would assert the capability for
+    # three providers that cannot.
+    session.branch.console:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.branch_console
+      action_gate: strict
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: branch_fork_produces_a_new_thread
+        scenario_id: console_thread_fork
+        oracle_source: server/zerg/qa/provider_resume_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.resume.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -292,6 +313,10 @@ providers:
 
   can_resume: true
   turn_start: true
+  # Branching forks the parent thread rather than resuming it, so a build
+  # that resumes is not thereby proven able to fork. Availability is gated
+  # on this, never inferred from can_resume.
+  fork_thread: true
   operation_evidence:
     launch_local:
       level: live_no_token
@@ -305,6 +330,12 @@ providers:
         tests
       disposition: "implemented"
       owner_action: "codex exec live-token transcript canary"
+      blocker: "budget"
+    fork_thread:
+      level: live_no_token
+      source: engine codex_exec installed_codex_forks_into_a_new_thread_that_remembers_the_parent
+      disposition: "implemented"
+      owner_action: "fork canary in the release lane rather than run by hand"
       blocker: "budget"
     reattach:
       level: live_no_token
@@ -622,7 +653,15 @@ providers:
 
   can_resume: true
   turn_start: true
+  fork_thread: false
   operation_evidence:
+    fork_thread:
+      level: none
+      source: not implemented; `claude --resume ID --fork-session` verified present
+        against installed 2.1.247 but claude_print still binds the parent identity
+      disposition: "not_implemented"
+      owner_action: "teach claude_print to discover the forked session id before
+        binding, then add the installed-binary fork canary beside Codex's"
     launch_local:
       level: live_no_token
       source: longhouse provider-live canary --provider claude binary/auth/channel/PTY
@@ -865,7 +904,13 @@ providers:
         max_age_seconds: 604800
   can_resume: true
   turn_start: true
+  fork_thread: false
   operation_evidence:
+    fork_thread:
+      level: none
+      source: not implemented; no fork surface observed on the OpenCode run adapter
+      disposition: "not_implemented"
+      owner_action: "observe whether OpenCode can branch a session and record the surface"
     launch_local:
       level: live_no_token
       source: longhouse provider-live canary --provider opencode server readiness/schema/session
@@ -1086,7 +1131,13 @@ providers:
         max_age_seconds: 86400
   can_resume: false
   turn_start: true
+  fork_thread: false
   operation_evidence:
+    fork_thread:
+      level: none
+      source: not implemented; Console turns here are hermetic-graded with no reattach story
+      disposition: "not_implemented"
+      owner_action: "revisit only after Antigravity Console turns are proven beyond hermetic"
     launch_local:
       level: live_no_token
       source: longhouse provider-live canary --provider antigravity version/help/plugin
@@ -1386,7 +1437,13 @@ providers:
         max_age_seconds: 604800
   can_resume: true
   turn_start: true
+  fork_thread: false
   operation_evidence:
+    fork_thread:
+      level: none
+      source: not implemented; no fork surface observed on the Cursor print adapter
+      disposition: "not_implemented"
+      owner_action: "observe whether Cursor can branch a conversation and record the surface"
     launch_local:
       level: live_token
       source: "Gate 0 create_chat_resume and new_session_id launched stock cursor-agent 2026.07.23-e383d2b and completed a real turn; the product E2E launched through the installed facade and archived it. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json"
@@ -1545,7 +1602,13 @@ providers:
   capabilities: {}
   can_resume: false
   turn_start: true
+  fork_thread: false
   operation_evidence:
+    fork_thread:
+      level: none
+      source: not implemented; no fork surface observed on the Pi print adapter
+      disposition: "not_implemented"
+      owner_action: "observe whether Pi can branch a session and record the surface"
     launch_local:
       level: live_token
       source: "Real `pi -p` completed a bounded OpenRouter turn in a sandbox and wrote a session JSONL; the factory adapter launches the stock pi CLI."

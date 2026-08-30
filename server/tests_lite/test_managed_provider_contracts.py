@@ -52,6 +52,7 @@ def _manifest_item(provider: str = "test") -> dict:
         "startup_coordination_context": True,
         "run_once": False,
         "turn_start": True,
+        "fork_thread": False,
         "operation_evidence": {
             "launch_local": {"level": "hermetic", "source": "test"},
             "reattach": {"level": "hermetic", "source": "test"},
@@ -65,6 +66,7 @@ def _manifest_item(provider: str = "test") -> dict:
             "transcript_binding": {"level": "hermetic", "source": "test"},
             "run_once": {"level": "none", "source": "test"},
             "turn_start": {"level": "hermetic", "source": "test"},
+            "fork_thread": {"level": "none", "source": "test"},
         },
     }
 
@@ -206,7 +208,12 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "session.resume.helm",
         "session.turn.start",
     }
+    # Codex alone carries session.branch.console: branching forks the parent's
+    # thread, and only Codex has a proven fork surface. It is a separate cell
+    # from session.resume.helm because its assertion is the opposite one -- a
+    # continuation must land on the same provider thread, a branch must not.
     assert set(codex.capabilities) == expected | turn_boundary | {
+        "session.branch.console",
         "session.launch.helm",
         "session.resume.helm",
         "session.turn.start",

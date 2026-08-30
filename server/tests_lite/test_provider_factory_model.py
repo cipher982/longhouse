@@ -37,9 +37,15 @@ def test_capability_assertions_match_schema_scenario_count(facts) -> None:
     # maintenance-tier and Pi has no factory acquisition lane, so neither is
     # silently promoted by this inventory. A new capability cell must come with
     # a producer rather than silently inflating the qualification matrix.
+    # 30 -> 31 scenarios and 70 -> 71 assertions on 2026-08-30: session
+    # branching added console_thread_fork, which asserts the mirror image of
+    # console_thread_continue -- a branch's first turn must land on a different
+    # provider thread, where a Console continuation must land on the same one.
+    # Reusing the continuation oracle would have asserted exactly what branching
+    # must not do, so it is its own cell with its own producer.
     scenario_ids = {a.scenario_id for a in facts.capability_assertions}
-    assert len(scenario_ids) == 30
-    assert len(facts.capability_assertions) == 70
+    assert len(scenario_ids) == 31
+    assert len(facts.capability_assertions) == 71
 
 
 def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> None:

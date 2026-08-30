@@ -31,6 +31,10 @@ _REQUIRED_BOOL_FIELDS = (
     "startup_coordination_context",
     "can_resume",
     "turn_start",
+    # Forking a thread is not implied by resuming one: a build can continue a
+    # conversation without being able to branch it. Branch availability reads
+    # this rather than inferring capability from can_resume.
+    "fork_thread",
     "live_proof",
 )
 _STRING_LIST_FIELDS = (
@@ -81,6 +85,7 @@ _OPERATION_EVIDENCE_FIELDS = (
     "runtime_phase",
     "transcript_binding",
     "turn_start",
+    "fork_thread",
 )
 MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
     "send": "send_input",

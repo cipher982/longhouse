@@ -171,6 +171,33 @@
             }
           ]
         },
+        "session.branch.console": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.branch_console",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "branch_fork_produces_a_new_thread",
+              "scenario_id": "console_thread_fork",
+              "oracle_source": "server/zerg/qa/provider_resume_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
+            }
+          ]
+        },
         "session.resume.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -195,7 +222,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "native_provider_resume_proven",
@@ -207,7 +234,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "native_provider_resume_proven",
@@ -219,7 +246,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -231,7 +258,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "console_continuation_is_distinct",
@@ -243,7 +270,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "session_thread_and_machine_identity_continue",
@@ -255,7 +282,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "resume_attempt_is_idempotent",
@@ -266,7 +293,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "one_local_provider_owner_wins",
@@ -277,7 +304,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "stale_input_is_not_replayed",
@@ -288,7 +315,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "failed_resume_closes_attempt_and_restores_contract",
@@ -299,7 +326,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             }
           ]
         },
@@ -457,6 +484,7 @@
       },
       "can_resume": true,
       "turn_start": true,
+      "fork_thread": true,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -470,6 +498,13 @@
           "source": "engine codex_exec argv/runtime terminal tests plus server one-shot launch tests",
           "disposition": "implemented",
           "owner_action": "codex exec live-token transcript canary",
+          "blocker": "budget"
+        },
+        "fork_thread": {
+          "level": "live_no_token",
+          "source": "engine codex_exec installed_codex_forks_into_a_new_thread_that_remembers_the_parent",
+          "disposition": "implemented",
+          "owner_action": "fork canary in the release lane rather than run by hand",
           "blocker": "budget"
         },
         "reattach": {
@@ -768,7 +803,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "native_provider_resume_proven",
@@ -780,7 +815,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "native_provider_resume_proven",
@@ -792,7 +827,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -804,7 +839,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "console_continuation_is_distinct",
@@ -816,7 +851,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "session_thread_and_machine_identity_continue",
@@ -828,7 +863,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "resume_attempt_is_idempotent",
@@ -839,7 +874,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "one_local_provider_owner_wins",
@@ -850,7 +885,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "stale_input_is_not_replayed",
@@ -861,7 +896,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "failed_resume_closes_attempt_and_restores_contract",
@@ -872,7 +907,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             }
           ]
         },
@@ -1069,7 +1104,14 @@
       },
       "can_resume": true,
       "turn_start": true,
+      "fork_thread": false,
       "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "not implemented; `claude --resume ID --fork-session` verified present against installed 2.1.247 but claude_print still binds the parent identity",
+          "disposition": "not_implemented",
+          "owner_action": "teach claude_print to discover the forked session id before binding, then add the installed-binary fork canary beside Codex's"
+        },
         "launch_local": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary --provider claude binary/auth/channel/PTY checks",
@@ -1364,7 +1406,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "native_provider_resume_proven",
@@ -1376,7 +1418,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "native_provider_resume_proven",
@@ -1388,7 +1430,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -1400,7 +1442,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "console_continuation_is_distinct",
@@ -1412,7 +1454,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "session_thread_and_machine_identity_continue",
@@ -1424,7 +1466,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "resume_attempt_is_idempotent",
@@ -1435,7 +1477,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "one_local_provider_owner_wins",
@@ -1446,7 +1488,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "stale_input_is_not_replayed",
@@ -1457,7 +1499,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "failed_resume_closes_attempt_and_restores_contract",
@@ -1468,7 +1510,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             }
           ]
         },
@@ -1527,7 +1569,14 @@
       },
       "can_resume": true,
       "turn_start": true,
+      "fork_thread": false,
       "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "not implemented; no fork surface observed on the OpenCode run adapter",
+          "disposition": "not_implemented",
+          "owner_action": "observe whether OpenCode can branch a session and record the surface"
+        },
         "launch_local": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary --provider opencode server readiness/schema/session checks",
@@ -1768,7 +1817,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             }
           ]
         },
@@ -1827,7 +1876,14 @@
       },
       "can_resume": false,
       "turn_start": true,
+      "fork_thread": false,
       "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "not implemented; Console turns here are hermetic-graded with no reattach story",
+          "disposition": "not_implemented",
+          "owner_action": "revisit only after Antigravity Console turns are proven beyond hermetic"
+        },
         "launch_local": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary --provider antigravity version/help/plugin checks",
@@ -2099,7 +2155,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "native_provider_resume_proven",
@@ -2111,7 +2167,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "native_provider_resume_proven",
@@ -2123,7 +2179,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "live_reattach_does_not_spawn_owner",
@@ -2135,7 +2191,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "console_continuation_is_distinct",
@@ -2147,7 +2203,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "session_thread_and_machine_identity_continue",
@@ -2159,7 +2215,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "resume_attempt_is_idempotent",
@@ -2170,7 +2226,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "one_local_provider_owner_wins",
@@ -2181,7 +2237,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "stale_input_is_not_replayed",
@@ -2192,7 +2248,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             },
             {
               "id": "failed_resume_closes_attempt_and_restores_contract",
@@ -2203,7 +2259,7 @@
                 "hermetic"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "50c43ae5d7f6b54ecdadaad89f4da62da188f2662678dcda6e55b719e813796f"
+              "oracle_digest": "d44bc336e5b90dc49e1b3d79ec7544a7d5a3c2623bdde1215dfb52c89bb18f81"
             }
           ]
         },
@@ -2294,7 +2350,14 @@
       },
       "can_resume": true,
       "turn_start": true,
+      "fork_thread": false,
       "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "not implemented; no fork surface observed on the Cursor print adapter",
+          "disposition": "not_implemented",
+          "owner_action": "observe whether Cursor can branch a conversation and record the surface"
+        },
         "launch_local": {
           "level": "live_token",
           "source": "Gate 0 create_chat_resume and new_session_id launched stock cursor-agent 2026.07.23-e383d2b and completed a real turn; the product E2E launched through the installed facade and archived it. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json",
@@ -2471,7 +2534,14 @@
       "capabilities": {},
       "can_resume": false,
       "turn_start": true,
+      "fork_thread": false,
       "operation_evidence": {
+        "fork_thread": {
+          "level": "none",
+          "source": "not implemented; no fork surface observed on the Pi print adapter",
+          "disposition": "not_implemented",
+          "owner_action": "observe whether Pi can branch a session and record the surface"
+        },
         "launch_local": {
           "level": "live_token",
           "source": "Real `pi -p` completed a bounded OpenRouter turn in a sandbox and wrote a session JSONL; the factory adapter launches the stock pi CLI.",
