@@ -1769,6 +1769,7 @@ def test_live_control_lease_only_adopts_nonterminal_launch_readiness(tmp_path, i
                 run_id=None,
                 owner_id=1,
                 provider="cursor",
+                permission_mode="provider_local",
                 device_id="cinder",
                 device_name="cinder",
                 cwd="/tmp/cursor",

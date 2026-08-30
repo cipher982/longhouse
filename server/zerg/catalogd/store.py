@@ -3968,6 +3968,11 @@ class CatalogStore:
                     expires_at=launch["expires_at"],
                     launch_actor=plan.launch_actor,
                     launch_surface=plan.launch_surface,
+                    # The replay comparison below already reads
+                    # plan.permission_mode; not passing it here meant every Helm
+                    # session persisted as bypass, and an idempotent relaunch of
+                    # a provider_local session could never match its own row.
+                    permission_mode=plan.permission_mode,
                     provider_config=plan.provider_config,
                     environment=getattr(plan, "environment", "development"),
                     origin_kind=getattr(plan, "origin_kind", None),

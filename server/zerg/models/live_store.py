@@ -347,6 +347,12 @@ class LiveSessionCatalog(LiveBase):
     launch_actor = Column(String(32), nullable=True, index=True)
     launch_surface = Column(String(32), nullable=True, index=True)
     permission_mode = Column(String(32), nullable=False, server_default=text("'bypass'"))
+    # Where permission_mode came from. The column above is non-null with a
+    # `bypass` default and is manufactured in more than one place, so a stored
+    # `bypass` does not prove the session ran under bypass -- it may only prove
+    # nobody said otherwise. Anything deciding what a session is allowed to do
+    # must read this, and treat null as unknown rather than as permissive.
+    permission_mode_source = Column(String(32), nullable=True)
     last_attention_push_state = Column(String(64), nullable=True)
     last_attention_push_at = Column(DateTime(timezone=True), nullable=True)
     last_attention_notification_id = Column(String(36), nullable=True)

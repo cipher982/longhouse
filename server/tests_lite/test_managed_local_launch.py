@@ -854,3 +854,20 @@ def test_this_device_launch_returns_native_antigravity_hot_launch(client, device
     # is registered without send authority rather than optimistically granted.
     (connection,) = _launch_facts(payload["session_id"], owner=owner_id)["connections"]
     assert connection["can_send_input"] == 0
+
+
+def test_helm_launch_persists_the_approvals_it_actually_ran_under(live, client, device_headers, owner_id):
+    """A launch must record its own permission posture, not a default.
+
+    create_local_launch never passed plan.permission_mode into the catalog
+    shell, whose default was "bypass". A launch that deliberately ran under the
+    provider's own approvals therefore persisted as bypass -- and because the
+    replay comparison reads plan.permission_mode against the stored value, an
+    idempotent relaunch of that session could never match its own row either.
+    """
+
+    response = _launch(client, device_headers, permission_mode="provider_local")
+    assert response.status_code == 200, response.text
+    catalog = _launch_facts(response.json()["session_id"], owner=owner_id)["catalog"]
+
+    assert catalog["permission_mode"] == "provider_local"
