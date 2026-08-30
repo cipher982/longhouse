@@ -167,6 +167,11 @@ const backend = spawn('uv', [
         E2E_HATCH_PATH: join(__dirname, 'bin', 'hatch'),
         // Deterministic tool stubs for E2E (runner_exec/ssh_exec/web_search)
         LONGHOUSE_TOOL_STUBS_PATH: toolStubsPath,
+        // The core suite intentionally creates many storage-v2 sessions in one
+        // process. Keep its real background search lane ahead of that bounded
+        // fixture backlog without changing production's single-writer-friendly
+        // steady-state default.
+        LONGHOUSE_SEARCH_PROJECTOR_WORKERS: process.env.LONGHOUSE_SEARCH_PROJECTOR_WORKERS || '4',
         // Suppress Python logging noise for E2E tests
         LOG_LEVEL: 'ERROR',
         // Clear APP_PUBLIC_URL so backend /config.js returns empty WS_BASE_URL.
