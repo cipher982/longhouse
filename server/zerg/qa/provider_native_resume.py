@@ -272,6 +272,20 @@ class TranscriptShipper:
                     result["retry_sleep_secs"] = retry_delay_secs
                 elif "source_epoch_conflict_unresolved" in stderr:
                     attempt_retry_reason = "source_epoch_conflict_unresolved"
+                elif all(
+                    marker in stderr
+                    for marker in (
+                        "storage-v2 envelope POST returned 503",
+                        '"code":"resource_exhausted"',
+                        "catalog read lane is full",
+                    )
+                ):
+                    result["failure_code"] = "storage_v2_catalog_read_lane_full"
+                    result["http_status"] = 503
+                    result["http_status_phrase"] = http.HTTPStatus.SERVICE_UNAVAILABLE.phrase
+                    attempt_retry_reason = "storage_v2_catalog_read_lane_full"
+                    retry_delay_secs = _TRANSCRIPT_CAPABILITY_RETRY_SLEEP_SECS
+                    result["retry_sleep_secs"] = retry_delay_secs
                 elif "storage-v2 capability request returned non-2xx" in stderr:
                     result["failure_code"] = "storage_v2_capability_request_failed"
                     status_match = _HTTP_STATUS_ERROR_RE.search(stderr)

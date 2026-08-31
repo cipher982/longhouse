@@ -492,6 +492,55 @@ def test_transcript_shipper_retries_a_storage_capability_502_once(
     assert sleeps == [1.0]
 
 
+def test_transcript_shipper_retries_catalog_read_lane_exhaustion_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "Error: storage-v2 envelope POST returned 503 Service Unavailable: "
+                    '{"detail":{"code":"resource_exhausted","message":"catalog read lane is full"}}'
+                ),
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"protocol": "storage-v2", "events_shipped": 2}),
+                stderr="",
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
+    shipper = TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("resume-bootstrap")
+
+    assert receipt["status"] == "pass"
+    assert receipt["attempts"] == 2
+    assert receipt["retry_reason"] == "storage_v2_catalog_read_lane_full"
+    assert receipt["retry_sleep_secs"] == 1.0
+    assert receipt["events_shipped"] == 2
+    assert sleeps == [1.0]
+
+
 def test_transcript_shipper_retains_a_repeated_storage_capability_502(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
