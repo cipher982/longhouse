@@ -899,6 +899,20 @@ fn collect_managed_launch_recovery(
                     continue;
                 }
             };
+            // Modern registration receipts settle to `stopped` when the
+            // provider exits. That state is direct lifecycle authority: the
+            // retry is over and there is no running degraded launch left to
+            // surface, even when the provider scan itself returned no rows.
+            // `exhausted` is different because a non-retryable failure can
+            // exhaust recovery while the provider is still running.
+            if directory_name == "registration-retries"
+                && matches!(
+                    payload.get("registration_state").and_then(Value::as_str),
+                    Some("stopped" | "recovered")
+                )
+            {
+                continue;
+            }
             // A receipt for a session this machine no longer sees describes a
             // launch that is over. Reporting it as needing attention is a
             // permanent alarm about the past.
@@ -6793,6 +6807,34 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             collect_managed_launch_recovery(&status_path, &known_sessions(&["session-a"]));
         assert_eq!(recovered.active_count, 0);
         assert_eq!(recovered.exhausted_count, 0);
+    }
+
+    #[test]
+    fn stopped_registration_retry_is_not_a_current_fault_without_scan_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let agent_dir = root.path().join("agent");
+        let retry_dir = agent_dir
+            .join("managed-local")
+            .join("registration-retries");
+        std::fs::create_dir_all(&retry_dir).unwrap();
+        std::fs::write(
+            retry_dir.join("departed.json"),
+            r#"{
+                "schema_version": 2,
+                "session_id": "departed",
+                "registration_state": "stopped",
+                "recovery_exhausted": true
+            }"#,
+        )
+        .unwrap();
+
+        let health = collect_managed_launch_recovery(
+            &agent_dir.join("engine-status.json"),
+            &std::collections::HashSet::new(),
+        );
+        assert_eq!(health.active_count, 0);
+        assert_eq!(health.exhausted_count, 0);
+        assert!(!health.scan_error);
     }
 
     #[test]
