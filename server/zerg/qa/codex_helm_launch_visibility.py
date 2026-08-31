@@ -57,7 +57,7 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
-    producer_revision=9,
+    producer_revision=10,
     scenario_id=SCENARIO_ID,
     scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None),),

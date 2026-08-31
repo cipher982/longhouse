@@ -17,6 +17,8 @@ from collections.abc import Callable
 from typing import Any
 
 from zerg.services.session_title import is_resume_seed_marker
+from zerg.services.session_visibility_policy import SessionVisibilityFacts
+from zerg.services.session_visibility_policy import evaluate_origin_visibility
 
 RuntimeRequest = Callable[[str, str, dict[str, Any] | None], dict[str, Any]]
 
@@ -114,7 +116,18 @@ def hide_and_verify_canary_isolation(
         user_messages = int(direct.get("user_messages") or 0)
         anchor_title = str(direct.get("anchor_title") or "").strip()
         first_user_message = str(direct.get("first_user_message_preview") or "")
-        if user_messages == 0:
+        title_origin_eligible = evaluate_origin_visibility(
+            SessionVisibilityFacts(
+                provider=provider,
+                project=project,
+                cwd=cwd,
+                machine_id=device_id,
+                first_user_message=first_user_message,
+            )
+        ).title_origin_eligible
+        if not title_origin_eligible:
+            title_debt_basis = "origin_ineligible"
+        elif user_messages == 0:
             title_debt_basis = "no_user_messages"
         elif anchor_title:
             title_debt_basis = "anchor_title_present"

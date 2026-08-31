@@ -133,3 +133,32 @@ def test_canary_isolation_accepts_the_products_explicit_resume_seed_marker():
 
     assert receipt["status"] == "pass"
     assert receipt["title_debt_basis"] == "resume_seed_marker"
+
+
+def test_provider_factory_origin_is_not_misclassified_as_title_debt():
+    def request(path: str, _method: str, _body: dict | None) -> dict:
+        if path.endswith("timeline-visibility"):
+            return {"hidden": True}
+        if path == "sessions/session-1":
+            return {
+                "id": "session-1",
+                "user_messages": 1,
+                "first_user_message_preview": "Exercise the real human launch path",
+            }
+        if path.startswith("machines/"):
+            return {"workspaces": []}
+        return {"sessions": []}
+
+    receipt = hide_and_verify_canary_isolation(
+        request,
+        session_id="session-1",
+        provider="codex",
+        project="provider-factory-codex-launch-fixture",
+        device_id="provider-factory-resume",
+        cwd="/tmp/lch-fixture/workspace",
+        owned_processes_dead=lambda: True,
+        timeout_seconds=0.1,
+    )
+
+    assert receipt["status"] == "pass"
+    assert receipt["title_debt_basis"] == "origin_ineligible"
