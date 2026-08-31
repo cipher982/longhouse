@@ -154,8 +154,7 @@ jobs:
             --package-path desktop/LonghouseMenuBarHarness \
             --product LonghouseMenuBarHarnessMenuBar \
             --configuration release)"
-          cp "$PRODUCT_PATH" "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
-          chmod +x "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
+          echo "MENUBAR_BINARY=$PRODUCT_PATH" >> "$GITHUB_ENV"
 
       - name: Configure macOS signing keychain
         id: macos_signing
@@ -280,7 +279,7 @@ jobs:
           mkdir -p "$APP_STAGE_DIR"
 
           scripts/release/macos-package-app.sh \
-            --binary "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar" \
+            --binary "$MENUBAR_BINARY" \
             --app-name Longhouse \
             --exec-name Longhouse \
             --bundle-id ai.longhouse.app \
@@ -290,6 +289,16 @@ jobs:
             --icon-png web/public/favicon-512.png \
             --build-identity .build/build-identity.json \
             --lsuielement true
+
+      - name: Smoke packaged macOS desktop app
+        timeout-minutes: 2
+        run: |
+          RESOURCE_BUNDLE="$RUNNER_TEMP/macos-app-bundles/Longhouse.app/Contents/Resources/LonghouseMenuBarHarness_LonghouseMenuBarCore.bundle"
+          test -f "$RESOURCE_BUNDLE/LonghouseMenuIcon.png"
+          test -f "$RESOURCE_BUNDLE/desktop-app-setup.sh"
+          "$RUNNER_TEMP/macos-app-bundles/Longhouse.app/Contents/MacOS/Longhouse" \
+            --input desktop/LonghouseMenuBarHarness/Fixtures/healthy.json \
+            --quit-after 1
 
       - name: Sign macOS desktop app bundle
         env:
