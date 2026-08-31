@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,7 +26,7 @@ def test_registration_binds_one_codex_provider_release_cell():
     assert registration["scenario_id"] == "codex_helm_launch_visibility"
     assert registration["assertion_cells"] == [{"assertion_id": "helm_launch_visibility_preserved", "variant": None}]
     assert registration["credential_binding_ids"] == ["codex_provider_token", "runtime_host_control"]
-    assert registration["producer_revision"] == 8
+    assert registration["producer_revision"] == 9
     assert registration["scenario_revision"] == 6
     assert "open_working_set_with_factory_isolation" in registration["observed_activity"]
 
@@ -191,3 +192,43 @@ def test_launch_lane_records_the_session_before_asserting_visibility():
         "the launch lane must record the session id before waiting on canonical "
         "visibility, or a failed wait leaks the bridge it just started"
     )
+
+
+def test_infrastructure_failure_retains_cause_without_claiming_a_product_verdict(tmp_path, monkeypatch):
+    codex_bin = tmp_path / "codex"
+    codex_bin.write_bytes(b"fixture")
+
+    class Proxy:
+        def __init__(self, _target):
+            pass
+
+        def start(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(launch, "RuntimeHostRecordingProxy", Proxy)
+    monkeypatch.setattr(launch.bridge_canary, "_run", lambda *_args, **_kwargs: SimpleNamespace(stdout="codex 1.0"))
+    monkeypatch.setattr(
+        launch,
+        "_human_launch_sequence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError('Runtime Host HTTP 503: {"detail":{"code":"resource_exhausted"}}')
+        ),
+    )
+
+    result = launch.run_scenario(
+        argparse.Namespace(
+            api_url="https://runtime.invalid",
+            codex_bin=codex_bin,
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert result["status"] == "fail"
+    assert result["failure_code"] == "codex_helm_launch_visibility_failed"
+    assert "Runtime Host HTTP 503" in result["error"]
+    assert "observation" not in result
+    assert "assertions" not in result
+    assert {item["path"] for item in result["artifact_manifest"]} == {"provider-binary-receipt.json"}

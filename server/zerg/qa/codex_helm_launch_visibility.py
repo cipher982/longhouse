@@ -57,7 +57,7 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
-    producer_revision=8,
+    producer_revision=9,
     scenario_id=SCENARIO_ID,
     scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None),),
@@ -842,8 +842,6 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "status": "fail",
             "failure_code": "codex_helm_launch_visibility_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "observation": {"failure_code": "codex_helm_launch_visibility_failed"},
-            "assertions": {ASSERTION_ID: False},
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)
