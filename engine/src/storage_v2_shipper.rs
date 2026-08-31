@@ -1217,6 +1217,62 @@ async fn reconcile_lost_local_epoch(
         return Ok(false);
     }
 
+    let local_position =
+        source_epoch::lane_position(conn, prepared.source_epoch, SourceLane::Durable)?;
+    if local_position > 0 {
+        // This epoch is absent on the host, so its authoritative host
+        // watermark is zero even if salvaged local state remembers an older
+        // receipt. Byte-offset sources can safely replay from disk as a fresh
+        // replacement; record-ordinal stores cannot reconstruct old rows and
+        // must remain quarantined.
+        if envelope.range_kind != "byte_offset"
+            || prepared.range_start != local_position
+            || pending.range_start != local_position
+        {
+            return Ok(false);
+        }
+        let metadata = match std::fs::metadata(&pending.source_path) {
+            Ok(metadata) if metadata.len() >= prepared.range_end => metadata,
+            _ => return Ok(false),
+        };
+        let current_incarnation = crate::state::file_identity::identity_from_metadata(&metadata);
+        let registered_incarnation = crate::state::source_epoch::active_source_incarnation(
+            conn,
+            &envelope.provider,
+            &envelope.opaque_source_id,
+        )?;
+        if !crate::state::file_identity::file_identities_match(
+            registered_incarnation.as_deref(),
+            current_incarnation.as_deref(),
+        ) {
+            return Ok(false);
+        }
+        let transaction = conn
+            .transaction()
+            .context("open transaction for lost host epoch replay")?;
+        crate::state::source_epoch::resync_to_host_watermark(
+            &transaction,
+            prepared.source_epoch,
+            SourceLane::Durable,
+            0,
+        )?;
+        if !pending_source_envelope::discard_after_cursor_resync(
+            &transaction,
+            prepared.source_epoch,
+            &pending.envelope_id,
+        )? {
+            anyhow::bail!("lost host epoch envelope changed before replay rewind");
+        }
+        transaction.commit()?;
+        tracing::warn!(
+            source_epoch = %prepared.source_epoch,
+            previous_local_position = local_position,
+            provider = %envelope.provider,
+            "Rewound host-absent byte-offset epoch for full replacement replay"
+        );
+        return Ok(true);
+    }
+
     let mut replacement = envelope.clone();
     replacement.predecessor_source_epoch = Some(host_epoch.to_string());
     let replacement_body =
@@ -6552,13 +6608,18 @@ mod tests {
         let expected_replacement_host_epoch = replacement_host_epoch;
         let server = tokio::spawn(async move {
             let mut original: Option<StorageV2Envelope> = None;
-            for request_index in 0..8 {
+            for request_index in 0..11 {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let (request_line, body) = read_http_request(&mut socket).await;
                 let (status, response_body) = match request_index {
-                    0 => {
+                    0 | 3 => {
                         let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
                         assert!(envelope.predecessor_source_epoch.is_none());
+                        if request_index == 0 {
+                            assert!(envelope.range_start > 0);
+                        } else {
+                            assert_eq!(envelope.range_start, 0);
+                        }
                         original = Some(envelope);
                         (
                             "409 Conflict",
@@ -6575,12 +6636,12 @@ mod tests {
                             .to_string(),
                         )
                     }
-                    1 => (
+                    1 | 4 | 7 => (
                         "404 Not Found",
                         r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#
                             .to_string(),
                     ),
-                    2 => {
+                    2 | 5 => {
                         assert!(request_line.contains(&expected_host_epoch.to_string()));
                         let envelope = original.as_ref().unwrap();
                         (
@@ -6617,7 +6678,7 @@ mod tests {
                             .to_string(),
                         )
                     }
-                    3 => {
+                    6 => {
                         let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
                         assert_eq!(
                             envelope.predecessor_source_epoch.as_deref(),
@@ -6640,12 +6701,7 @@ mod tests {
                             .to_string(),
                         )
                     }
-                    4 => (
-                        "404 Not Found",
-                        r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#
-                            .to_string(),
-                    ),
-                    5 => {
+                    8 => {
                         assert!(request_line.contains(&expected_host_epoch.to_string()));
                         let envelope = original.as_ref().unwrap();
                         (
@@ -6682,7 +6738,7 @@ mod tests {
                             .to_string(),
                         )
                     }
-                    6 => {
+                    9 => {
                         assert!(request_line.contains(&expected_replacement_host_epoch.to_string()));
                         let envelope = original.as_ref().unwrap();
                         (
@@ -6754,11 +6810,9 @@ mod tests {
         let path = dir
             .path()
             .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
-        fs::write(
-            &path,
-            b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n",
-        )
-        .unwrap();
+        let first_line = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let second_line = b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":\"world\"}}\n";
+        fs::write(&path, first_line).unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let config = ShipperConfig {
             api_url: format!("http://{address}"),
@@ -6766,6 +6820,40 @@ mod tests {
             ..ShipperConfig::default()
         };
         let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+
+        let locally_acked =
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                .unwrap()
+                .unwrap();
+        pending_source_envelope::acknowledge_and_delete(
+            &mut conn,
+            locally_acked.source_epoch,
+            &locally_acked.envelope.expected_envelope_id,
+            locally_acked.range_start,
+            locally_acked.range_end,
+        )
+        .unwrap();
+        fs::write(
+            &path,
+            [first_line.as_slice(), second_line.as_slice()].concat(),
+        )
+        .unwrap();
+
+        let rewound = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "repair",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(rewound.bytes_shipped, 0);
+        assert!(rewound.has_more);
 
         let recovered = ship_next_envelope(
             &mut conn,
