@@ -400,6 +400,10 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
         "steer_active_turn",
         "answer_pause",
         "turn_start",
+        // Forking a thread is its own provider surface, not implied by the
+        // ability to resume one. The engine validates the manifest it is handed,
+        // so an operation the schema declares has to be known here too.
+        "fork_thread",
         "terminate",
         "tail_output",
         "runtime_phase",
