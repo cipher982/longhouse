@@ -351,6 +351,14 @@ def _collect_managed_launch_recovery(engine_status: dict[str, Any]) -> dict[str,
                 continue
             if not isinstance(payload, dict):
                 scan_error = True
+            elif directory_name == "registration-retries" and payload.get("registration_state") in {
+                "stopped",
+                "recovered",
+            }:
+                # These are settled lifecycle states, not current recovery.
+                # Detached providers use `abandoned`, which deliberately falls
+                # through and remains visible when scanning cannot prove liveness.
+                continue
             elif payload.get("recovery_exhausted") is True:
                 exhausted_count += 1
             elif directory_name == "registration-retries" or _outcome_retry_is_aged(payload):

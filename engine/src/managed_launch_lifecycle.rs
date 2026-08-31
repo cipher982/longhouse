@@ -982,6 +982,11 @@ mod tests {
             retry.abandon();
         }
 
+        // Let the retry thread cross a cancellation checkpoint after the
+        // handle is gone. A late wakeup must preserve the launcher's more
+        // specific terminal reason.
+        std::thread::sleep(Duration::from_millis(300));
+
         let payload: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
         assert_eq!(payload["registration_state"], json!("abandoned"));
         assert_eq!(payload["recovery_exhausted"], json!(true));
@@ -1455,7 +1460,6 @@ pub struct ManagedRegistrationRetry {
 
 impl ManagedRegistrationRetry {
     fn stop_recovery_as(&self, outcome: RegistrationRetryOutcome) {
-        self.cancel.store(true, Ordering::Release);
         if let Ok(mut state) = self.state.lock() {
             if state.outcome == RegistrationRetryOutcome::Recovering {
                 state.outcome = outcome;
@@ -1468,6 +1472,10 @@ impl ManagedRegistrationRetry {
                 );
             }
         }
+        // Publish cancellation only after the terminal reason is durable.
+        // Otherwise the retry thread can observe `cancel`, settle `stopped`,
+        // and win the mutex before a detached launcher records `abandoned`.
+        self.cancel.store(true, Ordering::Release);
     }
 
     fn stop_recovery(&self) {
@@ -1520,7 +1528,6 @@ impl ManagedRegistrationRetry {
     /// Give up on recovery from the launcher side. A detached launch returns
     /// immediately and takes the retry thread with it, so the receipt must be
     /// settled here rather than left reporting a recovery that is not running.
-    #[allow(dead_code)]
     pub fn abandon(&self) {
         self.stop_recovery_as(RegistrationRetryOutcome::Abandoned);
     }

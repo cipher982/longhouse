@@ -394,10 +394,7 @@ def test_storage_reasons_scope_source_inspection_to_latest_epoch():
 
     _reasons, actions = _collect_health_reasons(context, transport_assessment=None)
 
-    assert any(
-        "longhouse shipping inspect --source-epoch fedcba98-7654-3210-fedc-ba9876543210 --json" in action
-        for action in actions
-    )
+    assert any("longhouse shipping inspect --source-epoch fedcba98-7654-3210-fedc-ba9876543210 --json" in action for action in actions)
 
 
 def test_managed_launch_recovery_scan_surfaces_exhausted_intents(tmp_path):
@@ -406,12 +403,12 @@ def test_managed_launch_recovery_scan_surfaces_exhausted_intents(tmp_path):
     retry_dir.mkdir(parents=True)
     (retry_dir / "session.json").write_text('{"recovery_exhausted": true}')
     (retry_dir / "active.json").write_text('{"recovery_exhausted": false}')
+    (retry_dir / "stopped.json").write_text('{"registration_state": "stopped", "recovery_exhausted": true}')
+    (retry_dir / "abandoned.json").write_text('{"registration_state": "abandoned", "recovery_exhausted": true}')
 
-    recovery = _collect_managed_launch_recovery(
-        {"path": str(home / "agent" / "engine-status.json")}
-    )
+    recovery = _collect_managed_launch_recovery({"path": str(home / "agent" / "engine-status.json")})
 
-    assert recovery == {"exhausted_count": 1, "active_count": 1, "scan_error": False}
+    assert recovery == {"exhausted_count": 2, "active_count": 1, "scan_error": False}
 
 
 def test_managed_launch_recovery_scan_uses_default_agent_path_without_engine_status():
@@ -431,9 +428,7 @@ def test_outcome_receipts_only_surface_after_exhaustion(tmp_path):
     # make every healthy launch amber. An older receipt is active recovery.
     (retry_dir / "exhausted.json").write_text('{"recovery_exhausted": true}')
 
-    recovery = _collect_managed_launch_recovery(
-        {"path": str(home / "agent" / "engine-status.json")}
-    )
+    recovery = _collect_managed_launch_recovery({"path": str(home / "agent" / "engine-status.json")})
 
     assert recovery == {"exhausted_count": 1, "active_count": 1, "scan_error": False}
 
