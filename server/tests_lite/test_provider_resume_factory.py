@@ -49,3 +49,7 @@ def test_generic_producer_retains_hermetic_observation_and_cleanup(tmp_path) -> 
         "cleanup-receipt.json",
         "generic-observation.json",
     }
+
+
+def test_generic_registration_and_scenario_driver_share_one_registry() -> None:
+    assert REGISTRATION.scenario_ids == tuple(scenario for scenario in SCENARIOS if scenario != "resume_unsupported")

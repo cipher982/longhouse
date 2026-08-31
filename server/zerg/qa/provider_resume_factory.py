@@ -33,21 +33,11 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveUser
+from zerg.qa.provider_resume_oracles import ASSERTIONS_BY_SCENARIO
 from zerg.qa.provider_resume_oracles import assertions_for
 from zerg.services.managed_provider_contracts import contract_for_provider
 
-SCENARIOS = (
-    "helm_cold_resume",
-    "helm_live_reattach",
-    "console_thread_continue",
-    "console_thread_fork",
-    "resume_identity_continuity",
-    "resume_attempt_idempotency",
-    "resume_single_owner",
-    "resume_input_safety",
-    "resume_failure_cleanup",
-    "resume_unsupported",
-)
+SCENARIOS = tuple(ASSERTIONS_BY_SCENARIO)
 
 
 def run_provider_resume_scenario(provider: str, scenario: str) -> dict[str, Any]:
@@ -608,8 +598,7 @@ async def _console_thread_fork_observation(
         "forked_from_parent_thread": first_turn.get("fork_from_provider_thread_id") == provider_thread_id,
         "child_binding_names_child_thread": True,
         "second_turn_continues_child": (
-            second_turn.get("resume_provider_thread_id") == child_provider_thread_id
-            and not second_turn.get("fork_from_provider_thread_id")
+            second_turn.get("resume_provider_thread_id") == child_provider_thread_id and not second_turn.get("fork_from_provider_thread_id")
         ),
         "parent_thread_untouched": True,
     }
