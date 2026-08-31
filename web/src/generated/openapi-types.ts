@@ -1519,6 +1519,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Session Branch Endpoint
+         * @description Branch an ended Helm session into a new Console session on its machine.
+         */
+        post: operations["create_session_branch_endpoint_sessions__session_id__branches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/lock": {
         parameters: {
             query?: never;
@@ -8249,6 +8269,35 @@ export interface components {
              */
             is_sidechain: boolean;
         };
+        /** SessionBranchCreateRequest */
+        SessionBranchCreateRequest: {
+            /** Message */
+            message: string;
+            /** Client Request Id */
+            client_request_id: string;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Launch Surface
+             * @default web
+             */
+            launch_surface: string;
+        };
+        /** SessionBranchCreateResponse */
+        SessionBranchCreateResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Thread Id */
+            thread_id: string;
+            /** Turn Id */
+            turn_id: string;
+            /** Run Id */
+            run_id: string | null;
+            /** State */
+            state: string;
+            /** Created */
+            created: boolean;
+        };
         /** SessionCapabilitiesResponse */
         SessionCapabilitiesResponse: {
             /**
@@ -13920,6 +13969,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["zerg__routers__session_chat__ConsoleSessionCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_session_branch_endpoint_sessions__session_id__branches_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionBranchCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionBranchCreateResponse"];
                 };
             };
             /** @description Validation Error */

@@ -848,6 +848,98 @@ async def enqueue_catalog_console_turn(
     )
 
 
+@dataclass(frozen=True)
+class CreatedBranch:
+    """One branch, its first turn, and whether this call created it."""
+
+    session_id: UUID
+    thread_id: UUID
+    turn_id: UUID
+    run_id: UUID | None
+    state: str
+    created: bool
+
+
+async def create_branch_with_first_turn(
+    *,
+    owner_id: int,
+    parent_session_id: UUID,
+    message: str,
+    client_request_id: str,
+    display_name: str | None = None,
+    launch_surface: str = "console",
+    client=None,
+    registry=None,
+) -> CreatedBranch:
+    """Create a branch and send its first turn.
+
+    The catalog mutation is atomic; the dispatch that follows is not, because
+    the Machine Agent is reached over the wire after commit. A send failure
+    therefore leaves a real branch whose first turn records the error, which is
+    what the caller should surface -- the session exists and the user can see
+    it, so raising would hide something that was genuinely created.
+    """
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalog = client or get_catalogd_client()
+    if catalog is None:
+        raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
+
+    now = datetime.now(timezone.utc)
+    result = await catalog.call(
+        "session.branch.create.v2",
+        {
+            "branch": {
+                "parent_session_id": str(parent_session_id),
+                "session_id": str(uuid4()),
+                "thread_id": str(uuid4()),
+                "owner_id": int(owner_id),
+                "message": message,
+                "client_request_id": client_request_id,
+                "display_name": display_name,
+                "launch_surface": launch_surface,
+                "created_at": now.isoformat(),
+            }
+        },
+    )
+    if result.get("found") is not True:
+        raise ConsoleTurnUnavailable("session_not_found", "Parent session was not found")
+    if result.get("idempotency_conflict") is True:
+        raise ConsoleTurnConflict("client_request_id was reused with different text")
+    if result.get("unavailable"):
+        raise ConsoleTurnUnavailable(str(result["unavailable"]), "Branch execution target is unavailable")
+
+    turn = dict(result.get("turn") or {})
+    created = bool(result.get("created"))
+    child_session_id = UUID(str(result["session_id"]))
+    child_thread_id = UUID(str(result["thread_id"]))
+    turn_id = UUID(str(turn["turn_id"]))
+    run_id = UUID(str(turn["run_id"])) if turn.get("run_id") else None
+
+    # A replay already dispatched; re-sending would start the provider twice for
+    # one request id.
+    if not created or run_id is None:
+        return CreatedBranch(
+            session_id=child_session_id,
+            thread_id=child_thread_id,
+            turn_id=turn_id,
+            run_id=run_id,
+            state=str(turn.get("state") or "queued"),
+            created=created,
+        )
+
+    dispatched = await dispatch_catalog_claimed_turn(owner_id=owner_id, turn=turn, client=catalog, registry=registry)
+    return CreatedBranch(
+        session_id=child_session_id,
+        thread_id=child_thread_id,
+        turn_id=dispatched.turn_id,
+        run_id=dispatched.run_id,
+        state=dispatched.state,
+        created=True,
+    )
+
+
 async def dispatch_catalog_claimed_turn(
     *,
     owner_id: int,

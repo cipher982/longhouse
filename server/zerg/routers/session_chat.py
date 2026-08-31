@@ -6,6 +6,7 @@ Longhouse. Per-session locks prevent concurrent send collisions.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -36,12 +37,15 @@ from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.routers import agents_sessions as _sessions_router
 from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.console_turns import ConsoleTurnConflict
 from zerg.services.console_turns import ConsoleTurnUnavailable
+from zerg.services.console_turns import create_branch_with_first_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import interrupt_console_turn
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
+from zerg.services.live_catalog_timeline import _supported_operations
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import cancel_live_queued_receipt_catalog
 from zerg.services.live_session_inputs import list_recent_live_input_receipts_catalog
@@ -140,6 +144,22 @@ class ConsoleSessionCreateRequest(BaseModel):
 class ConsoleSessionCreateResponse(BaseModel):
     session_id: str
     thread_id: str
+    created: bool
+
+
+class SessionBranchCreateRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    client_request_id: str = Field(..., min_length=1)
+    display_name: str | None = None
+    launch_surface: str = "web"
+
+
+class SessionBranchCreateResponse(BaseModel):
+    session_id: str
+    thread_id: str
+    turn_id: str
+    run_id: str | None
+    state: str
     created: bool
 
 
@@ -1319,6 +1339,112 @@ async def create_console_session_endpoint(
         thread_id=str(created.thread_id),
         created=created.created,
     )
+
+
+@router.post(
+    "/{session_id}/branches",
+    response_model=SessionBranchCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_session_branch_endpoint(
+    session_id: UUID,
+    body: SessionBranchCreateRequest,
+    response: Response,
+    db: Session | None = Depends(_catalog_control_db_dependency),
+    current_user: User = Depends(get_current_browser_route_user),
+) -> SessionBranchCreateResponse:
+    """Branch an ended Helm session into a new Console session on its machine."""
+
+    owner_id = int(current_user.id)
+    parent = await asyncio.to_thread(
+        _sessions_router.session_detail_payload,
+        session_id=session_id,
+        response=response,
+        db=db,
+        _auth=None,
+        owner_id=owner_id,
+    )
+
+    # The same predicate the Resume button reads, not a reimplementation of it.
+    # Two paths that disagree about whether continuation is possible is a worse
+    # failure than either being unavailable, and only the projector knows.
+    control = parent.session_state.control
+    resume = control.actions.resume if control is not None else None
+    if resume is None or resume.state != "available":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": resume.reason if resume is not None else "control_unknown",
+                "message": "This session cannot be branched right now",
+            },
+        )
+
+    # Resuming a conversation and branching one are different upstream
+    # surfaces, and a release can gain or lose either alone.
+    if "fork_thread" not in _supported_operations(parent.provider):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "fork_unsupported", "message": f"Longhouse cannot branch {parent.provider} sessions"},
+        )
+
+    # Console runs without approvals. Branching a session that ran under the
+    # provider's own prompts would silently drop them, so refuse unless the
+    # parent is positively known to have run under bypass -- the stored value
+    # alone cannot say, because it is non-null with a bypass default and is
+    # manufactured in more than one place.
+    posture = await _branch_permission_posture(owner_id=owner_id, session_id=session_id)
+    if posture != "bypass":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "permission_mode_unsupported",
+                "message": "This session ran with approvals a branch cannot carry",
+            },
+        )
+
+    try:
+        branch = await create_branch_with_first_turn(
+            owner_id=owner_id,
+            parent_session_id=session_id,
+            message=body.message,
+            client_request_id=body.client_request_id,
+            display_name=body.display_name,
+            launch_surface=body.launch_surface,
+        )
+    except ConsoleTurnConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ConsoleTurnUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+    return SessionBranchCreateResponse(
+        session_id=str(branch.session_id),
+        thread_id=str(branch.thread_id),
+        turn_id=str(branch.turn_id),
+        run_id=str(branch.run_id) if branch.run_id else None,
+        state=branch.state,
+        created=branch.created,
+    )
+
+
+async def _branch_permission_posture(*, owner_id: int, session_id: UUID) -> str | None:
+    """The parent's approval posture, or None when it is not positively known.
+
+    Absence is not permission. A stored ``bypass`` with no recorded source may
+    only mean nobody said otherwise, so it is treated as unknown.
+    """
+
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+    snapshot = await asyncio.to_thread(load_live_control_session_snapshot, str(session_id), owner_id=owner_id)
+    if snapshot is None:
+        return None
+    catalog = dict((snapshot.catalog_facts or {}).get("catalog") or {})
+    if not str(catalog.get("permission_mode_source") or "").strip():
+        return None
+    return str(catalog.get("permission_mode") or "").strip() or None
 
 
 @router.get("/{session_id}/lock")

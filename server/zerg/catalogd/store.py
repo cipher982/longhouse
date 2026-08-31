@@ -11984,6 +11984,10 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "launch_actor": row["launch_actor"],
         "launch_surface": row["launch_surface"],
         "permission_mode": "bypass",
+        # Storage rows carry no posture of their own, so this is a placeholder
+        # rather than an observation. Leaving the source unset is what keeps a
+        # caller from reading it as one.
+        "permission_mode_source": None,
     }
 
 
@@ -12598,6 +12602,9 @@ _CATALOG_FIELDS = frozenset(
         "launch_actor",
         "launch_surface",
         "permission_mode",
+        # Callers deciding what a session may do need to know whether the
+        # posture above was recorded or merely defaulted.
+        "permission_mode_source",
     }
 )
 _CARD_FIELDS = frozenset(
