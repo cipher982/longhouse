@@ -1086,14 +1086,17 @@ pub(crate) fn leases_from_cursor_helm_observations(
     leases
 }
 
-/// Antigravity leases, derived from the same hook state files that produce its
-/// readiness evidence.
+/// Antigravity leases, derived from launcher ownership plus fresh hook evidence.
 ///
 /// Without these the provider never appears in `managed_sessions`, and every
 /// server-side reconciliation that promotes control capability iterates that
 /// list -- so hook readiness could be shipped and then consumed by nothing.
 /// A hook that has been observed recently is the attach evidence here; there
-/// is no bridge process to be ready.
+/// is no bridge process to be ready. Shadow sessions have no launcher identity,
+/// and historical state files have no fresh presence, so neither can become a
+/// managed lease. Omitting a stale owned observation from this complete
+/// compatibility snapshot withdraws its former live presence; retained launch
+/// and detached-control evidence remain in their typed fact families.
 pub(crate) fn leases_from_antigravity_observations(
     machine_id: &str,
     observations: &[AntigravityHookObservation],
@@ -1104,10 +1107,15 @@ pub(crate) fn leases_from_antigravity_observations(
     let mut leases = Vec::with_capacity(observations.len());
 
     for obs in observations {
-        // A state file with no session identity cannot be reconciled against a
-        // Longhouse session, and publishing it would create a lease nothing
-        // can ever match or retire.
-        if obs.session_id.trim().is_empty() {
+        let owned = obs
+            .connection_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            && obs
+                .lease_generation
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+        if obs.session_id.trim().is_empty() || !owned || !antigravity_hook_is_live(obs, now) {
             continue;
         }
         leases.push(ManagedSessionLease {
@@ -1216,8 +1224,8 @@ pub(crate) fn machine_evidence_from_observations(
     // Shadow `agy` the user started has none and stays observe-only.
     for observation in antigravity_observations {
         let (Some(connection_id), Some(lease_generation)) = (
-            observation.connection_id.as_ref(),
-            observation.lease_generation.as_ref(),
+            nonempty(observation.connection_id.as_deref()),
+            nonempty(observation.lease_generation.as_deref()),
         ) else {
             continue;
         };
@@ -1230,8 +1238,8 @@ pub(crate) fn machine_evidence_from_observations(
             terminal_attached: None,
             session_id: observation.session_id.clone(),
             provider_session_id: observation.provider_session_id.clone(),
-            connection_id: Some(connection_id.clone()),
-            lease_generation: Some(lease_generation.clone()),
+            connection_id: Some(connection_id.to_string()),
+            lease_generation: Some(lease_generation.to_string()),
             run_id: observation.run_id.clone(),
             granted_operations: granted_control_operations("antigravity", attached),
             ownership: "managed".to_string(),
@@ -2249,9 +2257,8 @@ pub(crate) fn antigravity_hook_is_live(
     observation: &AntigravityHookObservation,
     now: DateTime<Utc>,
 ) -> bool {
-    let as_of = parse_utc(Some(&observation.updated_at)).unwrap_or(now);
     parse_utc(observation.last_hook_observed_at.as_deref()).is_some_and(|at| {
-        as_of >= at && as_of - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
+        now >= at && now - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
     })
 }
 
@@ -2259,13 +2266,13 @@ fn antigravity_readiness_evidence(
     observation: &AntigravityHookObservation,
     now: DateTime<Utc>,
 ) -> ReadinessEvidence {
-    let as_of = parse_utc(Some(&observation.updated_at)).unwrap_or(now);
+    let evidence_observed_at = parse_utc(Some(&observation.updated_at)).unwrap_or(now);
     let hook_time = parse_utc(observation.last_hook_observed_at.as_deref());
     let claim_time = parse_utc(observation.last_claimed_at.as_deref());
     let response_time = parse_utc(observation.last_response_at.as_deref());
     let is_fresh = |value: Option<DateTime<Utc>>| {
         value.is_some_and(|at| {
-            as_of >= at && as_of - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
+            now >= at && now - at <= chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS)
         })
     };
     let recent_hook_observed = antigravity_hook_is_live(observation, now);
@@ -2303,7 +2310,7 @@ fn antigravity_readiness_evidence(
         .flatten()
         .map(|at| at + chrono::Duration::seconds(ANTIGRAVITY_READINESS_TTL_SECS))
         .min()
-        .unwrap_or(as_of)
+        .unwrap_or(evidence_observed_at)
         .to_rfc3339();
 
     ReadinessEvidence {
@@ -5349,11 +5356,18 @@ mod tests {
             &antigravity_observations[0],
             now + chrono::Duration::minutes(5),
         );
-        assert_eq!(reevaluated, evidence.readiness[0]);
+        assert!(!reevaluated.recent_hook_observed);
+        assert!(!reevaluated.claim_observed);
+        assert!(!reevaluated.response_observed);
+        assert_eq!(reevaluated.observed_at, evidence.readiness[0].observed_at);
+        assert_eq!(reevaluated.valid_until, evidence.readiness[0].valid_until);
 
         let mut stale_at_observation = antigravity_observations[0].clone();
         stale_at_observation.updated_at = "2026-05-08T12:03:00Z".to_string();
-        let stale = antigravity_readiness_evidence(&stale_at_observation, now);
+        let stale = antigravity_readiness_evidence(
+            &stale_at_observation,
+            parse_utc(Some("2026-05-08T12:03:00Z")).unwrap(),
+        );
         assert!(!stale.recent_hook_observed);
         assert!(!stale.claim_observed);
         assert!(!stale.response_observed);
@@ -5527,6 +5541,43 @@ mod tests {
             false
         )])
         .is_empty());
+    }
+
+    #[test]
+    fn antigravity_lease_requires_both_launcher_ownership_and_fresh_presence() {
+        let now = parse_utc(Some("2026-05-08T12:00:10Z")).unwrap();
+        let mut live_owned = antigravity_observation(Some("2026-05-08T12:00:08Z"), true);
+        live_owned.session_id = "live-owned".to_string();
+        let mut live_shadow = antigravity_observation(Some("2026-05-08T12:00:08Z"), false);
+        live_shadow.session_id = "live-shadow".to_string();
+        let mut stale_owned = antigravity_observation(Some("2026-05-08T11:57:00Z"), true);
+        stale_owned.session_id = "stale-owned".to_string();
+        let mut historical_shadow = antigravity_observation(Some("2026-04-08T12:00:08Z"), false);
+        historical_shadow.session_id = "historical-shadow".to_string();
+
+        let leases = leases_from_antigravity_observations(
+            "cinder",
+            &[live_owned, live_shadow, stale_owned, historical_shadow],
+            now,
+        );
+
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].session_id, "live-owned");
+        assert_eq!(leases[0].state, "attached");
+    }
+
+    #[test]
+    fn antigravity_freshness_expires_against_scan_time_not_frozen_file_time() {
+        let observation = antigravity_observation(Some("2026-05-08T12:00:08Z"), true);
+
+        assert!(antigravity_hook_is_live(
+            &observation,
+            parse_utc(Some("2026-05-08T12:00:10Z")).unwrap()
+        ));
+        assert!(!antigravity_hook_is_live(
+            &observation,
+            parse_utc(Some("2026-05-08T12:03:00Z")).unwrap()
+        ));
     }
 
     #[test]

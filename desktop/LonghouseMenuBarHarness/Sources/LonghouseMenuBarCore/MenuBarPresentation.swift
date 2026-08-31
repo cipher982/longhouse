@@ -63,7 +63,7 @@ public struct MenuBarPresentation: Equatable, Sendable {
 extension HealthSnapshot {
     public func menuBarPresentation(relativeTo referenceDate: Date) -> MenuBarPresentation {
         let sessions = currentManagedSessions
-        let openHelmCount = foregroundManagedCount + legacyAttachedManagedCount
+        let openHelmCount = foregroundManagedCount
         let needsUser = sessions.filter { $0.explicitlyNeedsUser }.count
         let working = sessions.filter { $0.menuBarAttentionKind == .working }.count
         let blocked = sessions.filter { $0.menuBarAttentionKind == .blocked && !$0.explicitlyNeedsUser }.count

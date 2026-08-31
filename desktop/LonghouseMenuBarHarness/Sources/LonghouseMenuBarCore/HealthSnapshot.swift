@@ -701,20 +701,12 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         managedSummary?.degradedCount ?? currentManagedSessions.filter { $0.normalizedState == "degraded" }.count
     }
 
-    public var hasManagedUIPresence: Bool {
-        currentManagedSessions.contains { $0.normalizedUIPresence != nil }
-    }
-
     public var foregroundManagedCount: Int {
         currentManagedSessions.filter { $0.normalizedUIPresence == "foreground_tui" }.count
     }
 
     public var backgroundManagedCount: Int {
         currentManagedSessions.filter { $0.normalizedUIPresence == "background" }.count
-    }
-
-    public var legacyAttachedManagedCount: Int {
-        currentManagedSessions.filter { $0.normalizedUIPresence == nil && $0.normalizedState == "attached" }.count
     }
 
     public var orphanBridgeCount: Int {

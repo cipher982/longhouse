@@ -181,6 +181,22 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func attachedSessionWithoutObservedUIPresenceDoesNotClaimAnOpenHelmTerminal() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "managed-antigravity", provider: "antigravity", workspaceLabel: "longhouse",
+            timelineTitle: "Managed headless session", branch: "main", state: "attached",
+            phase: "idle", lastActivityAt: "1970-01-01T00:00:00Z", bridgeStatus: "ready",
+            bridgePid: nil, bridgeHeartbeatAt: "1970-01-01T00:00:00Z", reasonCodes: []
+        )
+        let snapshot = presentationSnapshot(sessions: [session])
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.headline == "No sessions running")
+        #expect(!presentation.headline.contains("Helm"))
+    }
+
+    @Test
     func durableConflictOutranksSessionInput() {
         let snapshot = presentationSnapshot(
             reasons: ["storage_v2_sources_blocked"],
@@ -3174,8 +3190,13 @@ struct LonghouseMenuBarCoreTests {
         let recorded = try HealthSnapshotDecoder.decode(data: Data(contentsOf: fixtureURL))
         #expect(recorded.severity == "green")
         #expect(recorded.managedSessions?.count == 1)
+        #expect(recorded.managedSessions?.first?.normalizedUIPresence == "foreground_tui")
         #expect(recorded.realtime?.runtimeUrl != nil)
         #expect(recorded.engineStatus?.payload != nil)
+        #expect(
+            recorded.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800)).headline
+                == "1 Helm session open"
+        )
 
         guard let binary = ProcessInfo.processInfo.environment["LONGHOUSE_HEALTH_BIN"],
               FileManager.default.isExecutableFile(atPath: binary)
@@ -3306,7 +3327,8 @@ private func presentationSession(phase: String) -> ManagedSessionSnapshot {
         sessionId: UUID().uuidString, provider: "codex", workspaceLabel: "longhouse",
         timelineTitle: "Review menu bar state", branch: "main", state: "attached",
         phase: phase, lastActivityAt: "1970-01-01T00:00:00Z", bridgeStatus: "ready",
-        bridgePid: 42, bridgeHeartbeatAt: "1970-01-01T00:00:00Z", reasonCodes: []
+        bridgePid: 42, bridgeHeartbeatAt: "1970-01-01T00:00:00Z",
+        launchMode: "tui", uiAttached: true, uiPresence: "foreground_tui", reasonCodes: []
     )
 }
 

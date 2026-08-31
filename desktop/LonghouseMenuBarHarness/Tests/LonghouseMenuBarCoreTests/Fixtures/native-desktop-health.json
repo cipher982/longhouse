@@ -13,9 +13,13 @@
         {
           "bridge": {
             "heartbeat_at": "2026-08-03T16:00:00Z",
+            "launch_mode": "tui",
             "pid": 4243,
-            "status": "ready"
+            "status": "ready",
+            "ui_attached": true,
+            "ui_presence": "foreground_tui"
           },
+          "control_path": "managed",
           "first_user_message": "example",
           "provider": "claude",
           "reason_codes": [],
@@ -45,6 +49,7 @@
       "bridge_pid": 4243,
       "bridge_status": "ready",
       "first_user_message": "example",
+      "launch_mode": "tui",
       "provider": "claude",
       "reason_codes": [],
       "session_id": "00000000-0000-4000-8000-000000000001",
@@ -52,6 +57,8 @@
       "timeline_title": "Review the panel",
       "title_source": "prompt",
       "title_state": "pending",
+      "ui_attached": true,
+      "ui_presence": "foreground_tui",
       "workspace_label": "longhouse"
     }
   ],

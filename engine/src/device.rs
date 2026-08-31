@@ -262,6 +262,12 @@ struct NativeDesktopSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     bridge_heartbeat_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    launch_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ui_attached: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ui_presence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reason_codes: Option<Vec<String>>,
 }
 
@@ -1259,7 +1265,12 @@ fn native_desktop_health_from_parts(
         .as_ref()
         .and_then(|value| value.get("sessions"))
         .and_then(Value::as_array)
-        .map(|rows| rows.iter().map(native_desktop_session_from_row).collect());
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row.get("control_path").and_then(Value::as_str) == Some("managed"))
+                .map(native_desktop_session_from_row)
+                .collect()
+        });
 
     let count_with_state = |state: &str| {
         session_rows.as_ref().map(|rows| {
@@ -1563,6 +1574,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
 
 fn native_desktop_session_from_row(row: &Value) -> NativeDesktopSession {
     let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_string);
+    let bridge = row.get("bridge");
     NativeDesktopSession {
         session_id: text("session_id"),
         provider: text("provider"),
@@ -1577,18 +1589,26 @@ fn native_desktop_session_from_row(row: &Value) -> NativeDesktopSession {
         title_state: text("title_state"),
         title_source: text("title_source"),
         state: text("state"),
-        bridge_status: row
-            .get("bridge")
+        bridge_status: bridge
             .and_then(|value| value.get("status"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        bridge_pid: row
-            .get("bridge")
+        bridge_pid: bridge
             .and_then(|value| value.get("pid"))
             .and_then(Value::as_u64),
-        bridge_heartbeat_at: row
-            .get("bridge")
+        bridge_heartbeat_at: bridge
             .and_then(|value| value.get("heartbeat_at"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        launch_mode: bridge
+            .and_then(|value| value.get("launch_mode"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        ui_attached: bridge
+            .and_then(|value| value.get("ui_attached"))
+            .and_then(Value::as_bool),
+        ui_presence: bridge
+            .and_then(|value| value.get("ui_presence"))
             .and_then(Value::as_str)
             .map(str::to_string),
         reason_codes: row
@@ -4082,10 +4102,17 @@ mod tests {
             "sessions": [{
                 "session_id": "s1",
                 "provider": "claude",
+                "control_path": "managed",
                 "state": "attached",
                 "timeline_title": "Review the panel",
                 "workspace": {"label": "longhouse"},
-                "bridge": {"status": "ready", "pid": 42},
+                "bridge": {
+                    "status": "ready",
+                    "pid": 42,
+                    "launch_mode": "tui",
+                    "ui_attached": true,
+                    "ui_presence": "foreground_tui"
+                },
                 "reason_codes": ["a"],
             }],
         });
@@ -4120,6 +4147,12 @@ mod tests {
         assert_eq!(value["managed_sessions"].as_array().unwrap().len(), 1);
         assert_eq!(value["managed_sessions"][0]["workspace_label"], "longhouse");
         assert_eq!(value["managed_sessions"][0]["bridge_pid"], 42);
+        assert_eq!(value["managed_sessions"][0]["launch_mode"], "tui");
+        assert_eq!(value["managed_sessions"][0]["ui_attached"], true);
+        assert_eq!(
+            value["managed_sessions"][0]["ui_presence"],
+            "foreground_tui"
+        );
         // Swift reads engine data from engine_status.payload, not flat keys.
         assert_eq!(value["engine_status"]["payload"]["version"], "test");
         // Without realtime the app never opens the projection stream and every
@@ -4130,6 +4163,50 @@ mod tests {
         assert!(value["managed_summary"]
             .get("orphan_bridge_count")
             .is_none());
+    }
+
+    #[test]
+    fn desktop_envelope_never_promotes_unmanaged_rows_to_managed_sessions() {
+        let mut sessions = (0..47)
+            .map(|index| {
+                json!({
+                    "provider": "antigravity",
+                    "provider_session_id": format!("shadow-{index}"),
+                    "control_path": "unmanaged",
+                    "state": "unmanaged"
+                })
+            })
+            .collect::<Vec<_>>();
+        sessions.push(json!({
+            "session_id": "managed-codex",
+            "provider": "codex",
+            "control_path": "managed",
+            "state": "attached",
+            "bridge": {"status": "ready"}
+        }));
+        let engine_payload = json!({"sessions": sessions});
+        let fast = native_fast_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            true,
+            Some(0),
+            Some(engine_payload.clone()),
+            None,
+        );
+
+        let value = serde_json::to_value(native_desktop_health_from_parts(
+            fast,
+            Some(engine_payload),
+            None,
+            None,
+            "2026-08-31T12:00:00Z".to_string(),
+        ))
+        .unwrap();
+
+        assert_eq!(value["managed_sessions"].as_array().unwrap().len(), 1);
+        assert_eq!(value["managed_sessions"][0]["session_id"], "managed-codex");
+        assert_eq!(value["managed_summary"]["attached_count"], 1);
+        assert_eq!(value["managed_summary"]["detached_count"], 0);
+        assert_eq!(value["managed_summary"]["degraded_count"], 0);
     }
 
     #[test]
@@ -4261,6 +4338,7 @@ mod tests {
             "sessions": [{
                 "session_id": "00000000-0000-4000-8000-000000000001",
                 "provider": "claude",
+                "control_path": "managed",
                 "state": "attached",
                 "timeline_title": "Review the panel",
                 "first_user_message": "example",
@@ -4271,6 +4349,9 @@ mod tests {
                     "status": "ready",
                     "pid": 4243,
                     "heartbeat_at": "2026-08-03T16:00:00Z",
+                    "launch_mode": "tui",
+                    "ui_attached": true,
+                    "ui_presence": "foreground_tui",
                 },
                 "reason_codes": [],
             }],
