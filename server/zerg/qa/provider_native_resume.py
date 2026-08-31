@@ -300,6 +300,12 @@ class TranscriptShipper:
                         attempt_retry_reason = "storage_v2_capability_unavailable"
                         retry_delay_secs = _TRANSCRIPT_CAPABILITY_RETRY_SLEEP_SECS
                         result["retry_sleep_secs"] = retry_delay_secs
+                elif "storage-v2 capability request failed" in stderr and "operation timed out" in stderr:
+                    result["failure_code"] = "storage_v2_capability_request_failed"
+                    result["transport_error"] = "operation_timed_out"
+                    attempt_retry_reason = "storage_v2_capability_unavailable"
+                    retry_delay_secs = _TRANSCRIPT_CAPABILITY_RETRY_SLEEP_SECS
+                    result["retry_sleep_secs"] = retry_delay_secs
             if attempt_retry_reason is not None:
                 result["retry_reason"] = attempt_retry_reason
             attempts.append(result)
@@ -498,7 +504,7 @@ def registration_for(provider: str) -> ProducerRegistration:
     spec = SPECS[provider]
     return ProducerRegistration(
         producer_id=spec.producer_id,
-        producer_revision=5 if provider == "cursor" else 4 if provider == "opencode" else 3,
+        producer_revision=6 if provider == "cursor" else 5 if provider == "opencode" else 4,
         scenario_id="helm_cold_resume",
         scenario_revision=5 if provider in {"cursor", "opencode"} else 4,
         assertion_cells=(
@@ -2021,6 +2027,8 @@ def _require_transcript_ship(receipt: dict[str, Any], *, label: str) -> None:
     phrase = str(receipt.get("http_status_phrase") or "").strip()
     if isinstance(status, int) and not isinstance(status, bool):
         reason = f"{reason}: {status}{f' {phrase}' if phrase else ''}"
+    if receipt.get("transport_error") == "operation_timed_out":
+        reason = f"{reason}: storage-v2 capability request failed: operation timed out"
     raise RuntimeError(f"{label} transcript ship failed: {reason}")
 
 

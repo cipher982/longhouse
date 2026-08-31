@@ -124,7 +124,7 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         assert registration.evidence_classes == ("live_token",)
         assert registration.executable is True
         assert registration.executable_module == SPECS[provider].executable_module
-        assert registration.producer_revision == (5 if provider == "cursor" else 4 if provider == "opencode" else 3)
+        assert registration.producer_revision == (6 if provider == "cursor" else 5 if provider == "opencode" else 4)
         assert registration.scenario_revision == (5 if provider in {"cursor", "opencode"} else 4)
         assert {
             "transcript_shipper_receipt",
@@ -489,6 +489,56 @@ def test_transcript_shipper_retries_a_storage_capability_502_once(
     assert receipt["retry_reason"] == "storage_v2_capability_unavailable"
     assert receipt["retry_sleep_secs"] == 1.0
     assert receipt["events_shipped"] == 2
+    assert sleeps == [1.0]
+
+
+def test_transcript_shipper_retries_a_storage_capability_timeout_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "Error: storage-v2 capability request failed\n\n"
+                    "Caused by:\n    0: error sending request for url "
+                    "(https://runtime.example/api/agents/storage/v2/capabilities)\n"
+                    "    1: operation timed out"
+                ),
+            ),
+            SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"protocol": "storage-v2", "events_shipped": 2}),
+                stderr="",
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
+    shipper = TranscriptShipper(
+        process=SimpleNamespace(poll=lambda: 0),
+        log_stream=None,
+        receipt={},
+        engine=tmp_path / "engine",
+        repo_root=tmp_path,
+        api_url="https://runtime.example",
+        machine_name="machine-1",
+        db_path=tmp_path / "shipper.db",
+        engine_environment={},
+        evidence_root=tmp_path,
+        redaction_secrets=(),
+        connect_command=[],
+    )
+
+    receipt = shipper.flush("post-resume")
+
+    assert receipt["status"] == "pass"
+    assert receipt["attempts"] == 2
+    assert receipt["retry_reason"] == "storage_v2_capability_unavailable"
+    assert receipt["retry_sleep_secs"] == 1.0
     assert sleeps == [1.0]
 
 
@@ -2119,6 +2169,24 @@ def test_cursor_native_resume_preserves_storage_capability_failure_before_transc
                 "failure_code": "storage_v2_capability_request_failed",
                 "http_status": 502,
                 "http_status_phrase": "Bad Gateway",
+            },
+            label="post-resume",
+        )
+
+
+def test_cursor_native_resume_preserves_storage_capability_timeout_before_transcript_judgment() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "post-resume transcript ship failed: storage_v2_capability_request_failed: "
+            "storage-v2 capability request failed: operation timed out"
+        ),
+    ):
+        provider_native_resume._require_transcript_ship(
+            {
+                "status": "fail",
+                "failure_code": "storage_v2_capability_request_failed",
+                "transport_error": "operation_timed_out",
             },
             label="post-resume",
         )
