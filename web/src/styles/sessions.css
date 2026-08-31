@@ -1483,6 +1483,19 @@
     color: var(--color-text-secondary);
   }
 
+  /* Where a branch came from. Present from the moment the child exists, not
+     only once its transcript has shipped. */
+  .session-branched-from {
+    align-self: flex-start;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-text-secondary);
+    font-size: 0.8rem;
+    text-decoration: underline dotted;
+    cursor: pointer;
+  }
+
   /* Picking an ended session back up. Sits where the run stopped, so the
      next thing you can do is where the last thing ended. */
   .branch-session-card {

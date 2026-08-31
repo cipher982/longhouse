@@ -1796,6 +1796,27 @@ describe("SessionDetailPage — signed copy link + shared attribution", () => {
 
 
 
+  it("shows where a branch came from, from the moment it exists", () => {
+    // The live thread edge is written at create time, so this must not wait
+    // for the branch's first transcript to ship. A relationship that appears
+    // only after the first output is invisible for the whole window a user
+    // spends watching the branch start.
+    renderSessionDetailPageAt("/timeline/session-codex", {
+      session: makeSession({
+        continuation_kind: "fork",
+        continued_from_session_id: "session-parent",
+      }),
+    });
+    expect(screen.getByTestId("session-branched-from")).toBeInTheDocument();
+  });
+
+  it("does not claim parentage for an ordinary session", () => {
+    renderSessionDetailPageAt("/timeline/session-codex", {
+      session: makeSession({ continuation_kind: null, continued_from_session_id: null }),
+    });
+    expect(screen.queryByTestId("session-branched-from")).not.toBeInTheDocument();
+  });
+
   it("does not render the Shared by pill when ?shared_by is absent", () => {
     renderSessionDetailPageAt("/timeline/session-codex", {
       user: { id: 1, email: "david@example.com", display_name: "David Rose" },

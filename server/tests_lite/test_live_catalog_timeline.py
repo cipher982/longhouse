@@ -1873,3 +1873,34 @@ def test_branch_lineage_projects_from_the_live_thread_edge():
     # A session whose facts carry no thread at all must not raise.
     assert _continued_from_session_id({}) is None
     assert _continuation_kind({}) is None
+
+
+def test_branch_lineage_survives_the_first_ingest():
+    """A branch reads as a child for its whole life, not only at the start.
+
+    Before its first ship the live thread edge is the only record of parentage;
+    afterwards the storage columns exist too. The served projection reads the
+    live edge in both windows, so the relationship cannot blink out at the exact
+    moment a branch produces its first output.
+    """
+
+    from zerg.services.live_catalog_timeline import _continuation_kind
+    from zerg.services.live_catalog_timeline import _continued_from_session_id
+
+    edge = {
+        "primary_thread": {
+            "parent_thread_id": "11111111-1111-4111-8111-111111111111",
+            "parent_session_id": "22222222-2222-4222-8222-222222222222",
+            "branch_kind": "fork",
+        }
+    }
+    before_ingest = (_continued_from_session_id(edge), _continuation_kind(edge))
+
+    # Ingest adds transcript-derived facts alongside the same thread row; it
+    # does not rewrite the edge that create time established.
+    after_ingest = dict(edge)
+    after_ingest["latest_run"] = {"id": "33333333-3333-4333-8333-333333333333"}
+    after_ingest["transcript_coordinates"] = {"last_append_at": "2026-08-30T00:00:00Z"}
+
+    assert (_continued_from_session_id(after_ingest), _continuation_kind(after_ingest)) == before_ingest
+    assert before_ingest == ("22222222-2222-4222-8222-222222222222", "fork")

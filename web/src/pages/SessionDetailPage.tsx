@@ -300,6 +300,11 @@ function SessionDetailWorkspaceRoute({
   // offered is worth showing too: an ended session that cannot be continued
   // should say why rather than simply have nothing there.
   const branchAction = branchSourceSession.session_state.control.actions.branch;
+  // Served from the live thread edge before a branch has shipped, and from the
+  // same edge afterwards, so the relationship is visible for the whole life of
+  // the child rather than appearing once its first transcript lands.
+  const branchedFromSessionId =
+    displaySession.continuation_kind === "fork" ? displaySession.continued_from_session_id : null;
   const showBranchCard =
     isViewingHead &&
     branchSourceSession.session_state.run?.lifecycle === "ended" &&
@@ -364,6 +369,17 @@ function SessionDetailWorkspaceRoute({
             <span className="session-shared-by-pill__label">Shared by</span>
             <span className="session-shared-by-pill__name">{sharedByDisplayName}</span>
           </span>
+        ) : null}
+        {branchedFromSessionId ? (
+          <button
+            type="button"
+            className="session-branched-from"
+            data-testid="session-branched-from"
+            onClick={() => navigateToSession(branchedFromSessionId)}
+            title="Open the session this branched from"
+          >
+            Branched from an earlier session
+          </button>
         ) : null}
       </div>
     </div>
