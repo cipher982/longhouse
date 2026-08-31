@@ -904,7 +904,8 @@ fn collect_managed_launch_recovery(
             // retry is over and there is no running degraded launch left to
             // surface, even when the provider scan itself returned no rows.
             // `exhausted` is different because a non-retryable failure can
-            // exhaust recovery while the provider is still running.
+            // exhaust recovery while the provider is still running. Detached
+            // launchers use the distinct `abandoned` state for the same reason.
             if directory_name == "registration-retries"
                 && matches!(
                     payload.get("registration_state").and_then(Value::as_str),
@@ -6835,6 +6836,26 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         assert_eq!(health.active_count, 0);
         assert_eq!(health.exhausted_count, 0);
         assert!(!health.scan_error);
+
+        std::fs::write(
+            retry_dir.join("departed.json"),
+            r#"{
+                "schema_version": 2,
+                "session_id": "departed",
+                "registration_state": "abandoned",
+                "recovery_exhausted": true
+            }"#,
+        )
+        .unwrap();
+        let abandoned = collect_managed_launch_recovery(
+            &agent_dir.join("engine-status.json"),
+            &std::collections::HashSet::new(),
+        );
+        assert_eq!(abandoned.active_count, 0);
+        assert_eq!(
+            abandoned.exhausted_count, 1,
+            "an abandoned detached provider may still be alive when scanning fails"
+        );
     }
 
     #[test]

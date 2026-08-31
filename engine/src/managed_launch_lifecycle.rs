@@ -216,6 +216,7 @@ enum RegistrationRetryOutcome {
     Recovered,
     Exhausted,
     Stopped,
+    Abandoned,
 }
 
 impl RegistrationRetryOutcome {
@@ -225,6 +226,7 @@ impl RegistrationRetryOutcome {
             Self::Recovered => "recovered",
             Self::Exhausted => "exhausted",
             Self::Stopped => "stopped",
+            Self::Abandoned => "abandoned",
         }
     }
 }
@@ -256,7 +258,9 @@ impl RegistrationRetryState {
     fn exhausted(&self) -> bool {
         matches!(
             self.outcome,
-            RegistrationRetryOutcome::Exhausted | RegistrationRetryOutcome::Stopped
+            RegistrationRetryOutcome::Exhausted
+                | RegistrationRetryOutcome::Stopped
+                | RegistrationRetryOutcome::Abandoned
         )
     }
 }
@@ -953,6 +957,34 @@ mod tests {
             json!(true),
             "receipt still claims an active recovery after its handle went away"
         );
+        assert_eq!(payload["registration_state"], json!("stopped"));
+    }
+
+    #[test]
+    fn detached_abandonment_remains_distinct_from_provider_exit() {
+        let agent_dir = tempfile::tempdir().unwrap();
+        let receipt = agent_dir
+            .path()
+            .join("managed-local")
+            .join("registration-retries")
+            .join("session-detached.json");
+        {
+            let retry = spawn_managed_registration_retry(
+                "http://127.0.0.1:1",
+                "device-token",
+                "Codex",
+                json!({"session_id": "session-detached"}),
+                "session-detached",
+                DeferredNotices::default(),
+                agent_dir.path().to_path_buf(),
+            );
+            retry.provider_alive.store(true, Ordering::Release);
+            retry.abandon();
+        }
+
+        let payload: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(payload["registration_state"], json!("abandoned"));
+        assert_eq!(payload["recovery_exhausted"], json!(true));
     }
 
     #[test]
@@ -1422,11 +1454,11 @@ pub struct ManagedRegistrationRetry {
 }
 
 impl ManagedRegistrationRetry {
-    fn stop_recovery(&self) {
+    fn stop_recovery_as(&self, outcome: RegistrationRetryOutcome) {
         self.cancel.store(true, Ordering::Release);
         if let Ok(mut state) = self.state.lock() {
             if state.outcome == RegistrationRetryOutcome::Recovering {
-                state.outcome = RegistrationRetryOutcome::Stopped;
+                state.outcome = outcome;
                 state.stopped_at = Some(chrono::Utc::now().to_rfc3339());
                 let _ = record_registration_retry_state(
                     &self.agent_dir,
@@ -1436,6 +1468,10 @@ impl ManagedRegistrationRetry {
                 );
             }
         }
+    }
+
+    fn stop_recovery(&self) {
+        self.stop_recovery_as(RegistrationRetryOutcome::Stopped);
     }
 
     /// Render the current recovery result after the provider has released the
@@ -1456,7 +1492,7 @@ impl ManagedRegistrationRetry {
                 "Longhouse: {} managed registration recovered while it was running.",
                 self.provider
             ),
-            RegistrationRetryOutcome::Exhausted => format!(
+            RegistrationRetryOutcome::Exhausted | RegistrationRetryOutcome::Abandoned => format!(
                 "Longhouse: {} ran without managed registration; recovery stopped after {} attempt{}.{}",
                 self.provider,
                 state.attempts,
@@ -1486,7 +1522,7 @@ impl ManagedRegistrationRetry {
     /// settled here rather than left reporting a recovery that is not running.
     #[allow(dead_code)]
     pub fn abandon(&self) {
-        self.stop_recovery();
+        self.stop_recovery_as(RegistrationRetryOutcome::Abandoned);
     }
 }
 
@@ -1552,6 +1588,14 @@ pub fn spawn_managed_registration_retry(
     std::thread::spawn(move || {
         let settle = |outcome: RegistrationRetryOutcome, error: Option<String>| {
             if let Ok(mut state) = state_for_thread.lock() {
+                // The launcher may have settled the receipt while an HTTP
+                // attempt was in flight. Preserve that more specific reason;
+                // a late retry-thread wakeup must not turn `abandoned` into
+                // `stopped` and erase the fact that the provider can remain
+                // alive without registration.
+                if state.outcome != RegistrationRetryOutcome::Recovering {
+                    return;
+                }
                 state.outcome = outcome;
                 if error.is_some() {
                     state.last_error = error;
