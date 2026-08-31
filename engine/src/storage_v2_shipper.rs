@@ -891,11 +891,7 @@ async fn reconcile_storage_v2_conflict(
             // creates epochs lazily on first commit and never created this one.
             // The 409 that caused all of it was discarded, which is why the
             // 2026-08-04 incident could not be root-caused after the fact.
-            return block_source(
-                conn,
-                prepared.source_epoch,
-                "source_epoch_conflict_unresolved",
-                &format!(
+            let block_detail = format!(
                     "Runtime Host refused admission ({}: {}) and has no manifest for the source epoch. \
                      Admission details: {}. Manifest probe: {}",
                     conflict.code,
@@ -905,8 +901,38 @@ async fn reconcile_storage_v2_conflict(
                         .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
                         .expect("typed source-not-found checked above")
                         .response_body
-                ),
-            );
+                );
+            let newly_blocked = pending_source_envelope::quarantine(
+                conn,
+                prepared.source_epoch,
+                "source_epoch_conflict_unresolved",
+                &block_detail,
+            )?;
+            let blocked = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
+                .context("newly blocked source disappeared before host-authority recovery")?;
+            if reconcile_lost_local_epoch(
+                conn,
+                client,
+                &blocked,
+                prepared,
+                host_open_epoch_from_conflict(conflict),
+                request_timeout,
+            )
+            .await?
+            {
+                return Ok(Some(StorageV2ShipOutcome {
+                    bytes_shipped: 0,
+                    events_shipped: 0,
+                    has_more: true,
+                }));
+            }
+            return Err(StorageV2SourceBlocked {
+                source_epoch: prepared.source_epoch,
+                kind: "source_epoch_conflict_unresolved".to_string(),
+                detail: block_detail,
+                newly_blocked,
+            }
+            .into());
         }
         Err(error) => return Err(error),
     };
@@ -995,6 +1021,18 @@ async fn reexamine_blocked_source(
             return Ok(true);
         }
     }
+    if reconcile_lost_local_epoch(
+        conn,
+        client,
+        pending,
+        prepared,
+        host_open_epoch_from_block_detail(pending.block_detail.as_deref()),
+        request_timeout,
+    )
+    .await?
+    {
+        return Ok(true);
+    }
     if prepared.envelope.provider == "cursor"
         && (reconcile_blocked_cursor_replacement(conn, client, prepared, request_timeout).await?
             || reconcile_blocked_cursor_lineage(conn, client, prepared, request_timeout).await?)
@@ -1041,6 +1079,130 @@ async fn reexamine_blocked_source(
     // interval is how the fix for an absorbing state turns into a load problem.
     pending_source_envelope::defer_reexamination(conn, prepared.source_epoch)?;
     Ok(false)
+}
+
+fn host_open_epoch_from_conflict(
+    conflict: &crate::shipping::client::StorageV2Conflict,
+) -> Option<Uuid> {
+    if conflict
+        .details
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        != Some("another_epoch_is_already_open_for_this_source")
+    {
+        return None;
+    }
+    let epochs = conflict.details.get("open_source_epochs")?.as_array()?;
+    if epochs.len() != 1 {
+        return None;
+    }
+    Uuid::parse_str(epochs[0].as_str()?).ok()
+}
+
+fn host_open_epoch_from_block_detail(detail: Option<&str>) -> Option<Uuid> {
+    let detail = detail?;
+    let admission = detail
+        .split_once("Admission details: ")?
+        .1
+        .split_once(". Manifest probe:")?
+        .0;
+    let response: serde_json::Value = serde_json::from_str(admission).ok()?;
+    let conflict = crate::shipping::client::StorageV2Conflict {
+        code: response.pointer("/detail/code")?.as_str()?.to_string(),
+        message: response.pointer("/detail/message")?.as_str()?.to_string(),
+        details: response.pointer("/detail/details")?.clone(),
+        response_body: admission.to_string(),
+    };
+    host_open_epoch_from_conflict(&conflict)
+}
+
+/// Recover from a salvaged local shipper database that no longer contains the
+/// epoch the Runtime Host already accepted for this source.
+///
+/// The host-proven open epoch becomes the wire predecessor of the retained
+/// local initial epoch. That preserves every local byte and lets normal epoch
+/// replacement close the old hosted epoch, instead of either replaying an
+/// overlapping "initial" history forever or jumping a local cursor forward.
+async fn reconcile_lost_local_epoch(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    pending: &PendingSourceEnvelope,
+    prepared: &PreparedStorageV2Envelope,
+    host_epoch: Option<Uuid>,
+    request_timeout: Duration,
+) -> Result<bool> {
+    let Some(host_epoch) = host_epoch else {
+        return Ok(false);
+    };
+    if prepared.envelope.predecessor_source_epoch.is_some()
+        || pending.block_kind.as_deref() != Some("source_epoch_conflict_unresolved")
+    {
+        return Ok(false);
+    }
+    let manifest = client
+        .storage_v2_source_manifest(&host_epoch.to_string(), 0, Some(request_timeout))
+        .await?;
+    let hosted = &manifest.source_epoch;
+    let envelope = &prepared.envelope;
+    let Ok(accepted_through) = hosted.accepted_through.parse::<u64>() else {
+        return Ok(false);
+    };
+    if manifest.v != 2
+        || hosted.source_epoch != host_epoch.to_string()
+        || hosted.tenant_id != envelope.tenant_id
+        || hosted.machine_id != envelope.machine_id
+        || hosted.provider != envelope.provider
+        || hosted.opaque_source_id != envelope.opaque_source_id
+        || hosted.range_kind != envelope.range_kind
+        || hosted.state != "open"
+        || hosted.replaced_by_source_epoch.is_some()
+        || accepted_through == 0
+        || manifest.objects.is_empty()
+    {
+        return Ok(false);
+    }
+
+    let mut replacement = envelope.clone();
+    replacement.predecessor_source_epoch = Some(host_epoch.to_string());
+    let replacement_body =
+        serde_json::to_vec(&replacement).context("serializing host-authority epoch recovery")?;
+    let replacement_body_zstd =
+        encode_zstd(&replacement_body, "host-authority epoch recovery body")?;
+    let proof_json = serde_json::json!({
+        "v": 1,
+        "requested_source_epoch": prepared.source_epoch.to_string(),
+        "requested_epoch_absent_remotely": true,
+        "host_open_source_epoch": host_epoch.to_string(),
+        "host_state": hosted.state,
+        "host_accepted_through": hosted.accepted_through,
+        "host_commit_seq": manifest.commit_seq,
+        "identity": {
+            "tenant_id": hosted.tenant_id,
+            "machine_id": hosted.machine_id,
+            "provider": hosted.provider,
+            "opaque_source_id": hosted.opaque_source_id,
+            "range_kind": hosted.range_kind,
+        },
+    })
+    .to_string();
+    pending_source_envelope::attach_host_authority_predecessor(
+        conn,
+        prepared.source_epoch,
+        host_epoch,
+        accepted_through,
+        &pending.envelope_id,
+        &pending.request_body_zstd,
+        &replacement_body_zstd,
+        &proof_json,
+    )?;
+    tracing::warn!(
+        source_epoch = %prepared.source_epoch,
+        host_predecessor = %host_epoch,
+        accepted_through,
+        provider = %envelope.provider,
+        "Recovered missing local epoch state from Runtime Host authority"
+    );
+    Ok(true)
 }
 
 /// Correct a local cursor that has run ahead of what the Runtime Host holds.
@@ -2088,9 +2250,7 @@ fn unique_cursor_turn_alignment(
     Some(
         path.into_iter()
             .enumerate()
-            .map(|(relevant_index, store_index)| {
-                (store_index, relevant_receipts[relevant_index].0)
-            })
+            .map(|(relevant_index, store_index)| (store_index, relevant_receipts[relevant_index].0))
             .collect(),
     )
 }
@@ -3763,7 +3923,10 @@ mod tests {
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
 
         // Nothing shipped yet: a normal ship already covers this source.
-        assert_eq!(replay_file_source(&mut conn, &path, "claude").unwrap(), None);
+        assert_eq!(
+            replay_file_source(&mut conn, &path, "claude").unwrap(),
+            None
+        );
 
         let first = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
             .unwrap()
@@ -4234,12 +4397,8 @@ mod tests {
             "an unchanged source must not rotate or re-spool after drain"
         );
         assert_eq!(
-            source_epoch::active_source_epoch(
-                &conn,
-                "cursor",
-                &first.envelope.opaque_source_id
-            )
-            .unwrap(),
+            source_epoch::active_source_epoch(&conn, "cursor", &first.envelope.opaque_source_id)
+                .unwrap(),
             Some(first_epoch)
         );
         assert_eq!(
@@ -4266,9 +4425,13 @@ mod tests {
             .unwrap();
         assert_eq!(tail.source_epoch, first_epoch);
         assert_eq!(tail.range_start, first_end);
-        assert!(tail.envelope.render.unwrap().records.iter().any(|record| {
-            record.content_text.as_deref() == Some("after drain")
-        }));
+        assert!(tail
+            .envelope
+            .render
+            .unwrap()
+            .records
+            .iter()
+            .any(|record| { record.content_text.as_deref() == Some("after drain") }));
     }
 
     #[test]
@@ -6193,6 +6356,179 @@ mod tests {
         let snapshot = pending_source_envelope::snapshot(&conn).unwrap();
         assert_eq!(snapshot.pending_count, 0);
         assert_eq!(snapshot.blocked_source_count, 1);
+    }
+
+    #[tokio::test]
+    async fn missing_local_epoch_adopts_single_host_open_predecessor() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let host_epoch = Uuid::new_v4();
+        let expected_host_epoch = host_epoch;
+        let server = tokio::spawn(async move {
+            let mut original: Option<StorageV2Envelope> = None;
+            for request_index in 0..4 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (request_line, body) = read_http_request(&mut socket).await;
+                let (status, response_body) = match request_index {
+                    0 => {
+                        let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                        assert!(envelope.predecessor_source_epoch.is_none());
+                        original = Some(envelope);
+                        (
+                            "409 Conflict",
+                            serde_json::json!({
+                                "detail": {
+                                    "code": "source_epoch_conflict",
+                                    "message": "source range overlaps or conflicts with the registered epoch",
+                                    "details": {
+                                        "reason": "another_epoch_is_already_open_for_this_source",
+                                        "open_source_epochs": [expected_host_epoch.to_string()],
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        )
+                    }
+                    1 => (
+                        "404 Not Found",
+                        r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#
+                            .to_string(),
+                    ),
+                    2 => {
+                        assert!(request_line.contains(&expected_host_epoch.to_string()));
+                        let envelope = original.as_ref().unwrap();
+                        (
+                            "200 OK",
+                            serde_json::json!({
+                                "v": 2,
+                                "source_epoch": {
+                                    "source_epoch": expected_host_epoch.to_string(),
+                                    "tenant_id": envelope.tenant_id,
+                                    "machine_id": envelope.machine_id,
+                                    "provider": envelope.provider,
+                                    "opaque_source_id": envelope.opaque_source_id,
+                                    "range_kind": envelope.range_kind,
+                                    "state": "open",
+                                    "predecessor_source_epoch": null,
+                                    "replaced_by_source_epoch": null,
+                                    "accepted_through": "91",
+                                },
+                                "objects": [{
+                                    "envelope_id": "host-envelope",
+                                    "tenant_id": envelope.tenant_id,
+                                    "machine_id": envelope.machine_id,
+                                    "provider": envelope.provider,
+                                    "opaque_source_id": envelope.opaque_source_id,
+                                    "source_epoch": expected_host_epoch.to_string(),
+                                    "range_kind": envelope.range_kind,
+                                    "range_start": "0",
+                                    "range_end": "91",
+                                    "retired_at": null,
+                                }],
+                                "commit_seq": "40",
+                                "observed_at": "2026-08-31T00:00:00Z",
+                            })
+                            .to_string(),
+                        )
+                    }
+                    _ => {
+                        let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                        assert_eq!(
+                            envelope.predecessor_source_epoch.as_deref(),
+                            Some(expected_host_epoch.to_string().as_str())
+                        );
+                        (
+                            "200 OK",
+                            serde_json::json!({
+                                "v": 2,
+                                "envelope_id": envelope.expected_envelope_id,
+                                "object_hash": "b".repeat(64),
+                                "commit_seq": "41",
+                                "raw_state": "durable",
+                                "render_state": "ready",
+                                "media_state": "complete",
+                                "missing_media_hashes": [],
+                            })
+                            .to_string(),
+                        )
+                    }
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let config = ShipperConfig {
+            api_url: format!("http://{address}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+
+        let recovered = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "repair",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(recovered.bytes_shipped, 0);
+        assert!(recovered.has_more);
+
+        let shipped = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "repair",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(shipped.bytes_shipped > 0);
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+        let local_predecessor: String = conn
+            .query_row(
+                "SELECT predecessor_epoch FROM source_epoch_registry
+                 WHERE ended_at IS NULL AND provider = 'claude'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(local_predecessor, host_epoch.to_string());
+        let host_position: i64 = conn
+            .query_row(
+                "SELECT last_position FROM source_epoch_lane_state
+                 WHERE source_epoch = ?1 AND lane = 'durable'",
+                [host_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(host_position, 91);
+        server.await.unwrap();
     }
 
     #[tokio::test]

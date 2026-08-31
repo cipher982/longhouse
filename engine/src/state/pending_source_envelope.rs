@@ -795,6 +795,188 @@ pub fn replace_request_body_after_lineage_repair(
     Ok(())
 }
 
+/// Attach a host-proven open epoch as the predecessor of a locally initial
+/// epoch after local cursor state was lost or salvaged incompletely.
+///
+/// The host epoch is recorded as an ended local authority marker: it is never
+/// prepared locally, but its durable watermark makes it the wire predecessor
+/// for the retained successor.  The successor keeps its exact envelope id and
+/// source bytes; only the predecessor field changes.
+pub fn attach_host_authority_predecessor(
+    conn: &mut Connection,
+    source_epoch: Uuid,
+    host_predecessor: Uuid,
+    host_accepted_through: u64,
+    envelope_id: &str,
+    expected_request_body_zstd: &[u8],
+    replacement_request_body_zstd: &[u8],
+    proof_json: &str,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let local: (
+        String,
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    ) = tx
+        .query_row(
+            "SELECT provider, opaque_source_id, file_incarnation, max_observed_len,
+                    source_revision, bound_session_id, predecessor_epoch, start_reason
+             FROM source_epoch_registry
+             WHERE source_epoch = ?1 AND ended_at IS NULL",
+            [source_epoch.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .context("host-authority recovery requires an active local epoch")?;
+    let local_position: i64 = tx.query_row(
+        "SELECT last_position FROM source_epoch_lane_state
+         WHERE source_epoch = ?1 AND lane = 'durable'",
+        [source_epoch.to_string()],
+        |row| row.get(0),
+    )?;
+    if local_position != 0 {
+        bail!("host-authority recovery requires an unacknowledged local epoch");
+    }
+    let host_position = to_sql_u64(host_accepted_through)?;
+    if host_position <= 0 {
+        bail!("host-authority predecessor must have a positive durable watermark");
+    }
+    let host_local: Option<(String, String, Option<i64>)> = tx
+        .query_row(
+            "SELECT registry.provider, registry.opaque_source_id,
+                    lane.last_position
+             FROM source_epoch_registry AS registry
+             LEFT JOIN source_epoch_lane_state AS lane
+               ON lane.source_epoch = registry.source_epoch AND lane.lane = 'durable'
+             WHERE registry.source_epoch = ?1",
+            [host_predecessor.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    match host_local {
+        Some((provider, opaque_source_id, position)) => {
+            if local.6.as_deref() != Some(host_predecessor.to_string().as_str())
+                || provider != local.0
+                || opaque_source_id != local.1
+                || position.is_some_and(|position| position != 0)
+            {
+                bail!("existing host-authority predecessor does not match local source lineage");
+            }
+            tx.execute(
+                "UPDATE source_epoch_registry
+                 SET start_reason = 'host_authority_reconciled', updated_at = ?1
+                 WHERE source_epoch = ?2",
+                params![now, host_predecessor.to_string()],
+            )?;
+        }
+        None => {
+            if local.6.is_some() || local.7 != "initial" {
+                bail!("new host-authority predecessor requires an initial local epoch");
+            }
+            tx.execute(
+                "INSERT INTO source_epoch_registry (
+                     source_epoch, provider, opaque_source_id, file_incarnation,
+                     predecessor_epoch, start_reason, max_observed_len, source_revision,
+                     bound_session_id, created_at, updated_at, ended_at, end_reason
+                 ) VALUES (?1, ?2, ?3, ?4, NULL, 'host_authority_reconciled', ?5, ?6,
+                           ?7, ?8, ?8, ?8, 'host_authority_reconciled')",
+                params![
+                    host_predecessor.to_string(),
+                    local.0,
+                    local.1,
+                    local.2,
+                    local.3,
+                    local.4,
+                    local.5,
+                    now,
+                ],
+            )?;
+        }
+    }
+    tx.execute(
+        "INSERT INTO source_epoch_lane_state (
+             source_epoch, lane, last_position, updated_at
+         ) VALUES (?1, 'durable', ?2, ?3)
+         ON CONFLICT(source_epoch, lane) DO UPDATE SET
+             last_position = excluded.last_position,
+             updated_at = excluded.updated_at
+         WHERE source_epoch_lane_state.last_position = 0",
+        params![host_predecessor.to_string(), host_position, now],
+    )?;
+    if local.6.is_none() {
+        let registry_changed = tx.execute(
+            "UPDATE source_epoch_registry
+             SET predecessor_epoch = ?1,
+                 start_reason = 'host_authority_reconciled',
+                 updated_at = ?2
+             WHERE source_epoch = ?3 AND predecessor_epoch IS NULL
+               AND start_reason = 'initial' AND ended_at IS NULL",
+            params![host_predecessor.to_string(), now, source_epoch.to_string()],
+        )?;
+        if registry_changed != 1 {
+            bail!("local source epoch changed during host-authority recovery");
+        }
+    }
+    let pending_changed = tx.execute(
+        "UPDATE pending_source_envelope
+         SET request_body_zstd = ?1,
+             blocked_at = NULL,
+             block_kind = NULL,
+             block_detail = NULL,
+             wake_at = '1970-01-01T00:00:00.000000000Z'
+         WHERE source_epoch = ?2 AND envelope_id = ?3
+           AND request_body_zstd = ?4
+           AND blocked_at IS NOT NULL
+           AND block_kind = 'source_epoch_conflict_unresolved'",
+        params![
+            replacement_request_body_zstd,
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+        ],
+    )?;
+    if pending_changed != 1 {
+        bail!("blocked envelope changed during host-authority recovery");
+    }
+    tx.execute(
+        "INSERT INTO pending_source_envelope_supersession (
+             source_epoch, envelope_id, old_request_body_zstd,
+             new_request_body_zstd, reason, proof_json, created_at,
+             old_request_body_sha256, new_request_body_sha256,
+             old_request_body_len, new_request_body_len
+         ) VALUES (?1, ?2, x'', x'', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            source_epoch.to_string(),
+            envelope_id,
+            "Runtime Host proved the open predecessor after local epoch state loss",
+            proof_json,
+            now,
+            body_digest(expected_request_body_zstd),
+            body_digest(replacement_request_body_zstd),
+            expected_request_body_zstd.len() as i64,
+            replacement_request_body_zstd.len() as i64,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Retire a quarantined request only after the Runtime Host proves that its
 /// source epoch was closed in favor of a locally durable replacement epoch.
 /// The exact frozen body and host proof remain durable in the supersession
@@ -1159,11 +1341,11 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        block_kind_is_reconciling, body_digest, defer_reexamination, pending_outbox_has_capacity,
-        persist_or_load, persist_or_load_with_limit, quarantine,
-        replace_request_body_after_lineage_repair, retained_envelope_bytes,
-        retire_after_host_replacement, retry_paths, snapshot, sortable_wake_at,
-        PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
+        attach_host_authority_predecessor, block_kind_is_reconciling, body_digest,
+        defer_reexamination, pending_outbox_has_capacity, persist_or_load,
+        persist_or_load_with_limit, quarantine, replace_request_body_after_lineage_repair,
+        retained_envelope_bytes, retire_after_host_replacement, retry_paths, snapshot,
+        sortable_wake_at, PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
     };
     use crate::state::db::open_db;
     use rusqlite::params;
@@ -1238,6 +1420,75 @@ mod tests {
              re-examined against host truth and stays blocked only if there is \
              genuinely nothing to do"
         );
+    }
+
+    #[test]
+    fn host_authority_recovery_completes_an_existing_predecessor_without_a_lane() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let current = Uuid::new_v4();
+        let host = Uuid::new_v4();
+        register_epoch(&conn, current, "cursor");
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (
+                 source_epoch, lane, last_position, updated_at
+             ) VALUES (?1, 'durable', 0, '2026-07-15T00:00:00Z')",
+            [current.to_string()],
+        )
+        .unwrap();
+        persist_or_load(&mut conn, &candidate(current, "/tmp/partial-rebind.db")).unwrap();
+        quarantine(
+            &mut conn,
+            current,
+            "source_epoch_conflict_unresolved",
+            "host predecessor omitted from lane state",
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE source_epoch_registry
+             SET predecessor_epoch = ?1, start_reason = 'truncation'
+             WHERE source_epoch = ?2",
+            params![host.to_string(), current.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 predecessor_epoch, start_reason, max_observed_len,
+                 created_at, updated_at, ended_at, end_reason
+             ) SELECT ?1, provider, opaque_source_id, file_incarnation,
+                      NULL, 'initial', max_observed_len,
+                      created_at, updated_at, updated_at, 'truncation'
+               FROM source_epoch_registry WHERE source_epoch = ?2",
+            params![host.to_string(), current.to_string()],
+        )
+        .unwrap();
+        let pending = super::load_for_epoch(&conn, current).unwrap().unwrap();
+
+        attach_host_authority_predecessor(
+            &mut conn,
+            current,
+            host,
+            137,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            b"replacement-body",
+            r#"{"proof":"host manifest"}"#,
+        )
+        .unwrap();
+
+        let host_lane: i64 = conn
+            .query_row(
+                "SELECT last_position FROM source_epoch_lane_state
+                 WHERE source_epoch = ?1 AND lane = 'durable'",
+                [host.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(host_lane, 137);
+        let repaired = super::load_for_epoch(&conn, current).unwrap().unwrap();
+        assert!(repaired.blocked_at.is_none());
+        assert_eq!(repaired.request_body_zstd, b"replacement-body");
     }
 
     #[test]
