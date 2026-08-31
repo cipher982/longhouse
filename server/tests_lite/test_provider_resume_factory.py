@@ -12,6 +12,16 @@ from zerg.qa.provider_resume_factory import run_provider_resume_scenario
 @pytest.mark.parametrize("scenario", [value for value in SCENARIOS if value != "resume_unsupported"])
 @pytest.mark.timeout(30)
 def test_launch_provider_resume_factory_matrix(provider: str, scenario: str) -> None:
+    # Branching is a declared capability, not something every provider has. Only
+    # Codex can fork today, and asserting the scenario against a provider whose
+    # schema says not_implemented would be asserting a capability the product
+    # deliberately does not claim.
+    if scenario == "console_thread_fork":
+        from zerg.services.managed_provider_contracts import contract_for_provider
+
+        contract = contract_for_provider(provider)
+        if contract is None or not contract.fork_thread:
+            pytest.skip(f"{provider} does not declare fork_thread")
     result = run_provider_resume_scenario(provider, scenario)
     assert result["status"] == "pass", result
     assert result["evidence_class"] == "hermetic"

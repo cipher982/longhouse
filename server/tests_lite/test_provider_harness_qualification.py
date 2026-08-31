@@ -436,8 +436,8 @@ def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> Non
 
     assert gate["status"] == "pass"
     assert gate["provider_status"] == "not_applicable"
-    assert gate["expected_scenario_count"] == 32
-    assert gate["captured_scenario_count"] == 32
+    assert gate["expected_scenario_count"] == 33
+    assert gate["captured_scenario_count"] == 33
     assert gate["unexpected_results"] == []
 
 
@@ -634,7 +634,7 @@ def test_claude_full_column_gate_accepts_explicit_no_token_limits() -> None:
 
     assert gate["status"] == "pass"
     assert gate["provider"] == "claude"
-    assert gate["expected_scenario_count"] == 32
+    assert gate["expected_scenario_count"] == 33
     assert gate["coverage_gap_kind_counts"] == {
         "passed": 32,
         "no_token_safety_gate": 1,
@@ -653,7 +653,7 @@ def test_opencode_full_column_gate_accepts_measured_contract_limits(tmp_path: Pa
 
     assert gate["status"] == "pass"
     assert gate["provider"] == "opencode"
-    assert gate["expected_scenario_count"] == 32
+    assert gate["expected_scenario_count"] == 33
     assert gate["coverage_gap_kind_counts"] == {
         "passed": 30,
         "no_token_safety_gate": 1,
@@ -670,7 +670,7 @@ def test_antigravity_full_column_gate_accepts_maintenance_tier_limits(tmp_path: 
 
     assert gate["status"] == "pass"
     assert gate["provider"] == "antigravity"
-    assert gate["expected_scenario_count"] == 32
+    assert gate["expected_scenario_count"] == 33
     assert gate["coverage_gap_kind_counts"] == {
         "passed": 26,
         "no_token_safety_gate": 1,

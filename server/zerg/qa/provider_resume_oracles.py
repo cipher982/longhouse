@@ -91,17 +91,24 @@ def assertions_for(scenario_id: str, observation: Mapping[str, object]) -> dict[
             )
         }
     if scenario_id == "console_thread_fork":
-        # The mirror image of console_thread_continue. A branch's first turn
-        # must land on a *different* provider thread while still carrying the
-        # parent's context, and the child's own thread is what its later turns
-        # continue. A fork that returned the parent thread would put two
-        # Longhouse sessions on one rollout, so same_provider_thread being
-        # False is the assertion, not an incidental detail.
+        # The mirror image of console_thread_continue. That scenario proves a
+        # Console turn continues the same provider thread; this proves a branch's
+        # first turn does the opposite, and that the child's later turns go back
+        # to continuing -- its own thread, never the parent's. A fork that
+        # returned the parent thread would put two Longhouse sessions on one
+        # rollout, so same_provider_thread being False is the assertion here,
+        # not an incidental detail.
+        #
+        # Deliberately scoped to what an observation of Longhouse can support.
+        # That a real fork carries the parent's context forward is provider
+        # truth, and no hermetic run can establish it; the installed-binary
+        # canary in engine/src/codex_exec.rs asserts that half, and the schema
+        # requires live_token evidence before this cell qualifies.
         return {
             "branch_fork_produces_a_new_thread": (
                 observation.get("mode") == "console"
                 and observation.get("same_provider_thread") is False
-                and observation.get("parent_context_recalled") is True
+                and observation.get("forked_from_parent_thread") is True
                 and observation.get("child_binding_names_child_thread") is True
                 and observation.get("second_turn_continues_child") is True
             )

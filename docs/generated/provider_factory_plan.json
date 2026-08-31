@@ -102,6 +102,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -270,6 +271,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -411,6 +413,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -719,6 +722,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -1012,6 +1016,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -1021,6 +1026,17 @@
       ],
       "credential_requirement": [],
       "assertion_status": [
+        {
+          "assertion_id": "branch_fork_produces_a_new_thread",
+          "variant": null,
+          "scenario_id": "console_thread_fork",
+          "minimum_scenario_revision": 1,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
           "variant": null,
@@ -1359,6 +1375,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -1373,6 +1390,17 @@
         "LONGHOUSE_ENGINE_BIN"
       ],
       "assertion_status": [
+        {
+          "assertion_id": "branch_fork_produces_a_new_thread",
+          "variant": null,
+          "scenario_id": "console_thread_fork",
+          "minimum_scenario_revision": 1,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [],
+          "satisfiable": false
+        },
         {
           "assertion_id": "cold_resume_registers_continuous_thread",
           "variant": null,
@@ -1598,6 +1626,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -1775,6 +1804,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -1971,6 +2001,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -2262,6 +2293,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -2570,6 +2602,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -2832,6 +2865,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",
@@ -2908,6 +2942,7 @@
         "helm_cold_resume",
         "helm_live_reattach",
         "console_thread_continue",
+        "console_thread_fork",
         "resume_identity_continuity",
         "resume_attempt_idempotency",
         "resume_single_owner",

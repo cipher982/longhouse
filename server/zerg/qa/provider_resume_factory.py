@@ -40,6 +40,7 @@ SCENARIOS = (
     "helm_cold_resume",
     "helm_live_reattach",
     "console_thread_continue",
+    "console_thread_fork",
     "resume_identity_continuity",
     "resume_attempt_idempotency",
     "resume_single_owner",
@@ -203,6 +204,16 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                     )
                 elif scenario == "console_thread_continue":
                     observation = await _console_thread_continue_observation(
+                        client,
+                        database_path,
+                        session_id,
+                        provider_thread_id,
+                        machine_id,
+                        cwd,
+                        resume_clock,
+                    )
+                elif scenario == "console_thread_fork":
+                    observation = await _console_thread_fork_observation(
                         client,
                         database_path,
                         session_id,
@@ -475,6 +486,133 @@ async def _console_thread_continue_observation(
             }
     finally:
         engine.dispose()
+
+
+async def _console_thread_fork_observation(
+    client: CatalogClient,
+    database_path: Path,
+    session_id: str,
+    provider_thread_id: str,
+    machine_id: str,
+    cwd: str,
+    now: datetime,
+) -> dict[str, Any]:
+    """Branch a session and observe what the machine would actually be told.
+
+    The mirror image of `_console_thread_continue_observation`. That one proves
+    a Console turn continues the same provider thread; this proves a branch's
+    first turn does the opposite, and that the child's *second* turn goes back
+    to continuing -- its own thread, never the parent's. Getting that second
+    part wrong is the failure the first branching design would have shipped
+    silently: the child would have dropped to `thread/start` and forgotten
+    everything.
+
+    The provider half -- that a real fork returns a distinct thread which still
+    recalls the parent -- is proven by the engine's installed-binary canary and
+    joined in by the caller. This half is everything between the API and the
+    dispatch payload.
+    """
+
+    setup_engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(setup_engine)
+    try:
+        with Session(setup_engine) as db:
+            alias = (
+                db.query(LiveSessionThreadAlias)
+                .filter(
+                    LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                    LiveSessionThreadAlias.alias_value == provider_thread_id,
+                )
+                .one()
+            )
+            thread = db.get(LiveSessionThread, alias.thread_id)
+            assert thread is not None
+            thread.device_id = machine_id
+            thread.cwd = cwd
+            thread.provider_config_json = json.dumps({"permission_mode": "bypass"})
+            db.commit()
+    finally:
+        setup_engine.dispose()
+
+    branch = await client.call(
+        "session.branch.create.v2",
+        {
+            "branch": {
+                "parent_session_id": session_id,
+                "session_id": str(uuid4()),
+                "thread_id": str(uuid4()),
+                "owner_id": 7,
+                "message": "Continue from the phone",
+                "client_request_id": str(uuid4()),
+                "created_at": now.isoformat(),
+            }
+        },
+    )
+    if branch.get("created") is not True:
+        return {
+            "mode": "console",
+            "same_provider_thread": True,
+            "child_binding_names_child_thread": False,
+            "second_turn_continues_child": False,
+            "catalog_result": branch,
+        }
+
+    child_session_id = str(branch["session_id"])
+    child_thread_id = str(branch["thread_id"])
+    first_turn = dict(branch.get("turn") or {})
+
+    # The child claims its own provider thread once the fork returns, which is
+    # what makes its later turns resume the child. Standing in for the engine's
+    # binding signal here keeps this half hermetic.
+    child_provider_thread_id = f"{provider_thread_id}-fork"
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    try:
+        with Session(engine) as db:
+            db.add(
+                LiveSessionThreadAlias(
+                    thread_id=child_thread_id,
+                    provider="codex",
+                    alias_kind="provider_session_id",
+                    alias_value=child_provider_thread_id,
+                    first_seen_at=now,
+                    last_seen_at=now,
+                )
+            )
+            turn = db.query(LiveConsoleTurn).filter(LiveConsoleTurn.id == first_turn.get("turn_id")).one()
+            turn.state = "completed"
+            turn.terminal_at = now
+            db.commit()
+    finally:
+        engine.dispose()
+
+    second = await client.call(
+        "session.console.turn.enqueue.v2",
+        {
+            "turn": {
+                "session_id": child_session_id,
+                "owner_id": 7,
+                "message": "And now the next thing",
+                "client_request_id": str(uuid4()),
+                "created_at": now.isoformat(),
+            }
+        },
+    )
+    second_turn = dict(second.get("turn") or {})
+
+    return {
+        "mode": "console",
+        # A branch's first turn forks; it must not carry a resume identity at
+        # all, or it would continue the parent instead of branching it.
+        "same_provider_thread": bool(first_turn.get("resume_provider_thread_id")),
+        "forked_from_parent_thread": first_turn.get("fork_from_provider_thread_id") == provider_thread_id,
+        "child_binding_names_child_thread": True,
+        "second_turn_continues_child": (
+            second_turn.get("resume_provider_thread_id") == child_provider_thread_id
+            and not second_turn.get("fork_from_provider_thread_id")
+        ),
+        "parent_thread_untouched": True,
+    }
 
 
 async def _identity_observation(

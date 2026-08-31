@@ -113,6 +113,7 @@ _EXPECTED_ANTIGRAVITY_FULL_COLUMN_LIMITS: dict[str, tuple[str, str | None]] = {
     "helm_cold_resume": ("not_applicable", None),
     "helm_live_reattach": ("not_applicable", None),
     "console_thread_continue": ("not_applicable", None),
+    "console_thread_fork": ("not_applicable", None),
     "resume_identity_continuity": ("not_applicable", None),
     "resume_attempt_idempotency": ("not_applicable", None),
     "resume_single_owner": ("not_applicable", None),
