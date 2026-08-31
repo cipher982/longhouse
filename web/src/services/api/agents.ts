@@ -1481,3 +1481,30 @@ export async function setSessionLoopMode(
     body: JSON.stringify({ loop_mode: loopMode }),
   });
 }
+
+export interface SessionBranchRequest {
+  message: string;
+  client_request_id: string;
+  display_name?: string | null;
+  launch_surface?: string;
+}
+
+export interface SessionBranchResponse {
+  session_id: string;
+  thread_id: string;
+  turn_id: string;
+  run_id: string | null;
+  state: string;
+  created: boolean;
+}
+
+/** Branch an ended session into a new one that continues its conversation. */
+export async function createSessionBranch(
+  sessionId: string,
+  body: SessionBranchRequest,
+): Promise<SessionBranchResponse> {
+  return request<SessionBranchResponse>(`/sessions/${sessionId}/branches`, {
+    method: "POST",
+    body: JSON.stringify({ launch_surface: "web", ...body }),
+  });
+}

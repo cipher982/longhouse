@@ -201,6 +201,7 @@ struct APISessionControlActions: Codable, Hashable, Sendable {
     let terminate: APISessionActionAvailability
     let reattach: APISessionActionAvailability
     let resume: APISessionActionAvailability
+    let branch: APISessionActionAvailability?
 }
 
 struct APISessionControlFacts: Codable, Hashable, Sendable {

@@ -776,3 +776,48 @@ def test_console_run_stops_claiming_work_once_its_activity_evidence_expires():
     assert facts.presentation.primary.key == "no_recent_activity"
     assert facts.presentation.primary.label == "No recent activity (last: running a tool)"
     assert facts.working_set == "history"
+
+
+def test_branch_availability_is_narrower_than_resume():
+    """Branching needs more than a resumable session.
+
+    Resume proves the machine, contract, provider and workspace still line up.
+    A branch additionally needs a provider that can fork, and a parent whose
+    approvals a Console turn can carry -- Console disables them entirely.
+    """
+
+    from zerg.services.session_state_contract import SessionActionAvailability
+    from zerg.services.session_state_facts_projector import _branch_action_availability
+
+    available = SessionActionAvailability(state="available")
+    bypass = {"catalog": {"permission_mode": "bypass", "permission_mode_source": "launch_plan"}}
+
+    assert _branch_action_availability(bypass, resume=available, supported_operations={"fork_thread"}).state == "available"
+
+    # A refusal to resume is a refusal to branch, reported with the same reason
+    # so the client never has to translate one into the other.
+    blocked = _branch_action_availability(
+        bypass,
+        resume=SessionActionAvailability(state="unavailable", reason="machine_offline"),
+        supported_operations={"fork_thread"},
+    )
+    assert blocked.state == "unavailable" and blocked.reason == "machine_offline"
+
+    no_fork = _branch_action_availability(bypass, resume=available, supported_operations=set())
+    assert no_fork.reason == "fork_unsupported"
+
+    # A stored bypass with no recorded source may only mean nobody said
+    # otherwise. Absence of evidence is not permission.
+    unknown = _branch_action_availability(
+        {"catalog": {"permission_mode": "bypass"}},
+        resume=available,
+        supported_operations={"fork_thread"},
+    )
+    assert unknown.reason == "permission_mode_unknown"
+
+    stricter = _branch_action_availability(
+        {"catalog": {"permission_mode": "provider_local", "permission_mode_source": "launch_plan"}},
+        resume=available,
+        supported_operations={"fork_thread"},
+    )
+    assert stricter.reason == "permission_mode_unsupported"

@@ -32,6 +32,7 @@ import {
   isUnexpectedResumeStop,
   ResumeSessionModal,
 } from "../components/session-workspace/ResumeSessionModal";
+import { BranchSessionCard } from "../components/session-workspace/BranchSessionCard";
 import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
@@ -295,6 +296,14 @@ function SessionDetailWorkspaceRoute({
   const resumeAvailable =
     isViewingHead &&
     branchSourceSession.session_state.control.actions.resume.state === "available";
+  // Branching is offered wherever Resume is, because the reason it is not
+  // offered is worth showing too: an ended session that cannot be continued
+  // should say why rather than simply have nothing there.
+  const branchAction = branchSourceSession.session_state.control.actions.branch;
+  const showBranchCard =
+    isViewingHead &&
+    branchSourceSession.session_state.run?.lifecycle === "ended" &&
+    branchSourceSession.session_state.mode === "helm";
   const workspaceClassName = [
     "session-workspace-route",
     "session-workspace-route--single-column",
@@ -464,6 +473,16 @@ function SessionDetailWorkspaceRoute({
       data-runtime-tone={runtime.tone}
     >
       {launchPendingBanner}
+      {showBranchCard ? (
+        <BranchSessionCard
+          sessionId={branchSourceSession.id}
+          providerLabel={interaction.providerLabel}
+          machineLabel={runtimeHostLabel}
+          available={branchAction?.state === "available"}
+          unavailableReason={branchAction?.reason}
+          onBranched={navigateToSession}
+        />
+      ) : null}
       <div className="session-workspace-shell">
         <TimelinePane
           items={items}

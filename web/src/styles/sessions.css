@@ -1483,6 +1483,60 @@
     color: var(--color-text-secondary);
   }
 
+  /* Picking an ended session back up. Sits where the run stopped, so the
+     next thing you can do is where the last thing ended. */
+  .branch-session-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    margin: var(--space-3);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, rgba(120, 180, 140, 0.10) 80%, transparent);
+    border: 1px solid color-mix(in srgb, rgba(120, 180, 140, 0.26) 75%, transparent);
+  }
+
+  .branch-session-card__header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .branch-session-card__header span {
+    color: var(--color-text-secondary);
+    font-size: 0.85rem;
+  }
+
+  .branch-session-card__input {
+    width: 100%;
+    resize: vertical;
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text-primary);
+    font: inherit;
+  }
+
+  .branch-session-card__error {
+    color: var(--color-danger, #b4463c);
+    font-size: 0.85rem;
+    margin: 0;
+  }
+
+  .branch-session-card__actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  /* An unavailable branch still explains itself rather than disappearing. */
+  .branch-session-card--unavailable {
+    background: transparent;
+    border-style: dashed;
+    color: var(--color-text-secondary);
+    font-size: 0.9rem;
+  }
+
   .launch-pending-banner,
   .launch-failed-banner {
     display: flex;

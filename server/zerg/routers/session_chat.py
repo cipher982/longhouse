@@ -45,7 +45,6 @@ from zerg.services.console_turns import create_branch_with_first_turn
 from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import interrupt_console_turn
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
-from zerg.services.live_catalog_timeline import _supported_operations
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import cancel_live_queued_receipt_catalog
 from zerg.services.live_session_inputs import list_recent_live_input_receipts_catalog
@@ -1365,40 +1364,18 @@ async def create_session_branch_endpoint(
         owner_id=owner_id,
     )
 
-    # The same predicate the Resume button reads, not a reimplementation of it.
-    # Two paths that disagree about whether continuation is possible is a worse
-    # failure than either being unavailable, and only the projector knows.
+    # One served fact, computed by the projector, read by both the button and
+    # this endpoint. Three gates evaluated here would be a second implementation
+    # of "can this be branched", and the visible symptom of drift would be a
+    # button offering something the server refuses.
     control = parent.session_state.control
-    resume = control.actions.resume if control is not None else None
-    if resume is None or resume.state != "available":
+    branch_action = control.actions.branch if control is not None else None
+    if branch_action is None or branch_action.state != "available":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
-                "code": resume.reason if resume is not None else "control_unknown",
+                "code": branch_action.reason if branch_action is not None else "control_unknown",
                 "message": "This session cannot be branched right now",
-            },
-        )
-
-    # Resuming a conversation and branching one are different upstream
-    # surfaces, and a release can gain or lose either alone.
-    if "fork_thread" not in _supported_operations(parent.provider):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "fork_unsupported", "message": f"Longhouse cannot branch {parent.provider} sessions"},
-        )
-
-    # Console runs without approvals. Branching a session that ran under the
-    # provider's own prompts would silently drop them, so refuse unless the
-    # parent is positively known to have run under bypass -- the stored value
-    # alone cannot say, because it is non-null with a bypass default and is
-    # manufactured in more than one place.
-    posture = await _branch_permission_posture(owner_id=owner_id, session_id=session_id)
-    if posture != "bypass":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "permission_mode_unsupported",
-                "message": "This session ran with approvals a branch cannot carry",
             },
         )
 
@@ -1427,24 +1404,6 @@ async def create_session_branch_endpoint(
         state=branch.state,
         created=branch.created,
     )
-
-
-async def _branch_permission_posture(*, owner_id: int, session_id: UUID) -> str | None:
-    """The parent's approval posture, or None when it is not positively known.
-
-    Absence is not permission. A stored ``bypass`` with no recorded source may
-    only mean nobody said otherwise, so it is treated as unknown.
-    """
-
-    from zerg.services.live_control_catalog import load_live_control_session_snapshot
-
-    snapshot = await asyncio.to_thread(load_live_control_session_snapshot, str(session_id), owner_id=owner_id)
-    if snapshot is None:
-        return None
-    catalog = dict((snapshot.catalog_facts or {}).get("catalog") or {})
-    if not str(catalog.get("permission_mode_source") or "").strip():
-        return None
-    return str(catalog.get("permission_mode") or "").strip() or None
 
 
 @router.get("/{session_id}/lock")

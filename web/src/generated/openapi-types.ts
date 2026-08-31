@@ -8475,6 +8475,7 @@ export interface components {
             terminate: components["schemas"]["SessionActionAvailability"];
             reattach: components["schemas"]["SessionActionAvailability"];
             resume: components["schemas"]["SessionActionAvailability"];
+            branch?: components["schemas"]["SessionActionAvailability"];
         };
         /** SessionControlFacts */
         SessionControlFacts: {

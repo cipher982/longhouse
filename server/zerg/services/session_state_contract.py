@@ -161,6 +161,14 @@ class SessionControlActions(_FrozenModel):
     terminate: SessionActionAvailability
     reattach: SessionActionAvailability
     resume: SessionActionAvailability
+    #: Whether this session can be branched into a new Console session on the
+    #: same machine. Strictly narrower than `resume`: the provider must also be
+    #: able to fork a thread, and the parent's approvals must be positively
+    #: known to be ones a branch can carry. Served as one fact so the button and
+    #: the endpoint cannot disagree about what is offerable.
+    branch: SessionActionAvailability = Field(
+        default_factory=lambda: SessionActionAvailability(state="unavailable", reason="not_supported")
+    )
 
 
 class SessionControlFacts(_FrozenModel):

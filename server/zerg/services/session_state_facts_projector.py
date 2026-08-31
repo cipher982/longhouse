@@ -316,6 +316,11 @@ def _served_control(
             return SessionActionAvailability(state="available")
         return SessionActionAvailability(state="unavailable", reason=reason)
 
+    branch = _branch_action_availability(
+        catalog_facts,
+        resume=resume,
+        supported_operations=supported_operations,
+    )
     console_control = _mapping(catalog_facts.get("console_control"))
     console_projection = ConsoleControlProjection.from_catalog_facts(console_control)
     start_turn = availability(
@@ -343,6 +348,7 @@ def _served_control(
                 terminate=availability(False, "unsupported"),
                 reattach=availability(False, "not_helm"),
                 resume=resume,
+                branch=branch,
             ),
         )
     if observed is not None:
@@ -354,7 +360,7 @@ def _served_control(
             update={
                 "control_plane": _control_plane_for_observation(catalog_facts, observed),
                 "actions": observed.actions.model_copy(
-                    update={"start_turn": start_turn, "reattach": reattach, "resume": resume},
+                    update={"start_turn": start_turn, "reattach": reattach, "resume": resume, "branch": branch},
                 ),
             }
         )
@@ -374,8 +380,41 @@ def _served_control(
             terminate=availability(False, unavailable_reason),
             reattach=reattach,
             resume=resume,
+            branch=branch,
         ),
     )
+
+
+def _branch_action_availability(
+    catalog_facts: Mapping[str, Any],
+    *,
+    resume: SessionActionAvailability,
+    supported_operations: set[str],
+) -> SessionActionAvailability:
+    """Whether this session can be branched, as one served fact.
+
+    Strictly narrower than Resume, and deliberately computed here rather than in
+    the endpoint that acts on it: two implementations of "can this be branched"
+    would eventually disagree, and the visible symptom would be a button that
+    offers something the server refuses.
+    """
+
+    if resume.state != "available":
+        return SessionActionAvailability(state="unavailable", reason=resume.reason or "resume_unavailable")
+    # Resuming a conversation and forking one are different provider surfaces;
+    # a build can do the first without the second.
+    if "fork_thread" not in supported_operations:
+        return SessionActionAvailability(state="unavailable", reason="fork_unsupported")
+    # Console runs with approvals disabled, so a branch can only carry a parent
+    # that positively ran under bypass. The stored posture cannot say that on
+    # its own -- it is non-null with a bypass default and manufactured in more
+    # than one place -- so an unrecorded source is unknown, never permissive.
+    catalog = _mapping(catalog_facts.get("catalog"))
+    if not _text(catalog.get("permission_mode_source")):
+        return SessionActionAvailability(state="unavailable", reason="permission_mode_unknown")
+    if _text(catalog.get("permission_mode")) != "bypass":
+        return SessionActionAvailability(state="unavailable", reason="permission_mode_unsupported")
+    return SessionActionAvailability(state="available")
 
 
 def _durable_action_availability(
