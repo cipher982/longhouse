@@ -926,6 +926,22 @@ async fn reconcile_storage_v2_conflict(
                     has_more: true,
                 }));
             }
+            if reconcile_replaced_host_predecessor(
+                conn,
+                client,
+                &blocked,
+                prepared,
+                host_closed_predecessor_from_conflict(conflict),
+                request_timeout,
+            )
+            .await?
+            {
+                return Ok(Some(StorageV2ShipOutcome {
+                    bytes_shipped: 0,
+                    events_shipped: 0,
+                    has_more: true,
+                }));
+            }
             return Err(StorageV2SourceBlocked {
                 source_epoch: prepared.source_epoch,
                 kind: "source_epoch_conflict_unresolved".to_string(),
@@ -1033,6 +1049,18 @@ async fn reexamine_blocked_source(
     {
         return Ok(true);
     }
+    if reconcile_replaced_host_predecessor(
+        conn,
+        client,
+        pending,
+        prepared,
+        host_closed_predecessor_from_block_detail(pending.block_detail.as_deref()),
+        request_timeout,
+    )
+    .await?
+    {
+        return Ok(true);
+    }
     if prepared.envelope.provider == "cursor"
         && (reconcile_blocked_cursor_replacement(conn, client, prepared, request_timeout).await?
             || reconcile_blocked_cursor_lineage(conn, client, prepared, request_timeout).await?)
@@ -1100,20 +1128,47 @@ fn host_open_epoch_from_conflict(
 }
 
 fn host_open_epoch_from_block_detail(detail: Option<&str>) -> Option<Uuid> {
-    let detail = detail?;
-    let admission = detail
+    host_open_epoch_from_conflict(&conflict_from_block_detail(detail)?)
+}
+
+fn host_closed_predecessor_from_conflict(
+    conflict: &crate::shipping::client::StorageV2Conflict,
+) -> Option<Uuid> {
+    if conflict
+        .details
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        != Some("predecessor_not_open_for_this_identity")
+        || conflict
+            .details
+            .get("predecessor_state")
+            .and_then(serde_json::Value::as_str)
+            != Some("closed")
+    {
+        return None;
+    }
+    Uuid::parse_str(conflict.details.get("expected_predecessor")?.as_str()?).ok()
+}
+
+fn host_closed_predecessor_from_block_detail(detail: Option<&str>) -> Option<Uuid> {
+    host_closed_predecessor_from_conflict(&conflict_from_block_detail(detail)?)
+}
+
+fn conflict_from_block_detail(
+    detail: Option<&str>,
+) -> Option<crate::shipping::client::StorageV2Conflict> {
+    let admission = detail?
         .split_once("Admission details: ")?
         .1
         .split_once(". Manifest probe:")?
         .0;
     let response: serde_json::Value = serde_json::from_str(admission).ok()?;
-    let conflict = crate::shipping::client::StorageV2Conflict {
+    Some(crate::shipping::client::StorageV2Conflict {
         code: response.pointer("/detail/code")?.as_str()?.to_string(),
         message: response.pointer("/detail/message")?.as_str()?.to_string(),
         details: response.pointer("/detail/details")?.clone(),
         response_body: admission.to_string(),
-    };
-    host_open_epoch_from_conflict(&conflict)
+    })
 }
 
 /// Recover from a salvaged local shipper database that no longer contains the
@@ -1201,6 +1256,135 @@ async fn reconcile_lost_local_epoch(
         accepted_through,
         provider = %envelope.provider,
         "Recovered missing local epoch state from Runtime Host authority"
+    );
+    Ok(true)
+}
+
+/// Follow a host replacement chain when the predecessor recovered on an
+/// earlier pass has already closed.
+async fn reconcile_replaced_host_predecessor(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    pending: &PendingSourceEnvelope,
+    prepared: &PreparedStorageV2Envelope,
+    closed_predecessor: Option<Uuid>,
+    request_timeout: Duration,
+) -> Result<bool> {
+    let Some(closed_predecessor) = closed_predecessor else {
+        return Ok(false);
+    };
+    if pending.block_kind.as_deref() != Some("source_epoch_conflict_unresolved")
+        || prepared.envelope.predecessor_source_epoch.as_deref()
+            != Some(closed_predecessor.to_string().as_str())
+    {
+        return Ok(false);
+    }
+
+    let envelope = &prepared.envelope;
+    let mut chain = Vec::new();
+    let mut epoch = closed_predecessor;
+    let mut previous = None;
+    let open_manifest = loop {
+        if chain.len() >= 32 {
+            return Ok(false);
+        }
+        let manifest = client
+            .storage_v2_source_manifest(&epoch.to_string(), 0, Some(request_timeout))
+            .await?;
+        let hosted = &manifest.source_epoch;
+        if manifest.v != 2
+            || hosted.source_epoch != epoch.to_string()
+            || hosted.tenant_id != envelope.tenant_id
+            || hosted.machine_id != envelope.machine_id
+            || hosted.provider != envelope.provider
+            || hosted.opaque_source_id != envelope.opaque_source_id
+            || hosted.range_kind != envelope.range_kind
+            || previous.is_some_and(|previous: Uuid| {
+                hosted
+                    .predecessor_source_epoch
+                    .as_deref()
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    != Some(previous)
+            })
+        {
+            return Ok(false);
+        }
+        chain.push(epoch);
+        if hosted.state == "open" && hosted.replaced_by_source_epoch.is_none() {
+            break manifest;
+        }
+        if hosted.state != "closed" {
+            return Ok(false);
+        }
+        let Some(replacement) = hosted.replaced_by_source_epoch.as_deref() else {
+            return Ok(false);
+        };
+        let Ok(replacement) = Uuid::parse_str(replacement) else {
+            return Ok(false);
+        };
+        if chain.contains(&replacement) {
+            return Ok(false);
+        }
+        previous = Some(epoch);
+        epoch = replacement;
+    };
+    let hosted = &open_manifest.source_epoch;
+    let open_predecessor = Uuid::parse_str(&hosted.source_epoch)?;
+    if open_predecessor == closed_predecessor
+        || open_manifest.objects.is_empty()
+        || chain.len() != 2
+    {
+        return Ok(false);
+    }
+    let Ok(accepted_through) = hosted.accepted_through.parse::<u64>() else {
+        return Ok(false);
+    };
+    if accepted_through == 0 {
+        return Ok(false);
+    }
+
+    let mut replacement = envelope.clone();
+    replacement.predecessor_source_epoch = Some(open_predecessor.to_string());
+    let replacement_body = serde_json::to_vec(&replacement)
+        .context("serializing replaced host-authority predecessor recovery")?;
+    let replacement_body_zstd = encode_zstd(
+        &replacement_body,
+        "replaced host-authority predecessor recovery body",
+    )?;
+    let proof_json = serde_json::json!({
+        "v": 1,
+        "requested_source_epoch": prepared.source_epoch.to_string(),
+        "stale_host_predecessor": closed_predecessor.to_string(),
+        "host_replacement_chain": chain.iter().map(Uuid::to_string).collect::<Vec<_>>(),
+        "host_open_source_epoch": open_predecessor.to_string(),
+        "host_accepted_through": hosted.accepted_through,
+        "host_commit_seq": open_manifest.commit_seq,
+        "identity": {
+            "tenant_id": hosted.tenant_id,
+            "machine_id": hosted.machine_id,
+            "provider": hosted.provider,
+            "opaque_source_id": hosted.opaque_source_id,
+            "range_kind": hosted.range_kind,
+        },
+    })
+    .to_string();
+    pending_source_envelope::retarget_host_authority_predecessor(
+        conn,
+        prepared.source_epoch,
+        closed_predecessor,
+        open_predecessor,
+        accepted_through,
+        &pending.envelope_id,
+        &pending.request_body_zstd,
+        &replacement_body_zstd,
+        &proof_json,
+    )?;
+    tracing::warn!(
+        source_epoch = %prepared.source_epoch,
+        stale_predecessor = %closed_predecessor,
+        open_predecessor = %open_predecessor,
+        accepted_through,
+        "Advanced recovered predecessor through Runtime Host replacement chain"
     );
     Ok(true)
 }
@@ -6363,10 +6547,12 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let host_epoch = Uuid::new_v4();
+        let replacement_host_epoch = Uuid::new_v4();
         let expected_host_epoch = host_epoch;
+        let expected_replacement_host_epoch = replacement_host_epoch;
         let server = tokio::spawn(async move {
             let mut original: Option<StorageV2Envelope> = None;
-            for request_index in 0..4 {
+            for request_index in 0..8 {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let (request_line, body) = read_http_request(&mut socket).await;
                 let (status, response_body) = match request_index {
@@ -6431,11 +6617,113 @@ mod tests {
                             .to_string(),
                         )
                     }
-                    _ => {
+                    3 => {
                         let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
                         assert_eq!(
                             envelope.predecessor_source_epoch.as_deref(),
                             Some(expected_host_epoch.to_string().as_str())
+                        );
+                        (
+                            "409 Conflict",
+                            serde_json::json!({
+                                "detail": {
+                                    "code": "source_epoch_conflict",
+                                    "message": "source range overlaps or conflicts with the registered epoch",
+                                    "details": {
+                                        "reason": "predecessor_not_open_for_this_identity",
+                                        "predecessor_exists": true,
+                                        "expected_predecessor": expected_host_epoch.to_string(),
+                                        "predecessor_state": "closed",
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        )
+                    }
+                    4 => (
+                        "404 Not Found",
+                        r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#
+                            .to_string(),
+                    ),
+                    5 => {
+                        assert!(request_line.contains(&expected_host_epoch.to_string()));
+                        let envelope = original.as_ref().unwrap();
+                        (
+                            "200 OK",
+                            serde_json::json!({
+                                "v": 2,
+                                "source_epoch": {
+                                    "source_epoch": expected_host_epoch.to_string(),
+                                    "tenant_id": envelope.tenant_id,
+                                    "machine_id": envelope.machine_id,
+                                    "provider": envelope.provider,
+                                    "opaque_source_id": envelope.opaque_source_id,
+                                    "range_kind": envelope.range_kind,
+                                    "state": "closed",
+                                    "predecessor_source_epoch": null,
+                                    "replaced_by_source_epoch": expected_replacement_host_epoch.to_string(),
+                                    "accepted_through": "91",
+                                },
+                                "objects": [{
+                                    "envelope_id": "host-envelope",
+                                    "tenant_id": envelope.tenant_id,
+                                    "machine_id": envelope.machine_id,
+                                    "provider": envelope.provider,
+                                    "opaque_source_id": envelope.opaque_source_id,
+                                    "source_epoch": expected_host_epoch.to_string(),
+                                    "range_kind": envelope.range_kind,
+                                    "range_start": "0",
+                                    "range_end": "91",
+                                    "retired_at": null,
+                                }],
+                                "commit_seq": "41",
+                                "observed_at": "2026-08-31T00:01:00Z",
+                            })
+                            .to_string(),
+                        )
+                    }
+                    6 => {
+                        assert!(request_line.contains(&expected_replacement_host_epoch.to_string()));
+                        let envelope = original.as_ref().unwrap();
+                        (
+                            "200 OK",
+                            serde_json::json!({
+                                "v": 2,
+                                "source_epoch": {
+                                    "source_epoch": expected_replacement_host_epoch.to_string(),
+                                    "tenant_id": envelope.tenant_id,
+                                    "machine_id": envelope.machine_id,
+                                    "provider": envelope.provider,
+                                    "opaque_source_id": envelope.opaque_source_id,
+                                    "range_kind": envelope.range_kind,
+                                    "state": "open",
+                                    "predecessor_source_epoch": expected_host_epoch.to_string(),
+                                    "replaced_by_source_epoch": null,
+                                    "accepted_through": "102",
+                                },
+                                "objects": [{
+                                    "envelope_id": "replacement-host-envelope",
+                                    "tenant_id": envelope.tenant_id,
+                                    "machine_id": envelope.machine_id,
+                                    "provider": envelope.provider,
+                                    "opaque_source_id": envelope.opaque_source_id,
+                                    "source_epoch": expected_replacement_host_epoch.to_string(),
+                                    "range_kind": envelope.range_kind,
+                                    "range_start": "0",
+                                    "range_end": "102",
+                                    "retired_at": null,
+                                }],
+                                "commit_seq": "42",
+                                "observed_at": "2026-08-31T00:02:00Z",
+                            })
+                            .to_string(),
+                        )
+                    }
+                    _ => {
+                        let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                        assert_eq!(
+                            envelope.predecessor_source_epoch.as_deref(),
+                            Some(expected_replacement_host_epoch.to_string().as_str())
                         );
                         (
                             "200 OK",
@@ -6495,6 +6783,22 @@ mod tests {
         assert_eq!(recovered.bytes_shipped, 0);
         assert!(recovered.has_more);
 
+        let retargeted = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "repair",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(retargeted.bytes_shipped, 0);
+        assert!(retargeted.has_more);
+
         let shipped = ship_next_envelope(
             &mut conn,
             &client,
@@ -6518,7 +6822,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(local_predecessor, host_epoch.to_string());
+        assert_eq!(local_predecessor, replacement_host_epoch.to_string());
         let host_position: i64 = conn
             .query_row(
                 "SELECT last_position FROM source_epoch_lane_state
@@ -6528,6 +6832,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(host_position, 91);
+        let replacement_host_position: i64 = conn
+            .query_row(
+                "SELECT last_position FROM source_epoch_lane_state
+                 WHERE source_epoch = ?1 AND lane = 'durable'",
+                [replacement_host_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(replacement_host_position, 102);
         server.await.unwrap();
     }
 
