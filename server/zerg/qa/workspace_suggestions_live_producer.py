@@ -23,6 +23,8 @@ RUNTIME_API_URL_ENV = "LONGHOUSE_RUNTIME_API_URL"
 RUNTIME_AGENTS_TOKEN_ENV = "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
 MAX_LIVE_LATENCY_SECONDS = 3.0
 MAX_MACHINES = 10
+TRANSIENT_STATUS_CODES = frozenset({502, 503})
+TRANSIENT_RETRY_DELAYS_SECONDS = (0.5, 1.0)
 _PROOF_MACHINE_MARKERS = ("provider-factory", "canary", "github-actions", "sauron")
 _DISALLOWED_PATH_MARKERS = (
     "/canaries/provider-live/",
@@ -36,7 +38,7 @@ _DISALLOWED_PATH_MARKERS = (
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.workspace_suggestions_live.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id="workspace_suggestions_live",
     scenario_revision=2,
     assertion_cells=((ASSERTION_ID, None),),
@@ -86,16 +88,22 @@ def _headers(token: str) -> dict[str, str]:
     return {"X-Agents-Token": token}
 
 
-def _get_json(url: str, *, token: str) -> tuple[int, float, object]:
-    started = time.monotonic()
-    response = httpx.get(url, headers=_headers(token), timeout=10)
-    latency = time.monotonic() - started
-    payload: object
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = {"body": response.text[:1_000]}
-    return response.status_code, latency, payload
+def _get_json(url: str, *, token: str) -> tuple[int, float, object, int]:
+    attempts = 0
+    for delay_after_failure in (*TRANSIENT_RETRY_DELAYS_SECONDS, None):
+        attempts += 1
+        started = time.monotonic()
+        response = httpx.get(url, headers=_headers(token), timeout=10)
+        latency = time.monotonic() - started
+        payload: object
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {"body": response.text[:1_000]}
+        if response.status_code not in TRANSIENT_STATUS_CODES or delay_after_failure is None:
+            return response.status_code, latency, payload, attempts
+        time.sleep(delay_after_failure)
+    raise AssertionError("transient retry loop must return")
 
 
 def _workspace_paths(payload: object) -> list[str]:
@@ -111,7 +119,7 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
     if not api_url or not token:
         raise ValueError("live workspace assurance requires Runtime Host API URL and token")
 
-    machines_status, machines_latency, machines_payload = _get_json(
+    machines_status, machines_latency, machines_payload, machines_attempts = _get_json(
         f"{api_url}/api/agents/machines",
         token=token,
     )
@@ -132,7 +140,7 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
     reads: list[dict[str, Any]] = []
     for machine in candidates[:MAX_MACHINES]:
         device_id = str(machine["device_id"])
-        status, latency, payload = _get_json(
+        status, latency, payload, attempts = _get_json(
             f"{api_url}/api/agents/machines/{quote(device_id, safe='')}/workspaces?limit=50&days_back=180",
             token=token,
         )
@@ -142,6 +150,7 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
                 "device_id": device_id,
                 "status_code": status,
                 "latency_seconds": round(latency, 6),
+                "attempts": attempts,
                 "paths": paths,
                 "response_shape_valid": isinstance(payload, dict) and isinstance(payload.get("workspaces"), list),
             }
@@ -156,6 +165,7 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
         "checked_machine_count": len(reads),
         "machine_directory_status": machines_status,
         "machine_directory_latency_seconds": round(machines_latency, 6),
+        "machine_directory_attempts": machines_attempts,
         "all_reads_succeeded": all(read["status_code"] == 200 for read in reads),
         "all_reads_within_budget": all(read["latency_seconds"] <= MAX_LIVE_LATENCY_SECONDS for read in reads),
         "all_response_shapes_valid": all(read["response_shape_valid"] for read in reads),
@@ -167,6 +177,10 @@ def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, A
         "reads": reads,
     }
     coverage_available = bool(all_paths)
+    failed_reads = [read for read in reads if read["status_code"] != 200 or not read["response_shape_valid"]]
+    if not coverage_available and failed_reads:
+        statuses = ",".join(str(read["status_code"]) for read in failed_reads)
+        raise RuntimeError(f"workspace projection failed status={statuses} before positive coverage was observed")
     passed = coverage_available and (
         observation["all_reads_succeeded"]
         and observation["all_reads_within_budget"]
