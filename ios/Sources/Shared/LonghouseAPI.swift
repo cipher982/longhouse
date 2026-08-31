@@ -169,6 +169,7 @@ protocol SessionWorkspaceClient: Sendable {
     func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse
     func markSessionRead(id: String, readThrough: String) async throws
     func sessionResumeIntent(id: String) async throws -> SessionResumeIntent
+    func createSessionBranch(id: String, message: String, clientRequestId: String) async throws -> SessionBranch
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
 }
 
@@ -177,6 +178,10 @@ extension SessionWorkspaceClient {
     func markSessionRead(id: String, readThrough: String) async throws {}
 
     func sessionResumeIntent(id: String) async throws -> SessionResumeIntent {
+        throw LonghouseAPIError.requestFailed
+    }
+
+    func createSessionBranch(id: String, message: String, clientRequestId: String) async throws -> SessionBranch {
         throw LonghouseAPIError.requestFailed
     }
 
@@ -723,6 +728,28 @@ struct LonghouseAPI: Sendable {
         return try JSONDecoder.snakeCase.decode(SessionResumeIntent.self, from: data)
     }
 
+    func createSessionBranch(id: String, message: String, clientRequestId: String) async throws -> SessionBranch {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/branches"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(
+            withJSONObject: [
+                "message": message,
+                // Stable per attempt: the server deduplicates on this, so a
+                // retry after a dropped response cannot start a second branch.
+                "client_request_id": clientRequestId,
+                "launch_surface": "ios",
+            ]
+        )
+
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(SessionBranch.self, from: data)
+    }
+
     func notificationSettings() async throws -> UserNotificationSettings {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/users/me/notifications"))
         request.addValue("application/json", forHTTPHeaderField: "Accept")
@@ -1100,6 +1127,15 @@ public struct RemoteSessionLaunchResponse: Decodable, Sendable {
     public let executionLifetime: RemoteExecutionLifetime?
     public let launchErrorCode: String?
     public let launchErrorMessage: String?
+}
+
+public struct SessionBranch: Decodable, Sendable {
+    public let sessionId: String
+    public let threadId: String
+    public let turnId: String
+    public let runId: String?
+    public let state: String
+    public let created: Bool
 }
 
 public struct ConsoleSessionCreateResponse: Decodable, Sendable {

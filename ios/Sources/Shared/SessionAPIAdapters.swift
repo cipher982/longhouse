@@ -113,6 +113,8 @@ private extension APISessionStateFacts {
             terminate: control.actions.terminate.sessionStateAction,
             reattach: control.actions.reattach.sessionStateAction,
             resume: control.actions.resume.sessionStateAction,
+            branch: control.actions.branch?.sessionStateAction
+                ?? SessionStateAction(state: "unavailable", reason: "not_supported"),
             pendingInteractionKind: pendingInteraction?.kind,
             transcriptConvergence: transcript.convergence,
             primary: presentation.primary?.sessionStateLabel,

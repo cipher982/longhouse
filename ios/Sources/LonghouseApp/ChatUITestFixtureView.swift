@@ -1199,6 +1199,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     terminate: available,
                     reattach: unavailable,
                     resume: unavailable,
+                    branch: unavailable,
                     pendingInteractionKind: nil,
                     transcriptConvergence: "current",
                     primary: SessionStateLabel(key: "idle", label: "Idle", tone: "idle", observedAt: nil),

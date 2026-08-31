@@ -693,9 +693,30 @@ struct SessionView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+            // Resume hands back a command to type on the laptop, which is the
+            // wrong shape for the device this app runs on. Branching is the
+            // same continuation as a text box: it starts a new session that
+            // forks the provider's conversation and leaves this one alone.
+            if detail.stateFacts.runLifecycle == "ended" || detail.isClosed {
+                branchComposer(detail: detail)
+            }
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func branchComposer(detail: SessionDetail) -> some View {
+        BranchComposerCard(
+            available: detail.stateFacts.branch.isAvailable,
+            unavailableReason: detail.stateFacts.mode == "helm" ? detail.stateFacts.branch.reason : nil,
+            message: $viewModel.branchMessage,
+            isSubmitting: viewModel.isBranching,
+            errorMessage: viewModel.branchErrorMessage,
+            submit: {
+                Task { await viewModel.startBranch(sessionId: detail.id, appState: appState) }
+            }
+        )
     }
 
     private var primaryIntent: String {
@@ -1709,7 +1730,7 @@ private func isUnexpectedResumeStop(_ reason: String?) -> Bool {
     reason == "provider_exit" || reason == "process_gone"
 }
 
-private func resumeReasonLabel(_ reason: String?) -> String {
+func resumeReasonLabel(_ reason: String?) -> String {
     switch reason {
     case "run_active": return "the Helm is still running; use Reattach"
     case "machine_offline": return "the machine is offline"
@@ -1764,6 +1785,11 @@ final class SessionViewModel: ObservableObject {
     @Published var loopModeErrorMessage: String?
     @Published var pauseResponseErrorMessage: String?
     @Published var resumeIntent: SessionResumeIntent?
+    @Published var branchMessage: String = ""
+    @Published var isBranching = false
+    @Published var branchErrorMessage: String?
+    /// Set when a branch starts, so the view can follow it.
+    @Published var branchedSessionId: String?
     @Published var isPreparingResume = false
     @Published var resumeErrorMessage: String?
     private var transcriptDiagnostics: RenderBeaconReporter.WebKitDiagnostics?
@@ -2077,6 +2103,31 @@ final class SessionViewModel: ObservableObject {
             resumeIntent = try await api.sessionResumeIntent(id: sessionId)
         } catch {
             resumeErrorMessage = "Could not prepare Resume. Refresh and try again."
+        }
+    }
+
+    func startBranch(sessionId: String, appState: AppState) async {
+        let text = branchMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isBranching else { return }
+        guard let api = apiFactory(appState.serverURL) else {
+            branchErrorMessage = "The Longhouse server URL is invalid."
+            return
+        }
+        isBranching = true
+        branchErrorMessage = nil
+        defer { isBranching = false }
+        do {
+            let branch = try await api.createSessionBranch(
+                id: sessionId,
+                message: text,
+                clientRequestId: UUID().uuidString
+            )
+            // Only clear the draft once the branch exists. Losing what someone
+            // typed is the worst possible answer to a failure they can retry.
+            branchMessage = ""
+            branchedSessionId = branch.sessionId
+        } catch {
+            branchErrorMessage = "Couldn't start the branch. Try again."
         }
     }
 

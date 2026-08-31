@@ -75,6 +75,11 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     let terminate: SessionStateAction
     let reattach: SessionStateAction
     let resume: SessionStateAction
+    /// Whether this session can be branched into a new one that continues its
+    /// conversation. Strictly narrower than `resume`, and computed by the
+    /// server so the phone and the endpoint cannot disagree about what is
+    /// offerable.
+    let branch: SessionStateAction
     let pendingInteractionKind: String?
     let transcriptConvergence: String
     let primary: SessionStateLabel?
@@ -109,6 +114,7 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
         terminate: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         reattach: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         resume: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
+        branch: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         pendingInteractionKind: nil,
         transcriptConvergence: "unknown",
         primary: nil,

@@ -1800,6 +1800,7 @@ struct SessionModelsTests {
             terminate: unavailable,
             reattach: SessionStateAction(state: "unavailable", reason: "not_helm"),
             resume: SessionStateAction(state: "unavailable", reason: "not_helm"),
+            branch: SessionStateAction(state: "unavailable", reason: "not_helm"),
             pendingInteractionKind: nil,
             transcriptConvergence: "current",
             primary: SessionStateLabel(key: "ended", label: "Ended", tone: "closed", observedAt: nil),
@@ -1877,5 +1878,34 @@ struct SessionModelsTests {
           "loop_mode": "assist"
         }
         """.data(using: .utf8)!
+    }
+}
+
+struct BranchAvailabilityTests {
+    /// The two refusals branching adds over Resume get their own words. Falling
+    /// through to the Resume vocabulary would tell someone their contract was
+    /// missing when the real answer is that this provider cannot fork at all.
+    @Test
+    func branchReasonsThatResumeDoesNotHave() {
+        #expect(branchReasonLabel("fork_unsupported") == "Longhouse can't branch this provider yet.")
+        #expect(branchReasonLabel("permission_mode_unknown") == "This session ran with approvals a branch can't carry.")
+        #expect(branchReasonLabel("permission_mode_unsupported") == "This session ran with approvals a branch can't carry.")
+    }
+
+    /// Anything a branch inherits from Resume is explained the way Resume
+    /// explains it, so one refusal is never described two ways.
+    @Test
+    func sharedReasonsReuseTheResumeWording() {
+        #expect(branchReasonLabel("machine_offline").contains(resumeReasonLabel("machine_offline")))
+        #expect(branchReasonLabel(nil).contains(resumeReasonLabel(nil)))
+    }
+
+    /// Branch is strictly narrower than Resume: a session may be resumable and
+    /// still not branchable, and the phone must render the narrower fact.
+    @Test
+    func branchIsSeparateFromResumeOnTheStateFacts() {
+        let facts = makeSessionStateFacts(owned: true, resumeAvailable: true, branchAvailable: false)
+        #expect(facts.resume.isAvailable)
+        #expect(!facts.branch.isAvailable)
     }
 }

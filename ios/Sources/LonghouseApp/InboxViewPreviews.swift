@@ -64,6 +64,7 @@ private func previewStateFacts(
         terminate: isManaged ? available : unavailable,
         reattach: unavailable,
         resume: unavailable,
+        branch: unavailable,
         pendingInteractionKind: pendingInteractionKind,
         transcriptConvergence: "current",
         primary: SessionStateLabel(

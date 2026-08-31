@@ -13,6 +13,7 @@ func makeSessionStateFacts(
     /// the ended-Helm presentation has to get right.
     runLifecycle overrideRunLifecycle: String? = nil,
     resumeAvailable: Bool = false,
+    branchAvailable: Bool? = nil,
     reattachAvailable: Bool = false,
     tool: String? = nil,
     startTurnAvailable: Bool = false,
@@ -71,6 +72,9 @@ func makeSessionStateFacts(
         terminate: owned ? available : unavailable,
         reattach: reattachAvailable ? available : unavailable,
         resume: resumeAvailable ? available : unavailable,
+        // Branching is strictly narrower than Resume, so a fixture that can
+        // resume can also branch unless a test says otherwise.
+        branch: (branchAvailable ?? resumeAvailable) ? available : unavailable,
         pendingInteractionKind: pendingInteractionKind,
         transcriptConvergence: "current",
         primary: primary,
