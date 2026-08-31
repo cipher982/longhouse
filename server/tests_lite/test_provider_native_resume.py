@@ -20,6 +20,7 @@ from zerg.qa.codex_native_resume import _validate_resume_intent
 from zerg.qa.codex_native_resume import _write_json as write_codex_json
 from zerg.qa.codex_native_resume import _write_resume_contract_snapshot
 from zerg.qa.provider_native_resume import SPECS
+from zerg.qa.provider_native_resume import RuntimeHostRegistrationTransient
 from zerg.qa.provider_native_resume import TranscriptShipper
 from zerg.qa.provider_native_resume import _accept_claude_development_channel_prompt
 from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
@@ -47,6 +48,7 @@ from zerg.qa.provider_native_resume import _opencode_tui_is_connected
 from zerg.qa.provider_native_resume import _post_resume_response_correlated
 from zerg.qa.provider_native_resume import _provider_process_pid
 from zerg.qa.provider_native_resume import _provision_transcript_roots
+from zerg.qa.provider_native_resume import _raise_known_registration_transient
 from zerg.qa.provider_native_resume import _refresh_failure_result_manifest
 from zerg.qa.provider_native_resume import _resume_intent_timeout
 from zerg.qa.provider_native_resume import _resume_marker
@@ -2365,6 +2367,30 @@ def test_wait_state_excludes_existing_state_paths(tmp_path: Path) -> None:
             timeout=0.01,
             exclude_paths={stale, fresh},
         )
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    (
+        "Error: register managed Claude resume launch\nCaused by: operation timed out",
+        "Error: managed Claude resume launch failed: Runtime Host returned HTTP 503 Service Unavailable",
+    ),
+)
+def test_claude_resume_registration_transient_becomes_typed_retry_without_copying_terminal(
+    tmp_path: Path,
+    diagnostic: str,
+) -> None:
+    recording = tmp_path / "resume.tty"
+    recording.write_text(
+        f"{diagnostic}\nsecret-user-output",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeHostRegistrationTransient) as exc_info:
+        _raise_known_registration_transient(SimpleNamespace(recording=recording))
+
+    assert str(exc_info.value) == "managed Claude resume registration temporarily unavailable"
+    assert "secret-user-output" not in str(exc_info.value)
 
 
 def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:

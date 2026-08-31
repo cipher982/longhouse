@@ -650,6 +650,22 @@ class PtyProcess:
             pass
 
 
+class RuntimeHostRegistrationTransient(RuntimeError):
+    """A managed resume could not establish fresh Runtime Host ownership."""
+
+
+def _raise_known_registration_transient(process: PtyProcess) -> None:
+    """Turn only the CLI's fixed registration diagnostics into a typed retry."""
+
+    terminal = _terminal_text(process.recording)
+    timed_out = "register managed Claude resume launch" in terminal and ("timed out" in terminal or "operation timed out" in terminal)
+    unavailable = "managed Claude resume launch failed: Runtime Host returned HTTP" in terminal and any(
+        f"HTTP {status}" in terminal for status in (408, 502, 503, 504)
+    )
+    if timed_out or unavailable:
+        raise RuntimeHostRegistrationTransient("managed Claude resume registration temporarily unavailable")
+
+
 def _close_recordings(processes: tuple[PtyProcess | None, ...]) -> None:
     """Close PTY recording streams before hashing the evidence manifest."""
 
@@ -1618,6 +1634,7 @@ def _wait_state(
         if process is not None:
             process.drain()
             if process.process.poll() is not None:
+                _raise_known_registration_transient(process)
                 diagnostics = _state_candidate_diagnostics(spec, home)
                 raise RuntimeError(
                     f"{spec.provider} Helm process exited before publishing state; candidates={json.dumps(diagnostics, sort_keys=True)}"
@@ -4336,6 +4353,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             redacted = _secret_scan(root, list(_qualification_secrets(environment, args.agents_token)))
         except OSError:
             redacted = []
+        failure_code = (
+            "runtime_host_registration_temporarily_unavailable"
+            if isinstance(exc, RuntimeHostRegistrationTransient)
+            else "direct_native_resume_failed"
+        )
         failure = {
             "schema_version": 1,
             "artifact_kind": "direct_native_resume_result",
@@ -4347,7 +4369,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "evidence_class": "live_token",
             "generated_at": _now(),
             "status": "fail",
-            "failure_code": "direct_native_resume_failed",
+            "failure_code": failure_code,
             "error": f"{type(exc).__name__}: {exc}",
             "redacted_secret_files": redacted,
             "artifact_manifest": _artifact_manifest(root),

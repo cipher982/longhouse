@@ -1563,21 +1563,33 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             .get("session_id")
             .and_then(serde_json::Value::as_str)
     };
-    let registration = register_managed_launch_with_timeout(
-        &runtime,
-        &url,
-        &token,
-        if resume_target.is_some() {
-            "Claude resume"
-        } else {
-            "Claude"
-        },
-        &payload,
-        expected_session_id,
-        managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
-    );
+    // A fresh Helm launch may degrade and recover after the provider starts.
+    // Resume cannot: without a new Runtime Host run, the provider would reuse
+    // the retained session's old ownership identity. Give the authoritative
+    // registration its full bound and fail closed, matching Codex/OpenCode.
+    let registration = if resume_target.is_some() {
+        register_managed_launch(
+            &runtime,
+            &url,
+            &token,
+            "Claude resume",
+            &payload,
+            expected_session_id,
+        )
+    } else {
+        register_managed_launch_with_timeout(
+            &runtime,
+            &url,
+            &token,
+            "Claude",
+            &payload,
+            expected_session_id,
+            managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
+        )
+    };
     let mut response: Option<ManagedLaunchResponse> = match registration {
         Ok(response) => Some(response),
+        Err(error) if resume_target.is_some() => return Err(error),
         Err(error) => {
             eprintln!(
                 "Longhouse: {}; starting Claude locally. Managed registration will retry while Claude is running.",
@@ -1603,6 +1615,9 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     {
         if let Some(invalid) = response.take() {
             abort_claude_registration_in_background(&url, &token, invalid);
+        }
+        if resume_target.is_some() {
+            anyhow::bail!("Claude resume registration was unusable: {issue}");
         }
         eprintln!(
             "Longhouse warning: starting Claude without Longhouse control because registration was unusable ({issue})"
