@@ -795,7 +795,7 @@ pub fn replace_request_body_after_lineage_repair(
     Ok(())
 }
 
-/// Attach a host-proven open epoch as the predecessor of a locally initial
+/// Attach a host-proven open epoch as the predecessor of a locally unshipped
 /// epoch after local cursor state was lost or salvaged incompletely.
 ///
 /// The host epoch is recorded as an ended local authority marker: it is never
@@ -857,24 +857,66 @@ pub fn attach_host_authority_predecessor(
     if host_position <= 0 {
         bail!("host-authority predecessor must have a positive durable watermark");
     }
-    let host_local: Option<(String, String, Option<i64>)> = tx
+    let previous_predecessor = local.6.clone();
+    if let Some(previous) = previous_predecessor.as_deref() {
+        if previous != host_predecessor.to_string() {
+            let stale_local: Option<(String, String, Option<String>, Option<i64>, i64)> = tx
+                .query_row(
+                    "SELECT registry.provider, registry.opaque_source_id, registry.ended_at,
+                            lane.last_position,
+                            EXISTS(SELECT 1 FROM pending_source_envelope AS pending
+                                   WHERE pending.source_epoch = registry.source_epoch)
+                     FROM source_epoch_registry AS registry
+                     LEFT JOIN source_epoch_lane_state AS lane
+                       ON lane.source_epoch = registry.source_epoch AND lane.lane = 'durable'
+                     WHERE registry.source_epoch = ?1",
+                    [previous],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((provider, opaque_source_id, ended_at, position, has_pending)) = stale_local
+            else {
+                bail!("local predecessor is unavailable for host-authority replacement");
+            };
+            if provider != local.0
+                || opaque_source_id != local.1
+                || ended_at.is_none()
+                || position != Some(0)
+                || has_pending != 0
+            {
+                bail!("local predecessor is not an ended zero-progress epoch");
+            }
+        }
+    } else if local.7 != "initial" {
+        bail!("new host-authority predecessor requires an initial local epoch");
+    }
+
+    let host_local: Option<(String, String, Option<String>, Option<i64>)> = tx
         .query_row(
-            "SELECT registry.provider, registry.opaque_source_id,
+            "SELECT registry.provider, registry.opaque_source_id, registry.ended_at,
                     lane.last_position
              FROM source_epoch_registry AS registry
              LEFT JOIN source_epoch_lane_state AS lane
                ON lane.source_epoch = registry.source_epoch AND lane.lane = 'durable'
              WHERE registry.source_epoch = ?1",
             [host_predecessor.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()?;
     match host_local {
-        Some((provider, opaque_source_id, position)) => {
-            if local.6.as_deref() != Some(host_predecessor.to_string().as_str())
-                || provider != local.0
+        Some((provider, opaque_source_id, ended_at, position)) => {
+            if provider != local.0
                 || opaque_source_id != local.1
-                || position.is_some_and(|position| position != 0)
+                || ended_at.is_none()
+                || position.is_some_and(|position| position != 0 && position != host_position)
             {
                 bail!("existing host-authority predecessor does not match local source lineage");
             }
@@ -886,9 +928,6 @@ pub fn attach_host_authority_predecessor(
             )?;
         }
         None => {
-            if local.6.is_some() || local.7 != "initial" {
-                bail!("new host-authority predecessor requires an initial local epoch");
-            }
             tx.execute(
                 "INSERT INTO source_epoch_registry (
                      source_epoch, provider, opaque_source_id, file_incarnation,
@@ -919,15 +958,20 @@ pub fn attach_host_authority_predecessor(
          WHERE source_epoch_lane_state.last_position = 0",
         params![host_predecessor.to_string(), host_position, now],
     )?;
-    if local.6.is_none() {
+    if previous_predecessor.as_deref() != Some(host_predecessor.to_string().as_str()) {
         let registry_changed = tx.execute(
             "UPDATE source_epoch_registry
              SET predecessor_epoch = ?1,
                  start_reason = 'host_authority_reconciled',
                  updated_at = ?2
-             WHERE source_epoch = ?3 AND predecessor_epoch IS NULL
-               AND start_reason = 'initial' AND ended_at IS NULL",
-            params![host_predecessor.to_string(), now, source_epoch.to_string()],
+             WHERE source_epoch = ?3 AND predecessor_epoch IS ?4
+               AND ended_at IS NULL",
+            params![
+                host_predecessor.to_string(),
+                now,
+                source_epoch.to_string(),
+                previous_predecessor
+            ],
         )?;
         if registry_changed != 1 {
             bail!("local source epoch changed during host-authority recovery");
@@ -1683,6 +1727,94 @@ mod tests {
             )
             .unwrap();
         assert_eq!(host_lane, 137);
+        let repaired = super::load_for_epoch(&conn, current).unwrap().unwrap();
+        assert!(repaired.blocked_at.is_none());
+        assert_eq!(repaired.request_body_zstd, b"replacement-body");
+    }
+
+    #[test]
+    fn host_authority_recovery_skips_an_ended_zero_progress_local_predecessor() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let current = Uuid::new_v4();
+        let stale = Uuid::new_v4();
+        let host = Uuid::new_v4();
+        register_epoch(&conn, current, "cursor");
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (
+                 source_epoch, lane, last_position, updated_at
+             ) VALUES (?1, 'durable', 0, '2026-08-31T00:00:00Z')",
+            [current.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 predecessor_epoch, start_reason, max_observed_len,
+                 source_revision, bound_session_id, created_at, updated_at,
+                 ended_at, end_reason
+             ) SELECT ?1, provider, opaque_source_id, file_incarnation,
+                      NULL, 'initial', max_observed_len, source_revision,
+                      bound_session_id, created_at, updated_at,
+                      '2026-08-31T00:00:00Z', 'revision_change'
+               FROM source_epoch_registry WHERE source_epoch = ?2",
+            params![stale.to_string(), current.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (
+                 source_epoch, lane, last_position, updated_at
+             ) VALUES (?1, 'durable', 0, '2026-08-31T00:00:00Z')",
+            [stale.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE source_epoch_registry
+             SET predecessor_epoch = ?1, start_reason = 'revision_change'
+             WHERE source_epoch = ?2",
+            params![stale.to_string(), current.to_string()],
+        )
+        .unwrap();
+        persist_or_load(&mut conn, &candidate(current, "/tmp/revised-store.db")).unwrap();
+        quarantine(
+            &mut conn,
+            current,
+            "source_epoch_conflict_unresolved",
+            "host predecessor survived a lost local registry",
+        )
+        .unwrap();
+        let pending = super::load_for_epoch(&conn, current).unwrap().unwrap();
+
+        attach_host_authority_predecessor(
+            &mut conn,
+            current,
+            host,
+            78,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            b"replacement-body",
+            r#"{"proof":"host manifest"}"#,
+        )
+        .unwrap();
+
+        let predecessor: String = conn
+            .query_row(
+                "SELECT predecessor_epoch FROM source_epoch_registry
+                 WHERE source_epoch = ?1",
+                [current.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(predecessor, host.to_string());
+        let stale_position: i64 = conn
+            .query_row(
+                "SELECT last_position FROM source_epoch_lane_state
+                 WHERE source_epoch = ?1 AND lane = 'durable'",
+                [stale.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale_position, 0);
         let repaired = super::load_for_epoch(&conn, current).unwrap().unwrap();
         assert!(repaired.blocked_at.is_none());
         assert_eq!(repaired.request_body_zstd, b"replacement-body");
