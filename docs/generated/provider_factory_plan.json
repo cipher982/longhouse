@@ -1200,6 +1200,7 @@
           "scenario_id": "console_thread_fork",
           "minimum_scenario_revision": 1,
           "acceptable_evidence": [
+            "hermetic",
             "live_token"
           ],
           "producible_evidence": [],

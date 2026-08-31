@@ -156,7 +156,7 @@ providers:
         scenario_id: console_thread_fork
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
-        acceptable_evidence: [live_token]
+        acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
     session.resume.helm:
       disposition: implemented
