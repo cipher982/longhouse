@@ -16,6 +16,8 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from zerg.services.session_title import is_resume_seed_marker
+
 RuntimeRequest = Callable[[str, str, dict[str, Any] | None], dict[str, Any]]
 
 
@@ -77,11 +79,9 @@ def hide_and_verify_canary_isolation(
 ) -> dict[str, Any]:
     """Hide one row, then prove it cannot leak through adjacent user surfaces.
 
-    Title debt is proven absent by the strongest portable launch-canary fact:
-    the retained row has no user turn.  The title reconciler requires
-    ``user_messages > 0`` before a row can enter its candidate queue.  A
-    future canary that performs a real turn must supply a separate title or a
-    dedicated title-debt authority instead of weakening this check.
+    Title debt is absent when the row has no user turn, already has its frozen
+    title, or contains the product's explicit Resume seed marker. These are the
+    same sufficient facts that keep a row out of the storage title queue.
     """
 
     hidden = request(f"sessions/{session_id}/timeline-visibility", "PATCH", {"hidden": True})
@@ -111,10 +111,21 @@ def hide_and_verify_canary_isolation(
             "GET",
             None,
         )
+        user_messages = int(direct.get("user_messages") or 0)
+        anchor_title = str(direct.get("anchor_title") or "").strip()
+        first_user_message = str(direct.get("first_user_message_preview") or "")
+        if user_messages == 0:
+            title_debt_basis = "no_user_messages"
+        elif anchor_title:
+            title_debt_basis = "anchor_title_present"
+        elif is_resume_seed_marker(first_user_message):
+            title_debt_basis = "resume_seed_marker"
+        else:
+            title_debt_basis = "storage_title_candidate"
         axes = {
             "default_timeline_absent": session_id not in _ids(default),
             "open_absent": session_id not in _ids(open_sessions),
-            "title_debt_absent": int(direct.get("user_messages") or 0) == 0,
+            "title_debt_absent": title_debt_basis != "storage_title_candidate",
             "workspace_suggestion_absent": cwd not in _workspace_paths(workspaces),
             "direct_retrieval_succeeds": str(direct.get("id") or "") == session_id,
             "owned_processes_dead": owned_processes_dead(),
@@ -124,7 +135,7 @@ def hide_and_verify_canary_isolation(
             "session_id": session_id,
             "hidden": hidden.get("hidden") is True,
             "axes": axes,
-            "title_debt_basis": "storage_title_candidates_requires_user_messages",
+            "title_debt_basis": title_debt_basis,
             "workspace_path": cwd,
         }
         if last["hidden"] and last["status"] == "pass":

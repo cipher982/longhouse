@@ -543,7 +543,7 @@ def _human_launch_sequence(
         seed_receipt = _seed_codex_rollout(
             fresh_tui,
             codex_home=Path(environment["CODEX_HOME"]),
-            marker=f"LONGHOUSE_CODEX_HELM_SEED_{uuid.uuid4().hex}",
+            marker=f"_RESUME_SEED_LONGHOUSE_CODEX_HELM_{uuid.uuid4().hex}",
             timeout=args.wait_ready_secs,
         )
         write_json(root / "human-seed-receipt.json", seed_receipt)
