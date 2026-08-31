@@ -19,6 +19,8 @@ from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.models.live_store import LiveSessionThreadAlias
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveUser
 from zerg.services.agents.session_graph_writes import primary_thread_id_for_session
 from zerg.services.console_turns import CatalogConsoleTurn
@@ -601,3 +603,176 @@ def test_local_launch_shell_binds_thread_execution_target_for_console(tmp_path):
     assert "unavailable" not in turn
     assert turn["turn"]["provider"] == "pi"
     assert turn["turn"]["provider_config"]["pi_provider"] == "openrouter"
+
+
+def _seed_branch_parent(engine, *, owner_id: int = 1):
+    """A Helm parent that has a provider thread to fork from."""
+
+    now = datetime.now(UTC)
+    parent_id = str(uuid4())
+    parent_thread_id = str(uuid4())
+    with Session(engine) as db:
+        db.add_all(
+            [
+                LiveUser(id=owner_id, email="owner@example.com", is_active=True),
+                LiveSessionCatalog(
+                    session_id=parent_id,
+                    provider="codex",
+                    environment="production",
+                    origin_kind="managed_local",
+                    project="longhouse",
+                    cwd="/tmp/longhouse",
+                    device_id="cinder",
+                    started_at=now,
+                    last_activity_at=now,
+                    primary_thread_id=parent_thread_id,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                LiveSessionThread(
+                    id=parent_thread_id,
+                    session_id=parent_id,
+                    provider="codex",
+                    device_id="cinder",
+                    cwd="/tmp/longhouse",
+                    branch_kind="root",
+                    is_primary=1,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                # Ownership is durable evidence, not a catalog column: the
+                # store fails closed unless a row explicitly binds the owner.
+                LiveSession(
+                    session_id=parent_id,
+                    owner_id=owner_id,
+                    provider="codex",
+                    device_id="cinder",
+                    started_at=now,
+                ),
+                LiveSessionThreadAlias(
+                    thread_id=parent_thread_id,
+                    provider="codex",
+                    alias_kind="provider_session_id",
+                    alias_value="parent-provider-thread",
+                    first_seen_at=now,
+                    last_seen_at=now,
+                ),
+            ]
+        )
+        db.commit()
+    return parent_id, parent_thread_id, now
+
+
+def _branch_request(parent_id, *, now, owner_id=1, client_request_id="branch-1", message="keep going"):
+    return {
+        "parent_session_id": parent_id,
+        "session_id": str(uuid4()),
+        "thread_id": str(uuid4()),
+        "owner_id": owner_id,
+        "message": message,
+        "client_request_id": client_request_id,
+        "created_at": now,
+    }
+
+
+def test_branch_create_persists_child_lineage_and_first_turn_together(tmp_path):
+    """Create and first turn are one transaction, and the turn forks.
+
+    They were two catalogd RPCs in two transactions, which left a window where
+    the parent could be resumed between them -- changing the thread the fork
+    would be taken from -- and a client that died in the gap would leave an
+    empty session nobody asked for.
+    """
+
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    parent_id, parent_thread_id, now = _seed_branch_parent(engine)
+
+    request = _branch_request(parent_id, now=now)
+    result = CatalogStore(engine).create_branch_session(data=request)
+
+    assert result["created"] is True
+    turn = result["turn"]
+    # A branch's first turn forks and never resumes: the child owns no thread
+    # yet, so a resume identity here would be the parent's and would continue it.
+    assert turn["fork_from_provider_thread_id"] == "parent-provider-thread"
+    assert turn["resume_provider_thread_id"] is None
+    assert turn["state"] == "starting"
+
+    with Session(engine) as db:
+        child_thread = db.get(LiveSessionThread, request["thread_id"])
+        assert child_thread.parent_thread_id == parent_thread_id
+        assert child_thread.parent_session_id == parent_id
+        assert child_thread.branch_kind == "fork"
+        # Provider-tier lineage rides the non-routing alias kind; the routing
+        # alias belongs to whichever thread owns that provider session, and the
+        # child claims its own once the fork returns a new id.
+        alias = (
+            db.query(LiveSessionThreadAlias)
+            .filter(LiveSessionThreadAlias.thread_id == request["thread_id"])
+            .one()
+        )
+        assert alias.alias_kind == "forked_from_provider_session_id"
+        assert alias.alias_value == "parent-provider-thread"
+        assert db.query(LiveConsoleTurn).count() == 1
+        assert db.query(LiveSessionRun).count() == 1
+
+
+def test_branch_create_replay_is_keyed_on_the_parent(tmp_path):
+    """A retry must not create a second branch.
+
+    Replay cannot key on the child's own session id the way an ordinary console
+    turn does: on a retry the child does not exist yet, so the parent plus the
+    client request id is the only identity the request has.
+    """
+
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    parent_id, _parent_thread_id, now = _seed_branch_parent(engine)
+    store = CatalogStore(engine)
+
+    first = store.create_branch_session(data=_branch_request(parent_id, now=now))
+    replay = store.create_branch_session(data=_branch_request(parent_id, now=now))
+
+    assert first["created"] is True
+    assert replay["created"] is False
+    assert replay["idempotency_conflict"] is False
+    assert replay["session_id"] == first["session_id"]
+    with Session(engine) as db:
+        assert db.query(LiveSessionInputReceipt).count() == 1
+        assert db.query(LiveConsoleTurn).count() == 1
+
+    # Same key, different content is a conflict rather than a silent second
+    # branch or a silently ignored edit.
+    conflict = store.create_branch_session(data=_branch_request(parent_id, now=now, message="different"))
+    assert conflict["created"] is False
+    assert conflict["idempotency_conflict"] is True
+    assert conflict["turn"] is None
+
+
+def test_branch_create_refuses_a_parent_with_no_provider_thread(tmp_path):
+    """Nothing to fork from is a typed refusal, not a half-made session."""
+
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    parent_id, parent_thread_id, now = _seed_branch_parent(engine)
+    with Session(engine) as db:
+        db.query(LiveSessionThreadAlias).filter(LiveSessionThreadAlias.thread_id == parent_thread_id).delete()
+        db.commit()
+
+    result = CatalogStore(engine).create_branch_session(data=_branch_request(parent_id, now=now))
+
+    assert result == {"found": True, "unavailable": "provider_identity_missing"}
+    with Session(engine) as db:
+        assert db.query(LiveConsoleTurn).count() == 0
+        assert db.query(LiveSessionCatalog).count() == 1
+
+
+def test_branch_create_refuses_another_owners_session(tmp_path):
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    parent_id, _parent_thread_id, now = _seed_branch_parent(engine)
+
+    result = CatalogStore(engine).create_branch_session(data=_branch_request(parent_id, now=now, owner_id=42))
+
+    assert result == {"found": False}

@@ -538,6 +538,8 @@ class CatalogDaemon:
             return await self._finish_control_operation(request)
         if request.method == "session.console.create.v2":
             return await self._create_console_session(request)
+        if request.method == "session.branch.create.v2":
+            return await self._create_branch_session(request)
         if request.method == "session.console.turn.enqueue.v2":
             return await self._enqueue_console_turn(request)
         if request.method == "session.console.turn.current.v2":
@@ -1646,6 +1648,30 @@ class CatalogDaemon:
         assert self._store is not None
         result = await self._run_store(self._store.create_console_session, data=data)
         return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _create_branch_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"branch"} or not isinstance(request.params["branch"], dict):
+            return self._error(request, "invalid_request", "session.branch.create.v2 requires branch")
+        data = dict(request.params["branch"])
+        required = {
+            "parent_session_id",
+            "session_id",
+            "thread_id",
+            "owner_id",
+            "message",
+            "client_request_id",
+            "created_at",
+        }
+        if not required.issubset(data):
+            return self._error(request, "invalid_request", "branch is missing required fields")
+        try:
+            for field in ("parent_session_id", "session_id", "thread_id"):
+                uuid.UUID(str(data[field]))
+            data["created_at"] = _parse_datetime(data["created_at"], "branch.created_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        return CatalogRpcResponse(id=request.id, result=await self._run_store(self._store.create_branch_session, data=data))
 
     async def _enqueue_console_turn(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"turn"} or not isinstance(request.params["turn"], dict):

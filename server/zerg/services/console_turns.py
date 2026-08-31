@@ -99,6 +99,9 @@ class ClaimedConsoleTurn:
     client_request_id: str
     provider_config: dict[str, object]
     resume_provider_thread_id: str | None
+    #: Branch first turn only. Kept distinct from the resume identity because a
+    #: fork produces a sibling thread where a resume continues one.
+    fork_from_provider_thread_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -537,6 +540,8 @@ async def _dispatch_claimed_console_turn(
     }
     if claimed.resume_provider_thread_id:
         payload["resume_provider_thread_id"] = claimed.resume_provider_thread_id
+    if claimed.fork_from_provider_thread_id:
+        payload["fork_from_provider_thread_id"] = claimed.fork_from_provider_thread_id
 
     response = await control.send_command(
         owner_id=owner_id,
@@ -723,6 +728,8 @@ async def enqueue_catalog_console_turn(
         }
         if turn.get("resume_provider_thread_id"):
             payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
+        if turn.get("fork_from_provider_thread_id"):
+            payload["fork_from_provider_thread_id"] = turn["fork_from_provider_thread_id"]
         logger.info(
             "console_latency stage=command_dispatch session=%s turn=%s run=%s request=%s provider=%s device=%s accepted_elapsed_ms=%d",
             session_id,
@@ -883,6 +890,8 @@ async def dispatch_catalog_claimed_turn(
         }
         if turn.get("resume_provider_thread_id"):
             payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
+        if turn.get("fork_from_provider_thread_id"):
+            payload["fork_from_provider_thread_id"] = turn["fork_from_provider_thread_id"]
         response = await control.send_command(
             owner_id=owner_id,
             device_id=device_id,

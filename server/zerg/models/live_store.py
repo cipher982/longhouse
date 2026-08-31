@@ -833,6 +833,13 @@ class LiveConsoleTurn(LiveBase):
     device_id = Column(String(255), nullable=False)
     cwd = Column(Text, nullable=False)
     resume_provider_thread_id = Column(String(1024), nullable=True)
+    # Set on a branch's first turn only, and never alongside a resume. The two
+    # mean opposite things to the adapter -- resume continues a thread, fork
+    # produces a sibling -- and this has to be durable rather than derived,
+    # because FIFO replay, reconnect dispatch and ambiguous-command retry all
+    # rebuild the payload from this row. Carrying it in provider_config instead
+    # would re-send it on every later turn and fork again each time.
+    fork_from_provider_thread_id = Column(String(1024), nullable=True)
     error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False)

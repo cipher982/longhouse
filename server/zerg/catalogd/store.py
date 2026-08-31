@@ -411,6 +411,7 @@ def _live_console_turn_dto(
         "client_request_id": client_request_id,
         "provider_config": json.loads(provider_config or "{}"),
         "resume_provider_thread_id": turn.resume_provider_thread_id,
+        "fork_from_provider_thread_id": turn.fork_from_provider_thread_id,
         "error": turn.error,
     }
 
@@ -3444,6 +3445,205 @@ class CatalogStore:
                 "thread_id": str(data["thread_id"]),
                 "commit_seq": str(commit_seq),
             }
+
+    def create_branch_session(self, *, data: dict[str, Any]) -> dict[str, Any]:
+        """Create a branch, its lineage, and its first turn in one transaction.
+
+        Creating the child and enqueuing its first turn cannot be two calls.
+        Between them the parent can be resumed on its machine, which changes the
+        thread the fork would be taken from, and a client that crashed in the
+        gap would leave an empty session nobody asked for. They are separate
+        catalogd RPCs today precisely because nothing needed them together.
+
+        What this cannot make atomic is the dispatch that follows: the Machine
+        Agent is contacted after commit. A branch whose send fails is therefore a
+        durable branch with a failed first turn, which is the honest outcome --
+        the child exists, the user can see it, and the turn says what went wrong.
+        Hiding it behind an error would lose a session that was really created.
+        """
+
+        from zerg.services.live_archive_outbox import enqueue_console_session_create_outbox
+        from zerg.services.live_catalog_launch import create_live_console_session_shell
+
+        now = data["created_at"]
+        parent_session_id = str(data["parent_session_id"])
+        owner_id = int(data["owner_id"])
+        client_request_id = str(data["client_request_id"])
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                parent = orm.get(LiveSessionCatalog, parent_session_id)
+                if parent is None or not parent.primary_thread_id:
+                    orm.rollback()
+                    return {"found": False}
+                if not self._session_explicitly_belongs_to_owner(connection, session_id=parent_session_id, owner_id=owner_id):
+                    orm.rollback()
+                    return {"found": False}
+
+                # Replay is keyed on the parent, not the child: on a retry the
+                # child does not exist yet, so the receipt's own session id
+                # cannot identify the request that would have created it.
+                existing = (
+                    orm.query(LiveSessionInputReceipt, LiveSessionThread)
+                    .join(LiveSessionThread, LiveSessionThread.session_id == LiveSessionInputReceipt.session_id)
+                    .filter(
+                        LiveSessionInputReceipt.owner_id == owner_id,
+                        LiveSessionInputReceipt.client_request_id == client_request_id,
+                        LiveSessionThread.parent_session_id == parent_session_id,
+                    )
+                    .first()
+                )
+                if existing is not None:
+                    receipt, child_thread = existing
+                    turn = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id == receipt.id).one()
+                    exact = receipt.text == data["message"]
+                    replay = _live_console_turn_dto(
+                        turn,
+                        message=receipt.text,
+                        client_request_id=receipt.client_request_id,
+                        provider_config=child_thread.provider_config_json,
+                    )
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "created": False,
+                        "idempotency_conflict": not exact,
+                        "session_id": child_thread.session_id,
+                        "thread_id": child_thread.id,
+                        "turn": replay if exact else None,
+                    }
+
+                parent_thread = orm.get(LiveSessionThread, str(parent.primary_thread_id))
+                if parent_thread is None or not parent_thread.device_id or not parent_thread.cwd:
+                    orm.rollback()
+                    return {"found": True, "unavailable": "execution_target_missing"}
+
+                # The thread to fork from, read at execution time rather than
+                # when the user tapped. There is no way to pin an earlier point:
+                # ThreadForkParams.lastTurnId exists but no provider turn id is
+                # available here, so the fork is taken at the tip.
+                parent_alias = (
+                    orm.query(LiveSessionThreadAlias)
+                    .filter(
+                        LiveSessionThreadAlias.thread_id == parent_thread.id,
+                        LiveSessionThreadAlias.provider == parent.provider,
+                        LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                    )
+                    .order_by(
+                        LiveSessionThreadAlias.last_seen_at.desc(),
+                        LiveSessionThreadAlias.first_seen_at.desc(),
+                        LiveSessionThreadAlias.id.desc(),
+                    )
+                    .first()
+                )
+                if parent_alias is None or not parent_alias.alias_value:
+                    orm.rollback()
+                    return {"found": True, "unavailable": "provider_identity_missing"}
+
+                child_session_id = str(data["session_id"])
+                child_thread_id = str(data["thread_id"])
+                shell = {
+                    "session_id": child_session_id,
+                    "thread_id": child_thread_id,
+                    "owner_id": owner_id,
+                    "provider": parent.provider,
+                    "device_id": parent_thread.device_id,
+                    "cwd": parent_thread.cwd,
+                    "project": parent.project,
+                    "display_name": data.get("display_name"),
+                    "provider_config": {"permission_mode": "bypass"},
+                    "launch_actor": "user",
+                    "launch_surface": str(data.get("launch_surface") or "console"),
+                    "started_at": now,
+                    "parent_thread_id": parent_thread.id,
+                    "parent_session_id": parent_session_id,
+                    "branch_kind": "fork",
+                }
+                create_live_console_session_shell(orm, data=shell)
+                enqueue_console_session_create_outbox(orm, session=shell)
+
+                # Provider-tier lineage, on the non-routing alias kind. The
+                # routing alias is uniquely indexed and belongs to whichever
+                # thread actually owns that provider session; the child will
+                # claim its own once the fork returns a new id.
+                orm.add(
+                    LiveSessionThreadAlias(
+                        thread_id=child_thread_id,
+                        provider=parent.provider,
+                        alias_kind="forked_from_provider_session_id",
+                        alias_value=parent_alias.alias_value,
+                        first_seen_at=now,
+                        last_seen_at=now,
+                    )
+                )
+
+                receipt_id = str(uuid4())
+                turn_id = str(uuid4())
+                run_id = str(uuid4())
+                receipt = LiveSessionInputReceipt(
+                    id=receipt_id,
+                    owner_id=owner_id,
+                    session_id=child_session_id,
+                    thread_id=child_thread_id,
+                    provider=parent.provider,
+                    device_id=parent_thread.device_id,
+                    client_request_id=client_request_id,
+                    intent="auto",
+                    status="delivering",
+                    text=data["message"],
+                    delivery_request_id=run_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+                turn = LiveConsoleTurn(
+                    id=turn_id,
+                    session_id=child_session_id,
+                    thread_id=child_thread_id,
+                    receipt_id=receipt_id,
+                    run_id=run_id,
+                    state="starting",
+                    provider=parent.provider,
+                    device_id=parent_thread.device_id,
+                    cwd=parent_thread.cwd,
+                    # A branch's first turn forks and never resumes. The child
+                    # owns no thread yet, so a resume identity here would be the
+                    # parent's and would continue it instead of branching it.
+                    resume_provider_thread_id=None,
+                    fork_from_provider_thread_id=parent_alias.alias_value,
+                    created_at=now,
+                    updated_at=now,
+                )
+                orm.add_all([receipt, turn])
+                orm.add(
+                    LiveSessionRun(
+                        id=run_id,
+                        thread_id=child_thread_id,
+                        provider=parent.provider,
+                        host_id=parent_thread.device_id,
+                        cwd=parent_thread.cwd,
+                        launch_origin="longhouse_spawned",
+                        started_at=now,
+                    )
+                )
+                orm.commit()
+                result = {
+                    "found": True,
+                    "created": True,
+                    "session_id": child_session_id,
+                    "thread_id": child_thread_id,
+                    "turn": _live_console_turn_dto(
+                        turn,
+                        message=receipt.text,
+                        client_request_id=client_request_id,
+                        provider_config=json.dumps(shell["provider_config"], sort_keys=True),
+                    ),
+                }
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+        return result
 
     def enqueue_console_turn(self, *, data: dict[str, Any]) -> dict[str, Any]:
         """Accept one idempotent Console message and claim it when the thread is idle."""
