@@ -14,7 +14,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.models.agents import TimelineCard
-from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
 from zerg.services.session_visibility_policy import facts_from_row
 from zerg.services.session_visibility_policy import visible_in_test_scope
@@ -219,8 +218,8 @@ def find_hatch_automation_candidates(db: Session, *, limit: int = 100) -> list[d
     )
     candidates: list[dict[str, Any]] = []
     for session, thread in rows:
-        prompt_text = session.first_user_message_preview or _event_preview(db, session.id)
-        if is_hatch_execution_contract(prompt_text):
+        prompt_text = session.first_user_message_preview or _event_preview(db, session.id) or ""
+        if prompt_text.startswith("Hatch execution contract:\nThis is a single bounded, non-interactive run"):
             candidate = _candidate_dict(db, session, thread)
             candidate["confidence"] = "high"
             candidate["reason"] = "exact Hatch execution contract; safe to classify"

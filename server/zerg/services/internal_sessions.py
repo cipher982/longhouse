@@ -40,10 +40,6 @@ PROVIDER_COORDINATION_AWARENESS_MARKER_RE = re.compile(
     r"^(?:print|reply)(?: with)? exactly LONGHOUSE_CURSOR_COORD_AWARENESS_[0-9a-f]{6,}\.?$",
     re.IGNORECASE,
 )
-HATCH_EXECUTION_CONTRACT_RE = re.compile(
-    r"^Hatch execution contract:\nThis is a single bounded, non-interactive run(?:\.| with a time budget\b)"
-)
-HATCH_EXECUTION_CONTRACT_SQL_LIKE = "Hatch execution contract:%This is a single bounded, non-interactive run%"
 SQL_LIKE_ESCAPE = "\\"
 SQL_WHITESPACE = " \t\r\n"
 SYNTHETIC_BENCH_PROJECTS = frozenset({"longhouse-bench"})
@@ -157,20 +153,6 @@ def is_provider_reply_exact_marker(text: str | None) -> bool:
     """Recognize Longhouse's exact-response provider proof markers."""
 
     return bool(PROVIDER_REPLY_EXACT_MARKER_RE.fullmatch(_normalize_internal_prompt(text)))
-
-
-def is_hatch_execution_contract(text: str | None) -> bool:
-    """Recognize Hatch's exact bounded-run preamble."""
-
-    return bool(HATCH_EXECUTION_CONTRACT_RE.match(str(text or "").strip()))
-
-
-def hatch_automation_session_clause(model):
-    """Return a SQLAlchemy clause matching the exact Hatch run preamble."""
-
-    columns = getattr(model, "c", model)
-    first_user = func.trim(func.coalesce(columns.first_user_message_preview, ""))
-    return first_user.like(HATCH_EXECUTION_CONTRACT_SQL_LIKE)
 
 
 def classify_provider_proof_environment(

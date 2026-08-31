@@ -10,7 +10,6 @@ from sqlalchemy import select
 
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import is_factory_title_assurance_session
-from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import is_provider_coordination_awareness_marker
 from zerg.services.internal_sessions import is_provider_evidence_cwd
 from zerg.services.internal_sessions import is_provider_factory_cwd
@@ -166,20 +165,6 @@ def test_temporary_raw_provider_evidence_workspace_is_automation_classified():
     assert is_provider_evidence_cwd(cwd)
     assert classify_provider_proof_environment(cwd=cwd, first_user_text="Review the deployment plan") == "test"
     assert not is_provider_evidence_cwd("/Users/davidrose/git/evidence/raw/my-project")
-
-
-def test_hatch_execution_contract_is_exact_and_automation_classified():
-    contract = (
-        "Hatch execution contract:\n"
-        "This is a single bounded, non-interactive run. A human is waiting for a useful answer."
-    )
-
-    assert is_hatch_execution_contract(contract)
-    assert is_hatch_execution_contract(
-        "Hatch execution contract:\n"
-        "This is a single bounded, non-interactive run with a time budget of about 15 minutes."
-    )
-    assert not is_hatch_execution_contract("Hatch execution contract: please help me write one")
 
 
 def test_managed_canary_launch_carries_hidden_provenance_without_hiding_normal_helm():

@@ -21,16 +21,12 @@ Longhouse treats these paths as your **interactive human history** (the AI-codin
 
 When running automated scripts, watchdogs, or cron jobs that invoke `claude`, `codex`, or `opencode`, you have two options depending on your goal:
 
-### Option A: Ingest and Log to Longhouse, but Keep Home Timeline Clean (Recommended)
+### Option A: Tracked Automation (Log to Longhouse with Hidden Timeline Provenance)
 
-If you want Longhouse to store, index, and make your automated background runs searchable via full-text search and `recall`, tag the execution as automation:
+If you want Longhouse to record, index, and make your automated runs searchable without cluttering your home timeline:
 
-```bash
-# Tag the run as automation so it is archived but stays off your primary home timeline
-LONGHOUSE_LAUNCH_ACTOR=automation LONGHOUSE_ORIGIN_KIND=hatch_automation my_script.sh
-```
-
-Or when calling the Longhouse Machine API directly:
+1. **Via Managed Launches or Hatch:** Run with `launch_actor="automation"` or `hatch` (which attaches automation provenance automatically).
+2. **Via Canonical Machine API:**
 
 ```http
 POST /api/agents/sessions
@@ -42,27 +38,26 @@ POST /api/agents/sessions
 }
 ```
 
-* **Outcome:** The full transcript is permanently logged and indexed in Longhouse, but excluded from the default interactive timeline.
+* **Outcome:** The full transcript is permanently archived and searchable, but excluded from the default interactive timeline feed.
 
 ---
 
-### Option B: Ephemeral Execution (Do Not Save History to Disk)
+### Option B: Isolated State Roots for Raw CLI Scripts
 
-If your automated script is disposable and should not save any history files to disk:
+When running bare provider CLIs in background scripts outside Longhouse's managed control path, isolate the provider's transcript directory from your interactive roots:
 
-* **Claude Code:** Pass `--no-session-persistence`:
+* **Claude Code:** Pass `--no-session-persistence` (keeps default login, skips writing session JSONL to `~/.claude/projects/`):
   ```bash
   claude --no-session-persistence -p "check build status"
   ```
-* **Codex CLI:** Set an ephemeral scratch directory:
+* **Codex CLI:** Set a dedicated state directory:
   ```bash
   CODEX_HOME=$(mktemp -d) codex exec "check build status"
   ```
-* **OpenCode:** Set a temporary data directory:
+* **OpenCode:** Set a dedicated data directory:
   ```bash
   XDG_DATA_HOME=$(mktemp -d) opencode run "check build status"
   ```
-
 ---
 
 ## 3. Curating Existing Sessions

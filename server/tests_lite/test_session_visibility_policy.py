@@ -107,6 +107,23 @@ def test_python_and_sql_visibility_evidence_have_scalar_parity():
     ]
 
 
+def test_prompt_text_alone_does_not_hide_session():
+    """Prompt content (such as a Hatch contract or canary token) is not intent.
+
+    A session on a normal development machine without explicit test environment,
+    automation actor, or scratch cwd must remain visible on the timeline.
+    """
+    facts = SessionVisibilityFacts(
+        provider="claude",
+        project="longhouse",
+        environment="local",
+        machine_id="cinder",
+        first_user_message="Hatch execution contract:\nThis is a single bounded, non-interactive run.",
+    )
+    decision = evaluate_origin_visibility(facts)
+    assert decision.system_hidden is False
+    assert decision.title_origin_eligible is True
+
 def test_persisted_projection_is_read_defense_but_not_title_authority():
     metadata = MetaData()
     sessions = Table(
