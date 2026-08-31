@@ -15,11 +15,9 @@ from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy import select
 
-from zerg.services.internal_sessions import HATCH_EXECUTION_CONTRACT_RE
 from zerg.services.internal_sessions import INTERNAL_CANARY_LABEL_PREFIXES
 from zerg.services.internal_sessions import INTERNAL_CANARY_PROVIDER_ALIASES
 from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.internal_sessions import is_hatch_execution_contract
 
 HIDDEN_ORIGIN_KINDS = frozenset({"hatch_automation", "test_or_canary"})
 HIDDEN_ENVIRONMENTS = frozenset({"test", "e2e"})
@@ -79,17 +77,8 @@ def evaluate_origin_visibility(facts: SessionVisibilityFacts) -> OriginVisibilit
         reasons.append("test_launch_surface")
     if launch_actor == "automation":
         reasons.append("automation_actor")
-    if (
-        classify_provider_proof_environment(
-            cwd=facts.cwd,
-            machine_id=facts.machine_id,
-            first_user_text=facts.first_user_message,
-        )
-        == "test"
-    ):
+    if classify_provider_proof_environment(cwd=facts.cwd, machine_id=facts.machine_id) == "test":
         reasons.append("provider_proof")
-    if is_hatch_execution_contract(facts.first_user_message):
-        reasons.append("hatch_contract")
     if _is_internal_canary(provider=provider, project=project, machine_id=machine_id):
         reasons.append("internal_canary")
     if facts.primary_thread_is_worker_only or facts.is_subagent:
@@ -124,7 +113,6 @@ def known_hidden_evidence_clause(model, *, include_test: bool = False):
     provider = _column(columns, "provider")
     project = _column(columns, "project")
     machine = _column(columns, "machine_id", "device_id")
-    first_user = _column(columns, "first_user_message_preview")
 
     is_subagent = _column(columns, "is_subagent")
     if is_subagent is not None:
@@ -148,10 +136,6 @@ def known_hidden_evidence_clause(model, *, include_test: bool = False):
         machine_value = func.lower(func.coalesce(machine, ""))
         for prefix in INTERNAL_CANARY_LABEL_PREFIXES:
             clauses.extend((machine_value == prefix, machine_value.like(f"%-{prefix}")))
-    if first_user is not None:
-        normalized_first = func.trim(func.coalesce(first_user, ""), " \t\r\n")
-        clauses.append(normalized_first.op("REGEXP")(HATCH_EXECUTION_CONTRACT_RE.pattern))
-
     # Provider-proof recognition already degrades gracefully between device_id
     # and machine_id and is the single SQL authority for its exact markers.
     if all(_column(columns, field) is not None for field in ("provider", "project", "cwd")) and machine is not None:

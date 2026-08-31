@@ -55,7 +55,6 @@ from zerg.services.agents.session_graph_writes import resolve_thread_by_provider
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.internal_sessions import classify_provider_proof_environment
-from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import interaction_context_key_parts
@@ -879,9 +878,6 @@ class AgentsStore:
         """Backfill richer session metadata when the same session is ingested again."""
         incoming_execution_home = _infer_execution_home_from_ingest(data)
         incoming_origin_kind = _normalize_origin_kind(data.origin_kind)
-        hatch_contract = is_hatch_execution_contract(first_user_text) or is_hatch_execution_contract(session.first_user_message_preview)
-        if hatch_contract and session.origin_kind != "console":
-            incoming_origin_kind = HATCH_AUTOMATION_ORIGIN_KIND
         provider_proof_environment = (
             None
             if session.origin_kind == "console"
@@ -911,7 +907,7 @@ class AgentsStore:
             origin_kind=effective_origin_kind,
             is_sidechain=data.is_sidechain,
         )
-        if hatch_contract and session.origin_kind != "console":
+        if effective_origin_kind == HATCH_AUTOMATION_ORIGIN_KIND and session.origin_kind != "console":
             incoming_launch_actor, incoming_launch_surface = "automation", "hatch"
         elif provider_proof_environment and session.origin_kind not in {"console", HATCH_AUTOMATION_ORIGIN_KIND}:
             incoming_launch_actor, incoming_launch_surface = "automation", "test"
@@ -2432,16 +2428,13 @@ class AgentsStore:
             data,
             sequence_context=interaction_sequence_context,
         )
-        first_user_text_from_ingest = _first_user_text_from_ingest(data, interaction_facts)
-        if is_hatch_execution_contract(first_user_text_from_ingest):
-            origin_kind = HATCH_AUTOMATION_ORIGIN_KIND
+        if origin_kind == HATCH_AUTOMATION_ORIGIN_KIND:
             origin_hidden_from_default_timeline = 1
             launch_actor, launch_surface = "automation", "hatch"
         elif (
             classify_provider_proof_environment(
                 cwd=data.cwd,
                 machine_id=data.device_id,
-                first_user_text=first_user_text_from_ingest,
             )
             and origin_kind != "console"
         ):
@@ -2462,7 +2455,6 @@ class AgentsStore:
                 self._refresh_existing_session_metadata(
                     existing,
                     data,
-                    first_user_text=first_user_text_from_ingest,
                 )
             session_id = existing.id
         else:
@@ -2480,7 +2472,6 @@ class AgentsStore:
                 classify_provider_proof_environment(
                     cwd=data.cwd,
                     machine_id=data.device_id,
-                    first_user_text=first_user_text_from_ingest,
                 )
                 if origin_kind != "console"
                 else None

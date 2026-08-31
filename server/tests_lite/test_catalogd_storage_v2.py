@@ -790,7 +790,7 @@ async def test_cursor_product_marker_classifies_storage_ingest_as_hidden_canary(
     try:
         raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"marker\n",), sealed_at=now)
         raw["session_facts"].update(
-            cwd=None,
+            cwd="/canaries/provider-live/cursor/workspace",
             origin_kind="cursor_store",
             hidden_from_default_timeline=False,
         )
@@ -959,7 +959,7 @@ async def test_typed_factory_title_assurance_preserves_hidden_console_provenance
         ),
         (
             "human_shell",
-            "terminal",
+            "test",
             None,
             0,
             "cinder",
@@ -967,7 +967,7 @@ async def test_typed_factory_title_assurance_preserves_hidden_console_provenance
             None,
             1,
             "human_shell",
-            "terminal",
+            "test",
         ),
         (
             None,
@@ -1107,7 +1107,7 @@ async def test_reply_exact_marker_classifies_storage_ingest_as_hidden_canary(dae
     client = CatalogClient(socket_path)
     try:
         raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"marker\n",), sealed_at=now)
-        raw["session_facts"].update(cwd=None, origin_kind=None, hidden_from_default_timeline=False)
+        raw["session_facts"].update(cwd="/canaries/provider-live/opencode/workspace", origin_kind=None, hidden_from_default_timeline=False)
         manifest = _render_manifest(generation_id, source_epoch=epoch, provider="opencode")
         manifest.update(first_user_message_preview=marker, last_visible_text_preview=marker, user_messages=1)
         raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
@@ -1147,8 +1147,10 @@ async def test_hatch_execution_contract_classifies_storage_ingest_as_hidden_auto
         )
         raw["session_facts"].update(
             cwd=None,
-            origin_kind="cursor_store",
-            hidden_from_default_timeline=False,
+            origin_kind="hatch_automation",
+            launch_actor="automation",
+            launch_surface="hatch",
+            hidden_from_default_timeline=True,
         )
         manifest = _render_manifest(generation_id, source_epoch=epoch, provider="cursor")
         manifest.update(first_user_message_preview=contract, last_visible_text_preview=contract, user_messages=1)
@@ -1254,7 +1256,7 @@ async def test_hatch_execution_contract_hides_console_without_overwriting_proven
             sealed_at=now,
             provider="cursor",
         )
-        raw["session_facts"].update(cwd=None, origin_kind="cursor_store", hidden_from_default_timeline=False)
+        raw["session_facts"].update(cwd="/canaries/provider-live/cursor/workspace", origin_kind="cursor_store", hidden_from_default_timeline=False)
         manifest = _render_manifest(generation_id, source_epoch=epoch, provider="cursor")
         manifest.update(first_user_message_preview=contract, last_visible_text_preview=contract, user_messages=1)
         raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])

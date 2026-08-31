@@ -179,41 +179,26 @@ def classify_provider_proof_environment(
     machine_id: str | None = None,
     first_user_text: str | None = None,
 ) -> str | None:
-    """Return the normalized environment for provider proof/canary sessions."""
+    """Return the normalized environment for provider proof/canary sessions based on path/machine namespace."""
     if (
         is_provider_live_canary_cwd(cwd)
         or is_provider_live_proof_worktree_cwd(cwd)
         or is_provider_factory_cwd(cwd)
         or is_provider_evidence_cwd(cwd)
         or is_provider_factory_machine_id(machine_id)
-        or is_provider_noreply_marker(first_user_text)
-        or is_provider_product_canary_marker(first_user_text)
-        or is_provider_reply_exact_marker(first_user_text)
-        or is_provider_coordination_awareness_marker(first_user_text)
     ):
         return "test"
     return None
 
 
 def provider_proof_session_clause(model):
-    """Return a SQLAlchemy clause matching provider live-proof sessions."""
+    """Return a SQLAlchemy clause matching provider live-proof sessions by path and machine namespace."""
     columns = getattr(model, "c", model)
     cwd = func.lower(func.coalesce(columns.cwd, ""))
-    # SQLite's one-argument trim() removes spaces only, while the canonical
-    # Python classifier uses str.strip(). Provider transcripts commonly retain
-    # a trailing newline, so name the shared whitespace alphabet explicitly.
-    first_user = func.trim(func.coalesce(columns.first_user_message_preview, ""), SQL_WHITESPACE)
     machine_id_column = getattr(columns, "machine_id", None)
     if machine_id_column is None:
         machine_id_column = getattr(columns, "device_id", None)
-    product_marker = first_user.op("REGEXP")(PROVIDER_PRODUCT_CANARY_MARKER_RE.pattern)
-    noreply_marker = first_user.op("REGEXP")(PROVIDER_NOREPLY_MARKER_RE.pattern)
-    reply_exact_marker = first_user.op("REGEXP")(PROVIDER_REPLY_EXACT_MARKER_RE.pattern)
-    coordination_awareness_marker = first_user.op("REGEXP")(PROVIDER_COORDINATION_AWARENESS_MARKER_RE.pattern)
-    metadata_markers = [coordination_awareness_marker]
-    if machine_id_column is not None:
-        metadata_markers.append(func.lower(func.coalesce(machine_id_column, "")) == PROVIDER_FACTORY_MACHINE_ID)
-    return or_(
+    clauses = [
         cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%"),
         cwd.like(f"%{PROVIDER_LIVE_PROOF_WORKTREE_MARKER}%"),
         cwd.like(f"%{PROVIDER_FACTORY_ARTIFACT_CWD_SEGMENT}%"),
@@ -225,11 +210,10 @@ def provider_proof_session_clause(model):
         cwd.like("/private/tmp/lhx-claude-coord-%"),
         cwd.like("/tmp/%/evidence/raw/%"),
         cwd.like("/private/tmp/%/evidence/raw/%"),
-        noreply_marker,
-        product_marker,
-        reply_exact_marker,
-        *metadata_markers,
-    )
+    ]
+    if machine_id_column is not None:
+        clauses.append(func.lower(func.coalesce(machine_id_column, "")) == PROVIDER_FACTORY_MACHINE_ID)
+    return or_(*clauses)
 
 
 def internal_canary_session_clause(model):

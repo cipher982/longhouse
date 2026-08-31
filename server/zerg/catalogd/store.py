@@ -103,7 +103,6 @@ from zerg.services.internal_sessions import SYNTHETIC_BENCH_PROJECTS
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import factory_title_assurance_session_clause
 from zerg.services.internal_sessions import is_factory_title_assurance_session
-from zerg.services.internal_sessions import is_hatch_execution_contract
 from zerg.services.session_title import RESUME_SEED_TOKEN
 from zerg.services.session_title import is_path_like_title
 from zerg.services.session_title import is_resume_seed_marker
@@ -7441,10 +7440,7 @@ class CatalogStore:
             )
             hatch_automation = (
                 (
-                    is_hatch_execution_contract(
-                        session_facts.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
-                    )
-                    or (existing_session is not None and existing_session["origin_kind"] == "hatch_automation")
+                    (existing_session is not None and existing_session["origin_kind"] == "hatch_automation")
                     or (live_catalog_session is not None and live_catalog_session["origin_kind"] == "hatch_automation")
                 )
                 and live_console_session is None
