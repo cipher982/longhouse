@@ -952,7 +952,7 @@ struct WebTranscriptView: UIViewRepresentable {
         func viewportHeightDidChange(from previous: CGFloat, to height: CGFloat, on webView: WKWebView) {
             viewportReconcileGeneration &+= 1
             let generation = viewportReconcileGeneration
-            DispatchQueue.main.async { [weak self, weak webView] in
+            let reconcile = { [weak self, weak webView] in
                 guard let self, let webView, generation == self.viewportReconcileGeneration else { return }
                 let scrollView = webView.scrollView
                 // The valid range is bounded by the adjusted insets, not by
@@ -973,6 +973,18 @@ struct WebTranscriptView: UIViewRepresentable {
                     : min(max(scrollView.contentOffset.y, minOffset), maxOffset)
                 guard abs(scrollView.contentOffset.y - target) > 0.5 else { return }
                 scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: target), animated: false)
+            }
+            DispatchQueue.main.async { [weak self, weak webView] in
+                guard let self, let webView, generation == self.viewportReconcileGeneration else { return }
+                reconcile()
+                // WKWebView may apply its own bounds adjustment after our first
+                // deferred write. Re-check once on the next main-loop turn; the
+                // generation and live stickiness guards keep this from reviving
+                // an old session or fighting a drag that began in between.
+                DispatchQueue.main.async { [weak self, weak webView] in
+                    guard let self, webView != nil, generation == self.viewportReconcileGeneration else { return }
+                    reconcile()
+                }
             }
         }
 

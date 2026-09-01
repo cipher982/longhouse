@@ -296,6 +296,7 @@ private func consoleBlockedFactsJSON(
       "terminate": { "state": "unavailable", "reason": "unsupported" },
       "reattach": { "state": "unavailable", "reason": "not_helm" },
       "resume": { "state": "unavailable", "reason": "not_helm" },
+      "branch": { "state": "unavailable", "reason": "not_helm" },
       "pendingInteractionKind": null,
       "transcriptConvergence": "current",
       "primary": { "key": "ended", "label": "Ended", "tone": "closed", "observedAt": null },
