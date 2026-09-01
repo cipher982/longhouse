@@ -2651,11 +2651,15 @@ def test_latest_claude_startup_prompt_uses_append_only_order() -> None:
     trust = "No,exitYes,Itrustthisfolder"
     channel = "Iamusingthisforlocaldevelopment"
     theme = "Choosethetextstyle"
+    api_key = "DetectedacustomAPIkey"
+    security_notes = "Securitynotes"
 
     assert live_session_toolkit.latest_claude_startup_prompt(f"{trust}{permission}") == "permission"
     assert live_session_toolkit.latest_claude_startup_prompt(f"{permission}{trust}") == "trust"
     assert live_session_toolkit.latest_claude_startup_prompt(f"{trust}{channel}") == "channel"
     assert live_session_toolkit.latest_claude_startup_prompt(f"{permission}{theme}") == "theme"
+    assert live_session_toolkit.latest_claude_startup_prompt(f"{theme}{api_key}") == "api_key"
+    assert live_session_toolkit.latest_claude_startup_prompt(f"{api_key}{security_notes}") == "security_notes"
     assert live_session_toolkit.latest_claude_startup_prompt("ClaudeCode") is None
 
 
