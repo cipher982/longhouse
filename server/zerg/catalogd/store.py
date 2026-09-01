@@ -12245,6 +12245,14 @@ def _assemble_session_facts(
     live_session_table = LiveSession.__table__
     tombstone_table = LiveSessionTombstone.__table__
 
+    tombstoned_session_ids = {
+        str(row["session_id"])
+        for row in connection.execute(select(tombstone_table.c.session_id).where(tombstone_table.c.session_id.in_(session_ids))).mappings()
+    }
+    session_ids = [session_id for session_id in session_ids if session_id not in tombstoned_session_ids]
+    if not session_ids:
+        return []
+
     catalogs = {
         str(row["session_id"]): row
         for row in connection.execute(select(catalog_table).where(catalog_table.c.session_id.in_(session_ids))).mappings()

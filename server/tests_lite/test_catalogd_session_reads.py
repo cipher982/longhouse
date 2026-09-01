@@ -21,6 +21,7 @@ from zerg.catalogd.fact_reducer import ReducerFact
 from zerg.catalogd.fact_reducer import canonical_evidence_hash
 from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.models import FactHead
+from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.protocol import HEADER_BYTES
 from zerg.catalogd.protocol import MAX_PAYLOAD_BYTES
@@ -61,6 +62,39 @@ def daemon_paths():
     for path in root.iterdir():
         path.unlink(missing_ok=True)
     root.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_session_reads_exclude_tombstoned_legacy_catalog_facts(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = "11111111-1111-4111-8111-111111111111"
+    with engine.begin() as connection:
+        _seed_session(connection, session_id=session_id, device_id="cinder", now=now, owner_id="7")
+        connection.execute(
+            LiveSessionTombstone.__table__.insert().values(
+                session_id=session_id,
+                deletion_revision=1,
+                deleted_at=now,
+                commit_seq=1,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        read = await client.call("session.read.v2", {"session_id": session_id, "owner_id": 7})
+        batch = await client.call("session.read.batch.v2", {"session_ids": [session_id], "owner_id": 7})
+    finally:
+        await client.close()
+        await daemon.close()
+
+    assert read["found"] is False
+    assert batch["facts"] == []
 
 
 def _seed_session(
