@@ -1269,6 +1269,8 @@ def prepare_claude_profile(
     api_key_attempts = 0
     security_notes_attempts = 0
     confirmed_trust = False
+    trust_prompt_seen_at: float | None = None
+    trust_selection_sent_at: float | None = None
     started = time.monotonic()
     try:
         deadline = started + timeout
@@ -1307,13 +1309,17 @@ def prepare_claude_profile(
                 security_notes_attempts += 1
             elif not confirmed_trust and "Yes,Itrustthisfolder" in compact:
                 # Claude's safety-first selector defaults to ``No, exit``.
-                # Move to the visible trust choice, then let Claude finish
-                # repainting before accepting it. Sending Down+Enter in one
-                # PTY write loses Enter in Claude 2.1.252's render boundary.
-                process.send("\x1b[B")
-                time.sleep(1.0)
-                process.send("\r")
-                confirmed_trust = True
+                # Give both the initial selector and its changed selection a
+                # full repaint boundary before sending the next key.
+                now = time.monotonic()
+                if trust_prompt_seen_at is None:
+                    trust_prompt_seen_at = now
+                elif trust_selection_sent_at is None and now - trust_prompt_seen_at >= 1.0:
+                    process.send("\x1b[B")
+                    trust_selection_sent_at = now
+                elif trust_selection_sent_at is not None and now - trust_selection_sent_at >= 1.0:
+                    process.send("\r")
+                    confirmed_trust = True
             else:
                 try:
                     profile = json.loads((config_dir / ".claude.json").read_text(encoding="utf-8"))

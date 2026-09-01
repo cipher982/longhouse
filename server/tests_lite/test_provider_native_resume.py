@@ -2071,17 +2071,16 @@ def test_claude_profile_bootstrap_selects_trust_instead_of_default_exit(
         def close(self) -> None:
             pass
 
-    screens = iter(
-        (
-            "No, exit  Yes, I trust this folder",
-            "No, exit  Yes, I trust this folder",
-            "Claude Code  Welcome back!",
-            "Claude Code  Welcome back!",
-        )
-    )
     monkeypatch.setattr(live_session_toolkit, "PtyProcess", FakePtyProcess)
-    monkeypatch.setattr(live_session_toolkit, "_terminal_text", lambda _recording: next(screens))
-    monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_terminal_text",
+        lambda _recording: (
+            "Claude Code  Welcome back!" if FakePtyProcess.instance.sent == ["\x1b[B", "\r"] else "No, exit  Yes, I trust this folder"
+        ),
+    )
+    moments = iter(index / 2 for index in range(20))
+    monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: next(moments))
     monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
 
     result = live_session_toolkit.prepare_claude_profile(
@@ -2090,7 +2089,7 @@ def test_claude_profile_bootstrap_selects_trust_instead_of_default_exit(
         workspace=tmp_path,
         environment={},
         recording=tmp_path / "recording.tty",
-        timeout=1.0,
+        timeout=10.0,
     )
 
     assert result["status"] == "pass"

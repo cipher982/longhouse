@@ -31,11 +31,24 @@ def test_launch_selects_workspace_trust_instead_of_default_exit(tmp_path: Path, 
     session = FakeSession()
     monkeypatch.setattr(m.ProviderPtySession, "start", lambda **_kwargs: session)
     monkeypatch.setattr(m, "terminal_text", lambda _path: "No, exit  Yes, I trust this folder")
-    monkeypatch.setattr(m, "find_channel_session_id", lambda *_args, **_kwargs: "session-1")
+    monkeypatch.setattr(
+        m,
+        "find_channel_session_id",
+        lambda *_args, **_kwargs: "session-1" if session.writes == [b"\x1b[B", b"\r"] else None,
+    )
     monkeypatch.setattr(m, "wait_for_channel_ready", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(m, "read_provider_session_id", lambda *_args, **_kwargs: "provider-session-1")
-    monkeypatch.setattr(m, "wait_until", lambda predicate, **_kwargs: predicate())
-    monkeypatch.setattr(m.time, "sleep", lambda _seconds: None)
+
+    def run_until_ready(predicate: Callable[[], object], **_kwargs: object) -> object:
+        for _ in range(5):
+            value = predicate()
+            if value:
+                return value
+        raise AssertionError("predicate did not become ready")
+
+    ticks = iter((0.0, 0.5, 1.0, 1.5, 2.0))
+    monkeypatch.setattr(m, "wait_until", run_until_ready)
+    monkeypatch.setattr(m.time, "monotonic", lambda: next(ticks))
 
     launched, session_id, provider_session_id = m.launch_claude_session(
         workspace=tmp_path,

@@ -429,6 +429,8 @@ def launch_claude_session(
     # forever and every launch times out regardless of real readiness.
     session_home = Path(env["HOME"]) if env.get("HOME") else None
     confirmed_trust = False
+    trust_prompt_seen_at: float | None = None
+    trust_selection_sent_at: float | None = None
     confirmed_channel = False
     confirmed_permission_bypass = False
     permission_prompt_seen_at: float | None = None
@@ -437,6 +439,7 @@ def launch_claude_session(
 
     def channel_ready() -> str | None:
         nonlocal confirmed_trust, confirmed_channel, confirmed_permission_bypass
+        nonlocal trust_prompt_seen_at, trust_selection_sent_at
         nonlocal permission_prompt_seen_at, permission_selection_sent_at, resolved_provider_session_id
         if not session.alive():
             raise ScenarioError(f"longhouse claude exited before channel readiness (exit={session.process.returncode})")
@@ -465,13 +468,17 @@ def launch_claude_session(
                     confirmed_permission_bypass = True
         if not confirmed_trust and "Yes,Itrustthisfolder" in compact:
             # The first choice is intentionally ``No, exit``. Select the
-            # explicit trust choice and allow its repaint to settle before
-            # submitting it; Claude 2.1.252 drops an Enter sent in the same
-            # PTY write as the Down key.
-            session.write(b"\x1b[B")
-            time.sleep(1.0)
-            session.write(b"\r")
-            confirmed_trust = True
+            # explicit trust choice only after the initial selector settles,
+            # then allow its repaint to settle before submitting it.
+            now = time.monotonic()
+            if trust_prompt_seen_at is None:
+                trust_prompt_seen_at = now
+            elif trust_selection_sent_at is None and now - trust_prompt_seen_at >= 1.0:
+                session.write(b"\x1b[B")
+                trust_selection_sent_at = now
+            elif trust_selection_sent_at is not None and now - trust_selection_sent_at >= 1.0:
+                session.write(b"\r")
+                confirmed_trust = True
         if not confirmed_channel and "Iamusingthisforlocaldevelopment" in compact:
             session.write(b"\r")
             confirmed_channel = True
