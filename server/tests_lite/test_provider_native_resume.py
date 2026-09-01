@@ -2663,6 +2663,26 @@ def test_latest_claude_startup_prompt_uses_append_only_order() -> None:
     assert live_session_toolkit.latest_claude_startup_prompt("ClaudeCode") is None
 
 
+def test_claude_runtime_prompt_dispatches_only_latest_append_only_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    process = SimpleNamespace(recording=Path("unused"))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_terminal_text",
+        lambda _recording: "No, exit  Yes, I accept  I am using this for local development",
+    )
+    monkeypatch.setattr(live_session_toolkit, "_accept_claude_permission_prompt", lambda _process: calls.append("permission"))
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_accept_claude_development_channel_prompt",
+        lambda _process: calls.append("channel"),
+    )
+
+    live_session_toolkit._accept_latest_claude_runtime_prompt(process)  # type: ignore[arg-type]
+
+    assert calls == ["channel"]
+
+
 def test_unnumbered_claude_permission_prompt_waits_across_both_repaints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     recording = tmp_path / "claude.tty"
     recording.write_text("No, exit\nYes, I accept\n", encoding="utf-8")

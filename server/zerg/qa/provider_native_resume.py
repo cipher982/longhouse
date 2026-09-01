@@ -289,8 +289,7 @@ def _wait_claude_tui_ready(process: live_session_toolkit.PtyProcess, recording: 
         # provider-owned control record while waiting for the actual prompt;
         # otherwise the readiness wait observes the selector forever and the
         # channel server never initializes.
-        live_session_toolkit._accept_claude_permission_prompt(process)
-        live_session_toolkit._accept_claude_development_channel_prompt(process)
+        live_session_toolkit._accept_latest_claude_runtime_prompt(process)
         terminal = live_session_toolkit._terminal_text(process.recording)
         if _claude_input_prompt_visible(terminal):
             process.settle()

@@ -1115,6 +1115,17 @@ def _accept_claude_development_channel_prompt(process: PtyProcess) -> None:
         process.claude_development_channel_acceptance_sent = True
 
 
+def _accept_latest_claude_runtime_prompt(process: PtyProcess) -> None:
+    """Dispatch at most one active Claude runtime prompt per PTY poll."""
+
+    compact = re.sub(r"\s+", "", _terminal_text(process.recording))
+    prompt = latest_claude_startup_prompt(compact)
+    if prompt == "permission":
+        _accept_claude_permission_prompt(process)
+    elif prompt == "channel":
+        _accept_claude_development_channel_prompt(process)
+
+
 def _accept_cursor_workspace_trust(process: PtyProcess) -> None:
     """Accept Cursor's provider-owned first-run workspace trust gate once."""
 
@@ -1441,8 +1452,7 @@ def wait_state(
                     f"{spec.provider} Helm process exited before publishing state; candidates={json.dumps(diagnostics, sort_keys=True)}"
                 )
             if spec.provider == "claude":
-                _accept_claude_permission_prompt(process)
-                _accept_claude_development_channel_prompt(process)
+                _accept_latest_claude_runtime_prompt(process)
             elif spec.provider == "cursor":
                 _accept_cursor_workspace_trust(process)
         for path in state_candidates(spec, home):
