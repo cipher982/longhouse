@@ -402,7 +402,9 @@ private final class StreamFactoryRecorder: Sendable {
         var lastSinceSeq: Int?
         var lastKnownWorkspaceFingerprint: String?
         var startCount = 0
-        var continuation: AsyncStream<SessionWorkspaceStream.Event>.Continuation?
+        var nextStreamId = 0
+        var activeStreamId: Int?
+        var continuations: [Int: AsyncStream<SessionWorkspaceStream.Event>.Continuation] = [:]
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
 
@@ -411,9 +413,11 @@ private final class StreamFactoryRecorder: Sendable {
     var startCount: Int { state.withLock { $0.startCount } }
 
     func make(sinceSeq: Int?, knownWorkspaceFingerprint: String?) -> SessionWorkspaceStreamSource {
-        state.withLock {
+        let streamId = state.withLock {
             $0.lastSinceSeq = sinceSeq
             $0.lastKnownWorkspaceFingerprint = knownWorkspaceFingerprint
+            $0.nextStreamId += 1
+            return $0.nextStreamId
         }
         return SessionWorkspaceStreamSource(
             start: { [state] in
@@ -423,32 +427,37 @@ private final class StreamFactoryRecorder: Sendable {
                 AsyncStream { continuation in
                     state.withLock {
                         $0.startCount += 1
-                        $0.continuation = continuation
+                        $0.activeStreamId = streamId
+                        $0.continuations[streamId] = continuation
                     }
                 }
             },
             stop: { [state] in
-                state.withLock {
-                    $0.continuation?.finish()
-                    $0.continuation = nil
+                let continuation = state.withLock {
+                    let continuation = $0.continuations.removeValue(forKey: streamId)
+                    if $0.activeStreamId == streamId {
+                        $0.activeStreamId = nil
+                    }
+                    return continuation
                 }
+                continuation?.finish()
             },
             clockSkewMs: { 0 }
         )
     }
 
     func emitConnected() {
-        let c = state.withLock { $0.continuation }
+        let c = activeContinuation()
         c?.yield(.connected(SessionWorkspaceStream.Connected(session_id: "session-1", server_now_ms: nil)))
     }
 
     func emitUnauthorized() {
-        let c = state.withLock { $0.continuation }
+        let c = activeContinuation()
         c?.yield(.unauthorized)
     }
 
     func emitReplayGap(latestSeq: Int) {
-        let c = state.withLock { $0.continuation }
+        let c = activeContinuation()
         c?.yield(.replayGap(SessionWorkspaceStream.ReplayGap(
             session_id: "session-1",
             requested_seq: 777,
@@ -459,7 +468,7 @@ private final class StreamFactoryRecorder: Sendable {
     }
 
     func emitChanged(latestEventId: Int, pubsubSeq: Int?) {
-        let c = state.withLock { $0.continuation }
+        let c = activeContinuation()
         c?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
             session_id: "session-1",
             latest_event_id: latestEventId,
@@ -473,7 +482,7 @@ private final class StreamFactoryRecorder: Sendable {
     }
 
     func emitPreview(text: String, pubsubSeq: Int, provisional: Bool = true) {
-        let c = state.withLock { $0.continuation }
+        let c = activeContinuation()
         c?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
             session_id: "session-1",
             latest_event_id: pubsubSeq,
@@ -500,6 +509,13 @@ private final class StreamFactoryRecorder: Sendable {
                 stale_reason: nil
             )
         )))
+    }
+
+    private func activeContinuation() -> AsyncStream<SessionWorkspaceStream.Event>.Continuation? {
+        state.withLock {
+            guard let activeStreamId = $0.activeStreamId else { return nil }
+            return $0.continuations[activeStreamId]
+        }
     }
 }
 
