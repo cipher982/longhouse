@@ -48,6 +48,7 @@ def list_client_render_observations(
     provider: str | None = None,
     surface: str | None = None,
     managed: bool | None = None,
+    owned_session_ids: frozenset[str] | None = None,
     limit: int = 5_000,
 ) -> ClientRenderObservationList:
     provider = normalize_text_filter(provider)
@@ -58,6 +59,10 @@ def list_client_render_observations(
         .filter(SessionObservation.source_domain == SOURCE_DOMAIN_CLIENT)
         .filter(SessionObservation.kind == OBS_KIND_CLIENT_RENDER)
     )
+    if owned_session_ids is not None:
+        if not owned_session_ids:
+            return ClientRenderObservationList(rows=[], truncated=False)
+        query = query.filter(SessionObservation.session_id.in_(owned_session_ids))
     if session_id is not None:
         query = query.filter(SessionObservation.session_id == session_id)
     if since is not None:
@@ -65,11 +70,7 @@ def list_client_render_observations(
     if provider is not None:
         query = query.filter(SessionObservation.provider == provider)
 
-    raw_rows = (
-        query.order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
-        .limit(limit + 1)
-        .all()
-    )
+    raw_rows = query.order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc()).limit(limit + 1).all()
     truncated = len(raw_rows) > limit
     observations: list[ClientRenderObservation] = []
     for row in raw_rows[:limit]:

@@ -127,7 +127,16 @@ def test_media_claim_upload_claim_and_fetch(tmp_path, monkeypatch):
 
         claim_after = client.post(
             "/agents/media/claims",
-            json={"items": [{"sha256": digest, "mime_type": "image/png", "byte_size": len(payload)}]},
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(session_id),
+                    }
+                ]
+            },
         )
         assert claim_after.status_code == 200, claim_after.text
         assert claim_after.json() == {"needed": [], "present": [digest], "rejected": []}
@@ -142,6 +151,67 @@ def test_media_claim_upload_claim_and_fetch(tmp_path, monkeypatch):
         assert fetched.content == payload
         assert fetched.headers["content-type"].startswith("image/png")
         assert fetched.headers["x-media-sha256"] == digest
+    finally:
+        cleanup()
+
+
+def test_media_claim_does_not_turn_hash_knowledge_into_owner_access(tmp_path, monkeypatch):
+    _factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    owner_one_session = uuid4()
+    owner_two_session = uuid4()
+    payload = b"\x89PNG\r\nprivate-owner-media"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    def _snapshot(session_ids, *, owner_id):
+        allowed = owner_one_session if owner_id == 1 else owner_two_session if owner_id == 2 else None
+        return {
+            "facts": [
+                {"catalog": {"session_id": session_id}}
+                for session_id in session_ids
+                if session_id == str(allowed)
+            ]
+        }
+
+    monkeypatch.setattr(agents_media, "session_batch_snapshot", _snapshot)
+    try:
+        first_claim = client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(owner_one_session),
+                    }
+                ]
+            },
+        )
+        assert first_claim.json()["needed"] == [digest]
+        assert client.put(
+            f"/agents/media/{digest}",
+            content=payload,
+            headers={"Content-Type": "image/png", "X-Longhouse-Session-Id": str(owner_one_session)},
+        ).status_code == 200
+
+        api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=2)
+        second_claim = client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(owner_two_session),
+                    }
+                ]
+            },
+        )
+        assert second_claim.status_code == 200
+        assert second_claim.json() == {"needed": [digest], "present": [], "rejected": []}
+        assert client.get(f"/agents/media/{digest}/blob").status_code == 404
     finally:
         cleanup()
 
@@ -290,6 +360,14 @@ def test_browser_media_read_requires_session_ref(tmp_path, monkeypatch):
             },
         )
         assert claim.status_code == 200, claim.text
+        assert claim.json() == {"needed": [digest], "present": [], "rejected": []}
+
+        uploaded_for_owner = client.put(
+            f"/agents/media/{digest}",
+            content=payload,
+            headers={"Content-Type": "image/png", "X-Longhouse-Session-Id": str(session_id)},
+        )
+        assert uploaded_for_owner.status_code == 200, uploaded_for_owner.text
 
         head = client.head(f"/media/{digest}")
         assert head.status_code == 200, head.text
@@ -316,6 +394,16 @@ def test_browser_media_read_requires_visible_device_owner(tmp_path, monkeypatch)
         uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
         assert uploaded.status_code == 200, uploaded.text
 
+        monkeypatch.setattr(
+            agents_media,
+            "session_batch_snapshot",
+            lambda session_ids, *, owner_id: {
+                "facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids]
+                if owner_id == 2
+                else []
+            },
+        )
+
         with factory() as db:
             db.add(User(id=1, email="owner@test.local"))
             db.add(User(id=2, email="other@test.local"))
@@ -329,6 +417,7 @@ def test_browser_media_read_requires_visible_device_owner(tmp_path, monkeypatch)
             )
             db.commit()
 
+        api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=2)
         claim = client.post(
             "/agents/media/claims",
             json={
@@ -345,16 +434,14 @@ def test_browser_media_read_requires_visible_device_owner(tmp_path, monkeypatch)
             },
         )
         assert claim.status_code == 200, claim.text
-
-        monkeypatch.setattr(
-            agents_media,
-            "session_batch_snapshot",
-            lambda session_ids, *, owner_id: {
-                "facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids]
-                if owner_id == 2
-                else []
-            },
+        assert claim.json() == {"needed": [digest], "present": [], "rejected": []}
+        owner_upload = client.put(
+            f"/agents/media/{digest}",
+            content=payload,
+            headers={"Content-Type": "image/png", "X-Longhouse-Session-Id": str(session_id)},
         )
+        assert owner_upload.status_code == 200, owner_upload.text
+
         denied = client.get(f"/media/{digest}/blob")
         assert denied.status_code == 404, denied.text
 

@@ -23,6 +23,7 @@ from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
+from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import session_batch_snapshot
 from zerg.services.media_store import MAX_MEDIA_BYTES
 from zerg.services.media_store import absolute_media_path
@@ -134,7 +135,15 @@ async def _owner_row_or_404(db: Session, sha256: str, owner_id: int | None) -> M
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media not found")
     session_ids = [
         str(value)
-        for (value,) in (db.query(SessionMediaRef.session_id).filter(SessionMediaRef.media_sha256 == row.sha256).distinct().all())
+        for (value,) in (
+            db.query(SessionMediaRef.session_id)
+            .filter(
+                SessionMediaRef.media_sha256 == row.sha256,
+                SessionMediaRef.media_state == "present",
+            )
+            .distinct()
+            .all()
+        )
     ]
     for offset in range(0, len(session_ids), 20):
         snapshot = await asyncio.to_thread(
@@ -145,6 +154,22 @@ async def _owner_row_or_404(db: Session, sha256: str, owner_id: int | None) -> M
         if snapshot.get("facts"):
             return row
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media not found")
+
+
+async def _owned_session_id_set(session_ids: list[str], *, owner_id: int) -> frozenset[str]:
+    owned: set[str] = set()
+    for offset in range(0, len(session_ids), 20):
+        snapshot = await asyncio.to_thread(
+            session_batch_snapshot,
+            session_ids[offset : offset + 20],
+            owner_id=owner_id,
+        )
+        for facts in snapshot.get("facts") or []:
+            catalog = facts.get("catalog") if isinstance(facts, dict) else None
+            session_id = catalog.get("session_id") if isinstance(catalog, dict) else None
+            if isinstance(session_id, str):
+                owned.add(session_id)
+    return frozenset(owned)
 
 
 def _stream_media_row(row: MediaObject) -> StreamingResponse:
@@ -173,30 +198,98 @@ def _head_media_row(row: MediaObject) -> Response:
 @router.post(
     "/claims",
     response_model=MediaClaimsResponse,
-    dependencies=[Depends(verify_agents_caller), Depends(require_single_tenant)],
+    dependencies=[Depends(require_single_tenant)],
 )
-async def create_media_claims(request: MediaClaimsRequest, db: Session = Depends(get_db)) -> MediaClaimsResponse:
+async def create_media_claims(
+    request: MediaClaimsRequest,
+    db: Session = Depends(get_db),
+    auth: Caller = Depends(verify_agents_caller),
+) -> MediaClaimsResponse:
     """Return which content-addressed media blobs this Runtime Host needs."""
 
     if len(request.items) > 512:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="too many media claim items")
-    result = claim_media(db, [item.model_dump() for item in request.items])
-    return MediaClaimsResponse(needed=result.needed, present=result.present, rejected=result.rejected)
+    items = [item.model_dump() for item in request.items]
+    requested_session_ids = list(dict.fromkeys(str(item["session_id"]) for item in items if item.get("session_id") is not None))
+    try:
+        owned_claim_sessions = await _owned_session_id_set(requested_session_ids, owner_id=auth.owner_id)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail="media authorization is unavailable") from exc
+    eligible: list[dict] = []
+    unbound: list[dict] = []
+    rejected: list[dict[str, str]] = []
+    for item in items:
+        session_id = str(item["session_id"]) if item.get("session_id") is not None else None
+        if session_id is None:
+            unbound.append(item)
+        elif session_id not in owned_claim_sessions:
+            rejected.append({"sha256": str(item.get("sha256") or ""), "reason": "session_not_found"})
+        else:
+            eligible.append(item)
+
+    # Preserve specific validation errors without letting a valid unbound
+    # claim probe global content-addressed presence.
+    unbound_result = claim_media(db, unbound, present_hashes=frozenset())
+    rejected.extend(unbound_result.rejected)
+    rejected.extend({"sha256": value, "reason": "session_required"} for value in unbound_result.needed)
+
+    hashes = [str(item.get("sha256") or "").strip().lower() for item in eligible]
+    ref_rows = (
+        db.query(SessionMediaRef.media_sha256, SessionMediaRef.session_id)
+        .filter(SessionMediaRef.media_sha256.in_(hashes), SessionMediaRef.media_state == "present")
+        .all()
+        if hashes
+        else []
+    )
+    prior_ref_session_ids = list(dict.fromkeys(str(row[1]) for row in ref_rows))
+    try:
+        owned_prior_sessions = await _owned_session_id_set(prior_ref_session_ids, owner_id=auth.owner_id)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail="media authorization is unavailable") from exc
+    present_hashes = frozenset(str(row[0]) for row in ref_rows if str(row[1]) in owned_prior_sessions)
+    result = claim_media(db, eligible, present_hashes=present_hashes)
+    return MediaClaimsResponse(
+        needed=result.needed,
+        present=result.present,
+        rejected=[*rejected, *result.rejected],
+    )
 
 
 @router.put(
     "/{sha256}",
     response_model=MediaUploadResponse,
-    dependencies=[Depends(verify_agents_caller), Depends(require_single_tenant)],
+    dependencies=[Depends(require_single_tenant)],
 )
 async def put_media_blob(
     sha256: str,
     request: Request,
     db: Session = Depends(get_db),
     first_seen_session_id: UUID | None = Header(default=None, alias="X-Longhouse-Session-Id"),
+    auth: Caller = Depends(verify_agents_caller),
 ) -> MediaUploadResponse:
     """Upload a media blob once, keyed by sha256."""
 
+    pending_session_ids = [
+        str(value)
+        for (value,) in (
+            db.query(SessionMediaRef.session_id)
+            .filter(
+                SessionMediaRef.media_sha256 == sha256.strip().lower(),
+                SessionMediaRef.media_state == "pending",
+            )
+            .distinct()
+            .all()
+        )
+    ]
+    if first_seen_session_id is not None:
+        pending_session_ids.append(str(first_seen_session_id))
+    try:
+        owned = await _owned_session_id_set(list(dict.fromkeys(pending_session_ids)), owner_id=auth.owner_id)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail="media authorization is unavailable") from exc
+    if first_seen_session_id is not None:
+        if str(first_seen_session_id) not in owned:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
     data = await _read_bounded_body(request)
     try:
         stored = store_media_blob(
@@ -205,6 +298,7 @@ async def put_media_blob(
             mime_type=_content_type(request),
             data=data,
             first_seen_session_id=first_seen_session_id,
+            present_ref_session_ids=owned,
         )
     except ValueError as exc:
         status_code = status.HTTP_409_CONFLICT if str(exc) == "sha256 mismatch" else status.HTTP_400_BAD_REQUEST

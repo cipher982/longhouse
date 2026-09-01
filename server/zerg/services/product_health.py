@@ -20,6 +20,8 @@ from zerg.schemas.observability import ProductHealthCheckSummaryResponse
 from zerg.schemas.observability import ProductHealthCheckThresholdsResponse
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import list_machine_transport_health
+from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
+from zerg.services.catalog_read_gateway import machine_heartbeats
 from zerg.services.client_render_observations import ClientRenderObservation
 from zerg.services.client_render_observations import ClientRenderObservationList
 from zerg.services.client_render_observations import list_client_render_observations
@@ -59,6 +61,8 @@ def build_product_health_checks(
     provider: str | None = None,
     surface: str | None = None,
     managed: bool | None = None,
+    owner_id: int | None = None,
+    owned_session_ids: frozenset[str] | None = None,
 ) -> ProductHealthCheckListResponse:
     resolved_window = _parse_window(window)
     generated_at = utc_now()
@@ -69,6 +73,7 @@ def build_product_health_checks(
         provider=provider,
         surface=surface,
         managed=managed,
+        owned_session_ids=owned_session_ids,
         limit=LIVE_PREVIEW_OBSERVATION_LIMIT,
     )
     live_preview = build_live_preview_check(
@@ -79,9 +84,15 @@ def build_product_health_checks(
         provider=provider,
         surface=surface,
         managed=managed,
+        owned_session_ids=owned_session_ids,
     )
     checks = [
-        _build_machine_connected_summary(db, window=resolved_window, generated_at=generated_at),
+        _build_machine_connected_summary(
+            db,
+            window=resolved_window,
+            generated_at=generated_at,
+            owner_id=owner_id,
+        ),
         _build_render_freshness_summary(
             render_observations.rows,
             window=resolved_window,
@@ -190,6 +201,7 @@ def build_live_preview_check(
     provider: str | None = None,
     surface: str | None = None,
     managed: bool | None = None,
+    owned_session_ids: frozenset[str] | None = None,
 ) -> ProductHealthCheckLivePreviewResponse:
     resolved_window = resolved_window or _parse_window(window)
     generated_at = generated_at or utc_now()
@@ -201,6 +213,7 @@ def build_live_preview_check(
             provider=provider,
             surface=surface,
             managed=managed,
+            owned_session_ids=owned_session_ids,
             limit=LIVE_PREVIEW_OBSERVATION_LIMIT,
         )
     cells = _build_live_preview_cells(
@@ -377,14 +390,28 @@ def _build_machine_connected_summary(
     *,
     window: _Window,
     generated_at: datetime,
+    owner_id: int | None = None,
 ) -> ProductHealthCheckSummaryResponse:
     window_seconds = max(1, int(window.delta.total_seconds()))
-    machines, total = list_machine_transport_health(
-        db,
-        stale_after_seconds=DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
-        recent_within_seconds=window_seconds,
-        limit=10_000,
-    )
+    if owner_id is None:
+        machines, total = list_machine_transport_health(
+            db,
+            stale_after_seconds=DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
+            recent_within_seconds=window_seconds,
+            limit=10_000,
+        )
+    else:
+        payload = machine_heartbeats(
+            owner_id=owner_id,
+            device_id=None,
+            recent_after=(generated_at - window.delta).isoformat(),
+            limit=100,
+        )
+        machines, total = machine_transport_health_from_catalog_rows(
+            payload.get("heartbeats", []),
+            stale_after_seconds=DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
+            limit=100,
+        )
     if total == 0:
         return ProductHealthCheckSummaryResponse(
             check=MACHINE_CONNECTED_CHECK_ID,

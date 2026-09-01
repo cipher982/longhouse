@@ -9,11 +9,13 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.auth.caller import Caller
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_auth import get_current_browser_caller
 from zerg.schemas.observability import MachineHealthListResponse
@@ -72,10 +74,24 @@ def _owned_legacy_sessions(db: Session, *, caller: Caller, hours_back: int = 24 
     """Authorize legacy telemetry joins before they load session details."""
 
     from zerg.models.agents import AgentSession
+    from zerg.models.agents import SessionObservation
+    from zerg.models.agents import SessionTurn
 
-    del hours_back
-    candidates = db.query(AgentSession.id).order_by(AgentSession.started_at.desc()).limit(2_000).all()
-    return owned_session_ids([str(row[0]) for row in candidates], owner_id=caller.owner_id)
+    since = utc_now() - timedelta(hours=max(1, hours_back))
+    activity_anchor = func.coalesce(AgentSession.last_activity_at, AgentSession.started_at)
+    candidates = [
+        *(row[0] for row in db.query(AgentSession.id).filter(activity_anchor >= since).limit(2_000).all()),
+        *(
+            row[0]
+            for row in db.query(SessionObservation.session_id)
+            .filter(SessionObservation.session_id.isnot(None), SessionObservation.observed_at >= since)
+            .distinct()
+            .limit(2_000)
+            .all()
+        ),
+        *(row[0] for row in db.query(SessionTurn.session_id).filter(SessionTurn.user_submitted_at >= since).distinct().limit(2_000).all()),
+    ]
+    return owned_session_ids([str(value) for value in candidates], owner_id=caller.owner_id)
 
 
 @router.get("/checks", response_model=ProductHealthCheckListResponse)
@@ -85,15 +101,21 @@ async def list_product_health_checks(
     surface: str | None = Query(None, description="Filter live-preview observations by client surface"),
     managed: bool | None = Query(None, description="Filter live-preview observations by managed-session flag"),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_current_browser_caller),
 ) -> ProductHealthCheckListResponse:
     try:
+        owned = _owned_legacy_sessions(db, caller=caller)
         return build_product_health_checks(
             db,
             window=window,
             provider=provider,
             surface=surface,
             managed=managed,
+            owner_id=caller.owner_id,
+            owned_session_ids=owned,
         )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -102,6 +124,7 @@ async def list_product_health_checks(
 async def list_agent_product_health_checks(
     window: str = Query("15m", description="Recent observation window such as 15m, 1h, or 7d"),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(verify_agents_caller),
 ) -> ProductHealthCheckListResponse:
     """Machine-readable product health over the canonical agents authority.
 
@@ -110,7 +133,15 @@ async def list_agent_product_health_checks(
     """
 
     try:
-        return build_product_health_checks(db, window=window)
+        owned = _owned_legacy_sessions(db, caller=caller)
+        return build_product_health_checks(
+            db,
+            window=window,
+            owner_id=caller.owner_id,
+            owned_session_ids=owned,
+        )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -134,15 +165,20 @@ async def read_live_preview_health_check(
     surface: str | None = Query(None, description="Filter observations by client surface"),
     managed: bool | None = Query(None, description="Filter observations by managed-session flag"),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_current_browser_caller),
 ) -> ProductHealthCheckLivePreviewResponse:
     try:
+        owned = _owned_legacy_sessions(db, caller=caller)
         return build_live_preview_check(
             db,
             window=window,
             provider=provider,
             surface=surface,
             managed=managed,
+            owned_session_ids=owned,
         )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

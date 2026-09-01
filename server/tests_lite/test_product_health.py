@@ -17,6 +17,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=")
 
+import zerg.routers.observability as observability_routes
 import zerg.services.agent_heartbeat_health as heartbeat_health
 import zerg.services.catalog_read_gateway as catalog_read_gateway
 import zerg.services.product_health as product_health
@@ -422,6 +423,13 @@ def test_live_preview_slow_p95_is_degraded_with_evidence(tmp_path, monkeypatch):
 
 def test_product_health_check_routes_expose_summary_and_detail(tmp_path, monkeypatch):
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(observability_routes, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(
+        observability_routes,
+        "owned_session_ids",
+        lambda session_ids, *, owner_id: frozenset(session_ids),
+    )
+    monkeypatch.setattr(product_health, "machine_heartbeats", lambda **kwargs: {"heartbeats": []})
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
         session = _seed_session(db, provider="codex")
@@ -447,6 +455,35 @@ def test_product_health_check_routes_expose_summary_and_detail(tmp_path, monkeyp
         title_dependency = client.get("/agents/observability/checks/session_titles?window=15m")
         assert title_dependency.status_code == 200
         assert title_dependency.json()["check"] == "session_titles"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_product_health_routes_exclude_other_owner_observations(tmp_path, monkeypatch):
+    monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        owned_session = _seed_session(db, provider="codex")
+        other_session = _seed_session(db, provider="codex", device_id="other")
+        owned_session_id = owned_session.id
+        _record_render(db, session_id=owned_session.id, latency_ms=100, event_id="owned")
+        _record_render(db, session_id=other_session.id, latency_ms=900, event_id="other")
+
+    monkeypatch.setattr(observability_routes, "utc_now", lambda: PINNED_NOW)
+    monkeypatch.setattr(
+        observability_routes,
+        "owned_session_ids",
+        lambda session_ids, *, owner_id: frozenset({str(owned_session_id)}),
+    )
+    monkeypatch.setattr(product_health, "machine_heartbeats", lambda **kwargs: {"heartbeats": []})
+    client = _make_client(SessionLocal)
+    try:
+        response = client.get("/observability/checks/live_preview?window=15m&provider=codex")
+        assert response.status_code == 200, response.text
+        cell = response.json()["cells"][0]
+        assert cell["signals"]["events"] == 1
+        assert cell["signals"]["render_p95_ms"] == 100
+        assert [item["id"] for item in cell["evidence_refs"]] == [str(owned_session_id)]
     finally:
         api_app.dependency_overrides.clear()
 

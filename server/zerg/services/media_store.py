@@ -140,11 +140,21 @@ def upsert_media_ref(db: Session, *, item: dict, media_state: str) -> bool:
     return changed
 
 
-def mark_media_refs_present(db: Session, sha256: str) -> bool:
-    """Mark all refs for a now-present blob as available."""
+def mark_media_refs_present(
+    db: Session,
+    sha256: str,
+    *,
+    session_ids: frozenset[str] | None = None,
+) -> bool:
+    """Mark refs for a now-present blob as available within an optional owner scope."""
 
     digest = validate_sha256(sha256)
-    rows = db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == digest).all()
+    query = db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == digest)
+    if session_ids is not None:
+        if not session_ids:
+            return False
+        query = query.filter(SessionMediaRef.session_id.in_(session_ids))
+    rows = query.all()
     changed = False
     for row in rows:
         if row.media_state != "present" or row.last_error is not None:
@@ -154,17 +164,27 @@ def mark_media_refs_present(db: Session, sha256: str) -> bool:
     return changed
 
 
-def _first_seen_from_refs(db: Session, sha256: str) -> UUID | None:
-    ref = (
-        db.query(SessionMediaRef)
-        .filter(SessionMediaRef.media_sha256 == sha256)
-        .order_by(SessionMediaRef.created_at.asc(), SessionMediaRef.id.asc())
-        .first()
-    )
+def _first_seen_from_refs(
+    db: Session,
+    sha256: str,
+    *,
+    session_ids: frozenset[str] | None = None,
+) -> UUID | None:
+    query = db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == sha256)
+    if session_ids is not None:
+        if not session_ids:
+            return None
+        query = query.filter(SessionMediaRef.session_id.in_(session_ids))
+    ref = query.order_by(SessionMediaRef.created_at.asc(), SessionMediaRef.id.asc()).first()
     return ref.session_id if ref is not None else None
 
 
-def claim_media(db: Session, items: list[dict]) -> MediaClaimResult:
+def claim_media(
+    db: Session,
+    items: list[dict],
+    *,
+    present_hashes: frozenset[str] | None = None,
+) -> MediaClaimResult:
     """Return which requested sha256 objects are missing from the server."""
 
     needed: list[str] = []
@@ -197,7 +217,7 @@ def claim_media(db: Session, items: list[dict]) -> MediaClaimResult:
             continue
 
         row = db.query(MediaObject).filter(MediaObject.sha256 == raw_sha).first()
-        is_present = media_row_is_present(row)
+        is_present = media_row_is_present(row) and (present_hashes is None or raw_sha in present_hashes)
         refs_changed = (
             upsert_media_ref(
                 db,
@@ -229,6 +249,7 @@ def store_media_blob(
     first_seen_session_id: UUID | None = None,
     width: int | None = None,
     height: int | None = None,
+    present_ref_session_ids: frozenset[str] | None = None,
     commit: bool = True,
 ) -> StoredMediaObject:
     """Persist media bytes once and upsert their content-addressed row."""
@@ -252,7 +273,7 @@ def store_media_blob(
         if existing.first_seen_session_id is None and first_seen_session_id is not None:
             existing.first_seen_session_id = first_seen_session_id
             changed = True
-        changed = mark_media_refs_present(db, digest) or changed
+        changed = mark_media_refs_present(db, digest, session_ids=present_ref_session_ids) or changed
         if changed and commit:
             db.commit()
             db.refresh(existing)
@@ -283,8 +304,8 @@ def store_media_blob(
     if row.first_seen_session_id is None and first_seen_session_id is not None:
         row.first_seen_session_id = first_seen_session_id
     elif row.first_seen_session_id is None:
-        row.first_seen_session_id = _first_seen_from_refs(db, digest)
-    mark_media_refs_present(db, digest)
+        row.first_seen_session_id = _first_seen_from_refs(db, digest, session_ids=present_ref_session_ids)
+    mark_media_refs_present(db, digest, session_ids=present_ref_session_ids)
     db.add(row)
 
     if commit:
