@@ -118,8 +118,8 @@ export default function SecurityPage() {
           <p>
             Backups are the honest exception. We back the hosted database up off-site, encrypted,
             and a snapshot taken before you deleted something still holds it until that snapshot
-            ages out — daily copies for two weeks, then thinned weekly, monthly, and yearly copies
-            beyond that. We never restore deleted data back into the service.
+            ages out — recent copies for two days, daily copies for two weeks, eight weekly copies,
+            and three monthly copies. We never restore deleted data back into the service.
           </p>
           <p>
             So deleting a session is not the same as un-leaking a secret. If a transcript ever
