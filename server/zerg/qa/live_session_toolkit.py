@@ -1036,6 +1036,9 @@ def latest_claude_startup_prompt(compact_terminal: str) -> str | None:
         "permission": compact_terminal.rfind("Yes,Iaccept"),
         "trust": compact_terminal.rfind("Yes,Itrustthisfolder"),
         "channel": compact_terminal.rfind("Iamusingthisforlocaldevelopment"),
+        "theme": compact_terminal.rfind("Choosethetextstyle"),
+        "api_key": compact_terminal.rfind("DetectedacustomAPIkey"),
+        "security_notes": max(compact_terminal.rfind("Securitynotes"), compact_terminal.rfind("PressEnte")),
     }
     prompt, position = max(positions.items(), key=lambda item: item[1])
     return prompt if position >= 0 else None
@@ -1309,16 +1312,16 @@ def prepare_claude_profile(
             startup_prompt = latest_claude_startup_prompt(compact)
             if startup_prompt == "permission":
                 _accept_claude_permission_prompt(process)
-            elif theme_attempts == 0 and "Choosethetextstyle" in compact:
+            elif startup_prompt == "theme" and theme_attempts == 0:
                 process.send("\r")
                 theme_attempts += 1
-            elif "DetectedacustomAPIkey" in compact and api_key_attempts == 0:
+            elif startup_prompt == "api_key" and api_key_attempts == 0:
                 process.send("\x1b[A")
                 api_key_attempts = 1
-            elif "DetectedacustomAPIkey" in compact and api_key_attempts == 1:
+            elif startup_prompt == "api_key" and api_key_attempts == 1:
                 process.send("\r")
                 api_key_attempts = 2
-            elif security_notes_attempts == 0 and ("Securitynotes" in compact or "PressEnte" in compact):
+            elif startup_prompt == "security_notes" and security_notes_attempts == 0:
                 process.send("\r")
                 security_notes_attempts += 1
             elif not confirmed_trust and startup_prompt == "trust":

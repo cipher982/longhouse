@@ -2593,10 +2593,12 @@ def test_latest_claude_startup_prompt_uses_append_only_order() -> None:
     permission = "No,exitYes,Iaccept"
     trust = "No,exitYes,Itrustthisfolder"
     channel = "Iamusingthisforlocaldevelopment"
+    theme = "Choosethetextstyle"
 
     assert live_session_toolkit.latest_claude_startup_prompt(f"{trust}{permission}") == "permission"
     assert live_session_toolkit.latest_claude_startup_prompt(f"{permission}{trust}") == "trust"
     assert live_session_toolkit.latest_claude_startup_prompt(f"{trust}{channel}") == "channel"
+    assert live_session_toolkit.latest_claude_startup_prompt(f"{permission}{theme}") == "theme"
     assert live_session_toolkit.latest_claude_startup_prompt("ClaudeCode") is None
 
 
