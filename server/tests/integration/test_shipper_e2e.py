@@ -1468,7 +1468,7 @@ class TestOpenCodeSQLiteShipping:
 
 
 def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path):
-    """One-shot ship should flush existing spool backlog, not only newly discovered files."""
+    """One-shot ship should drain a retained v1 spool pointer through storage-v2."""
 
     temp_home = tmp_path / "home"
     (temp_home / ".claude" / "projects").mkdir(parents=True)
@@ -1486,32 +1486,42 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
     engine_db = tmp_path / "engine.db"
     env = {**os.environ, "HOME": str(temp_home)}
 
-    queue_result = subprocess.run(
+    bind_result = subprocess.run(
         [
             str(ENGINE_BIN),
-            "ship",
-            "--file",
+            "bind",
+            "--path",
             str(session_file),
-            "--url",
-            "http://127.0.0.1:9",
-            "--token",
-            "zdt_test",
+            "--session-id",
+            session_id,
             "--provider",
             "claude",
             "--db",
             str(engine_db),
-            "--machine-name",
-            "shipper-e2e",
-            "--json",
         ],
         capture_output=True,
         text=True,
         timeout=30,
         env=env,
     )
-    assert queue_result.returncode == 0, (
-        f"initial spooling run failed\nstdout: {queue_result.stdout}\nstderr: {queue_result.stderr}"
+    assert bind_result.returncode == 0, (
+        f"state initialization failed\nstdout: {bind_result.stdout}\nstderr: {bind_result.stderr}"
     )
+    with sqlite3.connect(engine_db) as conn:
+        conn.execute(
+            """INSERT INTO spool_queue (
+                   provider, file_path, start_offset, end_offset, session_id,
+                   created_at, next_retry_at, status
+               ) VALUES (?, ?, 0, ?, ?, ?, ?, 'pending')""",
+            (
+                "claude",
+                str(session_file),
+                session_file.stat().st_size,
+                session_id,
+                "2026-02-15T10:00:00+00:00",
+                "2026-02-15T10:00:00+00:00",
+            ),
+        )
     assert _get_session(server, session_id) is None, "spooled session should not reach the API before replay"
 
     replay_result = subprocess.run(
