@@ -1233,12 +1233,13 @@ async fn reconcile_admitted_epoch_predecessor(
     {
         return Ok(false);
     }
-    if !manifest_proves_session_tail(
+    if !manifest_proves_tail(
         client,
         manifest,
         envelope,
         &envelope.source_epoch,
         accepted_through,
+        Some(&envelope.session_id),
         true,
         request_timeout,
     )
@@ -1268,12 +1269,13 @@ async fn reconcile_admitted_epoch_predecessor(
     {
         return Ok(false);
     }
-    if !manifest_proves_session_tail(
+    if !manifest_proves_tail(
         client,
         &predecessor,
         envelope,
         &host_predecessor.to_string(),
         predecessor_accepted,
+        None,
         false,
         request_timeout,
     )
@@ -1334,12 +1336,13 @@ fn timestamps_match_at_host_precision(left: &str, right: &str) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn manifest_proves_session_tail(
+async fn manifest_proves_tail(
     client: &ShipperClient,
     initial: &StorageV2SourceManifest,
     envelope: &StorageV2Envelope,
     source_epoch: &str,
     accepted_through: u64,
+    session_id: Option<&str>,
     require_active: bool,
     request_timeout: Duration,
 ) -> Result<bool> {
@@ -1347,7 +1350,7 @@ async fn manifest_proves_session_tail(
     loop {
         if page.objects.iter().any(|object| {
             object.tenant_id == envelope.tenant_id
-                && object.session_id == envelope.session_id
+                && session_id.is_none_or(|expected| object.session_id == expected)
                 && object.machine_id == envelope.machine_id
                 && object.provider == envelope.provider
                 && object.opaque_source_id == envelope.opaque_source_id
@@ -6992,7 +6995,11 @@ mod tests {
                     vec![serde_json::json!({
                         "envelope_id": "host-envelope",
                         "tenant_id": envelope.tenant_id,
-                        "session_id": envelope.session_id,
+                        "session_id": if request_index == 2 {
+                            "legacy-session"
+                        } else {
+                            envelope.session_id.as_str()
+                        },
                         "machine_id": envelope.machine_id,
                         "provider": envelope.provider,
                         "opaque_source_id": envelope.opaque_source_id,
