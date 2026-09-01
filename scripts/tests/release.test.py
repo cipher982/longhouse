@@ -44,8 +44,16 @@ def test_same_version_resumes_a_pushed_candidate() -> None:
     assert 'VERSION_MARKERS=(' in SOURCE
 
 
+def test_release_fetches_tags_before_building_changelog() -> None:
+    fetch = SOURCE.index('fetch --quiet --tags origin main')
+    previous_tag = SOURCE.index("PREV_TAG=")
+
+    assert fetch < previous_tag
+
+
 if __name__ == "__main__":
     test_full_validation_gates_candidate_push()
     test_pre_release_gate_precedes_github_release_and_skips_only_release_evidence()
     test_same_version_resumes_a_pushed_candidate()
+    test_release_fetches_tags_before_building_changelog()
     print("release tests passed")
