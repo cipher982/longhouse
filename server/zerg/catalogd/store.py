@@ -6031,8 +6031,19 @@ class CatalogStore:
         """Converge the denormalized system flag without rewriting raw facts."""
 
         session_key = str(session_id)
-        target = int(system_hidden)
         with _write_transaction(self.engine) as connection:
+            storage_row = (
+                connection.execute(
+                    select(StorageSession.__table__.c.raw_state, StorageSession.__table__.c.render_state).where(
+                        StorageSession.__table__.c.session_id == session_key
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            retired = bool(storage_row and (storage_row["raw_state"] == "retired" or storage_row["render_state"] == "retired"))
+            effective_system_hidden = bool(system_hidden or retired)
+            target = int(effective_system_hidden)
             changed_rows = 0
             found = False
             for table in (LiveSessionCatalog.__table__, LiveTimelineCard.__table__, StorageSession.__table__):
@@ -6057,11 +6068,17 @@ class CatalogStore:
             )
             changed_rows += int(result.rowcount or 0)
             commit_seq = _advance_commit_seq(connection, observed_at) if changed_rows else _current_commit_seq(connection)
+            if changed_rows:
+                connection.execute(
+                    update(StorageSession.__table__)
+                    .where(StorageSession.__table__.c.session_id == session_key)
+                    .values(commit_seq=commit_seq)
+                )
         return {
             "found": found,
             "reconciled": found,
             "rows_changed": changed_rows,
-            "system_hidden": system_hidden,
+            "system_hidden": effective_system_hidden,
             "commit_seq": str(commit_seq),
         }
 
@@ -6124,15 +6141,19 @@ class CatalogStore:
                         is_subagent=bool(storage_row.get("is_subagent")) if storage_row else False,
                     )
                 )
+                retired = bool(storage_row and (storage_row.get("raw_state") == "retired" or storage_row.get("render_state") == "retired"))
+                system_hidden = bool(decision.system_hidden or retired)
                 for reason in decision.reason_keys:
                     reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                if retired:
+                    reason_counts["retired_source"] = reason_counts.get("retired_source", 0) + 1
                 current_values = [
                     bool(row.get("hidden_from_default_timeline")) for row in (catalog_row, card_row, storage_row, thread_row) if row
                 ]
-                if any(value != decision.system_hidden for value in current_values):
+                if any(value != system_hidden for value in current_values):
                     actionable.append(session_id)
-                    targets[session_id] = int(decision.system_hidden)
-                final_hidden = decision.system_hidden
+                    targets[session_id] = int(system_hidden)
+                final_hidden = system_hidden
                 preferences = catalog_row if catalog_present else storage_row if storage_present else card_row
                 user_hidden = bool(preferences.get("user_hidden_from_timeline"))
                 user_state = str(preferences.get("user_state") or "active")

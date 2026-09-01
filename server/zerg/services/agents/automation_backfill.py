@@ -470,13 +470,14 @@ def reconcile_derived_visibility(
             if catalog_result.get("reconciled") is not True:
                 failed.append({"session_id": session_id, "error": "catalogd session not found"})
                 continue
+            effective_system_hidden = bool(catalog_result.get("system_hidden", system_hidden))
             if searchd_socket is not None:
                 call_catalogd_sync(
                     searchd_socket,
                     "search.session.reconcile_visibility.v2",
                     params={
                         "session_id": session_id,
-                        "system_hidden": system_hidden,
+                        "system_hidden": effective_system_hidden,
                         "test_scope_visible": bool(row.get("test_scope_visible", False)),
                         "user_hidden_from_timeline": bool(row["user_hidden_from_timeline"]),
                         "user_state": str(row["user_state"]),

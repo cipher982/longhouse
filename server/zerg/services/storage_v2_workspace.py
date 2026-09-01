@@ -215,6 +215,8 @@ async def build_storage_v2_workspace(
         storage_session = storage.get("session")
         if not isinstance(storage_session, dict) or str(storage_session.get("owner_id")) != str(owner_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
+        if storage_session.get("raw_state") == "retired" or storage_session.get("render_state") == "retired":
+            return None
         page = await read_storage_v2_session_events_page(
             session_id=session_id,
             owner_id=str(owner_id),

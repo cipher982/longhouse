@@ -3398,6 +3398,35 @@ async def test_source_epoch_replacement_advances_retired_projectors(daemon_paths
         assert retired[0] == "retired"
         assert all(row[1] == retired[1] and row[2] is None and row[3] == "idle" for row in states)
 
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE sessions SET hidden_from_default_timeline = 0 WHERE session_id = ?",
+                (str(old_session),),
+            )
+        reconciled = CatalogStore(engine).reconcile_all_session_visibility(
+            apply=True,
+            observed_at=now + timedelta(seconds=3),
+        )
+        assert str(old_session) in reconciled["actionable_session_ids"]
+        assert reconciled["reason_counts"]["retired_source"] == 1
+        with Session(engine) as db:
+            assert db.get(StorageSession, str(old_session)).hidden_from_default_timeline == 1
+
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE sessions SET hidden_from_default_timeline = 0 WHERE session_id = ?",
+                (str(old_session),),
+            )
+        single = CatalogStore(engine).reconcile_session_visibility(
+            session_id=str(old_session),
+            system_hidden=False,
+            observed_at=now + timedelta(seconds=4),
+        )
+        assert single["system_hidden"] is True
+        retired_commit_seq = int(single["commit_seq"])
+        with Session(engine) as db:
+            assert db.get(StorageSession, str(old_session)).hidden_from_default_timeline == 1
+
         # Startup repair must also heal sessions retired before this invariant
         # was introduced, including stale claims stuck on the old snapshot.
         with engine.begin() as connection:
@@ -3424,7 +3453,7 @@ async def test_source_epoch_replacement_advances_retired_projectors(daemon_paths
             ).all()
         engine.dispose()
         assert all(
-            row[0] == retired[1]
+            row[0] == retired_commit_seq
             and row[1] is None
             and row[2] is None
             and row[3] is None

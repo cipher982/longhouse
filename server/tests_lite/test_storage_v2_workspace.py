@@ -1,6 +1,7 @@
 import os
+from datetime import UTC
+from datetime import datetime
 from types import SimpleNamespace
-from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -9,15 +10,16 @@ from sqlalchemy.orm import Session
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-import zerg.services.storage_v2_workspace as workspace_module
 import zerg.routers.session_chat as session_chat_module
-from zerg.catalogd.schema import create_catalog_engine, initialize_catalog_schema
+import zerg.services.storage_v2_workspace as workspace_module
+from zerg.catalogd.schema import create_catalog_engine
+from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
-from zerg.models.live_store import LiveUser
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
-from zerg.services.live_control_catalog import load_live_control_session_snapshot
+from zerg.models.live_store import LiveUser
 from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
 
 class _Catalog:
@@ -127,6 +129,45 @@ async def test_storage_v2_workspace_returns_none_for_legacy_session(monkeypatch)
     assert (
         await workspace_module.build_storage_v2_workspace(
             session_id=uuid4(),
+            owner_id=42,
+            branch_mode="head",
+            limit=50,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_workspace_returns_none_for_retired_session(monkeypatch):
+    session_id = uuid4()
+
+    class RetiredCatalog:
+        async def call(self, method, params, *, timeout_seconds=None):
+            assert method == "storage.session.read.v2"
+            assert params == {"session_id": str(session_id)}
+            assert timeout_seconds == 4.25
+            return {
+                "found": True,
+                "session": {
+                    "owner_id": "42",
+                    "raw_state": "retired",
+                    "render_state": "retired",
+                },
+            }
+
+    session = SimpleNamespace(
+        capabilities=SimpleNamespace(live_control_available=False),
+    )
+    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: RetiredCatalog())
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id, **_kwargs: (session, None, "11"))
+
+    async def unexpected_read(**_kwargs):
+        raise AssertionError("retired render objects must not be read")
+
+    monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", unexpected_read)
+    assert (
+        await workspace_module.build_storage_v2_workspace(
+            session_id=session_id,
             owner_id=42,
             branch_mode="head",
             limit=50,
