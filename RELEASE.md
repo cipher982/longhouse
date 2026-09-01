@@ -16,19 +16,18 @@ Three tag families, each independent:
 
 ## Cutting a `vX.Y.Z` release
 
-1. Bump `version` in `server/pyproject.toml` to match the target tag (e.g. `0.1.13`).
-2. Commit and push to `main`. Let CI go green.
-3. Draft the GitHub release from the latest main SHA with tag `vX.Y.Z`. A short body is fine — point to the commit log or call out notable changes.
-4. Publish the release. This fires two workflows automatically:
+1. Run `make release VERSION=vX.Y.Z`. The command bumps every public manifest, commits the candidate locally, runs the full validation, and only then pushes it to `main`.
+2. The command waits for exact-SHA CI, deploy/verify, launch, installer, hosted live QA, and matching demo/canary surfaces before creating the GitHub release.
+3. The command creates the GitHub release. This fires two workflows automatically:
    - `Publish to PyPI` — builds the wheel, uploads it as a release asset, pushes to PyPI.
    - `Local Runtime Binary Release` — builds engine + managed Codex for Linux/macOS, signs/notarizes the macOS DMG, uploads all artifacts to the release.
-5. Wait for both workflows to finish (macOS notarization can take up to ~330 minutes in the worst case but typically finishes in minutes).
-6. Verify the release landed:
+4. Wait for both workflows to finish (macOS notarization can take up to ~330 minutes in the worst case but typically finishes in minutes).
+5. Verify the release landed:
    ```bash
    gh release view vX.Y.Z --json assets --jq '.assets[].name'
    ```
    Expected: wheel, engine binaries, codex binaries, DMG, zip, checksums, packaging manifest.
-7. Verify notarization:
+6. Verify notarization:
    ```bash
    gh release download vX.Y.Z --pattern local-runtime-macos-packaging.json --output -
    ```

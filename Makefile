@@ -424,7 +424,7 @@ test-hooks: ## Hook outbox pipeline E2E (requires daemon running)
 check-push-readiness: ## Detect stale duplicate commits on main before pushing (~1s)
 	@./scripts/ops/check-push-readiness.sh
 
-test-ci: ## Pre-push CI check (~3min)
+test-ci: ## Pre-push CI check (~20min)
 	$(MAKE) validate
 	$(MAKE) import-smoke
 	$(MAKE) test-web-entrypoint
@@ -588,6 +588,7 @@ validate-qa-scripts: ## @internal Every scripts/qa check is reachable or declare
 
 validate-ops-scripts: ## @internal Ops script contracts (backup/restore retention)
 	@bash scripts/qa/test-zerg-ops.sh
+	@python3 scripts/tests/release.test.py
 
 validate-managed-identity: ## @internal Guard the generated managed-identity vocabulary and its launch sites
 	@cd server && uv run python ../scripts/generate/managed_identity_contract_rs.py --check

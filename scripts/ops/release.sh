@@ -15,10 +15,12 @@ Cuts a stable Longhouse release:
      Note: this is the release version, not the per-commit build identity.
      Build identity advances on every commit; release version only moves
      when you run this script.
-  2. Commits + pushes the bump to main.
-  3. Creates the GitHub release with tag VERSION (fires publish.yml + local-runtime-release.yml).
-  4. Waits for both workflows to finish. Notarization can take up to ~330m in the worst case.
-  5. Verifies the release has the expected artifacts and that macOS notarization is notarized.
+   2. Commits the versioned candidate locally and runs the full validation.
+   3. Pushes the validated candidate to main.
+   4. Waits for exact-SHA CI, deploy, installer, hosted QA, and live-surface gates.
+   5. Creates the GitHub release with tag VERSION (fires publish.yml + local-runtime-release.yml).
+   6. Waits for both release workflows to finish. Notarization can take up to ~330m in the worst case.
+   7. Verifies the release has the expected artifacts and that macOS notarization is notarized.
 
 Does not push to PyPI directly — publish.yml does that from the release event.
 EOF
@@ -37,6 +39,7 @@ fi
 
 PYVER="${VERSION#v}"
 PYPROJECT="$ROOT/server/pyproject.toml"
+CURRENT_VERSION="$(grep -E '^version\s*=' "$PYPROJECT" | head -1 | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
 if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then
   echo "Working tree has uncommitted changes. Commit or stash before releasing." >&2
@@ -56,9 +59,12 @@ git -C "$ROOT" fetch --quiet origin main
 LOCAL_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
 REMOTE_HEAD="$(git -C "$ROOT" rev-parse origin/main)"
 if [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
-  echo "Local main ($LOCAL_HEAD) does not match origin/main ($REMOTE_HEAD)." >&2
-  echo "Push (or discard) local work before releasing — this guards against sweeping another agent's WIP into the release." >&2
-  exit 1
+  if [[ "$CURRENT_VERSION" != "$PYVER" ]] || ! git -C "$ROOT" merge-base --is-ancestor "$REMOTE_HEAD" "$LOCAL_HEAD"; then
+    echo "Local main ($LOCAL_HEAD) does not match origin/main ($REMOTE_HEAD)." >&2
+    echo "Push (or discard) local work before releasing — this guards against sweeping another agent's WIP into the release." >&2
+    exit 1
+  fi
+  echo "Resuming $VERSION from local main ahead of origin/main at ${LOCAL_HEAD:0:10}."
 fi
 
 if git -C "$ROOT" rev-parse --verify --quiet "refs/tags/$VERSION" >/dev/null; then
@@ -71,48 +77,88 @@ if git -C "$ROOT" ls-remote --tags origin "refs/tags/$VERSION" | grep -q "$VERSI
   exit 1
 fi
 
-if ! command -v bump-my-version >/dev/null 2>&1; then
-  echo "bump-my-version not found on PATH. Install with: uv tool install bump-my-version" >&2
-  exit 1
-fi
-
-CURRENT_VERSION="$(grep -E '^version\s*=' "$PYPROJECT" | head -1 | sed -E 's/version *= *"([^"]+)".*/\1/')"
 if [[ "$CURRENT_VERSION" == "$PYVER" ]]; then
-  echo "pyproject.toml is already at $PYVER. Bump to a new version first." >&2
+  echo "All manifests are already at $PYVER; reusing the current candidate and validating it again."
+else
+  if ! command -v bump-my-version >/dev/null 2>&1; then
+    echo "bump-my-version not found on PATH. Install with: uv tool install bump-my-version" >&2
+    exit 1
+  fi
+
+  echo "Bumping all manifests from $CURRENT_VERSION to $PYVER (shared release version)..."
+  # bump-my-version edits every file listed in .bumpversion.toml and bails
+  # if any of them don't contain the expected old version — that's the
+  # shared-version guarantee. If you see a mismatch error here, another
+  # agent likely hand-edited one of the manifests.
+  (cd "$ROOT" && bump-my-version bump --new-version "$PYVER")
+
+  echo "Refreshing package lockfiles for $PYVER..."
+  (cd "$ROOT/server" && uv lock)
+  (cd "$ROOT/engine" && cargo metadata --format-version 1 >/dev/null)
+fi
+
+# A retry may arrive after the bump commit, so verify the shared-version
+# invariant directly instead of trusting only the server's anchor manifest.
+VERSION_MARKERS=(
+  "server/pyproject.toml|version = \"$PYVER\""
+  "engine/Cargo.toml|version = \"$PYVER\""
+  "runner/package.json|\"version\": \"$PYVER\""
+  "ios/XcodeHarness/Configs/Version.xcconfig|MARKETING_VERSION = $PYVER"
+  ".bumpversion.toml|current_version = \"$PYVER\""
+)
+for entry in "${VERSION_MARKERS[@]}"; do
+  file="${entry%%|*}"
+  marker="${entry#*|}"
+  if ! grep -Fq "$marker" "$ROOT/$file"; then
+    echo "$file does not declare the shared release version $PYVER." >&2
+    exit 1
+  fi
+done
+
+if [[ "$CURRENT_VERSION" != "$PYVER" ]]; then
+  git -C "$ROOT" add \
+    server/pyproject.toml \
+    server/uv.lock \
+    engine/Cargo.toml \
+    engine/Cargo.lock \
+    runner/package.json \
+    ios/XcodeHarness/Configs/Version.xcconfig \
+    .bumpversion.toml
+  git -C "$ROOT" commit -m "Bump version to $PYVER"
+fi
+
+BUMP_SHA="$(git -C "$ROOT" rev-parse HEAD)"
+echo "Versioned candidate: ${BUMP_SHA:0:10}"
+
+echo "Running full release validation on the exact candidate commit..."
+(cd "$ROOT" && make test-ci)
+
+if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then
+  echo "Release validation changed tracked files. Commit the generated updates, then rerun the same release." >&2
   exit 1
 fi
 
-echo "Bumping all manifests from $CURRENT_VERSION to $PYVER (shared release version)..."
-# bump-my-version edits every file listed in .bumpversion.toml and bails
-# if any of them don't contain the expected old version — that's the
-# shared-version guarantee. If you see a mismatch error here, another
-# agent likely hand-edited one of the manifests.
-(cd "$ROOT" && bump-my-version bump --new-version "$PYVER")
-
-echo "Refreshing package lockfiles for $PYVER..."
-(cd "$ROOT/server" && uv lock)
-(cd "$ROOT/engine" && cargo metadata --format-version 1 >/dev/null)
-
-git -C "$ROOT" add \
-  server/pyproject.toml \
-  server/uv.lock \
-  engine/Cargo.toml \
-  engine/Cargo.lock \
-  runner/package.json \
-  ios/XcodeHarness/Configs/Version.xcconfig \
-  .bumpversion.toml
-git -C "$ROOT" commit -m "Bump version to $PYVER"
-BUMP_SHA="$(git -C "$ROOT" rev-parse HEAD)"
-echo "Bump commit: ${BUMP_SHA:0:10}"
-
-echo "Pushing bump commit to main..."
+echo "Pushing versioned candidate to main..."
 # Race-safe: only push if origin/main hasn't moved since the clean check above.
 # If another agent pushed in between, bail out so they can land and we retry.
 if ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
   echo "Push failed — another commit likely landed on origin/main. Rewind and retry:" >&2
-  echo "  git reset --hard origin/main && make release VERSION=$VERSION" >&2
+  echo "  reconcile local main with origin/main, then rerun make release VERSION=$VERSION" >&2
   exit 1
 fi
+
+echo "Waiting for pre-release exact-SHA gates before creating $VERSION..."
+"$ROOT/scripts/ops/launch-readiness.py" \
+  --sha "$BUMP_SHA" \
+  --required-workflow "CI" \
+  --required-workflow "Deploy and Verify" \
+  --required-workflow "Launch Gate" \
+  --required-workflow "Installer Validation Ring" \
+  --required-workflow "Hosted Live QA" \
+  --skip-release \
+  --skip-public-package \
+  --skip-runtime-artifacts \
+  --wait --timeout 3600 --discovery-grace 1800 --poll 30
 
 echo "Creating GitHub release $VERSION (this triggers publish.yml + local-runtime-release.yml)..."
 PREV_TAG="$(git -C "$ROOT" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)"
