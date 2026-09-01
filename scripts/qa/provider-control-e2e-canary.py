@@ -2775,6 +2775,40 @@ def classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None]:
     return "green", None
 
 
+def _retain_native_model_sources(canaries: dict[str, dict[str, Any]], evidence_root: Path) -> None:
+    """Keep only the native files used to derive a model-backed verdict.
+
+    Provider homes and package caches remain scratch. The bounded stdout,
+    stderr, and native model record referenced by the public canary contract
+    must outlive that scratch so downstream qualification can verify them.
+    """
+
+    for provider, canary in canaries.items():
+        references: list[tuple[dict[str, Any], str, str, str]] = [
+            (canary, "stdout_path", "stdout_sha256", "stdout"),
+            (canary, "stderr_path", "stderr_sha256", "stderr"),
+        ]
+        native_model = canary.get("native_model_evidence")
+        if isinstance(native_model, dict):
+            references.append((native_model, "path", "sha256", "native-model"))
+        for owner, path_key, digest_key, label in references:
+            path_value = owner.get(path_key)
+            digest_value = owner.get(digest_key)
+            if not isinstance(path_value, str) or not isinstance(digest_value, str):
+                continue
+            source = Path(path_value).expanduser().resolve(strict=True)
+            if not source.is_file() or _sha256_file(source) != digest_value:
+                raise RuntimeError(f"{provider} {label} native evidence changed before retention")
+            destination_root = evidence_root / "native-sources" / provider
+            destination_root.mkdir(parents=True, exist_ok=True)
+            suffix = "".join(source.suffixes)
+            destination = destination_root / f"{label}{suffix}"
+            shutil.copyfile(source, destination)
+            if _sha256_file(destination) != digest_value:
+                raise RuntimeError(f"{provider} {label} native evidence changed during retention")
+            owner[path_key] = str(destination.resolve())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=_repo_root_from_script())
@@ -2866,6 +2900,7 @@ def main(argv: list[str] | None = None) -> int:
     canaries: dict[str, dict[str, Any]] = {}
     try:
         canaries = _run_selected_canaries(args, selected, work_root)
+        _retain_native_model_sources(canaries, evidence_root)
     finally:
         if owned_work_root and not args.keep_work_root:
             shutil.rmtree(work_root, ignore_errors=True)

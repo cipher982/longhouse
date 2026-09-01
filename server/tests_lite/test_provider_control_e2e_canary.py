@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sqlite3
+from pathlib import Path
 from types import ModuleType
 
 import pytest
@@ -297,6 +298,54 @@ def test_work_root_is_separate_from_the_evidence_root(tmp_path, monkeypatch) -> 
     assert evidence_root not in provider_root.parents
     assert not provider_root.exists()
     assert payload["work_root_retained"] is False
+
+
+def test_native_model_sources_survive_scratch_cleanup_without_archiving_provider_home(tmp_path, monkeypatch) -> None:
+    canary = _load_canary()
+    evidence_root = tmp_path / "evidence"
+    artifact = evidence_root / "provider-control-e2e.json"
+    observed: dict[str, object] = {}
+
+    def fake_claude_canary(args, provider_root):
+        observed["provider_root"] = provider_root
+        stdout = provider_root / "claude-print-stdout.jsonl"
+        stderr = provider_root / "claude-print-stderr.log"
+        stdout.write_text('{"type":"result","result":"ok"}\n')
+        stderr.write_text("")
+        cache = provider_root / "home" / ".npm" / "_cacache" / "blob"
+        cache.parent.mkdir(parents=True)
+        cache.write_bytes(b"workspace-only")
+        return {
+            "status": "pass",
+            "stdout_path": str(stdout),
+            "stdout_sha256": canary._sha256_file(stdout),  # noqa: SLF001
+            "stderr_path": str(stderr),
+            "stderr_sha256": canary._sha256_file(stderr),  # noqa: SLF001
+        }
+
+    monkeypatch.setattr(canary, "run_claude_real_print_canary", fake_claude_canary)
+
+    exit_code = canary.main(
+        [
+            "--provider",
+            "claude",
+            "--claude-run-real-print",
+            "--evidence-root",
+            str(evidence_root),
+            "--artifact",
+            str(artifact),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(artifact.read_text())
+    retained = payload["canaries"]["claude"]
+    assert Path(retained["stdout_path"]) == (evidence_root / "native-sources/claude/stdout.jsonl").resolve()
+    assert Path(retained["stderr_path"]) == (evidence_root / "native-sources/claude/stderr.log").resolve()
+    assert Path(retained["stdout_path"]).is_file()
+    assert Path(retained["stderr_path"]).is_file()
+    assert not any("_cacache" in path.as_posix() for path in evidence_root.rglob("*"))
+    assert not observed["provider_root"].exists()
 
 
 def test_keep_work_root_preserves_the_scratch_tree_for_debugging(tmp_path, monkeypatch) -> None:
