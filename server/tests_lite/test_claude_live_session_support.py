@@ -11,9 +11,7 @@ from zerg.qa import claude_live_session_support as m
 from zerg.qa import managed_claude_live
 
 
-def test_launch_selects_workspace_trust_instead_of_default_exit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_launch_selects_workspace_trust_instead_of_default_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeSession:
         process = SimpleNamespace(returncode=None)
 
