@@ -646,14 +646,9 @@ pub(crate) async fn ship_prepared_envelope(
         // recovery existed only for the provider whose incident prompted it, and
         // every other provider's blocks were permanent by default.
         //
-        // Re-examination is a manifest fetch and a watermark comparison, not a
-        // re-POST of the frozen body: re-sending an envelope the host already
-        // rejected cannot succeed when the disagreement is about position.
-        //
-        // One exception, handled inside: a body the host called *invalid* does
-        // get re-POSTed, because that verdict can change under it (a schema
-        // rollout, a half-deployed validator) and quarantining without ever
-        // re-trying would make a temporary opinion permanent.
+        // Re-examination starts from current host manifests. Admission
+        // conflicts retry the exact frozen request to obtain typed evidence;
+        // human-readable block detail is never parsed as control state.
         if reexamine_blocked_source(
             conn,
             client,
@@ -892,16 +887,16 @@ async fn reconcile_storage_v2_conflict(
             // The 409 that caused all of it was discarded, which is why the
             // 2026-08-04 incident could not be root-caused after the fact.
             let block_detail = format!(
-                    "Runtime Host refused admission ({}: {}) and has no manifest for the source epoch. \
-                     Admission details: {}. Manifest probe: {}",
-                    conflict.code,
-                    conflict.message,
-                    conflict.response_body,
-                    error
-                        .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
-                        .expect("typed source-not-found checked above")
-                        .response_body
-                );
+                "Runtime Host refused admission ({}: {}) and has no manifest for the source epoch. \
+                 Admission response: {}. Manifest response: {}",
+                conflict.code,
+                conflict.message,
+                conflict.response_body,
+                error
+                    .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
+                    .expect("typed source-not-found checked above")
+                    .response_body
+            );
             let newly_blocked = pending_source_envelope::quarantine(
                 conn,
                 prepared.source_epoch,
@@ -1030,13 +1025,22 @@ async fn reexamine_blocked_source(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<bool> {
-    // A source the host has no epoch for cannot be resynced against anything;
-    // that path stays with the provider-specific handlers below.
-    if let Ok(manifest) = client
+    let manifest = match client
         .storage_v2_source_manifest(&prepared.source_epoch.to_string(), 0, Some(request_timeout))
         .await
     {
-        if resync_behind_host(conn, &pending.source_path, prepared, &manifest)?.is_some() {
+        Ok(manifest) => Some(manifest),
+        Err(error)
+            if error
+                .downcast_ref::<crate::shipping::client::StorageV2SourceNotFound>()
+                .is_some() =>
+        {
+            None
+        }
+        Err(error) => return Err(error),
+    };
+    if let Some(manifest) = manifest.as_ref() {
+        if resync_behind_host(conn, &pending.source_path, prepared, manifest)?.is_some() {
             return Ok(true);
         }
         if reconcile_admitted_epoch_predecessor(
@@ -1044,7 +1048,7 @@ async fn reexamine_blocked_source(
             client,
             pending,
             prepared,
-            &manifest,
+            manifest,
             request_timeout,
         )
         .await?
@@ -1052,39 +1056,15 @@ async fn reexamine_blocked_source(
             return Ok(true);
         }
     }
-    if reconcile_lost_local_epoch(
-        conn,
-        client,
-        pending,
-        prepared,
-        host_open_epoch_from_block_detail(pending.block_detail.as_deref()),
-        request_timeout,
-    )
-    .await?
-    {
-        return Ok(true);
-    }
-    if reconcile_replaced_host_predecessor(
-        conn,
-        client,
-        pending,
-        prepared,
-        host_closed_predecessor_from_block_detail(pending.block_detail.as_deref()),
-        request_timeout,
-    )
-    .await?
-    {
-        return Ok(true);
-    }
     if prepared.envelope.provider == "cursor"
         && (reconcile_blocked_cursor_replacement(conn, client, prepared, request_timeout).await?
             || reconcile_blocked_cursor_lineage(conn, client, prepared, request_timeout).await?)
     {
         return Ok(true);
     }
-    // A manifest miss proves this epoch has never been admitted. Retry the
-    // exact POST so a newer host can return structured admission evidence;
-    // older generic 409 text must not become a permanent local verdict.
+    // Retry the frozen request to obtain current, typed admission evidence.
+    // Human-readable block detail remains diagnostic output, never control
+    // state that must be parsed back into a conflict.
     if pending.block_kind.as_deref() == Some("source_epoch_conflict_unresolved") {
         match client
             .ship_storage_v2_body(
@@ -1107,31 +1087,32 @@ async fn reexamine_blocked_source(
                 return Ok(true);
             }
             Err(error) => {
-                if let Some(conflict) =
+                let Some(conflict) =
                     error.downcast_ref::<crate::shipping::client::StorageV2Conflict>()
+                else {
+                    return Err(error);
+                };
+                if reconcile_cross_provider_session_binding(conn, pending, prepared, conflict)?
+                    || reconcile_lost_local_epoch(
+                        conn,
+                        client,
+                        pending,
+                        prepared,
+                        host_open_epoch_from_conflict(conflict),
+                        request_timeout,
+                    )
+                    .await?
+                    || reconcile_replaced_host_predecessor(
+                        conn,
+                        client,
+                        pending,
+                        prepared,
+                        host_closed_predecessor_from_conflict(conflict),
+                        request_timeout,
+                    )
+                    .await?
                 {
-                    if reconcile_cross_provider_session_binding(conn, pending, prepared, conflict)?
-                        || reconcile_lost_local_epoch(
-                            conn,
-                            client,
-                            pending,
-                            prepared,
-                            host_open_epoch_from_conflict(conflict),
-                            request_timeout,
-                        )
-                        .await?
-                        || reconcile_replaced_host_predecessor(
-                            conn,
-                            client,
-                            pending,
-                            prepared,
-                            host_closed_predecessor_from_conflict(conflict),
-                            request_timeout,
-                        )
-                        .await?
-                    {
-                        return Ok(true);
-                    }
+                    return Ok(true);
                 }
             }
         }
@@ -1196,10 +1177,6 @@ fn host_open_epoch_from_conflict(
     Uuid::parse_str(epochs[0].as_str()?).ok()
 }
 
-fn host_open_epoch_from_block_detail(detail: Option<&str>) -> Option<Uuid> {
-    host_open_epoch_from_conflict(&conflict_from_block_detail(detail)?)
-}
-
 fn host_closed_predecessor_from_conflict(
     conflict: &crate::shipping::client::StorageV2Conflict,
 ) -> Option<Uuid> {
@@ -1217,27 +1194,6 @@ fn host_closed_predecessor_from_conflict(
         return None;
     }
     Uuid::parse_str(conflict.details.get("expected_predecessor")?.as_str()?).ok()
-}
-
-fn host_closed_predecessor_from_block_detail(detail: Option<&str>) -> Option<Uuid> {
-    host_closed_predecessor_from_conflict(&conflict_from_block_detail(detail)?)
-}
-
-fn conflict_from_block_detail(
-    detail: Option<&str>,
-) -> Option<crate::shipping::client::StorageV2Conflict> {
-    let admission = detail?
-        .split_once("Admission details: ")?
-        .1
-        .split_once(". Manifest probe:")?
-        .0;
-    let response: serde_json::Value = serde_json::from_str(admission).ok()?;
-    Some(crate::shipping::client::StorageV2Conflict {
-        code: response.pointer("/detail/code")?.as_str()?.to_string(),
-        message: response.pointer("/detail/message")?.as_str()?.to_string(),
-        details: response.pointer("/detail/details")?.clone(),
-        response_body: admission.to_string(),
-    })
 }
 
 async fn reconcile_admitted_epoch_predecessor(
@@ -1664,8 +1620,11 @@ async fn reconcile_lost_local_epoch(
     Ok(true)
 }
 
-/// Follow a host replacement chain when the predecessor recovered on an
-/// earlier pass has already closed.
+/// Advance once when a recovered host predecessor has been replaced.
+///
+/// Only the single replacement shape supported by the local marker transaction
+/// is accepted. Deeper history stays blocked instead of triggering an
+/// unbounded manifest walk.
 async fn reconcile_replaced_host_predecessor(
     conn: &mut Connection,
     client: &ShipperClient,
@@ -1685,58 +1644,47 @@ async fn reconcile_replaced_host_predecessor(
     }
 
     let envelope = &prepared.envelope;
-    let mut chain = Vec::new();
-    let mut epoch = closed_predecessor;
-    let mut previous = None;
-    let open_manifest = loop {
-        if chain.len() >= 32 {
-            return Ok(false);
-        }
-        let manifest = client
-            .storage_v2_source_manifest(&epoch.to_string(), 0, Some(request_timeout))
-            .await?;
-        let hosted = &manifest.source_epoch;
-        if manifest.v != 2
-            || hosted.source_epoch != epoch.to_string()
-            || hosted.tenant_id != envelope.tenant_id
-            || hosted.machine_id != envelope.machine_id
-            || hosted.provider != envelope.provider
-            || hosted.opaque_source_id != envelope.opaque_source_id
-            || hosted.range_kind != envelope.range_kind
-            || previous.is_some_and(|previous: Uuid| {
-                hosted
-                    .predecessor_source_epoch
-                    .as_deref()
-                    .and_then(|value| Uuid::parse_str(value).ok())
-                    != Some(previous)
-            })
-        {
-            return Ok(false);
-        }
-        chain.push(epoch);
-        if hosted.state == "open" && hosted.replaced_by_source_epoch.is_none() {
-            break manifest;
-        }
-        if hosted.state != "closed" {
-            return Ok(false);
-        }
-        let Some(replacement) = hosted.replaced_by_source_epoch.as_deref() else {
-            return Ok(false);
-        };
-        let Ok(replacement) = Uuid::parse_str(replacement) else {
-            return Ok(false);
-        };
-        if chain.contains(&replacement) {
-            return Ok(false);
-        }
-        previous = Some(epoch);
-        epoch = replacement;
+    let closed_manifest = client
+        .storage_v2_source_manifest(&closed_predecessor.to_string(), 0, Some(request_timeout))
+        .await?;
+    let closed = &closed_manifest.source_epoch;
+    let Some(open_predecessor) = closed
+        .replaced_by_source_epoch
+        .as_deref()
+        .and_then(|value| Uuid::parse_str(value).ok())
+    else {
+        return Ok(false);
     };
+    if closed_manifest.v != 2
+        || closed.source_epoch != closed_predecessor.to_string()
+        || closed.tenant_id != envelope.tenant_id
+        || closed.machine_id != envelope.machine_id
+        || closed.provider != envelope.provider
+        || closed.opaque_source_id != envelope.opaque_source_id
+        || closed.range_kind != envelope.range_kind
+        || closed.state != "closed"
+    {
+        return Ok(false);
+    }
+    let open_manifest = client
+        .storage_v2_source_manifest(&open_predecessor.to_string(), 0, Some(request_timeout))
+        .await?;
     let hosted = &open_manifest.source_epoch;
-    let open_predecessor = Uuid::parse_str(&hosted.source_epoch)?;
-    if open_predecessor == closed_predecessor
+    if open_manifest.v != 2
+        || hosted.source_epoch != open_predecessor.to_string()
+        || hosted.tenant_id != envelope.tenant_id
+        || hosted.machine_id != envelope.machine_id
+        || hosted.provider != envelope.provider
+        || hosted.opaque_source_id != envelope.opaque_source_id
+        || hosted.range_kind != envelope.range_kind
+        || hosted
+            .predecessor_source_epoch
+            .as_deref()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            != Some(closed_predecessor)
+        || hosted.state != "open"
+        || hosted.replaced_by_source_epoch.is_some()
         || open_manifest.objects.is_empty()
-        || chain.len() != 2
     {
         return Ok(false);
     }
@@ -1759,9 +1707,9 @@ async fn reconcile_replaced_host_predecessor(
         "v": 1,
         "requested_source_epoch": prepared.source_epoch.to_string(),
         "stale_host_predecessor": closed_predecessor.to_string(),
-        "host_replacement_chain": chain.iter().map(Uuid::to_string).collect::<Vec<_>>(),
         "host_open_source_epoch": open_predecessor.to_string(),
         "host_accepted_through": hosted.accepted_through,
+        "closed_host_commit_seq": closed_manifest.commit_seq,
         "host_commit_seq": open_manifest.commit_seq,
         "identity": {
             "tenant_id": hosted.tenant_id,
@@ -1788,7 +1736,7 @@ async fn reconcile_replaced_host_predecessor(
         stale_predecessor = %closed_predecessor,
         open_predecessor = %open_predecessor,
         accepted_through,
-        "Advanced recovered predecessor through Runtime Host replacement chain"
+        "Advanced recovered predecessor to its Runtime Host replacement"
     );
     Ok(true)
 }

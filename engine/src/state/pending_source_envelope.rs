@@ -1135,12 +1135,14 @@ pub fn attach_host_authority_predecessor(
     let previous_predecessor = local.6.clone();
     if let Some(previous) = previous_predecessor.as_deref() {
         if previous != host_predecessor.to_string() {
-            let stale_local: Option<(String, String, Option<String>, Option<i64>, i64)> = tx
+            let stale_local: Option<(String, String, Option<String>, Option<i64>, i64, i64)> = tx
                 .query_row(
                     "SELECT registry.provider, registry.opaque_source_id, registry.ended_at,
                             lane.last_position,
                             EXISTS(SELECT 1 FROM pending_source_envelope AS pending
-                                   WHERE pending.source_epoch = registry.source_epoch)
+                                   WHERE pending.source_epoch = registry.source_epoch),
+                            EXISTS(SELECT 1 FROM cursor_store_raw_record AS raw
+                                   WHERE raw.source_epoch = registry.source_epoch)
                      FROM source_epoch_registry AS registry
                      LEFT JOIN source_epoch_lane_state AS lane
                        ON lane.source_epoch = registry.source_epoch AND lane.lane = 'durable'
@@ -1153,11 +1155,13 @@ pub fn attach_host_authority_predecessor(
                             row.get(2)?,
                             row.get(3)?,
                             row.get(4)?,
+                            row.get(5)?,
                         ))
                     },
                 )
                 .optional()?;
-            let Some((provider, opaque_source_id, ended_at, position, has_pending)) = stale_local
+            let Some((provider, opaque_source_id, ended_at, position, has_pending, has_raw)) =
+                stale_local
             else {
                 bail!("local predecessor is unavailable for host-authority replacement");
             };
@@ -1166,8 +1170,9 @@ pub fn attach_host_authority_predecessor(
                 || ended_at.is_none()
                 || position != Some(0)
                 || has_pending != 0
+                || has_raw != 0
             {
-                bail!("local predecessor is not an ended zero-progress epoch");
+                bail!("local predecessor is not an empty ended zero-progress epoch");
             }
         }
     } else if local.7 != "initial" {
@@ -2059,6 +2064,32 @@ mod tests {
         )
         .unwrap();
         let pending = super::load_for_epoch(&conn, current).unwrap().unwrap();
+
+        crate::state::cursor_store_records::append_unseen_cursor_records(
+            &mut conn,
+            stale,
+            &[b"retained".to_vec()],
+        )
+        .unwrap();
+        let error = attach_host_authority_predecessor(
+            &mut conn,
+            current,
+            host,
+            78,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            b"replacement-body",
+            r#"{"proof":"host manifest"}"#,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("local predecessor is not an empty ended zero-progress epoch"));
+        conn.execute(
+            "DELETE FROM cursor_store_raw_record WHERE source_epoch = ?1",
+            [stale.to_string()],
+        )
+        .unwrap();
 
         attach_host_authority_predecessor(
             &mut conn,
