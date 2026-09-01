@@ -1496,9 +1496,7 @@ async fn reconcile_lost_local_epoch(
     let Some(host_epoch) = host_epoch else {
         return Ok(false);
     };
-    if prepared.envelope.predecessor_source_epoch.is_some()
-        || pending.block_kind.as_deref() != Some("source_epoch_conflict_unresolved")
-    {
+    if pending.block_kind.as_deref() != Some("source_epoch_conflict_unresolved") {
         return Ok(false);
     }
     let manifest = client
@@ -7252,8 +7250,10 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let host_epoch = Uuid::new_v4();
         let replacement_host_epoch = Uuid::new_v4();
+        let stale_local_epoch = Uuid::new_v4();
         let expected_host_epoch = host_epoch;
         let expected_replacement_host_epoch = replacement_host_epoch;
+        let expected_stale_local_epoch = stale_local_epoch;
         let server = tokio::spawn(async move {
             let mut original: Option<StorageV2Envelope> = None;
             for request_index in 0..11 {
@@ -7262,10 +7262,14 @@ mod tests {
                 let (status, response_body) = match request_index {
                     0 | 3 => {
                         let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
-                        assert!(envelope.predecessor_source_epoch.is_none());
                         if request_index == 0 {
+                            assert!(envelope.predecessor_source_epoch.is_none());
                             assert!(envelope.range_start > 0);
                         } else {
+                            assert_eq!(
+                                envelope.predecessor_source_epoch.as_deref(),
+                                Some(expected_stale_local_epoch.to_string().as_str())
+                            );
                             assert_eq!(envelope.range_start, 0);
                         }
                         original = Some(envelope);
@@ -7502,6 +7506,41 @@ mod tests {
         .unwrap();
         assert_eq!(rewound.bytes_shipped, 0);
         assert!(rewound.has_more);
+
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 predecessor_epoch, start_reason, max_observed_len,
+                 source_revision, bound_session_id, created_at, updated_at,
+                 ended_at, end_reason
+             ) SELECT ?1, provider, opaque_source_id, file_incarnation,
+                      predecessor_epoch, 'truncation', max_observed_len,
+                      source_revision, bound_session_id, created_at, updated_at,
+                      updated_at, 'truncation'
+               FROM source_epoch_registry WHERE source_epoch = ?2",
+            params![
+                stale_local_epoch.to_string(),
+                locally_acked.source_epoch.to_string()
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (
+                 source_epoch, lane, last_position, updated_at
+             ) VALUES (?1, 'durable', 0, '2026-08-31T00:00:00Z')",
+            [stale_local_epoch.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE source_epoch_registry
+             SET predecessor_epoch = ?1, start_reason = 'truncation'
+             WHERE source_epoch = ?2",
+            params![
+                stale_local_epoch.to_string(),
+                locally_acked.source_epoch.to_string()
+            ],
+        )
+        .unwrap();
 
         let recovered = ship_next_envelope(
             &mut conn,
