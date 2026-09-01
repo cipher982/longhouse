@@ -80,6 +80,8 @@ def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path
         assert e2e_args.turn_boundary_only is True
         assert e2e_args.longhouse_bin == str(args.longhouse_cli)
         assert e2e_args.engine_bin == str(args.engine)
+        assert e2e_args.api_url == args.api_url
+        assert e2e_args.agents_token == args.agents_token
         e2e_args.artifact_root.mkdir(parents=True)
         (e2e_args.artifact_root / "terminal.raw").write_bytes(
             b"head-marker" + (b"x" * (128 * 1024)) + b"tail-marker"

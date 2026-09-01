@@ -180,6 +180,8 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             model=(args.model or os.environ.get("CURSOR_MODEL", "").strip() or _DEFAULT_CURSOR_MODEL),
             longhouse_bin=str(args.longhouse_cli),
             engine_bin=str(args.engine),
+            api_url=args.api_url,
+            agents_token=args.agents_token,
             turn_boundary_only=True,
             # The Machine Agent restart leg is launchctl/macOS-only
             # (_restart_machine_agent raises outright on Linux). The
