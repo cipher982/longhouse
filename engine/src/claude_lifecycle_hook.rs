@@ -219,6 +219,11 @@ mod tests {
     use super::*;
 
     /// Serialized because these mutate process-wide environment.
+    // Poison-tolerant on purpose: every mutation under this lock is made through an
+    // RAII guard whose Drop restores the previous value, and Drop runs while unwinding.
+    // So a panicking test leaves the environment clean, and the poison flag carries no
+    // information -- it only converts one real failure into a wall of PoisonError noise
+    // from every other test that shares the lock.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn with_provider<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {

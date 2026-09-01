@@ -4341,7 +4341,7 @@ mod tests {
 
     #[test]
     fn fresh_cursor_source_waits_for_launch_reservation_before_materializing_shadow() {
-        let _guard = CURSOR_BINDING_ENV_LOCK.lock().unwrap();
+        let _guard = CURSOR_BINDING_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().unwrap();
         let state_root = dir
             .path()

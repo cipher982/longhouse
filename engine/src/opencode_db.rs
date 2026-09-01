@@ -1476,6 +1476,11 @@ mod tests {
     use super::*;
     use base64::{engine::general_purpose, Engine as _};
 
+    // Poison-tolerant on purpose: every mutation under this lock is made through an
+    // RAII guard whose Drop restores the previous value, and Drop runs while unwinding.
+    // So a panicking test leaves the environment clean, and the poison flag carries no
+    // information -- it only converts one real failure into a wall of PoisonError noise
+    // from every other test that shares the lock.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvGuard {
@@ -1863,7 +1868,7 @@ mod tests {
 
     #[test]
     fn parse_opencode_session_reads_hatch_origin_sidecar_from_metadata_root() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("opencode.db");
         create_fixture_db(&db_path);

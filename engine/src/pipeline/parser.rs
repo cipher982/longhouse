@@ -3413,6 +3413,7 @@ mod tests {
             .is_none());
     }
 
+    #[test]
     fn test_parse_claude_sidechain_parentage() {
         let dir = tempfile::tempdir().unwrap();
         let parent_id = "f6a553e2-8aca-49c4-9823-3b3d8690fd2e";

@@ -2730,6 +2730,11 @@ mod tests {
 
     const COMMAND_LAUNCH: &str = "session.launch";
 
+    // Poison-tolerant on purpose: every mutation under this lock is made through an
+    // RAII guard whose Drop restores the previous value, and Drop runs while unwinding.
+    // So a panicking test leaves the environment clean, and the poison flag carries no
+    // information -- it only converts one real failure into a wall of PoisonError noise
+    // from every other test that shares the lock.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn command_cache() -> CompletedCommandCache {
@@ -3060,7 +3065,7 @@ mod tests {
 
     #[test]
     fn control_channel_status_tracks_connection_state() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let status = new_control_channel_status();
         assert_eq!(status.snapshot().enabled, false);
         assert_eq!(status.snapshot().status, "disabled");
@@ -3697,7 +3702,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_claude_control_natively() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::tempdir().unwrap();
         let (port, mut rx) = spawn_claude_inject_server().await;
         let session_id = "11111111-1111-4111-8111-111111111111";
@@ -3780,7 +3785,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_antigravity_send_through_the_hook_inbox() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let unique = format!(
             "lh-antigravity-send-{}-{}",
             std::process::id(),
@@ -3835,7 +3840,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_opencode_send_through_native_control() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::TempDir::new().unwrap();
         let empty_path = temp.path().join("empty-path");
         let config_dir = temp.path().join("claude-config");
@@ -3892,7 +3897,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_opencode_interrupt_through_native_control() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::TempDir::new().unwrap();
         let empty_path = temp.path().join("empty-path");
         let config_dir = temp.path().join("claude-config");
@@ -3943,7 +3948,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_opencode_terminate_through_native_control() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::TempDir::new().unwrap();
         let empty_path = temp.path().join("empty-path");
         let config_dir = temp.path().join("claude-config");
@@ -4008,7 +4013,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_provider_live_proof_without_session_id() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let unique = format!(
             "lh-provider-live-proof-{}-{}",
             std::process::id(),
@@ -4106,7 +4111,7 @@ exit 0
 
     #[tokio::test]
     async fn provider_live_proof_rejects_expected_version_mismatch() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let unique = format!(
             "lh-provider-live-proof-version-mismatch-{}-{}",
             std::process::id(),
@@ -4172,7 +4177,7 @@ exit 0
 
     #[tokio::test]
     async fn provider_live_proof_returns_valid_red_artifact_as_command_success() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let unique = format!(
             "lh-provider-live-proof-red-{}-{}",
             std::process::id(),
@@ -4391,7 +4396,7 @@ exit 1
 
     #[test]
     fn opencode_console_turn_start_uses_stock_run_and_resumes_native_session() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let temp = tempfile::TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
@@ -4490,7 +4495,7 @@ exit 1
 
     #[test]
     fn claude_console_turn_start_is_bounded_bound_and_natively_resumable() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let temp = tempfile::TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");

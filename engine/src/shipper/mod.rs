@@ -4561,7 +4561,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ship_opencode_database_persists_managed_session_binding() {
-        let _lock = OPENCODE_STATE_ROOT_ENV_LOCK.lock().unwrap();
+        let _lock = OPENCODE_STATE_ROOT_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("opencode.db");
         create_opencode_fixture_db(&db_path);

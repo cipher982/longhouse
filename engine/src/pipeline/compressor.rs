@@ -523,6 +523,11 @@ mod tests {
     use chrono::Utc;
     use flate2::read::GzDecoder;
 
+    // Poison-tolerant on purpose: every mutation under this lock is made through an
+    // RAII guard whose Drop restores the previous value, and Drop runs while unwinding.
+    // So a panicking test leaves the environment clean, and the poison flag carries no
+    // information -- it only converts one real failure into a wall of PoisonError noise
+    // from every other test that shares the lock.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvGuard {
@@ -642,7 +647,7 @@ mod tests {
 
     #[test]
     fn test_build_payload_includes_hatch_origin_env_without_legacy_sidechain() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _origin = EnvGuard::set("LONGHOUSE_ORIGIN_KIND", "hatch-automation");
         let _run = EnvGuard::set("LONGHOUSE_HATCH_RUN_ID", "hatch-run-1");
         let _parent_session = EnvGuard::set(
@@ -687,7 +692,7 @@ mod tests {
 
     #[test]
     fn test_build_payload_includes_hatch_origin_from_parser_metadata() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _origin = EnvGuard::remove("LONGHOUSE_ORIGIN_KIND");
         let _run = EnvGuard::remove("LONGHOUSE_HATCH_RUN_ID");
         let _parent_session = EnvGuard::remove("LONGHOUSE_PARENT_SESSION_ID");
@@ -731,7 +736,7 @@ mod tests {
 
     #[test]
     fn test_build_payload_includes_launch_provenance_from_env() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _origin = EnvGuard::remove("LONGHOUSE_ORIGIN_KIND");
         let _actor = EnvGuard::set("LONGHOUSE_LAUNCH_ACTOR", "human-shell");
         let _surface = EnvGuard::set("LONGHOUSE_LAUNCH_SURFACE", "terminal");
@@ -758,7 +763,7 @@ mod tests {
 
     #[test]
     fn test_hidden_origin_suppresses_inherited_human_launch_provenance() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _origin = EnvGuard::set("LONGHOUSE_ORIGIN_KIND", "hatch_automation");
         let _actor = EnvGuard::set("LONGHOUSE_LAUNCH_ACTOR", "human_shell");
         let _surface = EnvGuard::set("LONGHOUSE_LAUNCH_SURFACE", "terminal");
@@ -786,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_sidechain_suppresses_inherited_human_launch_provenance() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _origin = EnvGuard::remove("LONGHOUSE_ORIGIN_KIND");
         let _actor = EnvGuard::set("LONGHOUSE_LAUNCH_ACTOR", "human_shell");
         let _surface = EnvGuard::set("LONGHOUSE_LAUNCH_SURFACE", "terminal");
