@@ -1,15 +1,4 @@
-"""Guards for the retirement of ``AgentsStore``, the legacy in-process data path.
-
-Two separate claims live here.
-
-1. No Runtime Host route reaches ``AgentsStore`` any more. What is left is a
-   frozen allowlist of modules that only the QA harness and the demo image
-   build can reach; adding a new consumer, or reaching one from a router, has
-   to fail here rather than quietly re-growing the legacy path.
-2. ``latest_durable_head_event_id`` -- the query that replaced
-   ``AgentsStore.get_latest_event_id`` on the managed-local control path --
-   still scopes to the head branch and still ignores provisional events.
-"""
+"""Guards for the deleted v1 store and its durable-head replacement query."""
 
 from __future__ import annotations
 
@@ -36,29 +25,6 @@ from zerg.services.managed_local_event_polling import latest_durable_head_event_
 
 _SERVER_ZERG = Path(__file__).resolve().parents[1] / "zerg"
 
-# Every file under server/zerg/ still allowed to name ``AgentsStore``.
-#
-# ``services/agents/`` is the store itself. The other four service modules hold
-# functions that are now reachable only from ``qa/universal_agent_harness.py``:
-# its ``db_ingest_project`` scenario still proves ingest through
-# ``AgentsStore.ingest_session``, a write path production answers 426 for.
-# ``services/demo_seed.py`` writes the legacy corpus at image build time.
-# Both are pending owner decisions; when either lands, delete its entry here
-# rather than widening the set.
-_ALLOWED_AGENTS_STORE_FILES = frozenset(
-    {
-        "qa/universal_agent_harness.py",
-        "services/agents/__init__.py",
-        "services/agents/store.py",
-        "services/demo_seed.py",
-        "services/session_listing.py",
-        "services/session_response_projection.py",
-        "services/session_views.py",
-        "services/timeline_session_listing.py",
-    }
-)
-
-
 def _files_naming_agents_store() -> set[str]:
     found: set[str] = set()
     for path in _SERVER_ZERG.rglob("*.py"):
@@ -67,19 +33,9 @@ def _files_naming_agents_store() -> set[str]:
     return found
 
 
-def test_agents_store_consumers_are_a_frozen_allowlist():
-    actual = _files_naming_agents_store()
-
-    new_consumers = sorted(actual - _ALLOWED_AGENTS_STORE_FILES)
-    assert new_consumers == [], f"new AgentsStore consumers must not be added: {new_consumers}"
-
-    retired = sorted(_ALLOWED_AGENTS_STORE_FILES - actual)
-    assert retired == [], f"these files no longer use AgentsStore; drop them from the allowlist: {retired}"
-
-
-def test_no_router_names_agents_store():
-    routers = {name for name in _files_naming_agents_store() if name.startswith("routers/")}
-    assert routers == set(), f"/api routes must not reach the legacy store: {sorted(routers)}"
+def test_agents_store_is_deleted_and_has_no_consumers():
+    assert not (_SERVER_ZERG / "services" / "agents" / "store.py").exists()
+    assert _files_naming_agents_store() == set()
 
 
 def _make_db(tmp_path):

@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 265,
+  "file_count": 251,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -704,22 +704,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_agents_duplicate_sqlite.py",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
-        "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_agents_ingest_sqlite.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_agents_media.py",
       "providers": [
         "codex",
@@ -952,13 +936,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_hatch_automation_origin.py",
-      "providers": [
-        "cursor",
-        "opencode"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_heartbeat_endpoint.py",
       "providers": [
         "antigravity",
@@ -966,20 +943,6 @@
         "codex",
         "cursor",
         "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_ingest_export_roundtrip.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_ingest_session_counts.py",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {
@@ -1339,13 +1302,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_rewind_branch_projection.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_search_coverage_scope.py",
       "providers": [
         "claude",
@@ -1424,21 +1380,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_session_launch_provenance.py",
-      "providers": [
-        "claude",
-        "codex",
-        "opencode"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_session_listing_canary_filter.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_session_live_previews.py",
       "providers": [
         "codex",
@@ -1448,13 +1389,6 @@
     },
     {
       "path": "server/tests_lite/test_session_loop_mode.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_session_observation_rebuild.py",
       "providers": [
         "claude",
         "codex"
@@ -1554,13 +1488,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_source_line_roundtrip.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_sqlite_migration_guard.py",
       "providers": [
         "codex",
@@ -1611,14 +1538,6 @@
       ]
     },
     {
-      "path": "server/tests_lite/test_subagent_thread_ingest.py",
-      "providers": [
-        "claude",
-        "codex",
-        "opencode"
-      ]
-    },
-    {
       "path": "server/tests_lite/test_telemetry_beacon.py",
       "providers": [
         "claude",
@@ -1628,13 +1547,6 @@
     },
     {
       "path": "server/tests_lite/test_timeline_api_auth_boundary.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_timeline_runtime_overlay.py",
       "providers": [
         "claude",
         "codex"
@@ -1692,13 +1604,6 @@
     },
     {
       "path": "server/tests_lite/test_workspace_stream.py",
-      "providers": [
-        "claude",
-        "codex"
-      ]
-    },
-    {
-      "path": "server/tests_lite/test_workspace_suggestions.py",
       "providers": [
         "claude",
         "codex"
@@ -1937,14 +1842,6 @@
       "providers": [
         "antigravity",
         "codex"
-      ]
-    },
-    {
-      "path": "server/zerg/services/agents/store.py",
-      "providers": [
-        "claude",
-        "codex",
-        "opencode"
       ]
     },
     {

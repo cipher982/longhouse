@@ -35,6 +35,7 @@ os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from tests_lite.agents_fixture import SessionFixtureStore
 from tests_lite.live_catalog_harness import LiveCatalog
 from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
@@ -51,7 +52,6 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
-from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -306,7 +306,7 @@ def _seed_codex_session(session_local):
         db.commit()
         db.refresh(user)
 
-        store = AgentsStore(db)
+        store = SessionFixtureStore(db)
         started_at = datetime.now(timezone.utc)
         store.ingest_session(
             SessionIngest(

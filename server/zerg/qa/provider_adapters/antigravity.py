@@ -283,7 +283,7 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
         session_projection_data = dict(live_artifact.get("session_projection") or {})
         provider_session_id = str(session_projection_data.get("provider_session_id") or self._session_id(package))
         raw_events = antigravity_provider_live_raw_events(live_artifact, provider_session_id=provider_session_id)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -291,8 +291,8 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
         )
 
         live_verdict = str(live_artifact.get("verdict") or "red")
-        db_verdict = str(db_ingest.get("status") or STATUS_FAIL)
-        status = STATUS_PASS if live_verdict == "green" and db_verdict == STATUS_PASS else STATUS_FAIL
+        projection_verdict = str(projection_check.get("status") or STATUS_FAIL)
+        status = STATUS_PASS if live_verdict == "green" and projection_verdict == STATUS_PASS else STATUS_FAIL
         payload = {
             **projection,
             "status": status,
@@ -304,15 +304,15 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": live_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         launch_status = str((operation_evidence.get("launch_local") or {}).get("status") or STATUS_FAIL)
         if live_verdict != "green":
             payload["failure_code"] = live_artifact.get("failure_code") or "provider_live_canary_failed"
             payload["message"] = "Antigravity provider-live no-token canary did not pass."
-        elif db_verdict != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "launch_managed_session_db_ingest_failed"
-            payload["message"] = "Antigravity provider-live evidence did not pass Longhouse DB ingest assertions."
+        elif projection_verdict != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "launch_managed_session_projection_check_failed"
+            payload["message"] = "Antigravity provider-live evidence did not pass canonical provider projection assertions."
         elif launch_status != STATUS_PASS:
             payload["status"] = STATUS_FAIL
             payload["failure_code"] = "antigravity_launch_local_evidence_missing"
@@ -339,8 +339,8 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
             if isinstance(evidence, Mapping)
         }
         external_status = str((operation_evidence.get("external_event_channel") or {}).get("status") or STATUS_FAIL)
-        db_status = str(((payload.get("longhouse_ingest") or {}).get("status")) or STATUS_FAIL)
-        passed = external_status == STATUS_PASS and db_status == STATUS_PASS
+        projection_status = str(((payload.get("canonical_projection") or {}).get("status")) or STATUS_FAIL)
+        passed = external_status == STATUS_PASS and projection_status == STATUS_PASS
         payload["status"] = STATUS_PASS if passed else STATUS_FAIL
         payload["scenario"] = "external_event_channel"
         if passed:
@@ -391,7 +391,7 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = antigravity_real_send_operation_evidence(antigravity)
         raw_events = antigravity_real_send_raw_events(antigravity)
         provider_session_id = str(antigravity.get("session_id") or self._session_id(package))
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -401,13 +401,13 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
         verdict = str(control_artifact.get("verdict") or "red")
         send_status = str((operation_evidence.get("send_input") or {}).get("status") or STATUS_FAIL)
         live_status = str((operation_evidence.get("live_token_behavior") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
         passed = all(
             (
                 verdict == "green",
                 send_status == STATUS_PASS,
                 live_status == STATUS_PASS,
-                db_status == STATUS_PASS,
+                projection_status == STATUS_PASS,
             )
         )
         payload = {
@@ -421,15 +421,15 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": "provider_control_e2e_canary",
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if verdict != "green" or send_status != STATUS_PASS or live_status != STATUS_PASS:
             failure_code = control_artifact.get("failure_code") or antigravity.get("failure_code")
             payload["failure_code"] = failure_code or "antigravity_live_token_streaming_failed"
             payload["message"] = "Antigravity real-agy send canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "live_token_streaming_db_ingest_failed"
-            payload["message"] = "Antigravity live-token evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "live_token_streaming_projection_check_failed"
+            payload["message"] = "Antigravity live-token evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/live_token_streaming.json", payload)
         return payload
 
@@ -449,7 +449,7 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
         raw_events = antigravity_control_raw_events(antigravity)
         provider_session_id = str(antigravity.get("session_id") or self._session_id(package))
         operation_evidence = antigravity_control_operation_evidence(antigravity)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -458,8 +458,8 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
 
         verdict = str(control_artifact.get("verdict") or "red")
         canary_status = str(antigravity.get("status") or "fail")
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
-        passed = verdict == "green" and canary_status == "pass" and db_status == STATUS_PASS
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and canary_status == "pass" and projection_status == STATUS_PASS
         payload = {
             **projection,
             "status": STATUS_PASS if passed else STATUS_FAIL,
@@ -470,13 +470,13 @@ class AntigravityHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": "provider_control_e2e_canary",
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if canary_status != "pass":
             payload["failure_code"] = antigravity.get("failure_code") or control_artifact.get("failure_code")
             payload["message"] = "Antigravity hook/inbox provider-control canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
-            payload["message"] = "Antigravity hook/inbox evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "managed_session_e2e_projection_check_failed"
+            payload["message"] = "Antigravity hook/inbox evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
         return payload

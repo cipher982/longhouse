@@ -685,7 +685,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = claude_channel_control_operation_evidence(claude)
         raw_events = claude_channel_control_raw_events(claude)
         provider_session_id = _first_claude_control_session_id(claude) or self._session_id(package)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -694,8 +694,8 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
 
         verdict = str(control_artifact.get("verdict") or "red")
         interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
-        passed = verdict == "green" and interrupt_status == STATUS_PASS and db_status == STATUS_PASS
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and interrupt_status == STATUS_PASS and projection_status == STATUS_PASS
         payload = {
             **projection,
             "status": STATUS_PASS if passed else STATUS_FAIL,
@@ -706,15 +706,15 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": "provider_control_e2e_canary",
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if verdict != "green" or interrupt_status != STATUS_PASS:
             failure_code = control_artifact.get("failure_code") or claude.get("failure_code")
             payload["failure_code"] = failure_code or "claude_interrupt_cancel_failed"
             payload["message"] = "Claude channel interrupt canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "interrupt_cancel_db_ingest_failed"
-            payload["message"] = "Claude interrupt evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "interrupt_cancel_projection_check_failed"
+            payload["message"] = "Claude interrupt evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/interrupt_cancel.json", payload)
         return payload
 
@@ -726,9 +726,9 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             if isinstance(evidence, Mapping)
         }
         steer_status = str((operation_evidence.get("steer_active_turn") or {}).get("status") or STATUS_FAIL)
-        db_status = str(((payload.get("longhouse_ingest") or {}).get("status")) or STATUS_FAIL)
+        projection_status = str(((payload.get("canonical_projection") or {}).get("status")) or STATUS_FAIL)
         verdict = str(payload.get("provider_control_verdict") or "red")
-        passed = verdict == "green" and steer_status == STATUS_PASS and db_status == STATUS_PASS
+        passed = verdict == "green" and steer_status == STATUS_PASS and projection_status == STATUS_PASS
         payload["status"] = STATUS_PASS if passed else STATUS_FAIL
         payload["scenario"] = "steer_active_turn"
         if passed:
@@ -738,8 +738,8 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             payload["failure_code"] = payload.get("failure_code") or "claude_steer_active_turn_failed"
             payload["message"] = "Claude channel steer canary did not pass."
         else:
-            payload["failure_code"] = payload.get("failure_code") or "steer_active_turn_db_ingest_failed"
-            payload["message"] = "Claude steer evidence did not pass Longhouse DB ingest assertions."
+            payload["failure_code"] = payload.get("failure_code") or "steer_active_turn_projection_check_failed"
+            payload["message"] = "Claude steer evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/steer_active_turn.json", payload)
         return payload
 
@@ -873,7 +873,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = claude_real_print_operation_evidence(claude)
         raw_events = claude_real_print_raw_events(claude)
         provider_session_id = _first_claude_control_session_id(claude) or self._session_id(package)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -882,8 +882,8 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
 
         verdict = str(control_artifact.get("verdict") or "red")
         live_status = str((operation_evidence.get("live_token_behavior") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
-        passed = verdict == "green" and live_status == STATUS_PASS and db_status == STATUS_PASS
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and live_status == STATUS_PASS and projection_status == STATUS_PASS
         payload = {
             **projection,
             "status": STATUS_PASS if passed else STATUS_FAIL,
@@ -895,7 +895,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": "provider_control_e2e_canary",
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if model_evidence := claude_real_print_model_evidence(claude):
             payload["live_model_evidence"] = model_evidence
@@ -903,9 +903,9 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             failure_code = control_artifact.get("failure_code") or claude.get("failure_code")
             payload["failure_code"] = failure_code or "claude_live_token_streaming_failed"
             payload["message"] = "Claude real-print live-token canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "live_token_streaming_db_ingest_failed"
-            payload["message"] = "Claude live-token evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "live_token_streaming_projection_check_failed"
+            payload["message"] = "Claude live-token evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/live_token_streaming.json", payload)
         return payload
 
@@ -946,7 +946,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = claude_provider_live_operation_evidence(live_artifact)
         provider_session_id = str(live_artifact.get("provider_session_id") or self._session_id(package))
         raw_events = claude_provider_live_raw_events(live_artifact, provider_session_id=provider_session_id)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -954,9 +954,9 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         )
 
         live_verdict = str(live_artifact.get("verdict") or "red")
-        db_verdict = str(db_ingest.get("status") or STATUS_FAIL)
-        status = STATUS_PASS if live_verdict == "green" and db_verdict == STATUS_PASS else STATUS_FAIL
-        if live_verdict == "yellow" and db_verdict == STATUS_PASS:
+        projection_verdict = str(projection_check.get("status") or STATUS_FAIL)
+        status = STATUS_PASS if live_verdict == "green" and projection_verdict == STATUS_PASS else STATUS_FAIL
+        if live_verdict == "yellow" and projection_verdict == STATUS_PASS:
             status = STATUS_BLOCKED
         payload = {
             **projection,
@@ -969,7 +969,7 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": live_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if live_verdict == "red":
             payload["failure_code"] = live_artifact.get("failure_code") or "provider_live_canary_failed"
@@ -977,9 +977,9 @@ class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
         elif live_verdict == "yellow":
             payload["failure_code"] = live_artifact.get("failure_code") or "claude_provider_live_unconfirmed"
             payload["message"] = "Claude provider-live no-token canary is recognized but not fully confirmed."
-        elif db_verdict != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or f"{scenario}_db_ingest_failed"
-            payload["message"] = "Claude provider-live evidence did not pass Longhouse DB ingest assertions."
+        elif projection_verdict != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or f"{scenario}_projection_check_failed"
+            payload["message"] = "Claude provider-live evidence did not pass canonical provider projection assertions."
         if require_operation and status == STATUS_PASS:
             operation_status = str((operation_evidence.get(require_operation) or {}).get("status") or STATUS_FAIL)
             if operation_status != STATUS_PASS:

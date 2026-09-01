@@ -466,7 +466,7 @@ def test_hot_pause_request_reaches_the_timeline_card_before_archive_convergence(
     monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_factory)
     catalog_store = CatalogStore(live_engine)
     monkeypatch.setattr(
-        "zerg.services.catalog_facts.session_batch_snapshot",
+        "zerg.services.catalog_facts.internal_session_batch_snapshot",
         lambda session_ids: catalog_store.read_sessions(session_ids=session_ids),
     )
 

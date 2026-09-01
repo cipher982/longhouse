@@ -13,7 +13,7 @@ from zerg.qa.universal_agent_harness import EvidencePackage
 from zerg.qa.universal_agent_harness import UniversalProviderAdapter
 from zerg.qa.universal_agent_harness import _clean_optional_str
 from zerg.qa.universal_agent_harness import _uniform_operation_evidence
-from zerg.qa.universal_agent_harness import ingest_canonical_events_into_longhouse_db
+from zerg.qa.universal_agent_harness import project_canonical_events_for_harness
 from zerg.qa.universal_agent_harness import register_adapter
 from zerg.qa.universal_agent_harness import run_provider_control_e2e_canary
 
@@ -361,7 +361,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
                 (live_artifact.get("session_projection") or {}).get("provider_session_id") or self._session_id(package)
             ),
         )
-        db_ingest = ingest_canonical_events_into_longhouse_db(
+        projection_check = project_canonical_events_for_harness(
             package=package,
             provider=self.config.provider,
             rows=raw_events,
@@ -371,7 +371,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         )
         db_operation_evidence = {
             str(operation): dict(evidence)
-            for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+            for operation, evidence in dict(projection_check.get("operation_evidence") or {}).items()
             if isinstance(evidence, Mapping)
         }
         operation_evidence.update(db_operation_evidence)
@@ -384,10 +384,10 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             session_projection["operation_statuses"] = operation_evidence
             package.write_json("longhouse/session-projection.json", session_projection)
         live_verdict = str(live_artifact.get("verdict") or "red")
-        db_verdict = str(db_ingest.get("status") or STATUS_FAIL)
+        projection_verdict = str(projection_check.get("status") or STATUS_FAIL)
         payload = {
             **projection,
-            "status": STATUS_PASS if live_verdict == "green" and db_verdict == STATUS_PASS else STATUS_FAIL,
+            "status": STATUS_PASS if live_verdict == "green" and projection_verdict == STATUS_PASS else STATUS_FAIL,
             "scenario": "managed_session_e2e",
             "provider_version": live_artifact.get("provider_version"),
             "provider_live_artifact_path": str(live_artifact_path),
@@ -396,14 +396,14 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": live_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if live_verdict != "green":
             payload["failure_code"] = live_artifact.get("failure_code") or "provider_live_canary_failed"
             payload["message"] = "OpenCode provider-live no-token canary did not pass."
-        elif db_verdict != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
-            payload["message"] = "OpenCode provider-live evidence did not pass Longhouse DB ingest assertions."
+        elif projection_verdict != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "managed_session_e2e_projection_failed"
+            payload["message"] = "OpenCode provider-live evidence did not pass canonical projection assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
         return payload
 
@@ -431,7 +431,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         raw_events = opencode_provider_live_raw_events(live_artifact)
         live_session_projection = live_artifact.get("session_projection") or {}
         provider_session_id = str(live_session_projection.get("provider_session_id") or self._session_id(package))
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -440,8 +440,8 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
 
         live_verdict = str(live_artifact.get("verdict") or "red")
         interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
-        passed = live_verdict == "green" and interrupt_status == STATUS_PASS and db_status == STATUS_PASS
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
+        passed = live_verdict == "green" and interrupt_status == STATUS_PASS and projection_status == STATUS_PASS
         payload = {
             **projection,
             "status": STATUS_PASS if passed else STATUS_FAIL,
@@ -453,14 +453,14 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": live_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if live_verdict != "green" or interrupt_status != STATUS_PASS:
             payload["failure_code"] = live_artifact.get("failure_code") or "opencode_interrupt_cancel_failed"
             payload["message"] = "OpenCode session.abort canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "interrupt_cancel_db_ingest_failed"
-            payload["message"] = "OpenCode interrupt evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "interrupt_cancel_projection_check_failed"
+            payload["message"] = "OpenCode interrupt evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/interrupt_cancel.json", payload)
         return payload
 
@@ -512,7 +512,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         raw_events = opencode_provider_live_raw_events(live_artifact)
         live_session_projection = live_artifact.get("session_projection") or {}
         provider_session_id = str(live_session_projection.get("provider_session_id") or self._session_id(package))
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -521,11 +521,11 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
 
         live_verdict = str(live_artifact.get("verdict") or "red")
         reattach_status = str((operation_evidence.get("reattach") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
         payload = {
             **projection,
             "status": STATUS_PASS
-            if live_verdict == "green" and reattach_status == STATUS_PASS and db_status == STATUS_PASS
+            if live_verdict == "green" and reattach_status == STATUS_PASS and projection_status == STATUS_PASS
             else STATUS_FAIL,
             "scenario": scenario,
             "provider_version": live_artifact.get("provider_version"),
@@ -536,14 +536,14 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             "synthetic": False,
             "proof_scope": proof_scope,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if live_verdict != "green" or reattach_status != STATUS_PASS:
             payload["failure_code"] = live_artifact.get("failure_code") or "opencode_resume_reattach_failed"
             payload["message"] = "OpenCode process-restart reattach canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "resume_reattach_db_ingest_failed"
-            payload["message"] = "OpenCode reattach evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "resume_reattach_projection_check_failed"
+            payload["message"] = "OpenCode reattach evidence did not pass canonical provider projection assertions."
         package.write_json(f"assertions/{scenario}.json", payload)
         return payload
 
@@ -568,7 +568,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = opencode_tool_call_result_operation_evidence(control_artifact)
         raw_events = opencode_tool_call_result_raw_events(control_artifact)
         provider_session_id = _first_opencode_control_session_id(control_artifact) or self._session_id(package)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -577,8 +577,8 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
 
         verdict = str(control_artifact.get("verdict") or "red")
         tool_status = str((operation_evidence.get("tool_call_result") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
-        passed = verdict == "green" and tool_status == STATUS_PASS and db_status == STATUS_PASS
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and tool_status == STATUS_PASS and projection_status == STATUS_PASS
         payload = {
             **projection,
             "status": STATUS_PASS if passed else STATUS_FAIL,
@@ -590,7 +590,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": "provider_control_e2e_canary",
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if verdict != "green" or tool_status != STATUS_PASS:
             payload["failure_code"] = (
@@ -599,9 +599,9 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
                 or "opencode_tool_call_result_failed"
             )
             payload["message"] = "OpenCode real-tool call/result canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "tool_call_result_db_ingest_failed"
-            payload["message"] = "OpenCode real-tool call/result evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "tool_call_result_projection_check_failed"
+            payload["message"] = "OpenCode real-tool call/result evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/tool_call_result.json", payload)
         return payload
 
@@ -626,7 +626,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = opencode_real_print_operation_evidence(control_artifact)
         raw_events = opencode_real_print_raw_events(control_artifact)
         provider_session_id = _first_opencode_control_session_id(control_artifact) or self._session_id(package)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -637,13 +637,13 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
         verdict = str(control_artifact.get("verdict") or "red")
         live_status = str((operation_evidence.get("live_token_behavior") or {}).get("status") or STATUS_FAIL)
         run_once_status = str((operation_evidence.get("run_once") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
         passed = all(
             (
                 verdict == "green",
                 live_status == STATUS_PASS,
                 run_once_status == STATUS_PASS,
-                db_status == STATUS_PASS,
+                projection_status == STATUS_PASS,
             )
         )
         payload = {
@@ -657,7 +657,7 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": "provider_control_e2e_canary",
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         model_evidence = opencode_real_print_model_evidence(control_artifact)
         if model_evidence is not None:
@@ -670,8 +670,8 @@ class OpenCodeHarnessAdapter(UniversalProviderAdapter):
             payload["status"] = STATUS_FAIL
             payload["failure_code"] = "opencode_native_model_evidence_missing"
             payload["message"] = "OpenCode passed its live operation checks without a retained native model-evidence envelope."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "live_token_streaming_db_ingest_failed"
-            payload["message"] = "OpenCode live-token evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "live_token_streaming_projection_check_failed"
+            payload["message"] = "OpenCode live-token evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/live_token_streaming.json", payload)
         return payload

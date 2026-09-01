@@ -4,38 +4,38 @@
 
 | Provider | Trigger | Build provenance | Status |
 |---|---|---|---|
-| codex | release_poll | staged_release | runs — 2 qualification scenarios + 33 harness scenarios |
+| codex | release_poll | staged_release | runs — 2 qualification scenarios + 32 harness scenarios |
 | codex | push | generated_fake | runs — 1 scenario |
-| codex | weekly_cron | generated_fake | runs — 33 scenarios |
+| codex | weekly_cron | generated_fake | runs — 32 scenarios |
 | codex | manual | observed_install | never runs — remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'branch_fork_produces_a_new_thread', 'console_adapter_release_contract_preserved:interrupt_unsupported', 'coordination_instructions_model_visible_after_compaction', 'helm_launch_visibility_preserved', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss'] |
-| claude | release_poll | staged_release | runs — 1 qualification scenario + 33 harness scenarios |
+| claude | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | claude | push | generated_fake | runs — 4 scenarios |
-| claude | weekly_cron | generated_fake | runs — 33 scenarios |
+| claude | weekly_cron | generated_fake | runs — 32 scenarios |
 | claude | manual | observed_install | never runs — remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'console_adapter_release_contract_preserved:interrupt_supported', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss'] |
-| opencode | release_poll | staged_release | runs — 1 qualification scenario + 33 harness scenarios |
+| opencode | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | opencode | push | generated_fake | runs — 4 scenarios |
-| opencode | weekly_cron | generated_fake | runs — 33 scenarios |
+| opencode | weekly_cron | generated_fake | runs — 32 scenarios |
 | opencode | manual | observed_install | never runs — remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'console_adapter_release_contract_preserved:interrupt_supported', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss'] |
-| antigravity | release_poll | staged_release | runs — 1 qualification scenario + 33 harness scenarios |
+| antigravity | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | antigravity | push | generated_fake | runs — 4 scenarios |
-| antigravity | weekly_cron | generated_fake | runs — 33 scenarios |
+| antigravity | weekly_cron | generated_fake | runs — 32 scenarios |
 | antigravity | manual | observed_install | never runs — remaining capability-proof assertions for antigravity have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'real_print_injection_observed'] |
-| cursor | release_poll | observed_install | runs — 2 qualification scenarios + 33 harness scenarios |
+| cursor | release_poll | observed_install | runs — 2 qualification scenarios + 32 harness scenarios |
 | cursor | push | generated_fake | runs — 4 scenarios |
-| cursor | weekly_cron | generated_fake | runs — 33 scenarios |
-| cursor | manual | observed_install | runs — 33 scenarios |
-| pi | release_poll | observed_install | runs — 1 qualification scenario + 33 harness scenarios |
+| cursor | weekly_cron | generated_fake | runs — 32 scenarios |
+| cursor | manual | observed_install | runs — 32 scenarios |
+| pi | release_poll | observed_install | runs — 1 qualification scenario + 32 harness scenarios |
 | pi | push | generated_fake | runs — 4 scenarios |
-| pi | weekly_cron | generated_fake | runs — 33 scenarios |
+| pi | weekly_cron | generated_fake | runs — 32 scenarios |
 | pi | manual | observed_install | never runs — every capability-proof assertion declared for pi is already satisfiable by an automated trigger |
 
 ## Staged-release diagonal
 
 | Provider | The diagonal (real binary x full scenario set) |
 |---|---|
-| codex | runs — 33 scenarios |
-| claude | runs — 33 scenarios |
-| opencode | runs — 33 scenarios |
-| antigravity | runs — 33 scenarios |
+| codex | runs — 32 scenarios |
+| claude | runs — 32 scenarios |
+| opencode | runs — 32 scenarios |
+| antigravity | runs — 32 scenarios |
 | cursor | never runs — release lane does not execute the full universal scenario set |
 | pi | never runs — release lane does not execute the full universal scenario set |

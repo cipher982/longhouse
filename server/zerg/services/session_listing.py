@@ -1,76 +1,22 @@
-"""Use case for listing agent sessions.
-
-This keeps the canonical `/api/agents/sessions` route thin while preserving
-the current listing, search, runtime-overlay, and response-header behavior.
-"""
-
-from __future__ import annotations
-
-import asyncio
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
-
-from sqlalchemy.orm import Session
+"""Validation shared by the canonical catalog-backed session readers."""
 
 from zerg.auth.managed_session_tokens import ManagedSessionToken
-from zerg.services.agents import AgentsStore
 from zerg.services.session_listing_types import SessionListingError
 from zerg.services.session_listing_types import SessionListParams
 from zerg.services.session_listing_types import SessionListResult
-from zerg.services.session_response_projection import build_session_response_list
-from zerg.services.session_response_projection import has_real_sessions
-from zerg.services.session_views import SessionsListResponse
 
-
-async def list_agent_sessions(
-    *,
-    db: Session,
-    auth: object,
-    params: SessionListParams,
-    owner_id: int | None = None,
-) -> SessionListResult:
-    """List sessions for the machine-facing agents API."""
-
-    validate_managed_hook_scope(auth, params)
-    _validate_context_mode(params.context_mode)
-    effective_sort = _resolve_effective_sort(params)
-
-    return await asyncio.to_thread(
-        _list_lexical_sessions,
-        db=db,
-        params=params,
-        effective_sort=effective_sort,
-        owner_id=owner_id,
-    )
+__all__ = ["SessionListingError", "SessionListParams", "SessionListResult", "validate_managed_hook_scope"]
 
 
 def validate_managed_hook_scope(auth: object, params: SessionListParams) -> None:
-    """Bound what a managed-session hook token may list.
-
-    Public because the `/agents/sessions` route must apply it before it picks a
-    read backend: the live-catalog branch returns without ever reaching
-    `list_agent_sessions`, so a guard that only ran here would be dead in
-    production.
-
-    Absence is not a match. A token carrying no project compared equal to a
-    request carrying no project, which turned the one bound on a
-    prompt-injectable model into an owner-wide listing whose rows carry
-    ``summary`` and ``first_user_message``. Every hook and coordination token is
-    minted with the launching session's project, and that project is always a
-    non-empty derived string, so requiring one denies nothing legitimate.
-    """
-
+    """Restrict managed-session hook tokens to their bounded project lookup."""
     if not isinstance(auth, ManagedSessionToken):
         return
 
     token_project = str(auth.project or "").strip()
     requested_project = str(params.project or "").strip()
     if not token_project or token_project != requested_project:
-        raise SessionListingError(
-            403,
-            "Managed-session hook scope requires a matching project filter",
-        )
+        raise SessionListingError(403, "Managed-session hook scope requires a matching project filter")
     if (
         params.provider is not None
         or params.environment is not None
@@ -86,82 +32,4 @@ def validate_managed_hook_scope(auth: object, params: SessionListParams) -> None
         or params.context_mode != "forensic"
         or not params.hide_autonomous
     ):
-        raise SessionListingError(
-            403,
-            "Managed-session hook scope only supports bounded recent project lookup",
-        )
-
-
-def _validate_context_mode(context_mode: str) -> None:
-    if context_mode not in {"forensic", "active_context"}:
-        raise SessionListingError(
-            400,
-            "context_mode must be one of: forensic, active_context",
-        )
-
-
-def _resolve_effective_sort(params: SessionListParams) -> str:
-    if params.sort is None:
-        return "relevance" if params.query else "recency"
-
-    if params.sort == "balanced" and not params.query:
-        raise SessionListingError(
-            400,
-            "sort=balanced requires a search query (q param)",
-        )
-
-    return params.sort
-
-
-def _list_lexical_sessions(
-    *,
-    db: Session,
-    params: SessionListParams,
-    effective_sort: str,
-    owner_id: int | None = None,
-) -> SessionListResult:
-    store = AgentsStore(db)
-    since = datetime.now(timezone.utc) - timedelta(days=params.days_back)
-
-    sessions, total = store.list_sessions(
-        project=params.project,
-        provider=params.provider,
-        environment=params.environment,
-        include_test=params.include_test,
-        device_id=params.device_id,
-        since=since,
-        query=params.query,
-        limit=params.limit,
-        offset=params.offset,
-        hide_autonomous=params.hide_autonomous,
-        include_automation=params.include_automation,
-        context_mode=params.context_mode,
-        anchor_on_activity=effective_sort == "recency",
-    )
-
-    if params.query or effective_sort != "recency":
-        from zerg.services.search import apply_sort
-
-        bm25_order = [str(s.id) for s in sessions]
-        sessions = apply_sort(sessions, effective_sort, bm25_order=bm25_order)
-
-    session_ids = [s.id for s in sessions]
-    if params.query:
-        match_map = store.get_session_matches(session_ids, params.query, context_mode=params.context_mode)
-    else:
-        match_map = {}
-    response_sessions = build_session_response_list(
-        db=db,
-        store=store,
-        sessions=sessions,
-        match_map=match_map,
-        owner_id=owner_id,
-    )
-
-    return SessionListResult(
-        response=SessionsListResponse(
-            sessions=response_sessions,
-            total=total,
-            has_real_sessions=has_real_sessions(db, default_when_empty=total == 0),
-        )
-    )
+        raise SessionListingError(403, "Managed-session hook scope only supports bounded recent project lookup")

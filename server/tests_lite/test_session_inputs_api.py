@@ -25,6 +25,7 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 import pytest
 
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from tests_lite.agents_fixture import SessionFixtureStore
 from tests_lite.live_catalog_harness import LiveCatalog
 from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
@@ -43,7 +44,6 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers.session_chat import _live_queued_summary
 from zerg.routers.session_chat import _project_live_input_to_archive
-from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
@@ -410,7 +410,7 @@ def _seed_live_session(session_local, *, owner_id: int | None = None):
         else:
             user = db.query(User).filter(User.id == int(owner_id)).one()
 
-        store = AgentsStore(db)
+        store = SessionFixtureStore(db)
         started_at = datetime.now(timezone.utc)
         store.ingest_session(
             SessionIngest(

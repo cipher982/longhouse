@@ -597,7 +597,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = self._operation_evidence_map(canary_artifact.get("operation_evidence"))
         raw_events = codex_interrupt_cancel_raw_events(canary_artifact)
         provider_session_id = _first_codex_thread_id(canary_artifact) or self._session_id(package)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -606,8 +606,8 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
 
         verdict = str(canary_artifact.get("verdict") or "red")
         interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
-        passed = verdict == "green" and interrupt_status == STATUS_PASS and db_status == STATUS_PASS
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and interrupt_status == STATUS_PASS and projection_status == STATUS_PASS
         payload = {
             **projection,
             "status": STATUS_PASS if passed else STATUS_FAIL,
@@ -619,7 +619,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": canary_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
             "engine_identity": engine_identity,
             "package_identity": package_identity,
             "strict_oracle": {key: value.value for key, value in strict_outcomes.items()},
@@ -628,9 +628,9 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         if verdict != "green" or interrupt_status != STATUS_PASS:
             payload["failure_code"] = canary_artifact.get("failure_code") or "codex_interrupt_cancel_failed"
             payload["message"] = "Codex managed live interrupt canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "interrupt_cancel_db_ingest_failed"
-            payload["message"] = "Codex interrupt evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "interrupt_cancel_projection_check_failed"
+            payload["message"] = "Codex interrupt evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/interrupt_cancel.json", payload)
         return payload
 
@@ -661,7 +661,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = codex_tool_call_result_operation_evidence(canary_artifact)
         raw_events = codex_tool_call_result_raw_events(canary_artifact)
         provider_session_id = _first_codex_thread_id(canary_artifact) or self._session_id(package)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -670,8 +670,8 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
 
         verdict = str(canary_artifact.get("verdict") or "red")
         tool_status = str((operation_evidence.get("tool_call_result") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
-        passed = verdict == "green" and tool_status == STATUS_PASS and db_status == STATUS_PASS
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and tool_status == STATUS_PASS and projection_status == STATUS_PASS
         payload = {
             **projection,
             "status": STATUS_PASS if passed else STATUS_FAIL,
@@ -683,14 +683,14 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": canary_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if verdict != "green" or tool_status != STATUS_PASS:
             payload["failure_code"] = canary_artifact.get("failure_code") or "codex_tool_call_result_failed"
             payload["message"] = "Codex real-tool call/result canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "tool_call_result_db_ingest_failed"
-            payload["message"] = "Codex real-tool call/result evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "tool_call_result_projection_check_failed"
+            payload["message"] = "Codex real-tool call/result evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/tool_call_result.json", payload)
         return payload
 
@@ -750,7 +750,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = codex_live_token_streaming_operation_evidence(canary_artifact)
         raw_events = codex_live_token_streaming_raw_events(canary_artifact)
         provider_session_id = _first_codex_thread_id(canary_artifact) or self._session_id(package)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -760,13 +760,13 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         verdict = str(canary_artifact.get("verdict") or "red")
         live_status = str((operation_evidence.get("live_token_behavior") or {}).get("status") or STATUS_FAIL)
         send_status = str((operation_evidence.get("send_input") or {}).get("status") or STATUS_FAIL)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
         passed = all(
             (
                 verdict == "green",
                 live_status == STATUS_PASS,
                 send_status == STATUS_PASS,
-                db_status == STATUS_PASS,
+                projection_status == STATUS_PASS,
             )
         )
         payload = {
@@ -780,14 +780,14 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": canary_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if verdict != "green" or live_status != STATUS_PASS or send_status != STATUS_PASS:
             payload["failure_code"] = canary_artifact.get("failure_code") or "codex_live_token_streaming_failed"
             payload["message"] = "Codex managed live-send canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "live_token_streaming_db_ingest_failed"
-            payload["message"] = "Codex live-token evidence did not pass Longhouse DB ingest assertions."
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "live_token_streaming_projection_check_failed"
+            payload["message"] = "Codex live-token evidence did not pass canonical provider projection assertions."
         package.write_json("assertions/live_token_streaming.json", payload)
         return payload
 
@@ -1029,7 +1029,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         operation_evidence = self._operation_evidence_map(canary_artifact.get("operation_evidence"))
         raw_events = codex_provider_release_raw_events(canary_artifact)
         provider_session_id = _first_codex_thread_id(canary_artifact) or self._session_id(package)
-        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
+        projection, operation_evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=operation_evidence,
             raw_events=raw_events,
@@ -1038,10 +1038,10 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
 
         verdict = str(canary_artifact.get("verdict") or "red")
         credentials_gap = _codex_managed_bridge_credentials_gap(canary_artifact)
-        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        projection_status = str(projection_check.get("status") or STATUS_FAIL)
         payload = {
             **projection,
-            "status": STATUS_PASS if verdict == "green" and db_status == STATUS_PASS else STATUS_FAIL,
+            "status": STATUS_PASS if verdict == "green" and projection_status == STATUS_PASS else STATUS_FAIL,
             "scenario": scenario,
             "provider_version": canary_artifact.get("provider_version"),
             "codex_canary_artifact_path": str(canary_artifact_path),
@@ -1050,7 +1050,7 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
             "source_artifact_kind": canary_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if credentials_gap:
             if scenario == "resume_reattach":
@@ -1068,10 +1068,10 @@ class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
         elif verdict != "green":
             payload["failure_code"] = canary_artifact.get("failure_code") or "codex_provider_release_canary_failed"
             payload["message"] = "Codex provider release canary did not pass."
-        elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or f"{scenario}_db_ingest_failed"
-            payload["message"] = "Codex canary evidence did not pass Longhouse DB ingest assertions."
-        if require_operation and not credentials_gap and verdict == "green" and db_status == STATUS_PASS:
+        elif projection_status != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or f"{scenario}_projection_check_failed"
+            payload["message"] = "Codex canary evidence did not pass canonical provider projection assertions."
+        if require_operation and not credentials_gap and verdict == "green" and projection_status == STATUS_PASS:
             operation_status = str((operation_evidence.get(require_operation) or {}).get("status") or STATUS_FAIL)
             if operation_status != STATUS_PASS:
                 payload["status"] = STATUS_FAIL

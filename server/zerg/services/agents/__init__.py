@@ -23,10 +23,8 @@ from .models import SessionProjectionPage
 from .models import SourceLineIngest
 from .models import SourceRewindHintIngest
 from .schema import ensure_agents_schema
-from .store import AgentsStore
 
 __all__ = [
-    "AgentsStore",
     "EventIngest",
     "SourceLineIngest",
     "SourceRewindHintIngest",

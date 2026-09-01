@@ -41,7 +41,7 @@ from zerg.qa.universal_agent_harness import STATUS_FAIL
 from zerg.qa.universal_agent_harness import STATUS_PASS
 from zerg.qa.universal_agent_harness import EvidencePackage
 from zerg.qa.universal_agent_harness import UniversalProviderAdapter
-from zerg.qa.universal_agent_harness import ingest_canonical_events_into_longhouse_db
+from zerg.qa.universal_agent_harness import project_canonical_events_for_harness
 from zerg.qa.universal_agent_harness import register_adapter
 
 # Pi's built-in provider id plus the qualification model. The model is
@@ -266,7 +266,7 @@ class PiHarnessAdapter(UniversalProviderAdapter):
                 "session_dir": str(session_dir),
             }
         rows, provider_session_id, metadata = pi_transcript_rows(transcript)
-        ingested = ingest_canonical_events_into_longhouse_db(
+        projection = project_canonical_events_for_harness(
             package=package,
             provider=self.config.provider,
             rows=rows,
@@ -306,7 +306,7 @@ class PiHarnessAdapter(UniversalProviderAdapter):
             "marker_matched": marker_matched,
             "assistant_row_count": len(assistant_rows),
             "transcript_bound": transcript_bound,
-            "ingest": ingested,
+            "canonical_projection": projection,
         }
         if result.returncode != 0 and not timed_out:
             evidence["status"] = STATUS_FAIL
@@ -316,10 +316,10 @@ class PiHarnessAdapter(UniversalProviderAdapter):
             evidence["status"] = STATUS_FAIL
             evidence["failure_code"] = "pi_print_timed_out"
             evidence["message"] = "real pi -p did not finish within the run timeout"
-        elif ingested.get("status") != STATUS_PASS:
+        elif projection.get("status") != STATUS_PASS:
             evidence["status"] = STATUS_FAIL
-            evidence["failure_code"] = "pi_db_ingest_failed"
-            evidence["message"] = str(ingested.get("message") or "pi transcript DB ingest did not pass")
+            evidence["failure_code"] = "pi_projection_failed"
+            evidence["message"] = str(projection.get("message") or "pi transcript projection did not pass")
         elif not transcript_bound:
             evidence["status"] = STATUS_FAIL
             evidence["failure_code"] = "pi_transcript_unbound"

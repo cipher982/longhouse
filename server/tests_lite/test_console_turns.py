@@ -40,7 +40,6 @@ from zerg.services.session_turns import SESSION_TURN_STATE_DRAINING
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_QUEUED
 from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
-from zerg.services.session_views import _current_console_turn_state
 
 
 def _db(tmp_path):
@@ -514,34 +513,6 @@ async def test_dispatch_next_replays_preclaimed_starting_turn_after_crash(tmp_pa
     assert registry.command["command_id"] == str(preclaimed.run_id)
     assert registry.command["payload"]["turn_id"] == str(preclaimed.turn_id)
     assert db.get(SessionTurn, preclaimed.turn_id).state == SESSION_TURN_STATE_ACTIVE
-
-
-def test_current_console_turn_state_prefers_execution_owner_over_later_queue(tmp_path):
-    db = _db(tmp_path)
-    session = _session(db)
-    session.origin_kind = "console"
-    thread = ensure_primary_thread(db, session)
-    set_thread_execution_target(thread, device_id="cube", cwd="/tmp/longhouse")
-    db.commit()
-    enqueue_console_turn(
-        db,
-        session=session,
-        owner_id=1,
-        message="first",
-        client_request_id="owner-first",
-    )
-    claimed = claim_next_console_turn(db, thread_id=thread.id)
-    assert claimed is not None
-    mark_console_turn_active(db, turn_id=claimed.turn_id)
-    enqueue_console_turn(
-        db,
-        session=session,
-        owner_id=1,
-        message="second",
-        client_request_id="queued-second",
-    )
-
-    assert _current_console_turn_state(db, session_id=session.id) == SESSION_TURN_STATE_ACTIVE
 
 
 @pytest.mark.asyncio

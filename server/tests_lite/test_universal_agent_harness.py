@@ -1036,8 +1036,6 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
         assert actions["interrupt_cancel"]["contract_operation"] == "interrupt"
         assert actions["raw_evidence_capture"]["status"] == "pass"
         assert actions["parse_normalize"]["status"] == "pass"
-        assert actions["db_ingest"]["status"] == "pass"
-        assert actions["db_ingest"]["canary"] == "universal_db_ingest_project"
         assert actions["baseline_compare"]["status"] == "pass"
         assert actions["baseline_compare"]["canary"] == "provider_release_proof_baseline_diff"
         assert actions["old_new_release_diff"]["status"] == "pass"
@@ -1494,104 +1492,6 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert coverage["old_new_release_diff"]["coverage_status"] == "blocked"
 
 
-def test_db_ingest_project_uses_real_longhouse_sqlite_for_all_providers(tmp_path: Path) -> None:
-    payload = uah.run_harness(
-        uah.HarnessOptions(
-            providers=uah.SUPPORTED_PROVIDERS,
-            scenarios=("db_ingest_project",),
-            evidence_root=tmp_path / "evidence",
-            provider_bins=_fake_bins(tmp_path),
-        )
-    )
-
-    assert payload["verdict"] == "green"
-    assert {result["provider"] for result in payload["results"]} == set(uah.SUPPORTED_PROVIDERS)
-    for result in payload["results"]:
-        assert result["status"] == "pass"
-        assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
-        evidence_root = Path(result["evidence_root"])
-        db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-        assert Path(db_snapshot["db_path"]).is_file()
-        assert db_snapshot["ingest_result"]["events_inserted"] == 4
-        assert db_snapshot["session_counts"]["user_messages"] == 1
-        assert db_snapshot["session_counts"]["assistant_messages"] == 1
-        assert db_snapshot["session_counts"]["tool_calls"] == 1
-        assert db_snapshot["timeline"]["matched"] is True
-        assert "universal db ingest hello" in db_snapshot["export_jsonl"]
-
-
-def test_opencode_lineage_projection_uses_real_longhouse_sqlite(tmp_path: Path) -> None:
-    payload = uah.run_harness(
-        uah.HarnessOptions(
-            providers=("opencode",),
-            scenarios=("opencode_lineage_projection",),
-            evidence_root=tmp_path / "evidence",
-            provider_bins={"opencode": _fake_bins(tmp_path)["opencode"]},
-        )
-    )
-
-    assert payload["verdict"] == "green"
-    result = payload["results"][0]
-    assert result["provider"] == "opencode"
-    assert result["scenario"] == "opencode_lineage_projection"
-    assert result["status"] == "pass"
-    assert result["data"]["operation_evidence"]["opencode_lineage_projection"]["status"] == "pass"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
-    assert all(result["data"]["assertions"].values())
-
-    evidence_root = Path(result["evidence_root"])
-    projection = json.loads((evidence_root / "longhouse" / "opencode-lineage-projection.json").read_text(encoding="utf-8"))
-    branch_kinds = [row["branch_kind"] for row in projection["thread_rows"]]
-    assert branch_kinds.count("subagent") == 2
-    assert "fork" in branch_kinds
-    edge_kinds = [row["edge_kind"] for row in projection["edge_rows"]]
-    assert edge_kinds.count("task_child") == 2
-    assert "fork" in edge_kinds
-    assert "subagent_id" in {row["alias_kind"] for row in projection["alias_rows"]}
-    assert "forked_from_provider_session_id" in {row["alias_kind"] for row in projection["alias_rows"]}
-
-
-def test_opencode_orchestration_projection_uses_real_longhouse_sqlite(tmp_path: Path) -> None:
-    payload = uah.run_harness(
-        uah.HarnessOptions(
-            providers=("opencode",),
-            scenarios=("opencode_orchestration_projection",),
-            evidence_root=tmp_path / "evidence",
-            provider_bins={"opencode": _fake_bins(tmp_path)["opencode"]},
-        )
-    )
-
-    assert payload["verdict"] == "green"
-    result = payload["results"][0]
-    assert result["provider"] == "opencode"
-    assert result["scenario"] == "opencode_orchestration_projection"
-    assert result["status"] == "pass"
-    assert all(result["data"]["assertions"].values())
-    assert result["data"]["operation_evidence"]["opencode_nested_subagent_projection"]["status"] == "pass"
-    assert result["data"]["operation_evidence"]["opencode_task_id_resume_projection"]["status"] == "pass"
-    assert result["data"]["capability_states"]["background_task_status"] == "unknown"
-    assert result["data"]["capability_states"]["switch_actor"] == "unknown"
-    assert result["data"]["capability_reason_codes"]["background_task_status"] == "provider_background_status_unproven"
-    assert result["data"]["capability_reason_codes"]["switch_actor"] == "provider_actor_switch_unmapped"
-    assert (
-        result["data"]["operation_evidence"]["opencode_rich_gap_manifest"]["background_task_status_reason_code"]
-        == "provider_background_status_unproven"
-    )
-    assert (
-        result["data"]["operation_evidence"]["opencode_rich_gap_manifest"]["switch_actor_reason_code"] == "provider_actor_switch_unmapped"
-    )
-
-    evidence_root = Path(result["evidence_root"])
-    projection = json.loads((evidence_root / "longhouse" / "opencode-orchestration-projection.json").read_text(encoding="utf-8"))
-    edge_rows = projection["edge_rows"]
-    assert [row["edge_kind"] for row in edge_rows].count("task_child") == 2
-    nested_edges = [row for row in edge_rows if row["provider_edge_id"] == "task_nested"]
-    assert len(nested_edges) == 1
-    assert nested_edges[0]["source_thread_id"] is not None
-    assert nested_edges[0]["source_thread_id"] != nested_edges[0]["target_thread_id"]
-    assert "ses_fork" in {row["alias_value"] for row in projection["alias_rows"]}
-
-
 def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -1743,7 +1643,6 @@ def test_claude_launch_managed_session_uses_provider_live_contract_canary(tmp_pa
     assert result["data"]["source_artifact_kind"] == "provider_live_canary"
     assert result["data"]["operation_evidence"]["launch_local"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["launch_local"]["level"] == "live_no_token"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     assert (evidence_root / "assertions" / "launch_managed_session.json").is_file()
@@ -1803,8 +1702,7 @@ def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: P
     assert result["status"] == "pass"
     assert result["data"]["source_artifact_kind"] == "provider_live_canary"
     assert result["data"]["synthetic"] is False
-    assert result["data"]["longhouse_ingest"]["status"] == "pass"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+    assert result["data"]["canonical_projection"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
@@ -1821,12 +1719,8 @@ def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: P
 
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "ses_fake_universal_e2e"
-    assert session["longhouse_session_id"]
     assert session["operation_statuses"]["send_input"]["level"] == "live_no_token"
     assert session["operation_statuses"]["transcript_binding"]["canary"] == "opencode_prompt_async_no_reply_delivery"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 4
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_opencode_resume_reattach_uses_process_restart_canary(tmp_path: Path) -> None:
@@ -1847,7 +1741,6 @@ def test_opencode_resume_reattach_uses_process_restart_canary(tmp_path: Path) ->
     assert result["data"]["synthetic"] is False
     assert result["data"]["operation_evidence"]["reattach"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["reattach"]["level"] == "live_no_token"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
@@ -1857,9 +1750,6 @@ def test_opencode_resume_reattach_uses_process_restart_canary(tmp_path: Path) ->
     assert "provider_live_canary" in raw_events
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["operation_statuses"]["reattach"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 4
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_codex_resume_reattach_uses_provider_release_canary(tmp_path: Path, monkeypatch) -> None:
@@ -1917,7 +1807,6 @@ def test_codex_resume_reattach_uses_provider_release_canary(tmp_path: Path, monk
     assert result["data"]["source_artifact_kind"] == "provider_release_canary"
     assert result["data"]["operation_evidence"]["reattach"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["reattach"]["level"] == "live_no_token"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     assert (evidence_root / "assertions" / "resume_reattach.json").is_file()
@@ -2137,14 +2026,13 @@ def test_claude_managed_session_e2e_uses_provider_live_contract_canary(tmp_path:
     assert result["status"] == "pass"
     assert result["data"]["source_artifact_kind"] == "provider_live_canary"
     assert result["data"]["synthetic"] is False
-    assert result["data"]["longhouse_ingest"]["status"] == "pass"
+    assert result["data"]["canonical_projection"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["launch_local"]["level"] == "live_no_token"
     assert result["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["runtime_phase"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["send_input"]["status"] == "blocked"
     assert result["data"]["operation_evidence"]["send_input"]["level"] == "live_token_required"
     assert result["data"]["operation_evidence"]["steer_active_turn"]["status"] == "blocked"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
@@ -2158,9 +2046,6 @@ def test_claude_managed_session_e2e_uses_provider_live_contract_canary(tmp_path:
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider"] == "claude"
     assert session["operation_statuses"]["send_input"]["failure_code"] == "claude_live_token_contract_not_run"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 4
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_claude_managed_session_e2e_fails_when_channel_contract_breaks(
@@ -2238,9 +2123,8 @@ def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, 
     assert result["status"] == "pass"
     assert result["data"]["source_artifact_kind"] == "provider_release_canary"
     assert result["data"]["synthetic"] is False
-    assert result["data"]["longhouse_ingest"]["status"] == "pass"
+    assert result["data"]["canonical_projection"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["launch_local"]["canary"] == "managed_tui_attach"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     assert (evidence_root / "raw" / "codex-provider-release-canary.json").is_file()
@@ -2249,9 +2133,6 @@ def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, 
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "thread_codex_universal_e2e"
     assert session["operation_statuses"]["launch_local"]["level"] == "live_no_token"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 1
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def _codex_helm_package(tmp_path: Path) -> tuple[Path, Path]:
@@ -2377,7 +2258,6 @@ def test_codex_interrupt_cancel_uses_managed_live_interrupt_canary(tmp_path: Pat
     assert result["status"] == "pass"
     assert result["data"]["scenario"] == "interrupt_cancel"
     assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_token"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
     assert result["data"]["strict_oracle"] == {
         "active_managed_turn_observed": "pass",
         "interrupt_terminal_cancelled_or_interrupted": "pass",
@@ -2394,9 +2274,6 @@ def test_codex_interrupt_cancel_uses_managed_live_interrupt_canary(tmp_path: Pat
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "codex-thread-interrupt"
     assert session["operation_statuses"]["interrupt"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 2
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_codex_interrupt_cancel_blocks_when_strict_environment_missing(tmp_path: Path, monkeypatch) -> None:
@@ -2540,7 +2417,6 @@ def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, mon
     assert result["data"]["operation_evidence"]["send_input"]["level"] == "live_no_token"
     assert result["data"]["operation_evidence"]["steer_active_turn"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["interrupt"]["status"] == "pass"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
@@ -2550,9 +2426,6 @@ def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, mon
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "claude-channel-control-session"
     assert session["operation_statuses"]["interrupt"]["level"] == "live_no_token"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 3
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_claude_steer_active_turn_uses_channel_control_canary(tmp_path: Path, monkeypatch) -> None:
@@ -2617,7 +2490,6 @@ def test_claude_steer_active_turn_uses_channel_control_canary(tmp_path: Path, mo
     assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
     assert result["data"]["operation_evidence"]["steer_active_turn"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["steer_active_turn"]["level"] == "live_no_token"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     assert (evidence_root / "assertions" / "steer_active_turn.json").is_file()
@@ -2915,7 +2787,6 @@ def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> 
     assert result["data"]["synthetic"] is False
     assert result["data"]["operation_evidence"]["interrupt"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_no_token"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
@@ -2925,9 +2796,6 @@ def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> 
     assert "provider_live_canary" in raw_events
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["operation_statuses"]["interrupt"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 4
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_codex_live_token_streaming_uses_managed_live_send_canary(tmp_path: Path, monkeypatch) -> None:
@@ -2982,7 +2850,6 @@ def test_codex_live_token_streaming_uses_managed_live_send_canary(tmp_path: Path
     assert result["data"]["scenario"] == "live_token_streaming"
     assert result["data"]["operation_evidence"]["send_input"]["level"] == "live_token"
     assert result["data"]["operation_evidence"]["live_token_behavior"]["status"] == "pass"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
@@ -2991,9 +2858,6 @@ def test_codex_live_token_streaming_uses_managed_live_send_canary(tmp_path: Path
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "codex-thread-live-send"
     assert session["operation_statuses"]["live_token_behavior"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 2
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_codex_live_token_streaming_reports_runtime_host_credentials_gap(tmp_path: Path) -> None:
@@ -3094,7 +2958,6 @@ def test_claude_live_token_streaming_uses_real_print_canary(tmp_path: Path, monk
     assert result["data"]["operation_evidence"]["live_token_behavior"]["status"] == "pass"
     assert result["data"]["live_model_evidence"]["model"] == "claude-haiku-test"
     assert result["data"]["live_model_evidence"]["result_event"]["total_cost_usd"] == 0.001
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
@@ -3103,9 +2966,6 @@ def test_claude_live_token_streaming_uses_real_print_canary(tmp_path: Path, monk
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "fake-claude-print-session"
     assert session["operation_statuses"]["live_token_behavior"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 2
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_claude_model_evidence_binds_synthetic_result_to_native_model_event(tmp_path: Path) -> None:
@@ -3230,7 +3090,6 @@ def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, mo
     assert result["data"]["operation_evidence"]["live_token_behavior"]["status"] == "pass"
     assert result["data"]["live_model_evidence"]["model"] == "openrouter/deepseek/deepseek-v4-flash"
     assert result["data"]["live_model_evidence"]["result_event"]["usage"]["output"] == 2
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
@@ -3239,9 +3098,6 @@ def test_opencode_live_token_streaming_uses_real_print_canary(tmp_path: Path, mo
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "fake-opencode-print-session"
     assert session["operation_statuses"]["live_token_behavior"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 2
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_antigravity_live_token_streaming_uses_real_agy_send_canary(tmp_path: Path, monkeypatch) -> None:
@@ -3318,7 +3174,6 @@ def test_antigravity_live_token_streaming_uses_real_agy_send_canary(tmp_path: Pa
     assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
     assert result["data"]["operation_evidence"]["send_input"]["level"] == "live_token"
     assert result["data"]["operation_evidence"]["live_token_behavior"]["status"] == "pass"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
@@ -3327,9 +3182,6 @@ def test_antigravity_live_token_streaming_uses_real_agy_send_canary(tmp_path: Pa
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "antigravity-real-send-session"
     assert session["operation_statuses"]["live_token_behavior"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 2
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_codex_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeypatch) -> None:
@@ -3398,7 +3250,6 @@ def test_codex_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeypatc
     assert result["data"]["scenario"] == "tool_call_result"
     assert result["data"]["operation_evidence"]["tool_call_result"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["tool_call_result"]["level"] == "live_token"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
@@ -3406,10 +3257,6 @@ def test_codex_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeypatc
     assert "LONGHOUSE_CODEX_REAL_TOOL_fake" in raw_events
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["operation_statuses"]["tool_call_result"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 3
-    assert db_snapshot["session_counts"]["tool_calls"] == 1
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_codex_tool_call_result_strict_is_not_applicable_for_other_providers(tmp_path: Path) -> None:
@@ -3621,7 +3468,6 @@ def test_opencode_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeyp
     assert result["data"]["synthetic"] is False
     assert result["data"]["operation_evidence"]["tool_call_result"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["tool_call_result"]["level"] == "live_token"
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
@@ -3630,10 +3476,6 @@ def test_opencode_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeyp
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "ses_opencode_tool"
     assert session["operation_statuses"]["tool_call_result"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 3
-    assert db_snapshot["session_counts"]["tool_calls"] == 1
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_tool_call_result_is_typed_gap_for_unmigrated_providers(tmp_path: Path) -> None:
@@ -3747,7 +3589,6 @@ def test_antigravity_managed_session_e2e_uses_hook_inbox_canary(tmp_path: Path, 
     assert result["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["send_input"]["level"] == "hermetic"
     assert result["data"]["operation_evidence"]["runtime_phase"]["canary"] == ("provider_control_e2e_antigravity_hook_inbox")
-    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     assert (evidence_root / "raw" / "provider-control-e2e.json").is_file()
@@ -3757,9 +3598,6 @@ def test_antigravity_managed_session_e2e_uses_hook_inbox_canary(tmp_path: Path, 
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "antigravity-canary-session"
     assert session["operation_statuses"]["external_event_channel"]["status"] == "pass"
-    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
-    assert db_snapshot["ingest_result"]["events_inserted"] == 4
-    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_antigravity_managed_session_e2e_fails_when_hook_inbox_canary_fails(

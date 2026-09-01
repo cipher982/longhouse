@@ -427,13 +427,13 @@ def consume_live_reset_artifact(
             "evidence_origin": "provider_live_canary",
         }
     ]
-    projection, evidence, db_ingest = adapter._project_ingest_and_merge(
+    projection, evidence, projection_check = adapter._project_and_merge(
         package,
         operation_evidence=evidence,
         raw_events=raw_events,
         provider_session_id=longhouse_session_id,
     )
-    if db_ingest.get("status") != STATUS_PASS:
+    if projection_check.get("status") != STATUS_PASS:
         passed = False
     copied_observation = package.write_json("observations/conversation_reset.json", observation)
     payload = {
@@ -447,13 +447,13 @@ def consume_live_reset_artifact(
         "identity_allocation": observation.get("identity_allocation"),
         "synthetic": False,
         "operation_evidence": evidence,
-        "longhouse_ingest": adapter._longhouse_ingest_block(db_ingest),
+        "canonical_projection": adapter._projection_check_block(projection_check),
     }
     if identity_failure:
         payload["failure_code"], payload["message"] = identity_failure
-    elif db_ingest.get("status") != STATUS_PASS:
-        payload["failure_code"] = db_ingest.get("failure_code") or "conversation_reset_db_ingest_failed"
-        payload["message"] = "Conversation-reset evidence did not pass Longhouse DB ingest assertions."
+    elif projection_check.get("status") != STATUS_PASS:
+        payload["failure_code"] = projection_check.get("failure_code") or "conversation_reset_projection_failed"
+        payload["message"] = "Conversation-reset evidence did not pass canonical projection assertions."
     package.write_json("assertions/conversation_reset.json", payload)
     return payload
 

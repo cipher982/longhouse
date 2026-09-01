@@ -25,7 +25,6 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import model_validator
-from sqlalchemy.orm import Session
 
 from zerg.generated.provider_brands import provider_display_name
 from zerg.models.agents import AgentEvent
@@ -33,12 +32,9 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveLaunchReadiness
-from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
-from zerg.services.agents.kernel_capabilities import project_console_turn_capabilities
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
-from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.send_affordance import OFFLINE_HOST_STATES
@@ -47,10 +43,8 @@ from zerg.services.send_affordance import project_send_affordance
 from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_kernel_projection import SessionControlProjection
 from zerg.services.session_kernel_projection import project_session_control_fields
-from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_launch_lifecycle import ExecutionLifetime
 from zerg.services.session_launch_lifecycle import LaunchLifecycle
-from zerg.services.session_launch_lifecycle import project_launch_lifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
@@ -64,10 +58,7 @@ from zerg.services.session_runtime_display import TerminalReason
 from zerg.services.session_runtime_display import Tone
 from zerg.services.session_runtime_display import TruthTier
 from zerg.services.session_state_contract import SessionStateFacts
-from zerg.services.session_state_contract import build_archive_session_state_facts
 from zerg.services.session_state_contract import build_session_state_facts
-from zerg.services.session_title import resolve_timeline_title
-from zerg.services.session_title import resolve_title_provenance
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import UTCBaseModel
@@ -2165,310 +2156,6 @@ def normalize_utc_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def get_thread_meta(store: AgentsStore, session: AgentSession, thread_cache: Dict[str, tuple[str, int]]) -> tuple[str, int]:
-    root_id = str(session.id)
-    cached = thread_cache.get(root_id)
-    if cached is not None:
-        return cached
-
-    batched = store.batch_thread_meta([session])
-    meta = batched.get(root_id, (str(session.id), 1))
-    thread_cache[root_id] = meta
-    return meta
-
-
-def _archive_runtime_aliases(
-    *,
-    session_state: SessionStateFacts,
-    runtime_display: SessionRuntimeDisplayResponse,
-    last_activity_at: datetime | None,
-) -> dict[str, Any]:
-    """Deprecated runtime fields derived only from canonical archive facts."""
-
-    activity = session_state.activity
-    activity_observed_at = normalize_utc(activity.observed_at)
-    primary = session_state.presentation.primary
-    closed = session_state.disposition.state == "closed"
-    return {
-        "timeline_anchor_at": last_activity_at,
-        "runtime_phase": runtime_display.state.value if runtime_display.state is not None else None,
-        "phase_started_at": activity_observed_at,
-        "last_progress_at": activity_observed_at,
-        "runtime_source": activity.source,
-        "terminal_state": session_state.disposition.close_reason if closed else None,
-        "runtime_version": None,
-        "status": "completed" if closed else "working" if runtime_display.is_executing else "idle" if runtime_display.is_idle else None,
-        "presence_state": runtime_display.state.value if runtime_display.state is not None else None,
-        "presence_tool": activity.tool,
-        "presence_updated_at": activity_observed_at,
-        "last_live_at": activity_observed_at if runtime_display.is_live else None,
-        "display_phase": primary.label if primary is not None else None,
-        "active_tool": activity.tool,
-        "confidence": "live" if runtime_display.is_live else None,
-    }
-
-
-def _current_console_turn_state(db: Session, *, session_id: UUID) -> str:
-    """Return the durable FIFO owner before any later queued turn."""
-
-    current = (
-        db.query(SessionTurn.state)
-        .filter(
-            SessionTurn.session_id == session_id,
-            SessionTurn.source_kind == "console",
-            SessionTurn.state.in_(("starting", "active", "draining")),
-        )
-        .order_by(SessionTurn.created_at.asc(), SessionTurn.id.asc())
-        .first()
-    )
-    if current is None:
-        current = (
-            db.query(SessionTurn.state)
-            .filter(
-                SessionTurn.session_id == session_id,
-                SessionTurn.source_kind == "console",
-                SessionTurn.state == "queued",
-            )
-            .order_by(SessionTurn.created_at.asc(), SessionTurn.id.asc())
-            .first()
-        )
-    return str(current[0]) if current is not None else "idle"
-
-
-def build_session_response(
-    store: AgentsStore,
-    session: AgentSession,
-    *,
-    thread_cache: Dict[str, tuple[str, int]] | None = None,
-    last_activity_at: datetime | None = None,
-    runtime_overlay: SessionRuntimeView | None = None,
-    first_user_message: str | None = None,
-    match_event_id: int | None = None,
-    match_snippet: str | None = None,
-    match_role: str | None = None,
-    match_score: float | None = None,
-    binding_overlay=None,
-    transcript_preview: TranscriptPreview | None = None,
-    owner_id: int | None = None,
-    summary_status: str | None = None,
-    control_overlay=None,
-    kernel_capabilities=None,
-    has_pending_response_turn: bool = False,
-    pause_request: dict[str, Any] | None = None,
-    archive_state: str = "current",
-    launch_attempt: SessionLaunchAttempt | None | object = _LAUNCH_ATTEMPT_MISSING,
-    launch_readiness: LiveLaunchReadinessView | None = None,
-    sharer: SessionSharerResponse | None = None,
-) -> SessionResponse:
-    cache = thread_cache if thread_cache is not None else {}
-    thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
-    kernel_projection = project_session_kernel_fields(store.db, session, capabilities=kernel_capabilities)
-    resolved_kernel_capabilities = kernel_projection.capabilities
-    is_console = str(getattr(session, "origin_kind", "") or "").strip() == "console"
-    if is_console:
-        turn_state = _current_console_turn_state(store.db, session_id=session.id)
-        device_id = str(getattr(session, "device_id", "") or "").strip()
-        cwd = str(getattr(session, "cwd", "") or "").strip()
-        provider = str(getattr(session, "provider", "") or "").strip()
-        registry = get_machine_control_channel_registry()
-        machine_online = bool(owner_id is not None and device_id and registry.is_online(owner_id=owner_id, device_id=device_id))
-        resolved_kernel_capabilities = project_console_turn_capabilities(
-            resolved_kernel_capabilities,
-            # Both, deliberately: `user_closed` writes `closed_at` and leaves
-            # `ended_at` NULL, so an `ended_at`-only test let a closed session
-            # keep advertising a startable turn.
-            closed=bool(getattr(session, "closed_at", None) or getattr(session, "ended_at", None)),
-            execution_target_available=bool(device_id and cwd),
-            turn_state=turn_state,
-            machine_online=machine_online,
-            adapter_available=bool(
-                machine_online
-                and registry.supports(
-                    owner_id=owner_id,
-                    device_id=device_id,
-                    capability=f"{provider}.turn_start",
-                )
-            ),
-            interrupt_adapter_available=bool(
-                machine_online
-                and registry.supports(
-                    owner_id=owner_id,
-                    device_id=device_id,
-                    capability=f"{provider}.turn_interrupt",
-                )
-            ),
-        )
-    capability_flags = resolved_kernel_capabilities
-    current_now = datetime.now(timezone.utc)
-    display_last_activity_at = last_activity_at or session.ended_at or session.started_at
-    transcript_preview_response = build_session_transcript_preview_response(
-        transcript_preview,
-        last_activity_at=last_activity_at,
-        now=current_now,
-    )
-    has_visible_transcript_preview = bool(
-        transcript_preview_response is not None and transcript_preview_response.text.strip() and not transcript_preview_response.is_stale
-    )
-    if launch_readiness is not None:
-        effective_launch_attempt = None
-    elif launch_attempt is _LAUNCH_ATTEMPT_MISSING:
-        effective_launch_attempt = _latest_launch_attempt(store.db, session.id)
-    else:
-        effective_launch_attempt = launch_attempt
-    archive_launch_lifecycle = None if launch_readiness is not None else project_launch_lifecycle(effective_launch_attempt)
-    launch_state = launch_readiness.launch_state if launch_readiness is not None else None
-    execution_lifetime = launch_readiness.execution_lifetime if launch_readiness is not None else None
-    launch_error_code = launch_readiness.launch_error_code if launch_readiness is not None else None
-    launch_error_message = launch_readiness.launch_error_message if launch_readiness is not None else None
-    if archive_launch_lifecycle is not None:
-        launch_state = archive_launch_lifecycle.state
-        execution_lifetime = archive_launch_lifecycle.execution_lifetime
-        launch_error_code = archive_launch_lifecycle.error_code
-        launch_error_message = archive_launch_lifecycle.error_message
-    lineage_projection = kernel_projection.lineage
-    title_state, title_source = resolve_title_provenance(
-        anchor_title=session.anchor_title,
-        first_user_message=first_user_message,
-        user_messages=session.user_messages,
-        title_retry_at=getattr(session, "title_retry_at", None),
-        title_last_error=getattr(session, "title_last_error", None),
-    )
-    from zerg.services.session_preferences import load_session_preferences
-
-    preferences = load_session_preferences(session.id, owner_id=owner_id, standalone_session=session)
-    if is_console:
-        session_state = build_session_state_facts(
-            session=session,
-            capabilities=capability_flags,
-            launch_state=launch_state,
-            launch_error_code=launch_error_code,
-            launch_error_message=launch_error_message,
-            execution_lifetime=execution_lifetime,
-            last_activity_at=display_last_activity_at,
-            has_visible_transcript_preview=has_visible_transcript_preview,
-            has_pending_response_turn=has_pending_response_turn,
-            user_messages=session.user_messages or 0,
-            assistant_messages=session.assistant_messages or 0,
-            archive_state=archive_state,
-            pause_request=pause_request,
-            runtime_view=runtime_overlay,
-            liveness=None,
-            now=current_now,
-        )
-    else:
-        session_state = build_archive_session_state_facts(
-            session=session,
-            capabilities=capability_flags,
-            launch_state=launch_state,
-            launch_error_code=launch_error_code,
-            launch_error_message=launch_error_message,
-            execution_lifetime=execution_lifetime,
-            last_activity_at=display_last_activity_at,
-            has_visible_transcript_preview=has_visible_transcript_preview,
-            has_pending_response_turn=has_pending_response_turn,
-            user_messages=session.user_messages or 0,
-            assistant_messages=session.assistant_messages or 0,
-            archive_state=archive_state,
-            pause_request=pause_request,
-        )
-    runtime_display = build_compat_runtime_display_response(
-        session_state=session_state,
-        pause_request=pause_request,
-        now=current_now,
-    )
-    runtime_aliases = _archive_runtime_aliases(
-        session_state=session_state,
-        runtime_display=runtime_display,
-        last_activity_at=last_activity_at,
-    )
-    response_capabilities = project_compat_capabilities_from_state(
-        build_session_capabilities_response(
-            session=session,
-            capability_flags=capability_flags,
-            runtime_display=runtime_display,
-            runtime_facts=None,
-            kernel_capabilities=resolved_kernel_capabilities,
-            launch_lifecycle=archive_launch_lifecycle,
-            session_mode=session_state.mode,
-        ),
-        session_state,
-    )
-    return SessionResponse(
-        id=str(session.id),
-        provider=session.provider,
-        provider_session_id=kernel_projection.provider_session_id,
-        project=session.project,
-        device_id=session.device_id,
-        environment=session.environment,
-        cwd=session.cwd,
-        git_repo=session.git_repo,
-        git_branch=session.git_branch,
-        started_at=session.started_at,
-        ended_at=session.ended_at,
-        user_messages=session.user_messages or 0,
-        assistant_messages=session.assistant_messages or 0,
-        tool_calls=session.tool_calls or 0,
-        last_activity_at=last_activity_at,
-        **runtime_aliases,
-        summary=session.summary,
-        summary_title=session.summary_title,
-        anchor_title=session.anchor_title,
-        timeline_title=resolve_timeline_title(
-            anchor_title=(session.anchor_title if not str(getattr(session, "title_last_error", "") or "").strip() else None),
-            summary_title=session.summary_title,
-            summary_status=summary_status,
-            first_user_message=first_user_message,
-            project=session.project,
-            git_branch=session.git_branch,
-            provider=session.provider,
-            user_messages=session.user_messages or 0,
-            assistant_messages=session.assistant_messages or 0,
-            tool_calls=session.tool_calls or 0,
-        ),
-        title_state=title_state,
-        title_source=title_source,
-        hidden_from_default_timeline=bool(getattr(session, "hidden_from_default_timeline", False)),
-        launch_actor=str(getattr(session, "launch_actor", "") or "").strip() or None,
-        launch_surface=str(getattr(session, "launch_surface", "") or "").strip() or None,
-        summary_status=summary_status,
-        first_user_message=first_user_message,
-        match_event_id=match_event_id,
-        match_snippet=match_snippet,
-        match_role=match_role,
-        match_score=match_score,
-        thread_root_session_id=lineage_projection.thread_root_session_id,
-        thread_head_session_id=thread_head_session_id,
-        thread_continuation_count=thread_continuation_count,
-        continued_from_session_id=lineage_projection.continued_from_session_id,
-        continuation_kind=lineage_projection.continuation_kind,
-        origin_label=lineage_projection.origin_label,
-        home_label=capability_flags.home_label,
-        branched_from_event_id=lineage_projection.branched_from_event_id,
-        is_writable_head=lineage_projection.is_writable_head,
-        is_sidechain=lineage_projection.is_sidechain,
-        control=build_session_control_response(
-            session,
-            db=store.db,
-            capability_flags=capability_flags,
-            control_projection=kernel_projection.control,
-        ),
-        capabilities=response_capabilities,
-        session_state=session_state,
-        runtime_display=runtime_display,
-        transcript_preview=transcript_preview_response,
-        timeline_card=build_session_timeline_card_response(
-            runtime_view=runtime_overlay,
-            runtime_display=runtime_display,
-            session_state=session_state,
-        ),
-        loop_mode=_coerce_session_loop_mode(preferences.loop_mode),
-        user_state=preferences.user_state,
-        user_hidden_from_timeline=preferences.user_hidden_from_timeline,
-        execution_lifetime=execution_lifetime,
-        sharer=sharer,
-    )
 
 
 def build_session_transcript_preview_response(

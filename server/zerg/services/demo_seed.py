@@ -8,13 +8,15 @@ from datetime import timezone
 
 from sqlalchemy.orm import Session
 
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
-from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_run
+from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.demo_sessions import build_demo_agent_sessions
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -217,6 +219,73 @@ def _seed_demo_presentation(db: Session, sessions_by_provider_id: dict[str, Agen
     ingest_runtime_events(db, runtime_events)
 
 
+def _insert_demo_session(db: Session, data) -> None:
+    """Write a disposable demo fixture without reviving the retired v1 ingest path."""
+    session = AgentSession(
+        id=data.id,
+        provider=data.provider,
+        environment=data.environment,
+        project=data.project,
+        device_id=data.device_id,
+        device_name=data.device_name or (data.device_id or "").replace("shipper-", "") or None,
+        cwd=data.cwd,
+        git_repo=data.git_repo,
+        git_branch=data.git_branch,
+        started_at=data.started_at,
+        ended_at=None,
+        last_activity_at=max((event.timestamp for event in data.events), default=data.started_at),
+        user_messages=sum(event.role == "user" for event in data.events),
+        assistant_messages=sum(event.role == "assistant" and not event.tool_name for event in data.events),
+        tool_calls=sum(bool(event.tool_name) for event in data.events),
+        first_user_message_preview=next(
+            (event.content_text for event in data.events if event.role == "user" and event.content_text),
+            None,
+        ),
+        launch_actor="automation",
+        launch_surface="test",
+    )
+    db.add(session)
+    db.flush()
+    thread = ensure_primary_thread(db, session)
+    record_thread_alias(
+        db,
+        thread=thread,
+        provider=data.provider,
+        alias_kind="longhouse_session_id",
+        alias_value=str(session.id),
+    )
+    if data.provider_session_id:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=data.provider,
+            alias_kind="provider_session_id",
+            alias_value=data.provider_session_id,
+        )
+    branch = AgentSessionBranch(session_id=session.id, branch_reason="root", is_head=1)
+    db.add(branch)
+    db.flush()
+    for event in data.events:
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                thread_id=thread.id,
+                branch_id=branch.id,
+                role=event.role,
+                content_text=event.content_text,
+                tool_name=event.tool_name,
+                tool_input_json=event.tool_input_json,
+                tool_output_text=event.tool_output_text,
+                tool_call_id=event.tool_call_id,
+                timestamp=event.timestamp,
+                source_path=event.source_path,
+                source_offset=event.source_offset,
+                raw_json=event.raw_json,
+            )
+        )
+    db.commit()
+
+
 def seed_missing_demo_sessions(db: Session, now: datetime | None = None) -> tuple[int, int]:
     """Seed only missing demo sessions.
 
@@ -227,7 +296,6 @@ def seed_missing_demo_sessions(db: Session, now: datetime | None = None) -> tupl
     seeded_count = 0
     failed_count = 0
 
-    store = AgentsStore(db)
     anchor = now or datetime.now(timezone.utc)
     sessions = build_demo_agent_sessions(anchor)
 
@@ -243,7 +311,7 @@ def seed_missing_demo_sessions(db: Session, now: datetime | None = None) -> tupl
             continue
 
         try:
-            store.ingest_session(session, trigger_initial_title_generation=False)
+            _insert_demo_session(db, session)
             seeded_count += 1
             existing_ids.add(provider_session_id)
         except Exception:
@@ -253,10 +321,6 @@ def seed_missing_demo_sessions(db: Session, now: datetime | None = None) -> tupl
 
     _seed_demo_presentation(db, _demo_sessions_by_provider_id(db), anchor=anchor)
 
-    # IngestSession commits each session; this commit persists the deterministic
-    # presentation/runtime state and any FTS rebuild.
-    if seeded_count > 0:
-        store.rebuild_fts()
     db.commit()
 
     return seeded_count, failed_count

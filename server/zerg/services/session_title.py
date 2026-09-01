@@ -174,8 +174,6 @@ def resolve_title_provenance(
 def resolve_timeline_title(
     *,
     anchor_title: str | None,
-    summary_title: str | None,
-    summary_status: str | None,
     first_user_message: str | None,
     project: str | None,
     git_branch: str | None = None,
@@ -191,9 +189,9 @@ def resolve_timeline_title(
       2. a sanitized ``first_user_message`` — temporary recovery display only
       3. structured ``{project} · {branch}`` context fallback
 
-    ``summary_title`` is deliberately not a title candidate. It is a drifting
-    summary/search artifact; allowing it here would make a summary race look
-    like a successfully generated session title and hide title debt.
+    Summary fields are deliberately not inputs. They are drifting search
+    artifacts; allowing them here would make a summary race look like a
+    successfully generated session title and hide title debt.
     """
     frozen = sanitize_timeline_title(anchor_title)
     if frozen:

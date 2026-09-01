@@ -10,13 +10,13 @@ from uuid import uuid4
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from tests_lite.agents_fixture import SessionFixtureStore
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.services.agents.models import EventIngest
 from zerg.services.agents.models import IngestResult
 from zerg.services.agents.models import SessionIngest
-from zerg.services.agents.store import AgentsStore
 from zerg.services.archive_events_verifier import verify_session_event_archive_coverage
 from zerg.services.archive_primary import write_ingest_archive
 from zerg.services.archive_store import FilesystemArchiveStore
@@ -52,7 +52,7 @@ def test_verifier_flags_uncovered_event_rows(tmp_path, monkeypatch):
         ("assistant", "hi", "2026-01-01T00:00:02Z", 50, '{"type":"assistant","content":"hi"}'),
     ]
     with factory() as db:
-        store = AgentsStore(db)
+        store = SessionFixtureStore(db)
         store.ingest_session(_session(session_id, events))
         # Archive ONLY the first event's bytes.
         write_ingest_archive(
@@ -88,7 +88,7 @@ def test_verifier_full_coverage(tmp_path, monkeypatch):
         ("assistant", "hi", "2026-01-01T00:00:02Z", 50, '{"type":"assistant","content":"hi"}'),
     ]
     with factory() as db:
-        store = AgentsStore(db)
+        store = SessionFixtureStore(db)
         store.ingest_session(_session(session_id, events))
         write_ingest_archive(
             db,

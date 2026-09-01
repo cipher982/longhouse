@@ -56,12 +56,8 @@ def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> Non
     assert PUSH_CODEX_COORDINATION_SCENARIO_ID not in ORPHANED_CAPABILITY_SCENARIO_IDS
 
 
-def test_default_harness_scenarios_has_33_entries(facts) -> None:
-    # 32 -> 33 on 2026-08-30: console_thread_fork, the mirror image of
-    # console_thread_continue. A branch's first turn must land on a different
-    # provider thread where a continuation lands on the same one, so it needs
-    # its own scenario rather than a reuse of one asserting the opposite.
-    assert len(facts.default_harness_scenarios) == 33
+def test_default_harness_scenarios_has_32_entries(facts) -> None:
+    assert len(facts.default_harness_scenarios) == 32
     assert "probe_identity" in facts.default_harness_scenarios
     assert "managed_session_e2e" in facts.default_harness_scenarios
     assert "interaction_semantics" in facts.default_harness_scenarios

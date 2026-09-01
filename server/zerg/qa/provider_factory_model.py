@@ -83,7 +83,6 @@ DEFAULT_HARNESS_SCENARIOS: tuple[str, ...] = (
     "old_new_release_diff",
     "full_action_suite",
     "parse_ingest_project",
-    "db_ingest_project",
     "interaction_semantics",
     "session_projection",
     "timeline_projection",

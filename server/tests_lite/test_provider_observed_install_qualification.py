@@ -125,9 +125,9 @@ def test_cursor_observed_install_keeps_native_resume_unqualified_until_direct_pr
     assert result["status"] == "fail"
     assert result["build_provenance"] == "observed_install"
     assert result["full_column_gate"]["status"] == "fail"
-    assert result["full_column_gate"]["captured_scenario_count"] == 33
+    assert result["full_column_gate"]["captured_scenario_count"] == 32
     assert result["full_column_gate"]["coverage_gap_kind_counts"] == {
-        "passed": 28,
+        "passed": 27,
         "no_token_safety_gate": 1,
         "not_applicable": 2,
         "provider_contract_unsupported": 1,

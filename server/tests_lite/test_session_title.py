@@ -15,8 +15,6 @@ def test_path_only_prompt_uses_project_fallback_for_timeline_copy():
     assert is_path_like_title(path)
     assert resolve_timeline_title(
         anchor_title=None,
-        summary_title=None,
-        summary_status="pending",
         first_user_message=path,
         project="longhouse",
         git_branch="main",
@@ -112,8 +110,6 @@ class TestResolveTimelineTitle:
     def _resolve(self, **overrides):
         base = dict(
             anchor_title=None,
-            summary_title=None,
-            summary_status=None,
             first_user_message=None,
             project="zerg",
             git_branch="main",
@@ -126,26 +122,18 @@ class TestResolveTimelineTitle:
         return resolve_timeline_title(**base)
 
     def test_prefers_frozen_anchor(self):
-        assert self._resolve(anchor_title="Fix Refresh Token", summary_title="Now Doing X") == "Fix Refresh Token"
+        assert self._resolve(anchor_title="Fix Refresh Token") == "Fix Refresh Token"
 
     def test_anchor_wins_even_when_summary_drifts(self):
-        # Muscle-memory property: the row does not move when summary_title changes.
-        out = self._resolve(anchor_title="Refresh Token Rotation", summary_title="Completely Different Topic")
-        assert out == "Refresh Token Rotation"
-
-    def test_summary_never_counts_as_a_session_title(self):
-        assert self._resolve(summary_title="Debug Bedrock Race") == "zerg · main"
+        assert self._resolve(anchor_title="Refresh Token Rotation") == "Refresh Token Rotation"
 
     def test_falls_to_sanitized_first_message(self):
         out = self._resolve(first_user_message='"""\nhelp me debug this thing')
         assert out == "help me debug this thing"
 
     def test_first_message_beats_summarizing_placeholder(self):
-        out = self._resolve(first_user_message="add a new endpoint", summary_status="pending")
+        out = self._resolve(first_user_message="add a new endpoint")
         assert out == "add a new endpoint"
-
-    def test_summary_pending_does_not_mask_title_debt(self):
-        assert self._resolve(summary_status="pending") == "zerg · main"
 
     def test_structured_fallback_last(self):
         assert self._resolve() == "zerg · main"
@@ -164,7 +152,7 @@ class TestResolveTimelineTitle:
 
     def test_never_freezes_garbage_via_anchor(self):
         # An anchor that sanitizes to nothing must fall through, not render blank.
-        out = self._resolve(anchor_title='"""', summary_title="Real Title")
+        out = self._resolve(anchor_title='"""')
         assert out == "zerg · main"
 
 

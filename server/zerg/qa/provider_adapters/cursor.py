@@ -171,13 +171,13 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
                 ),
             }
         ]
-        projection, evidence, db_ingest = self._project_ingest_and_merge(
+        projection, evidence, projection_check = self._project_and_merge(
             package,
             operation_evidence=evidence,
             raw_events=raw_events,
             provider_session_id=provider_session_id,
         )
-        if db_ingest.get("status") != STATUS_PASS:
+        if projection_check.get("status") != STATUS_PASS:
             passed = False
         payload = {
             **projection,
@@ -196,7 +196,7 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
             },
             "synthetic": False,
             "operation_evidence": evidence,
-            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
+            "canonical_projection": self._projection_check_block(projection_check),
         }
         if gate_version != probe_version:
             payload["failure_code"] = "cursor_gate0_version_mismatch"
@@ -216,9 +216,9 @@ class CursorHarnessAdapter(UniversalProviderAdapter):
         elif not native_evidence_passed:
             payload["failure_code"] = "cursor_native_evidence_missing"
             payload["message"] = "Cursor Gate 0 did not bind a verified native store and hook-event receipt."
-        elif db_ingest.get("status") != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "cursor_gate0_db_ingest_failed"
-            payload["message"] = "Cursor Gate 0 evidence did not pass Longhouse DB ingest assertions."
+        elif projection_check.get("status") != STATUS_PASS:
+            payload["failure_code"] = projection_check.get("failure_code") or "cursor_gate0_projection_check_failed"
+            payload["message"] = "Cursor Gate 0 evidence did not pass canonical provider projection assertions."
         package.write_json(f"assertions/{scenario}.json", payload)
         return payload
 

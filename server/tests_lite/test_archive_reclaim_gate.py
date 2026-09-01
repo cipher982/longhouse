@@ -16,16 +16,17 @@ from uuid import uuid4
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from tests_lite.agents_fixture import SessionFixtureStore
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSourceLine
+from zerg.models.models import User  # noqa: F401 -- registers the users table on shared metadata
 from zerg.services.agents.models import IngestResult
 from zerg.services.agents.models import SessionIngest
 from zerg.services.agents.models import SourceLineIngest
-from zerg.services.agents.store import AgentsStore
-from zerg.services.archive_reclaim_verifier import verify_session_archive_coverage
 from zerg.services.archive_primary import write_ingest_archive
+from zerg.services.archive_reclaim_verifier import verify_session_archive_coverage
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.archive_transcript import load_session_source_line_bytes
 
@@ -52,7 +53,7 @@ def test_slim_row_written_when_raw_disabled(tmp_path):
     session_id = uuid4()
     lines = [("/tmp/s.jsonl", 0, '{"type":"user"}'), ("/tmp/s.jsonl", 40, '{"type":"assistant"}')]
     with factory() as db:
-        store = AgentsStore(db)
+        store = SessionFixtureStore(db)
         _ingest(store, session_id, lines, write_legacy_raw=False)
         db.commit()
 
@@ -79,7 +80,7 @@ def test_archive_lookup_disambiguates_revisions_by_line_hash(tmp_path, monkeypat
 
     # Ingest two revisions at the SAME offset, and archive both.
     with factory() as db:
-        store = AgentsStore(db)
+        store = SessionFixtureStore(db)
         _ingest(store, session_id, [("/tmp/s.jsonl", 10, v1)])
         _ingest(store, session_id, [("/tmp/s.jsonl", 10, v2)])
         for raw in (v1, v2):
@@ -124,7 +125,7 @@ def test_verifier_flags_uncovered_rows(tmp_path, monkeypatch):
 
     # Ingest two rows but archive only the FIRST one.
     with factory() as db:
-        store = AgentsStore(db)
+        store = SessionFixtureStore(db)
         _ingest(store, session_id, lines)
         write_ingest_archive(
             db,

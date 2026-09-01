@@ -25,6 +25,7 @@ def test_agents_routes_allow_missing_device_token_when_auth_disabled(monkeypatch
     """Dev mode serves a machine read that carries no token at all."""
 
     with provision_live_catalog() as live:
+        live.create_user("auth-disabled@test.local")
         # Only the environment: ``verify_agents_token`` reads settings per
         # request, which is what makes the operator's switch take effect.
         monkeypatch.setenv("AUTH_DISABLED", "1")

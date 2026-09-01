@@ -296,8 +296,6 @@ def _title_projection(session: LiveSessionCatalog, card: LiveTimelineCard) -> tu
     trusted_anchor = None if title_error else sanitize_timeline_title(session.anchor_title, max_words=6)
     title = resolve_timeline_title(
         anchor_title=trusted_anchor,
-        summary_title=None,
-        summary_status="ready" if session.summary else "unavailable",
         first_user_message=first_user_message,
         project=session.project,
         git_branch=session.git_branch,
