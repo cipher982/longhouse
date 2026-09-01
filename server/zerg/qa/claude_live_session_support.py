@@ -40,6 +40,7 @@ from typing import Any
 from typing import Callable
 
 from zerg.qa.live_session_toolkit import TranscriptShipper
+from zerg.qa.live_session_toolkit import latest_claude_startup_prompt
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.managed_claude_live import assistant_transcript_contains
 from zerg.qa.managed_claude_live import channel_send
@@ -444,6 +445,7 @@ def launch_claude_session(
         if not session.alive():
             raise ScenarioError(f"longhouse claude exited before channel readiness (exit={session.process.returncode})")
         compact = re.sub(r"\s+", "", terminal_text(terminal_path))
+        startup_prompt = latest_claude_startup_prompt(compact)
         # Recent Claude builds render a native bypass-permissions
         # acknowledgement ("1. No, exit" / "2. Yes, I accept") before
         # publishing channel state, on every fresh launch in this sandboxed
@@ -452,7 +454,7 @@ def launch_claude_session(
         # this helper never learned to, so every producer built on top of it
         # hung at this exact prompt indefinitely (found registering the 12
         # non-Resume producers' real end-to-end verification).
-        if not confirmed_permission_bypass:
+        if not confirmed_permission_bypass and startup_prompt == "permission":
             if "1.No,exit" in compact and "2.Yes,Iaccept" in compact:
                 session.write(b"2\r")
                 confirmed_permission_bypass = True
@@ -466,7 +468,7 @@ def launch_claude_session(
                 elif permission_selection_sent_at is not None and now - permission_selection_sent_at >= 1.0:
                     session.write(b"\r")
                     confirmed_permission_bypass = True
-        if not confirmed_trust and "Yes,Itrustthisfolder" in compact:
+        elif not confirmed_trust and startup_prompt == "trust":
             # The first choice is intentionally ``No, exit``. Select the
             # explicit trust choice only after the initial selector settles,
             # then allow its repaint to settle before submitting it.
@@ -479,7 +481,7 @@ def launch_claude_session(
             elif trust_selection_sent_at is not None and now - trust_selection_sent_at >= 1.0:
                 session.write(b"\r")
                 confirmed_trust = True
-        if not confirmed_channel and "Iamusingthisforlocaldevelopment" in compact:
+        elif not confirmed_channel and startup_prompt == "channel":
             session.write(b"\r")
             confirmed_channel = True
         candidate = find_channel_session_id(workspace, home=session_home)

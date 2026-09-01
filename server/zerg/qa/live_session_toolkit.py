@@ -1029,6 +1029,18 @@ def _terminal_text(path: Path) -> str:
     return _ANSI_CONTROL_RE.sub("", raw.decode("utf-8", "replace"))
 
 
+def latest_claude_startup_prompt(compact_terminal: str) -> str | None:
+    """Return the newest Claude choice prompt in an append-only recording."""
+
+    positions = {
+        "permission": compact_terminal.rfind("Yes,Iaccept"),
+        "trust": compact_terminal.rfind("Yes,Itrustthisfolder"),
+        "channel": compact_terminal.rfind("Iamusingthisforlocaldevelopment"),
+    }
+    prompt, position = max(positions.items(), key=lambda item: item[1])
+    return prompt if position >= 0 else None
+
+
 def _accept_claude_permission_prompt(process: PtyProcess) -> None:
     """Accept Claude's first-run bypass-permissions acknowledgement.
 
@@ -1278,7 +1290,6 @@ def prepare_claude_profile(
             process.drain()
             if process.process.poll() is not None:
                 raise RuntimeError("Claude onboarding process exited before profile completion")
-            _accept_claude_permission_prompt(process)
             compact = re.sub(r"\s+", "", _terminal_text(recording))
             if "ClaudeCode" in compact and "Welcomeback!" in compact:
                 process.send("\x04")
@@ -1295,7 +1306,10 @@ def prepare_claude_profile(
                     "trust_confirmed": confirmed_trust,
                     "duration_seconds": round(time.monotonic() - started, 3),
                 }
-            if theme_attempts == 0 and "Choosethetextstyle" in compact:
+            startup_prompt = latest_claude_startup_prompt(compact)
+            if startup_prompt == "permission":
+                _accept_claude_permission_prompt(process)
+            elif theme_attempts == 0 and "Choosethetextstyle" in compact:
                 process.send("\r")
                 theme_attempts += 1
             elif "DetectedacustomAPIkey" in compact and api_key_attempts == 0:
@@ -1307,7 +1321,7 @@ def prepare_claude_profile(
             elif security_notes_attempts == 0 and ("Securitynotes" in compact or "PressEnte" in compact):
                 process.send("\r")
                 security_notes_attempts += 1
-            elif not confirmed_trust and "Yes,Itrustthisfolder" in compact:
+            elif not confirmed_trust and startup_prompt == "trust":
                 # Claude's safety-first selector defaults to ``No, exit``.
                 # Give both the initial selector and its changed selection a
                 # full repaint boundary before sending the next key.

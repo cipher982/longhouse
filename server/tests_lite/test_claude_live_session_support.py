@@ -39,11 +39,13 @@ def test_launch_selects_workspace_trust_instead_of_default_exit(tmp_path: Path, 
     monkeypatch.setattr(m, "wait_for_channel_ready", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(m, "read_provider_session_id", lambda *_args, **_kwargs: "provider-session-1")
 
-    def run_until_ready(predicate: Callable[[], object], **_kwargs: object) -> object:
-        for _ in range(5):
+    def run_until_ready(predicate: Callable[[], object], *, timeout: float, **_kwargs: object) -> object:
+        elapsed = 0.0
+        while elapsed <= timeout:
             value = predicate()
             if value:
                 return value
+            elapsed += 0.5
         raise AssertionError("predicate did not become ready")
 
     ticks = iter((0.0, 0.5, 1.0, 1.5, 2.0))
@@ -56,7 +58,7 @@ def test_launch_selects_workspace_trust_instead_of_default_exit(tmp_path: Path, 
         name="test",
         env={"HOME": str(tmp_path)},
         terminal_path=tmp_path / "terminal.log",
-        launch_timeout_secs=1.0,
+        launch_timeout_secs=3.0,
     )
 
     assert launched is session
@@ -92,11 +94,13 @@ def test_launch_accepts_unnumbered_permission_prompt_across_repaints(tmp_path: P
     monkeypatch.setattr(m, "wait_for_channel_ready", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(m, "read_provider_session_id", lambda *_args, **_kwargs: "provider-session-1")
 
-    def run_until_ready(predicate: Callable[[], object], **_kwargs: object) -> object:
-        for _ in range(5):
+    def run_until_ready(predicate: Callable[[], object], *, timeout: float, **_kwargs: object) -> object:
+        elapsed = 0.0
+        while elapsed <= timeout:
             value = predicate()
             if value:
                 return value
+            elapsed += 0.5
         raise AssertionError("predicate did not become ready")
 
     ticks = iter((0.0, 0.5, 1.0, 1.5, 2.0))
@@ -109,12 +113,68 @@ def test_launch_accepts_unnumbered_permission_prompt_across_repaints(tmp_path: P
         name="test",
         env={"HOME": str(tmp_path)},
         terminal_path=tmp_path / "terminal.log",
-        launch_timeout_secs=1.0,
+        launch_timeout_secs=3.0,
     )
 
     assert launched is session
     assert session_id == "session-1"
     assert provider_session_id == "provider-session-1"
+    assert session.writes == [b"\x1b[B", b"\r"]
+
+
+def test_launch_handles_only_the_latest_prompt_in_append_only_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSession:
+        process = SimpleNamespace(returncode=None)
+
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        def alive(self) -> bool:
+            return True
+
+        def write(self, value: bytes) -> None:
+            self.writes.append(value)
+
+        def close(self) -> None:
+            pass
+
+    session = FakeSession()
+    monkeypatch.setattr(m.ProviderPtySession, "start", lambda **_kwargs: session)
+    monkeypatch.setattr(
+        m,
+        "terminal_text",
+        lambda _path: "No, exit  Yes, I trust this folder  No, exit  Yes, I accept",
+    )
+    monkeypatch.setattr(
+        m,
+        "find_channel_session_id",
+        lambda *_args, **_kwargs: "session-1" if session.writes == [b"\x1b[B", b"\r"] else None,
+    )
+    monkeypatch.setattr(m, "wait_for_channel_ready", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(m, "read_provider_session_id", lambda *_args, **_kwargs: "provider-session-1")
+
+    def run_until_ready(predicate: Callable[[], object], *, timeout: float, **_kwargs: object) -> object:
+        elapsed = 0.0
+        while elapsed <= timeout:
+            value = predicate()
+            if value:
+                return value
+            elapsed += 0.5
+        raise AssertionError("predicate did not become ready")
+
+    ticks = iter((0.0, 0.5, 1.0, 1.5, 2.0))
+    monkeypatch.setattr(m, "wait_until", run_until_ready)
+    monkeypatch.setattr(m.time, "monotonic", lambda: next(ticks))
+
+    m.launch_claude_session(
+        workspace=tmp_path,
+        project="test",
+        name="test",
+        env={"HOME": str(tmp_path)},
+        terminal_path=tmp_path / "terminal.log",
+        launch_timeout_secs=3.0,
+    )
+
     assert session.writes == [b"\x1b[B", b"\r"]
 
 

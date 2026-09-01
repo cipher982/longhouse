@@ -2589,6 +2589,17 @@ def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:
     assert process.claude_permission_acceptance_sent is True
 
 
+def test_latest_claude_startup_prompt_uses_append_only_order() -> None:
+    permission = "No,exitYes,Iaccept"
+    trust = "No,exitYes,Itrustthisfolder"
+    channel = "Iamusingthisforlocaldevelopment"
+
+    assert live_session_toolkit.latest_claude_startup_prompt(f"{trust}{permission}") == "permission"
+    assert live_session_toolkit.latest_claude_startup_prompt(f"{permission}{trust}") == "trust"
+    assert live_session_toolkit.latest_claude_startup_prompt(f"{trust}{channel}") == "channel"
+    assert live_session_toolkit.latest_claude_startup_prompt("ClaudeCode") is None
+
+
 def test_unnumbered_claude_permission_prompt_waits_across_both_repaints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     recording = tmp_path / "claude.tty"
     recording.write_text("No, exit\nYes, I accept\n", encoding="utf-8")
