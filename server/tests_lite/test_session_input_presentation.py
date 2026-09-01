@@ -16,6 +16,7 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
 from tests_lite._capability_test_helper import build_session_capabilities
 from zerg.services.session_views import build_session_capabilities_response
+from zerg.services.session_views import project_compat_capabilities_from_state
 
 
 def _session(**overrides):
@@ -35,42 +36,57 @@ def _session(**overrides):
     return SimpleNamespace(**values)
 
 
-def _runtime(**overrides):
+def _state(**overrides):
     values = {
         "lifecycle": "open",
         "host_state": "online",
-        "activity_recency": "live",
-        "state": "idle",
-        "is_executing": False,
+        "activity_state": "quiescent",
+        "control_connection": "connected",
     }
     values.update(overrides)
-    return SimpleNamespace(**values)
-
-
-def _facts(**overrides):
-    values = {
-        "control_path": "managed",
-        "control_state": "online",
-        "control_reason": None,
-        "host_state": "online",
-        "lifecycle": "open",
-        "phase_kind": "idle",
-    }
-    values.update(overrides)
+    connection = values["control_connection"]
+    action_state = "available" if connection == "connected" else "unavailable"
+    action_reason = None if action_state == "available" else f"control_{connection}"
+    access = {
+        "connected": SimpleNamespace(key="live_control", label="Live control", tone="live"),
+        "disconnected": SimpleNamespace(key="reattach", label="Reattach", tone="reattach"),
+        "degraded": SimpleNamespace(key="control_degraded", label="Control degraded", tone="degraded"),
+        "unknown": SimpleNamespace(key="control_unknown", label="Control unknown", tone="inactive"),
+    }.get(connection)
     return SimpleNamespace(
-        control_path=values["control_path"],
+        mode="helm",
+        disposition=SimpleNamespace(state=values["lifecycle"]),
+        run=None,
+        host=SimpleNamespace(state=values["host_state"]),
+        activity=SimpleNamespace(state=values["activity_state"]),
         control=SimpleNamespace(
-            state="none" if values["control_path"] == "unmanaged" else values["control_state"],
-            reason=values["control_reason"],
-            source="machine_heartbeat" if values["control_path"] == "managed" else None,
+            ownership="owned",
+            connection=connection,
+            actions=SimpleNamespace(
+                start_turn=SimpleNamespace(state="unavailable", reason="not_console"),
+                send_input=SimpleNamespace(state=action_state, reason=action_reason),
+                interrupt=SimpleNamespace(state=action_state, reason=action_reason),
+                terminate=SimpleNamespace(state=action_state, reason=action_reason),
+                reattach=SimpleNamespace(
+                    state="available" if connection == "disconnected" else "unavailable",
+                    reason=None if connection == "disconnected" else "not_needed",
+                ),
+                resume=SimpleNamespace(state=action_state, reason=action_reason),
+            ),
         ),
-        host=SimpleNamespace(
-            state=values["host_state"],
-            source="machine_heartbeat" if values["host_state"] != "unknown" else None,
-        ),
-        lifecycle=SimpleNamespace(state=values["lifecycle"], reason=None),
-        phase=SimpleNamespace(kind=values["phase_kind"]),
+        presentation=SimpleNamespace(primary=None, access=access),
+        launch=None,
+        transcript=SimpleNamespace(live_observation=True),
     )
+
+
+def _projected_response(session, state):
+    response = build_session_capabilities_response(
+        session=session,
+        capability_flags=build_session_capabilities(session),
+        session_state=state,
+    )
+    return project_compat_capabilities_from_state(response, state)
 
 
 def test_live_idle_session_exposes_enabled_composer_with_auto_intent():
@@ -79,7 +95,7 @@ def test_live_idle_session_exposes_enabled_composer_with_auto_intent():
     response = build_session_capabilities_response(
         session=session,
         capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(),
+        session_state=_state(),
     )
 
     assert response.input_mode == "live"
@@ -96,7 +112,7 @@ def test_active_steerable_session_exposes_steer_as_primary_intent():
     response = build_session_capabilities_response(
         session=session,
         capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(state="running", is_executing=True),
+        session_state=_state(activity_state="executing"),
     )
 
     assert response.input_mode == "live"
@@ -114,7 +130,7 @@ def test_active_claude_channel_session_exposes_steer_as_primary_intent():
     response = build_session_capabilities_response(
         session=session,
         capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(state="running", is_executing=True),
+        session_state=_state(activity_state="executing"),
     )
 
     assert response.input_mode == "live"
@@ -132,7 +148,7 @@ def test_idle_claude_channel_session_exposes_auto_primary_intent():
     response = build_session_capabilities_response(
         session=session,
         capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(),
+        session_state=_state(),
     )
 
     assert response.input_mode == "live"
@@ -146,7 +162,7 @@ def test_offline_managed_session_exposes_disabled_composer_reason():
     response = build_session_capabilities_response(
         session=session,
         capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(host_state="stale", activity_recency="stale", is_executing=False),
+        session_state=_state(host_state="stale"),
     )
 
     assert response.input_mode == "offline"
@@ -165,7 +181,7 @@ def test_live_control_without_send_bit_exposes_typed_reason_not_offline_copy():
     response = build_session_capabilities_response(
         session=session,
         capability_flags=caps,
-        runtime_display=_runtime(),
+        session_state=_state(),
     )
 
     assert response.input_mode == "read_only"
@@ -181,7 +197,7 @@ def test_closed_session_lifecycle_overrides_stale_live_capabilities():
     response = build_session_capabilities_response(
         session=session,
         capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(lifecycle="closed", host_state="online"),
+        session_state=_state(lifecycle="closed"),
     )
 
     assert response.live_control_available is False
@@ -203,17 +219,9 @@ def test_closed_session_lifecycle_overrides_stale_live_capabilities():
 
 def test_control_transport_offline_fact_disables_composer_even_when_host_is_online():
     session = _session()
+    state = _state(control_connection="disconnected")
 
-    response = build_session_capabilities_response(
-        session=session,
-        capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(host_state="online"),
-        runtime_facts=_facts(
-            host_state="online",
-            control_state="offline",
-            control_reason="lease_stale",
-        ),
-    )
+    response = _projected_response(session, state)
 
     assert response.live_control_available is False
     assert response.host_reattach_available is True
@@ -221,62 +229,41 @@ def test_control_transport_offline_fact_disables_composer_even_when_host_is_onli
     assert response.default_input_intent == "none"
     assert response.composer_enabled is False
     assert response.send_disabled_reason == "control_offline"
-    assert response.display_label == "Control offline"
+    assert response.display_label == "Reattach"
 
 
-def test_host_offline_fact_overrides_stale_runtime_display_host_copy():
+def test_host_state_keeps_control_offline_in_projection():
     session = _session()
+    state = _state(host_state="stale", control_connection="disconnected")
 
-    response = build_session_capabilities_response(
-        session=session,
-        capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(host_state="online"),
-        runtime_facts=_facts(host_state="stale", control_state="online"),
-    )
+    response = _projected_response(session, state)
 
     assert response.live_control_available is False
     assert response.input_mode == "offline"
     assert response.send_disabled_reason == "control_offline"
-    assert response.display_label == "Control offline"
+    assert response.display_label == "Reattach"
 
 
 def test_control_transport_degraded_fact_disables_composer_without_closing_session():
     session = _session()
+    state = _state(control_connection="degraded")
 
-    response = build_session_capabilities_response(
-        session=session,
-        capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(host_state="online"),
-        runtime_facts=_facts(
-            host_state="online",
-            control_state="degraded",
-            control_reason="bridge_unavailable",
-            lifecycle="open",
-        ),
-    )
+    response = _projected_response(session, state)
 
     assert response.live_control_available is False
-    assert response.host_reattach_available is True
+    assert response.host_reattach_available is False
     assert response.input_mode == "offline"
     assert response.send_disabled_reason == "control_offline"
-    assert response.display_label == "Control offline"
+    assert response.display_label == "Control degraded"
 
 
-def test_unknown_control_cold_start_does_not_override_positive_host_display():
+def test_unknown_control_state_is_explicitly_offline():
     session = _session()
+    state = _state(control_connection="unknown")
 
-    response = build_session_capabilities_response(
-        session=session,
-        capability_flags=build_session_capabilities(session),
-        runtime_display=_runtime(host_state="online"),
-        runtime_facts=_facts(
-            host_state="online",
-            control_state="unknown",
-            control_reason="cold_start",
-            lifecycle="open",
-        ),
-    )
+    response = _projected_response(session, state)
 
-    assert response.live_control_available is True
-    assert response.input_mode == "live"
-    assert response.send_disabled_reason is None
+    assert response.live_control_available is False
+    assert response.input_mode == "offline"
+    assert response.send_disabled_reason == "control_offline"
+    assert response.display_label == "Control unknown"

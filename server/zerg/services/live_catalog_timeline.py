@@ -525,7 +525,7 @@ def _response_from_catalog(
     capabilities = build_session_capabilities_response(
         session=session,
         capability_flags=capability_flags,
-        runtime_display=runtime_display,
+        session_state=session_state,
         kernel_capabilities=capability_flags,
         session_mode=session_state.mode,
     )

@@ -101,8 +101,7 @@ def build_session_capabilities_response(
     session: AgentSession | None = None,
     *,
     capability_flags=None,
-    runtime_display=None,
-    runtime_facts=None,
+    session_state: SessionStateFacts,
     kernel_capabilities: KernelSessionCapabilities | None = None,
     launch_lifecycle: LaunchLifecycle | None = None,
     session_mode: str | None = None,
@@ -112,20 +111,18 @@ def build_session_capabilities_response(
     host_label = None
     if session is not None:
         host_label = str(getattr(session, "device_id", "") or "").strip() or None
-    lifecycle = _runtime_lifecycle_state(runtime_display=runtime_display, runtime_facts=runtime_facts)
-    host_state = _runtime_host_state(runtime_display=runtime_display, runtime_facts=runtime_facts)
-    control_unavailable = _runtime_control_unavailable(runtime_facts)
-    availability_host_state = "offline" if control_unavailable else host_state
+    lifecycle = session_state.disposition.state
+    host_state = session_state.host.state
     capability_display = build_session_capability_display(
         capability_flags,
         host_label=host_label,
         lifecycle=lifecycle,
-        host_state=availability_host_state,
+        host_state=host_state,
     )
-    host_state_norm = (availability_host_state or "").strip().lower()
+    host_state_norm = (host_state or "").strip().lower()
     runtime_offline = host_state_norm in OFFLINE_HOST_STATES
     lifecycle_closed = lifecycle == "closed"
-    control_available = not runtime_offline and not control_unavailable and not lifecycle_closed
+    control_available = not runtime_offline and not lifecycle_closed
     effective_live_control = bool(capability_flags.live_control_available) and control_available
     effective_reply = bool(capability_flags.reply_to_live_session_available) and control_available
     effective_queue = bool(capability_flags.can_queue_next_input) and control_available
@@ -137,8 +134,8 @@ def build_session_capabilities_response(
         provider_label=_provider_label(session),
         session_mode=session_mode,
         lifecycle=lifecycle,
-        is_executing=_runtime_is_executing(runtime_display=runtime_display, runtime_facts=runtime_facts),
-        host_state=availability_host_state,
+        is_executing=session_state.activity.state in {"thinking", "executing"},
+        host_state=host_state,
         can_start_turn=bool(kernel_capabilities.can_start_turn) if kernel_capabilities is not None else False,
         start_turn_blocked_by=(kernel_capabilities.start_turn_blocked_by if kernel_capabilities is not None else None),
     )
@@ -186,45 +183,6 @@ def build_session_capabilities_response(
     )
 
 
-def _runtime_lifecycle_state(*, runtime_display, runtime_facts) -> str:
-    runtime_facts_lifecycle = getattr(runtime_facts, "lifecycle", None)
-    lifecycle = str(getattr(runtime_facts_lifecycle, "state", "") or "").strip()
-    if lifecycle:
-        return lifecycle
-    if runtime_display is not None:
-        return str(getattr(runtime_display, "lifecycle", "") or "").strip()
-    return ""
-
-
-def _runtime_host_state(*, runtime_display, runtime_facts) -> str | None:
-    runtime_facts_host = getattr(runtime_facts, "host", None)
-    facts_host_state = str(getattr(runtime_facts_host, "state", "") or "").strip()
-    if facts_host_state:
-        return facts_host_state
-    if runtime_display is not None:
-        return str(getattr(runtime_display, "host_state", "") or "").strip() or None
-    return None
-
-
-def _runtime_control_unavailable(runtime_facts) -> bool:
-    control = getattr(runtime_facts, "control", None)
-    state = str(getattr(control, "state", "") or "").strip().lower()
-    reason = str(getattr(control, "reason", "") or "").strip().lower()
-    if state in {"offline", "degraded"}:
-        return True
-    if state == "unknown" and reason in {
-        "bridge_unavailable",
-        "detached",
-        "host_offline",
-        "lease_stale",
-        "missing_from_snapshot",
-        "thread_subscription_failed",
-        "unknown_control_state",
-    }:
-        return True
-    return False
-
-
 def _attach_images_capability(capability_flags, *, live_control_available: bool | None = None) -> bool:
     """True when this session can accept image attachments.
 
@@ -247,14 +205,6 @@ def _provider_label(session: AgentSession | None) -> str | None:
     if not provider:
         return None
     return provider_display_name(provider)
-
-
-def _runtime_is_executing(*, runtime_display, runtime_facts) -> bool:
-    if runtime_display is not None:
-        return bool(getattr(runtime_display, "is_executing", False))
-    phase = getattr(runtime_facts, "phase", None)
-    phase_kind = str(getattr(phase, "kind", "") or "").strip()
-    return phase_kind in {"thinking", "running", "blocked", "stalled"}
 
 
 def derive_session_liveness_facts(

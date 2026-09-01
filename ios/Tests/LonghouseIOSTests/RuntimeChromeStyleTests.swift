@@ -49,6 +49,10 @@ final class RuntimeChromeStyleTests: XCTestCase {
         XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "inactive", capabilityTone: "neutral").dot, .idle)
     }
 
+    func testQuietIsIdle() {
+        XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "quiet", capabilityTone: "neutral").dot, .idle)
+    }
+
     func testUnknownToneIsDormant() {
         XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "wat", capabilityTone: "neutral").dot, .dormant)
         XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "", capabilityTone: "neutral").dot, .dormant)
@@ -60,7 +64,7 @@ final class RuntimeChromeStyleTests: XCTestCase {
         let expected: [String: RuntimeSignal] = [
             "running": .live, "thinking": .live, "active": .live,
             "blocked": .attention, "stalled": .attention,
-            "idle": .idle, "inactive": .idle,
+            "idle": .idle, "inactive": .idle, "quiet": .idle,
             "closed": .dormant,
         ]
         for (tone, signal) in expected {
