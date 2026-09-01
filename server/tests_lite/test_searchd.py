@@ -22,6 +22,7 @@ from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
 from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.server import _embedding_write_params
+from zerg.searchd.store import _CANDIDATE_CEILING
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
 from zerg.searchd.store import _SEARCH_SQL
 from zerg.searchd.store import _SEARCHABLE_SEARCH_SQL
@@ -850,7 +851,25 @@ def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_
     try:
         plan = connection.execute(
             f"EXPLAIN QUERY PLAN {_SEARCHABLE_SEARCH_SQL}",
-            ("search db", "42", 0, 0, None, None, None, None, None, None, None, None, None, None, 50_000, 10, "search db"),
+            (
+                "search db",
+                "42",
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                _CANDIDATE_CEILING,
+                10,
+                "search db",
+            ),
         ).fetchall()
         details = [str(row[3]) for row in plan]
         assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)

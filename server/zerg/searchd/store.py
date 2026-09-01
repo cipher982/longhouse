@@ -269,10 +269,12 @@ _SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL = _SEARCHABLE_SEARCH_SQL.replace(
     "NULL AS content_snippet,\n           NULL AS tool_output_snippet,",
 )
 
-# Most recent matching events considered before ranking. Measured on a 5M-row
-# corpus, the worst case (a term matching 2.2M events) costs ~346ms against a
-# 500ms target, and ranking is exact for any term matching fewer than this many
-# events — on a real corpus, every query carrying useful signal.
+# Most recent matching events considered before ranking. The old 50K window
+# looked cheap on a synthetic 5M-row corpus, but took 4.8s for the retained
+# dogfood query after a cold restart once search.db reached 19 GiB. A 10K walk
+# returned the same requested page in 0.3s warm on that corpus and keeps broad
+# terms honestly marked ``recent_bounded``; rare terms remain exact because the
+# walk still exhausts their whole match set.
 #
 # A broad term combined with a narrow window is the one shape that stays slow
 # (~2s, down from ~3.4s): the walk rejects nearly everything it visits, so it
@@ -280,7 +282,7 @@ _SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL = _SEARCHABLE_SEARCH_SQL.replace(
 # window was measured and rejected — MIN(source_event_id) over a time range is
 # not index-only, costing ~570ms on every search including the rare-term
 # queries that are otherwise sub-millisecond.
-_CANDIDATE_CEILING = 50_000
+_CANDIDATE_CEILING = 10_000
 
 # Focused plan tests and diagnostic tooling use this name for the all-history
 # correctness lane. Interactive recent recall uses _SEARCHABLE_SEARCH_SQL.
