@@ -4405,7 +4405,7 @@ async fn prepare_file_for_job(
             "wake"
         } else {
             let binding = crate::state::session_binding::SessionBinding::new(&conn);
-            session_id_override = binding.get(&canonical)?;
+            session_id_override = binding.get_for_provider(&canonical, &provider)?;
             if session_id_override.is_none() {
                 let file_state = crate::state::file_state::FileState::new(&conn);
                 let current_offset = file_state
@@ -4415,7 +4415,7 @@ async fn prepare_file_for_job(
                     let binding_wait_started = Instant::now();
                     std::thread::sleep(std::time::Duration::from_millis(300));
                     binding_wait_ms = binding_wait_started.elapsed().as_millis() as u64;
-                    session_id_override = binding.get(&canonical)?;
+                    session_id_override = binding.get_for_provider(&canonical, &provider)?;
                 }
             }
             if session_id_override.is_some() {
@@ -6382,7 +6382,7 @@ mod tests {
         let canonical = std::fs::canonicalize(&transcript).unwrap();
         assert_eq!(
             crate::state::session_binding::SessionBinding::new(&conn)
-                .get(&canonical.to_string_lossy())
+                .get_for_provider(&canonical.to_string_lossy(), "cursor")
                 .unwrap()
                 .as_deref(),
             Some("managed-session")
@@ -6587,7 +6587,7 @@ mod tests {
         assert_eq!(FileState::new(&conn).get_offset(&canonical).unwrap_or(0), 0);
         assert_eq!(
             crate::state::session_binding::SessionBinding::new(&conn)
-                .get(&canonical)
+                .get_for_provider(&canonical, "claude")
                 .unwrap(),
             Some(managed_session_id.to_string())
         );

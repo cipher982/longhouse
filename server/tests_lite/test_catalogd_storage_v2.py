@@ -695,6 +695,50 @@ async def test_storage_commit_rejects_existing_session_owner_mismatch(daemon_pat
 
 
 @pytest.mark.asyncio
+async def test_storage_commit_explains_cross_provider_session_collision(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = _raw_params(
+            epoch=uuid4(),
+            session_id=session_id,
+            start=0,
+            end=1,
+            records=(b"a",),
+            sealed_at=now,
+            provider="claude",
+        )
+        await client.call("storage.raw_object.commit.v2", first)
+
+        collision = _raw_params(
+            epoch=uuid4(),
+            session_id=session_id,
+            start=0,
+            end=1,
+            records=(b"b",),
+            sealed_at=now + timedelta(seconds=1),
+            provider="cursor",
+        )
+        with pytest.raises(CatalogRemoteError) as conflict:
+            await client.call("storage.raw_object.commit.v2", collision)
+        assert conflict.value.code == "source_epoch_conflict"
+        assert conflict.value.details == {
+            "reason": "session_identity_conflict",
+            "existing_tenant_id": "tenant-a",
+            "requested_tenant_id": "tenant-a",
+            "existing_provider": "claude",
+            "requested_provider": "cursor",
+        }
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

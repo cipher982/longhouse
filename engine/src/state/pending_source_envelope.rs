@@ -795,6 +795,281 @@ pub fn replace_request_body_after_lineage_repair(
     Ok(())
 }
 
+/// Restore the predecessor field of an already-admitted epoch from host proof.
+///
+/// A local database salvage can retain the durable watermark and frozen next
+/// envelope while losing the predecessor link. The host has already fixed that
+/// identity, so only an exact manifest match may repair the local registry and
+/// serialized retry body.
+#[allow(clippy::too_many_arguments)]
+pub fn align_admitted_epoch_predecessor(
+    conn: &mut Connection,
+    source_epoch: Uuid,
+    host_predecessor: Uuid,
+    host_predecessor_parent: Option<Uuid>,
+    host_accepted_through: u64,
+    predecessor_accepted_through: u64,
+    envelope_id: &str,
+    expected_request_body_zstd: &[u8],
+    replacement_request_body_zstd: &[u8],
+    proof_json: &str,
+) -> Result<()> {
+    if source_epoch == host_predecessor || host_accepted_through == 0 {
+        bail!("host-admitted predecessor proof is invalid");
+    }
+    let now = Utc::now().to_rfc3339();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let local: (
+        String,
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    ) = tx
+        .query_row(
+            "SELECT provider, opaque_source_id, file_incarnation, max_observed_len,
+                    source_revision, bound_session_id, predecessor_epoch, start_reason
+             FROM source_epoch_registry
+             WHERE source_epoch = ?1 AND ended_at IS NULL",
+            [source_epoch.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .context("host-admitted recovery requires an active local epoch")?;
+    if local.6.is_some() || local.7 != "initial" {
+        bail!("host-admitted recovery requires a salvaged initial epoch");
+    }
+    let local_position: i64 = tx.query_row(
+        "SELECT last_position FROM source_epoch_lane_state
+         WHERE source_epoch = ?1 AND lane = 'durable'",
+        [source_epoch.to_string()],
+        |row| row.get(0),
+    )?;
+    if local_position != to_sql_u64(host_accepted_through)? {
+        bail!("host-admitted watermark no longer matches local durable state");
+    }
+
+    let predecessor_position = to_sql_u64(predecessor_accepted_through)?;
+    let predecessor_parent = host_predecessor_parent.map(|value| value.to_string());
+    let existing: Option<(String, String, Option<String>, Option<String>, Option<i64>)> = tx
+        .query_row(
+            "SELECT registry.provider, registry.opaque_source_id,
+                    registry.predecessor_epoch, registry.ended_at, lane.last_position
+             FROM source_epoch_registry AS registry
+             LEFT JOIN source_epoch_lane_state AS lane
+               ON lane.source_epoch = registry.source_epoch AND lane.lane = 'durable'
+             WHERE registry.source_epoch = ?1",
+            [host_predecessor.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    match existing {
+        Some((provider, opaque_source_id, parent, ended_at, position)) => {
+            if provider != local.0
+                || opaque_source_id != local.1
+                || parent != predecessor_parent
+                || ended_at.is_none()
+                || position != Some(predecessor_position)
+            {
+                bail!("existing predecessor marker disagrees with host proof");
+            }
+        }
+        None => {
+            tx.execute(
+                "INSERT INTO source_epoch_registry (
+                     source_epoch, provider, opaque_source_id, file_incarnation,
+                     predecessor_epoch, start_reason, max_observed_len, source_revision,
+                     bound_session_id, created_at, updated_at, ended_at, end_reason
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, 'host_authority_reconciled', ?6, ?7,
+                           ?8, ?9, ?9, ?9, 'host_authority_reconciled')",
+                params![
+                    host_predecessor.to_string(),
+                    local.0,
+                    local.1,
+                    local.2,
+                    predecessor_parent,
+                    local.3,
+                    local.4,
+                    local.5,
+                    now,
+                ],
+            )?;
+            tx.execute(
+                "INSERT INTO source_epoch_lane_state (
+                     source_epoch, lane, last_position, updated_at
+                 ) VALUES (?1, 'durable', ?2, ?3)",
+                params![host_predecessor.to_string(), predecessor_position, now],
+            )?;
+        }
+    }
+    let registry_changed = tx.execute(
+        "UPDATE source_epoch_registry
+         SET predecessor_epoch = ?1,
+             start_reason = 'host_authority_reconciled',
+             updated_at = ?2
+         WHERE source_epoch = ?3 AND predecessor_epoch IS NULL
+           AND start_reason = 'initial' AND ended_at IS NULL",
+        params![host_predecessor.to_string(), now, source_epoch.to_string()],
+    )?;
+    if registry_changed != 1 {
+        bail!("local epoch changed during host-admitted predecessor recovery");
+    }
+    let pending_changed = tx.execute(
+        "UPDATE pending_source_envelope
+         SET request_body_zstd = ?1,
+             blocked_at = NULL,
+             block_kind = NULL,
+             block_detail = NULL,
+             wake_at = '1970-01-01T00:00:00.000000000Z'
+         WHERE source_epoch = ?2 AND envelope_id = ?3
+           AND request_body_zstd = ?4 AND range_start = ?5
+           AND blocked_at IS NOT NULL AND block_kind = 'source_epoch_conflict'",
+        params![
+            replacement_request_body_zstd,
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+            to_sql_u64(host_accepted_through)?,
+        ],
+    )?;
+    if pending_changed != 1 {
+        bail!("blocked envelope changed during host-admitted predecessor recovery");
+    }
+    tx.execute(
+        "INSERT INTO pending_source_envelope_supersession (
+             source_epoch, envelope_id, old_request_body_zstd,
+             new_request_body_zstd, reason, proof_json, created_at,
+             old_request_body_sha256, new_request_body_sha256,
+             old_request_body_len, new_request_body_len
+         ) VALUES (?1, ?2, x'', x'', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            source_epoch.to_string(),
+            envelope_id,
+            "Runtime Host restored the predecessor of an already-admitted salvaged epoch",
+            proof_json,
+            now,
+            body_digest(expected_request_body_zstd),
+            body_digest(replacement_request_body_zstd),
+            expected_request_body_zstd.len() as i64,
+            replacement_request_body_zstd.len() as i64,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Remove a cross-provider path binding and rebuild its unadmitted request
+/// with the transcript's own provider identity.
+#[allow(clippy::too_many_arguments)]
+pub fn repair_cross_provider_session_binding(
+    conn: &mut Connection,
+    source_epoch: Uuid,
+    source_path: &str,
+    requested_provider: &str,
+    stale_provider: &str,
+    stale_session_id: &str,
+    provider_session_id: &str,
+    envelope_id: &str,
+    expected_request_body_zstd: &[u8],
+    replacement_request_body_zstd: &[u8],
+    proof_json: &str,
+) -> Result<()> {
+    if requested_provider.eq_ignore_ascii_case(stale_provider) {
+        bail!("cross-provider binding repair requires different providers");
+    }
+    let now = Utc::now().to_rfc3339();
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let binding_changed = tx.execute(
+        "DELETE FROM session_binding
+         WHERE path = ?1 AND session_id = ?2 AND lower(provider) = lower(?3)",
+        params![source_path, stale_session_id, stale_provider],
+    )?;
+    if binding_changed != 1 {
+        bail!("cross-provider binding no longer matches recovery proof");
+    }
+    let registry_changed = tx.execute(
+        "UPDATE source_epoch_registry
+         SET bound_session_id = NULL,
+             provider_session_id = ?1,
+             updated_at = ?2
+         WHERE source_epoch = ?3 AND provider = ?4
+           AND bound_session_id = ?5 AND ended_at IS NULL",
+        params![
+            provider_session_id,
+            now,
+            source_epoch.to_string(),
+            requested_provider,
+            stale_session_id,
+        ],
+    )?;
+    if registry_changed != 1 {
+        bail!("source epoch no longer matches cross-provider binding recovery");
+    }
+    let pending_changed = tx.execute(
+        "UPDATE pending_source_envelope
+         SET request_body_zstd = ?1,
+             blocked_at = NULL,
+             block_kind = NULL,
+             block_detail = NULL,
+             wake_at = '1970-01-01T00:00:00.000000000Z'
+         WHERE source_epoch = ?2 AND envelope_id = ?3
+           AND request_body_zstd = ?4 AND range_start = 0
+           AND blocked_at IS NOT NULL
+           AND block_kind = 'source_epoch_conflict_unresolved'",
+        params![
+            replacement_request_body_zstd,
+            source_epoch.to_string(),
+            envelope_id,
+            expected_request_body_zstd,
+        ],
+    )?;
+    if pending_changed != 1 {
+        bail!("pending request changed during cross-provider binding recovery");
+    }
+    tx.execute(
+        "INSERT INTO pending_source_envelope_supersession (
+             source_epoch, envelope_id, old_request_body_zstd,
+             new_request_body_zstd, reason, proof_json, created_at,
+             old_request_body_sha256, new_request_body_sha256,
+             old_request_body_len, new_request_body_len
+         ) VALUES (?1, ?2, x'', x'', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            source_epoch.to_string(),
+            envelope_id,
+            "Removed a cross-provider transcript binding before first host admission",
+            proof_json,
+            now,
+            body_digest(expected_request_body_zstd),
+            body_digest(replacement_request_body_zstd),
+            expected_request_body_zstd.len() as i64,
+            replacement_request_body_zstd.len() as i64,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Attach a host-proven open epoch as the predecessor of a locally unshipped
 /// epoch after local cursor state was lost or salvaged incompletely.
 ///

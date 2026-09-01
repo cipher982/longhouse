@@ -1140,9 +1140,12 @@ async fn run_app_server_turn(
 }
 
 async fn shutdown_worker_process_group(child: &mut Child, pgid: Option<i32>) -> Result<()> {
-    let outcome =
-        crate::process_group::shutdown_owned_child(child, pgid, crate::process_group::DEFAULT_GRACE)
-            .await;
+    let outcome = crate::process_group::shutdown_owned_child(
+        child,
+        pgid,
+        crate::process_group::DEFAULT_GRACE,
+    )
+    .await;
     if !outcome.is_gone() {
         tracing::warn!(
             pgid = pgid.unwrap_or_default(),
@@ -2494,8 +2497,14 @@ for line in sys.stdin:
     fn tool_phase_reports_a_token_not_the_command() {
         const WIRE_TOOL_NAME_LIMIT: usize = 128;
         let mut projection = AppServerProjection::default();
-        let command = format!("cd /Users/davidrose/git/zerg && {}", "git log --oneline ".repeat(20));
-        assert!(command.len() > WIRE_TOOL_NAME_LIMIT, "fixture must exceed the wire cap");
+        let command = format!(
+            "cd /Users/davidrose/git/zerg && {}",
+            "git log --oneline ".repeat(20)
+        );
+        assert!(
+            command.len() > WIRE_TOOL_NAME_LIMIT,
+            "fixture must exceed the wire cap"
+        );
 
         let projected = projection.apply(&json!({
             "method": "item/started",
@@ -2505,7 +2514,9 @@ for line in sys.stdin:
         let phase = projected
             .iter()
             .find_map(|event| match event {
-                ProjectedAppServerEvent::Phase { phase, tool_name } => Some((*phase, tool_name.clone())),
+                ProjectedAppServerEvent::Phase { phase, tool_name } => {
+                    Some((*phase, tool_name.clone()))
+                }
                 _ => None,
             })
             .expect("a tool start must project a phase");
@@ -2795,8 +2806,8 @@ for line in sys.stdin:
                     }
                     saw_needle |= json_string(&event, &["payload", "live_text"])
                         .is_some_and(|text| text.contains(needle));
-                    saw_terminal |= event.get("kind").and_then(Value::as_str)
-                        == Some("terminal_signal");
+                    saw_terminal |=
+                        event.get("kind").and_then(Value::as_str) == Some("terminal_signal");
                 }
                 if saw_terminal && provider_thread_id.is_some() {
                     break;
@@ -2862,7 +2873,7 @@ for line in sys.stdin:
         let child_path = codex_rollout_path(&child_thread_id)
             .expect("forked child rollout should exist on disk");
         let (bound_session, bound_thread) = binding
-            .get_with_thread(&child_path.to_string_lossy())
+            .get_with_thread_for_provider(&child_path.to_string_lossy(), "codex")
             .unwrap()
             .expect("the fork should have bound its own rollout path");
         assert_eq!(bound_session, child_session_id);

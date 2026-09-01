@@ -6969,7 +6969,14 @@ class CatalogStore:
                     existing_session["provider"] != provider,
                 )
             ):
-                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                return _source_epoch_conflict(
+                    connection,
+                    reason="session_identity_conflict",
+                    existing_tenant_id=str(existing_session["tenant_id"]),
+                    requested_tenant_id=tenant_id,
+                    existing_provider=str(existing_session["provider"]),
+                    requested_provider=provider,
+                )
             if (
                 existing_session is not None
                 and existing_session["owner_id"] is not None

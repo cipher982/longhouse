@@ -46,14 +46,20 @@ impl<'a> SessionBinding<'a> {
         Ok(())
     }
 
-    /// Look up the managed session id together with the provider thread it was
-    /// bound for. `None` in the second position means the binding predates
-    /// thread recording, or was written by a path that does not know its thread
-    /// — treat that as "not an exact binding", never as a match.
-    pub fn get_with_thread(&self, path: &str) -> Result<Option<(String, Option<String>)>> {
+    /// Look up a binding only when it belongs to the provider reading it.
+    ///
+    /// Transcript paths are not provider identities. A stale or misrouted
+    /// binding must never let one provider publish into another provider's
+    /// Longhouse session.
+    pub fn get_with_thread_for_provider(
+        &self,
+        path: &str,
+        provider: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
         let result = self.conn.query_row(
-            "SELECT session_id, provider_session_id FROM session_binding WHERE path = ?",
-            [path],
+            "SELECT session_id, provider_session_id FROM session_binding
+             WHERE path = ?1 AND lower(provider) = lower(?2)",
+            rusqlite::params![path, provider],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
         );
         match result {
@@ -79,18 +85,11 @@ impl<'a> SessionBinding<'a> {
         Ok(())
     }
 
-    /// Look up the managed session ID for a transcript path.
-    pub fn get(&self, path: &str) -> Result<Option<String>> {
-        let result = self.conn.query_row(
-            "SELECT session_id FROM session_binding WHERE path = ?",
-            [path],
-            |row| row.get::<_, String>(0),
-        );
-        match result {
-            Ok(id) => Ok(Some(id)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+    /// Look up a managed session only for the provider that created it.
+    pub fn get_for_provider(&self, path: &str, provider: &str) -> Result<Option<String>> {
+        Ok(self
+            .get_with_thread_for_provider(path, provider)?
+            .map(|(session_id, _)| session_id))
     }
 
     /// Remove binding for a transcript path.
@@ -140,12 +139,17 @@ mod tests {
         let (_tmp, conn) = setup();
         let sb = SessionBinding::new(&conn);
 
-        assert!(sb.get("/path/to/session.jsonl").unwrap().is_none());
+        assert!(sb
+            .get_for_provider("/path/to/session.jsonl", "claude")
+            .unwrap()
+            .is_none());
 
         sb.bind("/path/to/session.jsonl", "managed-uuid-1", "claude")
             .unwrap();
         assert_eq!(
-            sb.get("/path/to/session.jsonl").unwrap().as_deref(),
+            sb.get_for_provider("/path/to/session.jsonl", "claude")
+                .unwrap()
+                .as_deref(),
             Some("managed-uuid-1")
         );
     }
@@ -157,7 +161,32 @@ mod tests {
 
         sb.bind("/f.jsonl", "old-id", "claude").unwrap();
         sb.bind("/f.jsonl", "new-id", "claude").unwrap();
-        assert_eq!(sb.get("/f.jsonl").unwrap().as_deref(), Some("new-id"));
+        assert_eq!(
+            sb.get_for_provider("/f.jsonl", "claude")
+                .unwrap()
+                .as_deref(),
+            Some("new-id")
+        );
+    }
+
+    #[test]
+    fn provider_scoped_lookup_rejects_cross_provider_binding() {
+        let (_tmp, conn) = setup();
+        let sb = SessionBinding::new(&conn);
+        sb.bind_for_thread("/f.jsonl", "claude-id", "claude", Some("thread-1"))
+            .unwrap();
+
+        assert_eq!(
+            sb.get_for_provider("/f.jsonl", "claude")
+                .unwrap()
+                .as_deref(),
+            Some("claude-id")
+        );
+        assert!(sb.get_for_provider("/f.jsonl", "cursor").unwrap().is_none());
+        assert!(sb
+            .get_with_thread_for_provider("/f.jsonl", "cursor")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -167,7 +196,7 @@ mod tests {
 
         sb.bind("/f.jsonl", "id-1", "claude").unwrap();
         sb.unbind("/f.jsonl").unwrap();
-        assert!(sb.get("/f.jsonl").unwrap().is_none());
+        assert!(sb.get_for_provider("/f.jsonl", "claude").unwrap().is_none());
     }
 
     #[test]
@@ -189,7 +218,13 @@ mod tests {
 
         let pruned = sb.prune_stale(30).unwrap();
         assert_eq!(pruned, 1);
-        assert!(sb.get("/gone/old.jsonl").unwrap().is_none());
-        assert!(sb.get("/gone/recent.jsonl").unwrap().is_some());
+        assert!(sb
+            .get_for_provider("/gone/old.jsonl", "claude")
+            .unwrap()
+            .is_none());
+        assert!(sb
+            .get_for_provider("/gone/recent.jsonl", "claude")
+            .unwrap()
+            .is_some());
     }
 }

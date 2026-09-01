@@ -183,8 +183,8 @@ fn prepare_next_envelope_with_limit(
     // names this transcript's own thread was written deliberately for it; one
     // that names something else was inherited, and cannot be trusted to say who
     // owns this file.
-    let binding =
-        crate::state::session_binding::SessionBinding::new(conn).get_with_thread(&path_text)?;
+    let binding = crate::state::session_binding::SessionBinding::new(conn)
+        .get_with_thread_for_provider(&path_text, provider)?;
     let binding_thread = binding.as_ref().and_then(|(_, thread)| thread.clone());
     let durable_session_id = match session_id_override {
         Some(value) => Some(value.to_string()),
@@ -910,6 +910,13 @@ async fn reconcile_storage_v2_conflict(
             )?;
             let blocked = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
                 .context("newly blocked source disappeared before host-authority recovery")?;
+            if reconcile_cross_provider_session_binding(conn, &blocked, prepared, conflict)? {
+                return Ok(Some(StorageV2ShipOutcome {
+                    bytes_shipped: 0,
+                    events_shipped: 0,
+                    has_more: true,
+                }));
+            }
             if reconcile_lost_local_epoch(
                 conn,
                 client,
@@ -1026,14 +1033,22 @@ async fn reexamine_blocked_source(
     // A source the host has no epoch for cannot be resynced against anything;
     // that path stays with the provider-specific handlers below.
     if let Ok(manifest) = client
-        .storage_v2_source_manifest(
-            &prepared.source_epoch.to_string(),
-            prepared.range_start,
-            Some(request_timeout),
-        )
+        .storage_v2_source_manifest(&prepared.source_epoch.to_string(), 0, Some(request_timeout))
         .await
     {
         if resync_behind_host(conn, &pending.source_path, prepared, &manifest)?.is_some() {
+            return Ok(true);
+        }
+        if reconcile_admitted_epoch_predecessor(
+            conn,
+            client,
+            pending,
+            prepared,
+            &manifest,
+            request_timeout,
+        )
+        .await?
+        {
             return Ok(true);
         }
     }
@@ -1066,6 +1081,60 @@ async fn reexamine_blocked_source(
             || reconcile_blocked_cursor_lineage(conn, client, prepared, request_timeout).await?)
     {
         return Ok(true);
+    }
+    // A manifest miss proves this epoch has never been admitted. Retry the
+    // exact POST so a newer host can return structured admission evidence;
+    // older generic 409 text must not become a permanent local verdict.
+    if pending.block_kind.as_deref() == Some("source_epoch_conflict_unresolved") {
+        match client
+            .ship_storage_v2_body(
+                &capabilities.ingest_path,
+                lane,
+                decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?,
+                &pending.envelope_id,
+                Some(request_timeout),
+            )
+            .await
+        {
+            Ok(receipt) => {
+                pending_source_envelope::acknowledge_and_delete(
+                    conn,
+                    prepared.source_epoch,
+                    &receipt.envelope_id,
+                    prepared.range_start,
+                    prepared.range_end,
+                )?;
+                return Ok(true);
+            }
+            Err(error) => {
+                if let Some(conflict) =
+                    error.downcast_ref::<crate::shipping::client::StorageV2Conflict>()
+                {
+                    if reconcile_cross_provider_session_binding(conn, pending, prepared, conflict)?
+                        || reconcile_lost_local_epoch(
+                            conn,
+                            client,
+                            pending,
+                            prepared,
+                            host_open_epoch_from_conflict(conflict),
+                            request_timeout,
+                        )
+                        .await?
+                        || reconcile_replaced_host_predecessor(
+                            conn,
+                            client,
+                            pending,
+                            prepared,
+                            host_closed_predecessor_from_conflict(conflict),
+                            request_timeout,
+                        )
+                        .await?
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
     }
     // An envelope the host called invalid gets its POST retried, not just a
     // manifest fetch. "Invalid" is the host's opinion at one moment: a schema
@@ -1169,6 +1238,285 @@ fn conflict_from_block_detail(
         details: response.pointer("/detail/details")?.clone(),
         response_body: admission.to_string(),
     })
+}
+
+async fn reconcile_admitted_epoch_predecessor(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    pending: &PendingSourceEnvelope,
+    prepared: &PreparedStorageV2Envelope,
+    manifest: &StorageV2SourceManifest,
+    request_timeout: Duration,
+) -> Result<bool> {
+    let envelope = &prepared.envelope;
+    let hosted = &manifest.source_epoch;
+    let Some(host_predecessor) = hosted
+        .predecessor_source_epoch
+        .as_deref()
+        .and_then(|value| Uuid::parse_str(value).ok())
+    else {
+        return Ok(false);
+    };
+    let Ok(accepted_through) = hosted.accepted_through.parse::<u64>() else {
+        return Ok(false);
+    };
+    if pending.block_kind.as_deref() != Some("source_epoch_conflict")
+        || envelope.predecessor_source_epoch.is_some()
+        || manifest.v != 2
+        || hosted.source_epoch != envelope.source_epoch
+        || hosted.tenant_id != envelope.tenant_id
+        || hosted.machine_id != envelope.machine_id
+        || hosted.provider != envelope.provider
+        || hosted.opaque_source_id != envelope.opaque_source_id
+        || hosted.range_kind != envelope.range_kind
+        || !timestamps_match_at_host_precision(&hosted.opened_at, &envelope.epoch_opened_at)
+        || hosted.state != "open"
+        || hosted.replaced_by_source_epoch.is_some()
+        || accepted_through == 0
+        || accepted_through != prepared.range_start
+    {
+        return Ok(false);
+    }
+    if !manifest_proves_session_tail(
+        client,
+        manifest,
+        envelope,
+        &envelope.source_epoch,
+        accepted_through,
+        true,
+        request_timeout,
+    )
+    .await?
+    {
+        return Ok(false);
+    }
+
+    let predecessor = client
+        .storage_v2_source_manifest(&host_predecessor.to_string(), 0, Some(request_timeout))
+        .await?;
+    let predecessor_epoch = &predecessor.source_epoch;
+    let Ok(predecessor_accepted) = predecessor_epoch.accepted_through.parse::<u64>() else {
+        return Ok(false);
+    };
+    if predecessor.v != 2
+        || predecessor_epoch.source_epoch != host_predecessor.to_string()
+        || predecessor_epoch.tenant_id != envelope.tenant_id
+        || predecessor_epoch.machine_id != envelope.machine_id
+        || predecessor_epoch.provider != envelope.provider
+        || predecessor_epoch.opaque_source_id != envelope.opaque_source_id
+        || predecessor_epoch.range_kind != envelope.range_kind
+        || predecessor_epoch.state != "closed"
+        || predecessor_epoch.replaced_by_source_epoch.as_deref()
+            != Some(envelope.source_epoch.as_str())
+        || predecessor_accepted == 0
+    {
+        return Ok(false);
+    }
+    if !manifest_proves_session_tail(
+        client,
+        &predecessor,
+        envelope,
+        &host_predecessor.to_string(),
+        predecessor_accepted,
+        false,
+        request_timeout,
+    )
+    .await?
+    {
+        return Ok(false);
+    }
+
+    let mut replacement = envelope.clone();
+    replacement.predecessor_source_epoch = Some(host_predecessor.to_string());
+    let replacement_body =
+        serde_json::to_vec(&replacement).context("serializing host-admitted predecessor repair")?;
+    let replacement_body_zstd =
+        encode_zstd(&replacement_body, "host-admitted predecessor repair body")?;
+    let proof_json = serde_json::json!({
+        "v": 1,
+        "source_epoch": envelope.source_epoch,
+        "host_predecessor": host_predecessor.to_string(),
+        "host_accepted_through": hosted.accepted_through,
+        "predecessor_accepted_through": predecessor_epoch.accepted_through,
+        "host_commit_seq": manifest.commit_seq,
+        "predecessor_commit_seq": predecessor.commit_seq,
+    })
+    .to_string();
+    pending_source_envelope::align_admitted_epoch_predecessor(
+        conn,
+        prepared.source_epoch,
+        host_predecessor,
+        predecessor_epoch
+            .predecessor_source_epoch
+            .as_deref()
+            .map(Uuid::parse_str)
+            .transpose()?,
+        accepted_through,
+        predecessor_accepted,
+        &pending.envelope_id,
+        &pending.request_body_zstd,
+        &replacement_body_zstd,
+        &proof_json,
+    )?;
+    tracing::warn!(
+        source_epoch = %prepared.source_epoch,
+        host_predecessor = %host_predecessor,
+        accepted_through,
+        "Restored salvaged epoch predecessor from Runtime Host proof"
+    );
+    Ok(true)
+}
+
+fn timestamps_match_at_host_precision(left: &str, right: &str) -> bool {
+    let Ok(left) = DateTime::parse_from_rfc3339(left) else {
+        return false;
+    };
+    let Ok(right) = DateTime::parse_from_rfc3339(right) else {
+        return false;
+    };
+    left.timestamp_micros() == right.timestamp_micros()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn manifest_proves_session_tail(
+    client: &ShipperClient,
+    initial: &StorageV2SourceManifest,
+    envelope: &StorageV2Envelope,
+    source_epoch: &str,
+    accepted_through: u64,
+    require_active: bool,
+    request_timeout: Duration,
+) -> Result<bool> {
+    let mut page = initial.clone();
+    loop {
+        if page.objects.iter().any(|object| {
+            object.tenant_id == envelope.tenant_id
+                && object.session_id == envelope.session_id
+                && object.machine_id == envelope.machine_id
+                && object.provider == envelope.provider
+                && object.opaque_source_id == envelope.opaque_source_id
+                && object.source_epoch == source_epoch
+                && object.range_kind == envelope.range_kind
+                && (!require_active || object.retired_at.is_none())
+                && object.range_end.parse::<u64>() == Ok(accepted_through)
+        }) {
+            return Ok(true);
+        }
+        if page.objects.len() < 1_000 {
+            return Ok(false);
+        }
+        let Some(next_position) = page
+            .objects
+            .iter()
+            .filter_map(|object| object.range_end.parse::<u64>().ok())
+            .max()
+        else {
+            return Ok(false);
+        };
+        if next_position == 0 || next_position >= accepted_through {
+            return Ok(false);
+        }
+        page = client
+            .storage_v2_source_manifest(source_epoch, next_position, Some(request_timeout))
+            .await?;
+        if page.v != 2 || page.source_epoch.source_epoch != source_epoch {
+            return Ok(false);
+        }
+    }
+}
+
+fn reconcile_cross_provider_session_binding(
+    conn: &mut Connection,
+    pending: &PendingSourceEnvelope,
+    prepared: &PreparedStorageV2Envelope,
+    conflict: &crate::shipping::client::StorageV2Conflict,
+) -> Result<bool> {
+    if conflict
+        .details
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        != Some("session_identity_conflict")
+        || pending.block_kind.as_deref() != Some("source_epoch_conflict_unresolved")
+        || prepared.range_start != 0
+    {
+        return Ok(false);
+    }
+    let envelope = &prepared.envelope;
+    let Some(existing_provider) = conflict
+        .details
+        .get("existing_provider")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(false);
+    };
+    if conflict
+        .details
+        .get("requested_provider")
+        .and_then(serde_json::Value::as_str)
+        != Some(envelope.provider.as_str())
+        || existing_provider.eq_ignore_ascii_case(&envelope.provider)
+    {
+        return Ok(false);
+    }
+    let parsed = parser::parse_session_file(Path::new(&pending.source_path), 0)?;
+    let corrected_session_id = canonical_session_id(parsed.metadata.session_id.clone());
+    let corrected_uuid = Uuid::parse_str(&corrected_session_id)
+        .context("provider transcript session id is not a UUID")?;
+    if corrected_session_id == envelope.session_id {
+        return Ok(false);
+    }
+    let provider_session_id = parsed
+        .metadata
+        .provider_session_id
+        .as_deref()
+        .unwrap_or(&parsed.metadata.session_id)
+        .trim();
+    if provider_session_id.is_empty() {
+        return Ok(false);
+    }
+
+    let mut replacement = envelope.clone();
+    replacement.session_id = corrected_session_id.clone();
+    if let Some(render) = replacement.render.as_mut() {
+        render.generation_id = render_generation_id(corrected_uuid).to_string();
+    }
+    let replacement_body =
+        serde_json::to_vec(&replacement).context("serializing cross-provider binding repair")?;
+    let replacement_body_zstd =
+        encode_zstd(&replacement_body, "cross-provider binding repair body")?;
+    let proof_json = serde_json::json!({
+        "v": 1,
+        "source_epoch": envelope.source_epoch,
+        "host_source_epoch_absent": true,
+        "stale_session_id": envelope.session_id,
+        "stale_binding_provider": existing_provider,
+        "requested_provider": envelope.provider,
+        "provider_session_id": provider_session_id,
+        "corrected_session_id": corrected_session_id,
+    })
+    .to_string();
+    pending_source_envelope::repair_cross_provider_session_binding(
+        conn,
+        prepared.source_epoch,
+        &pending.source_path,
+        &envelope.provider,
+        existing_provider,
+        &envelope.session_id,
+        provider_session_id,
+        &pending.envelope_id,
+        &pending.request_body_zstd,
+        &replacement_body_zstd,
+        &proof_json,
+    )?;
+    tracing::warn!(
+        source_epoch = %prepared.source_epoch,
+        stale_session_id = envelope.session_id,
+        corrected_session_id,
+        stale_provider = existing_provider,
+        provider = envelope.provider,
+        "Removed cross-provider transcript binding before host admission"
+    );
+    Ok(true)
 }
 
 /// Recover from a salvaged local shipper database that no longer contains the
@@ -6599,6 +6947,351 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admitted_salvaged_epoch_restores_host_predecessor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let first_line = format!(
+            "{{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{{\"content\":\"{}\"}}}}\n",
+            "x".repeat(2_000)
+        )
+        .into_bytes();
+        let second_line = b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":\"world\"}}\n";
+        fs::write(&path, &first_line).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let first = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        acknowledge_prepared(&mut conn, &first);
+        fs::write(
+            &path,
+            [first_line.as_slice(), second_line.as_slice()].concat(),
+        )
+        .unwrap();
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        pending_source_envelope::quarantine(
+            &mut conn,
+            prepared.source_epoch,
+            "source_epoch_conflict",
+            "host rejected salvaged identity",
+        )
+        .unwrap();
+        let pending = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .unwrap();
+
+        let predecessor = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_epoch = prepared.source_epoch;
+        let envelope = prepared.envelope.clone();
+        let accepted = prepared.range_start;
+        let server = tokio::spawn(async move {
+            let hosted_opened_at = DateTime::parse_from_rfc3339(&envelope.epoch_opened_at)
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+            for request_index in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (request_line, _) = read_http_request(&mut socket).await;
+                let (epoch, state, predecessor_epoch, replaced_by, through, retired_at) =
+                    if request_index <= 1 {
+                        assert!(request_line.contains(&expected_epoch.to_string()));
+                        if request_index == 1 {
+                            assert!(request_line.contains("after_position=1000"));
+                        }
+                        (
+                            expected_epoch,
+                            "open",
+                            Some(predecessor),
+                            None,
+                            accepted,
+                            None,
+                        )
+                    } else {
+                        assert!(request_line.contains(&predecessor.to_string()));
+                        (
+                            predecessor,
+                            "closed",
+                            Some(parent),
+                            Some(expected_epoch),
+                            17,
+                            Some("2026-08-31T00:00:00Z"),
+                        )
+                    };
+                let objects = if request_index == 0 {
+                    (0..1_000)
+                        .map(|position| {
+                            serde_json::json!({
+                                "envelope_id": format!("host-envelope-{position}"),
+                                "tenant_id": envelope.tenant_id,
+                                "session_id": envelope.session_id,
+                                "machine_id": envelope.machine_id,
+                                "provider": envelope.provider,
+                                "opaque_source_id": envelope.opaque_source_id,
+                                "source_epoch": epoch.to_string(),
+                                "range_kind": envelope.range_kind,
+                                "range_start": position.to_string(),
+                                "range_end": (position + 1).to_string(),
+                                "retired_at": null,
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![serde_json::json!({
+                        "envelope_id": "host-envelope",
+                        "tenant_id": envelope.tenant_id,
+                        "session_id": envelope.session_id,
+                        "machine_id": envelope.machine_id,
+                        "provider": envelope.provider,
+                        "opaque_source_id": envelope.opaque_source_id,
+                        "source_epoch": epoch.to_string(),
+                        "range_kind": envelope.range_kind,
+                        "range_start": "0",
+                        "range_end": through.to_string(),
+                        "retired_at": retired_at,
+                    })]
+                };
+                let response_body = serde_json::json!({
+                    "v": 2,
+                    "source_epoch": {
+                        "source_epoch": epoch.to_string(),
+                        "tenant_id": envelope.tenant_id,
+                        "machine_id": envelope.machine_id,
+                        "provider": envelope.provider,
+                        "opaque_source_id": envelope.opaque_source_id,
+                        "range_kind": envelope.range_kind,
+                        "state": state,
+                        "predecessor_source_epoch": predecessor_epoch.map(|value| value.to_string()),
+                        "replaced_by_source_epoch": replaced_by.map(|value| value.to_string()),
+                        "accepted_through": through.to_string(),
+                        "opened_at": hosted_opened_at,
+                    },
+                    "objects": objects,
+                    "commit_seq": (40 + request_index).to_string(),
+                    "observed_at": "2026-08-31T00:00:00Z",
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let client = ShipperClient::with_compression(
+            &ShipperConfig {
+                api_url: format!("http://{address}"),
+                timeout_seconds: 5,
+                ..ShipperConfig::default()
+            },
+            CompressionAlgo::Gzip,
+        )
+        .unwrap();
+
+        assert!(reexamine_blocked_source(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &pending,
+            &prepared,
+            "repair",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap());
+        server.await.unwrap();
+        let repaired = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .unwrap();
+        assert!(repaired.blocked_at.is_none());
+        assert_eq!(
+            pending_to_prepared(repaired)
+                .unwrap()
+                .envelope
+                .predecessor_source_epoch,
+            Some(predecessor.to_string())
+        );
+        let registry_predecessor: String = conn
+            .query_row(
+                "SELECT predecessor_epoch FROM source_epoch_registry WHERE source_epoch = ?1",
+                [prepared.source_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(registry_predecessor, predecessor.to_string());
+    }
+
+    #[test]
+    fn host_timestamp_comparison_accepts_microsecond_storage_precision() {
+        assert!(timestamps_match_at_host_precision(
+            "2026-08-31T12:00:00.123456+00:00",
+            "2026-08-31T12:00:00.123456789Z",
+        ));
+        assert!(!timestamps_match_at_host_precision(
+            "2026-08-31T12:00:00.123455+00:00",
+            "2026-08-31T12:00:00.123456789Z",
+        ));
+    }
+
+    #[tokio::test]
+    async fn unresolved_cross_provider_binding_returns_to_transcript_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "22a940a2-8256-4042-856e-a3b5ade40bd6";
+        let transcript_dir = dir.path().join("agent-transcripts").join(conversation_id);
+        fs::create_dir_all(&transcript_dir).unwrap();
+        let path = transcript_dir.join(format!("{conversation_id}.jsonl"));
+        fs::write(
+            &path,
+            b"{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let correct = prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(correct.envelope.session_id, conversation_id);
+        let stale_session_id = Uuid::new_v4().to_string();
+        let pending = pending_source_envelope::load_for_epoch(&conn, correct.source_epoch)
+            .unwrap()
+            .unwrap();
+        let mut poisoned = correct.envelope.clone();
+        poisoned.session_id = stale_session_id.clone();
+        poisoned.render.as_mut().unwrap().generation_id =
+            render_generation_id(Uuid::parse_str(&stale_session_id).unwrap()).to_string();
+        let poisoned_body = encode_zstd(
+            &serde_json::to_vec(&poisoned).unwrap(),
+            "cross-provider fixture body",
+        )
+        .unwrap();
+        pending_source_envelope::replace_request_body_after_render_conflict(
+            &conn,
+            correct.source_epoch,
+            &pending.envelope_id,
+            &pending.request_body_zstd,
+            &poisoned_body,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE source_epoch_registry SET bound_session_id = ?1 WHERE source_epoch = ?2",
+            params![stale_session_id, correct.source_epoch.to_string()],
+        )
+        .unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(
+                &stable_source_path(&path).to_string_lossy(),
+                &stale_session_id,
+                "claude",
+            )
+            .unwrap();
+        pending_source_envelope::quarantine(
+            &mut conn,
+            correct.source_epoch,
+            "source_epoch_conflict_unresolved",
+            "source_epoch_not_found after generic admission conflict",
+        )
+        .unwrap();
+        let pending = pending_source_envelope::load_for_epoch(&conn, correct.source_epoch)
+            .unwrap()
+            .unwrap();
+        let prepared = pending_to_prepared(pending.clone()).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_stale = stale_session_id.clone();
+        let server = tokio::spawn(async move {
+            for request_index in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (request_line, body) = read_http_request(&mut socket).await;
+                let (status, response_body) = if request_index == 0 {
+                    assert!(request_line.starts_with("GET "));
+                    (
+                        "404 Not Found",
+                        r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#
+                            .to_string(),
+                    )
+                } else {
+                    assert!(request_line.starts_with("POST "));
+                    let posted: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(posted.session_id, expected_stale);
+                    (
+                        "409 Conflict",
+                        serde_json::json!({
+                            "detail": {
+                                "code": "source_epoch_conflict",
+                                "message": "session identity conflict",
+                                "details": {
+                                    "reason": "session_identity_conflict",
+                                    "existing_tenant_id": posted.tenant_id,
+                                    "requested_tenant_id": posted.tenant_id,
+                                    "existing_provider": "claude",
+                                    "requested_provider": "cursor",
+                                }
+                            }
+                        })
+                        .to_string(),
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let client = ShipperClient::with_compression(
+            &ShipperConfig {
+                api_url: format!("http://{address}"),
+                timeout_seconds: 5,
+                ..ShipperConfig::default()
+            },
+            CompressionAlgo::Gzip,
+        )
+        .unwrap();
+
+        assert!(reexamine_blocked_source(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &pending,
+            &prepared,
+            "repair",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap());
+        server.await.unwrap();
+        let repaired = pending_to_prepared(
+            pending_source_envelope::load_for_epoch(&conn, correct.source_epoch)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(repaired.envelope.session_id, conversation_id);
+        assert_eq!(
+            repaired.envelope.render.unwrap().generation_id,
+            render_generation_id(Uuid::parse_str(conversation_id).unwrap()).to_string()
+        );
+        assert!(crate::state::session_binding::SessionBinding::new(&conn)
+            .get_for_provider(&stable_source_path(&path).to_string_lossy(), "claude")
+            .unwrap()
+            .is_none());
+        let bound: Option<String> = conn
+            .query_row(
+                "SELECT bound_session_id FROM source_epoch_registry WHERE source_epoch = ?1",
+                [correct.source_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(bound.is_none());
+    }
+
+    #[tokio::test]
     async fn missing_local_epoch_adopts_single_host_open_predecessor() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -7550,10 +8243,12 @@ mod tests {
                 predecessor_source_epoch: None,
                 replaced_by_source_epoch: None,
                 accepted_through: prefix_end.to_string(),
+                opened_at: prepared.envelope.epoch_opened_at.clone(),
             },
             objects: vec![crate::shipping::storage_v2::StorageV2SourceObject {
                 envelope_id: prefix_id,
                 tenant_id: prepared.envelope.tenant_id.clone(),
+                session_id: prepared.envelope.session_id.clone(),
                 machine_id: prepared.envelope.machine_id.clone(),
                 provider: prepared.envelope.provider.clone(),
                 opaque_source_id: prepared.envelope.opaque_source_id.clone(),

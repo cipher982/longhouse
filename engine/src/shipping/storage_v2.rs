@@ -192,12 +192,16 @@ pub struct StorageV2SourceEpoch {
     pub predecessor_source_epoch: Option<String>,
     pub replaced_by_source_epoch: Option<String>,
     pub accepted_through: String,
+    #[serde(default)]
+    pub opened_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct StorageV2SourceObject {
     pub envelope_id: String,
     pub tenant_id: String,
+    #[serde(default)]
+    pub session_id: String,
     pub machine_id: String,
     pub provider: String,
     pub opaque_source_id: String,
