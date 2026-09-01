@@ -1284,9 +1284,12 @@ def prepare_claude_profile(
                 security_notes_attempts += 1
             elif not confirmed_trust and "Yes,Itrustthisfolder" in compact:
                 # Claude's safety-first selector defaults to ``No, exit``.
-                # Move to the visible trust choice before accepting it; a
-                # bare Enter records a false-positive receipt and exits.
-                process.send("\x1b[B\r")
+                # Move to the visible trust choice, then let Claude finish
+                # repainting before accepting it. Sending Down+Enter in one
+                # PTY write loses Enter in Claude 2.1.252's render boundary.
+                process.send("\x1b[B")
+                time.sleep(1.0)
+                process.send("\r")
                 confirmed_trust = True
             else:
                 try:

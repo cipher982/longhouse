@@ -451,8 +451,12 @@ def launch_claude_session(
             confirmed_permission_bypass = True
         if not confirmed_trust and "Yes,Itrustthisfolder" in compact:
             # The first choice is intentionally ``No, exit``. Select the
-            # explicit trust choice before submitting the prompt.
-            session.write(b"\x1b[B\r")
+            # explicit trust choice and allow its repaint to settle before
+            # submitting it; Claude 2.1.252 drops an Enter sent in the same
+            # PTY write as the Down key.
+            session.write(b"\x1b[B")
+            time.sleep(1.0)
+            session.write(b"\r")
             confirmed_trust = True
         if not confirmed_channel and "Iamusingthisforlocaldevelopment" in compact:
             session.write(b"\r")

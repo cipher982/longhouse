@@ -18,55 +18,55 @@ from zerg.qa import live_session_toolkit
 from zerg.qa import provider_native_resume
 from zerg.qa.codex_native_resume import _redact_process_command
 from zerg.qa.codex_native_resume import _validate_resume_intent
-from zerg.qa.live_session_toolkit import write_json as write_codex_json
 from zerg.qa.codex_native_resume import _write_resume_contract_snapshot
-from zerg.qa.provider_native_resume import SPECS
 from zerg.qa.live_session_toolkit import RuntimeHostRegistrationTransient
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import _accept_claude_development_channel_prompt
 from zerg.qa.live_session_toolkit import _accept_claude_permission_prompt
 from zerg.qa.live_session_toolkit import _accept_cursor_workspace_trust
-from zerg.qa.live_session_toolkit import bound_terminal_recordings
-from zerg.qa.provider_native_resume import _claude_input_prompt_visible
-from zerg.qa.live_session_toolkit import cleanup_processes
-from zerg.qa.provider_native_resume import _command_from_resume_intent
 from zerg.qa.live_session_toolkit import _control_send
-from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
-from zerg.qa.live_session_toolkit import cursor_bootstrap_prompt
 from zerg.qa.live_session_toolkit import _cursor_hook_event_observation
-from zerg.qa.provider_native_resume import _cursor_idle_then_flush
 from zerg.qa.live_session_toolkit import _cursor_idle_timeout_observation
-from zerg.qa.provider_native_resume import _cursor_initial_send_then_flush
 from zerg.qa.live_session_toolkit import _cursor_interrupt_to_idle
 from zerg.qa.live_session_toolkit import _cursor_projection_diagnostics
 from zerg.qa.live_session_toolkit import _cursor_tui_input_ready
-from zerg.qa.provider_native_resume import _finalize_result_payload
-from zerg.qa.live_session_toolkit import initialize_cursor_workspace
-from zerg.qa.live_session_toolkit import isolated_provider_home
-from zerg.qa.provider_native_resume import _isolated_qualification_environment
-from zerg.qa.live_session_toolkit import launch_command
 from zerg.qa.live_session_toolkit import _opencode_tui_is_connected
-from zerg.qa.provider_native_resume import _post_resume_response_correlated
-from zerg.qa.live_session_toolkit import provider_process_pid
 from zerg.qa.live_session_toolkit import _provision_transcript_roots
 from zerg.qa.live_session_toolkit import _raise_known_registration_transient
+from zerg.qa.live_session_toolkit import _wait_cursor_idle
+from zerg.qa.live_session_toolkit import _write_best_effort_json
+from zerg.qa.live_session_toolkit import bound_terminal_recordings
+from zerg.qa.live_session_toolkit import cleanup_processes
+from zerg.qa.live_session_toolkit import cursor_bootstrap_prompt
+from zerg.qa.live_session_toolkit import initialize_cursor_workspace
+from zerg.qa.live_session_toolkit import isolated_provider_home
+from zerg.qa.live_session_toolkit import launch_command
+from zerg.qa.live_session_toolkit import provider_process_pid
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.live_session_toolkit import state_candidates
+from zerg.qa.live_session_toolkit import wait_assistant_response_after_marker
+from zerg.qa.live_session_toolkit import wait_cursor_tui_ready
+from zerg.qa.live_session_toolkit import wait_session_tail
+from zerg.qa.live_session_toolkit import wait_state
+from zerg.qa.live_session_toolkit import write_json as write_codex_json
+from zerg.qa.provider_native_resume import SPECS
+from zerg.qa.provider_native_resume import _claude_input_prompt_visible
+from zerg.qa.provider_native_resume import _command_from_resume_intent
+from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
+from zerg.qa.provider_native_resume import _cursor_idle_then_flush
+from zerg.qa.provider_native_resume import _cursor_initial_send_then_flush
+from zerg.qa.provider_native_resume import _finalize_result_payload
+from zerg.qa.provider_native_resume import _isolated_qualification_environment
+from zerg.qa.provider_native_resume import _post_resume_response_correlated
 from zerg.qa.provider_native_resume import _refresh_failure_result_manifest
 from zerg.qa.provider_native_resume import _resume_intent_timeout
 from zerg.qa.provider_native_resume import _resume_marker
 from zerg.qa.provider_native_resume import _resume_marker_prompt
 from zerg.qa.provider_native_resume import _send_initial_seed
-from zerg.qa.live_session_toolkit import start_transcript_shipper
-from zerg.qa.live_session_toolkit import state_candidates
-from zerg.qa.live_session_toolkit import wait_assistant_response_after_marker
 from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_bootstrap_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_hook_sequence
-from zerg.qa.live_session_toolkit import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_initial_idle
-from zerg.qa.live_session_toolkit import wait_cursor_tui_ready
-from zerg.qa.live_session_toolkit import wait_session_tail
-from zerg.qa.live_session_toolkit import wait_state
-from zerg.qa.live_session_toolkit import _write_best_effort_json
 from zerg.qa.provider_native_resume import registration_for
 
 
@@ -2095,7 +2095,7 @@ def test_claude_profile_bootstrap_selects_trust_instead_of_default_exit(
 
     assert result["status"] == "pass"
     assert result["trust_confirmed"] is True
-    assert FakePtyProcess.instance.sent[0] == "\x1b[B\r"
+    assert FakePtyProcess.instance.sent[:2] == ["\x1b[B", "\r"]
 
 
 def test_codex_resume_receipts_normalize_path_values(tmp_path: Path) -> None:

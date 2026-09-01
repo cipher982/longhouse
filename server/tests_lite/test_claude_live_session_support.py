@@ -34,6 +34,7 @@ def test_launch_selects_workspace_trust_instead_of_default_exit(tmp_path: Path, 
     monkeypatch.setattr(m, "wait_for_channel_ready", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(m, "read_provider_session_id", lambda *_args, **_kwargs: "provider-session-1")
     monkeypatch.setattr(m, "wait_until", lambda predicate, **_kwargs: predicate())
+    monkeypatch.setattr(m.time, "sleep", lambda _seconds: None)
 
     launched, session_id, provider_session_id = m.launch_claude_session(
         workspace=tmp_path,
@@ -47,7 +48,7 @@ def test_launch_selects_workspace_trust_instead_of_default_exit(tmp_path: Path, 
     assert launched is session
     assert session_id == "session-1"
     assert provider_session_id == "provider-session-1"
-    assert session.writes == [b"\x1b[B\r"]
+    assert session.writes == [b"\x1b[B", b"\r"]
 
 
 def test_managed_claude_helpers_respect_an_explicit_isolated_home(tmp_path: Path) -> None:
