@@ -2100,7 +2100,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf03bf53426a6e47fa05e057627f8b721e694bfc3199481fe240aeaa078b88f6"
+              "oracle_digest": "496f544f155a23ff96931c20daf0674e368b10c3dfaa81a2b1c91ccfc9fb9310"
             }
           ]
         },

@@ -22,8 +22,6 @@ from uuid import uuid4
 import httpx
 
 from zerg.services.longhouse_paths import get_managed_local_dir
-from zerg.services.shipper import get_zerg_url
-from zerg.services.shipper import load_token
 
 
 def _now() -> str:
@@ -336,8 +334,12 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             description="native Cursor binding claim",
         )
-        url = get_zerg_url().rstrip("/")
-        token = load_token()
+        url = str(args.api_url or "").rstrip("/")
+        token = str(args.agents_token or "")
+        if not url or not token:
+            raise RuntimeError(
+                "Cursor product canary requires --api-url/--agents-token or " "LONGHOUSE_RUNTIME_API_URL/LONGHOUSE_RUNTIME_AGENTS_TOKEN"
+            )
         headers = {"X-Agents-Token": token}
 
         def api_get(path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -687,6 +689,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default="gpt-5.3-codex-low")
     parser.add_argument("--longhouse-bin", default="longhouse")
     parser.add_argument("--engine-bin", default="longhouse-engine")
+    parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
+    parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
     parser.add_argument("--skip-machine-agent-restart", action="store_true")
     parser.add_argument("--turn-boundary-only", action="store_true")
     return parser
