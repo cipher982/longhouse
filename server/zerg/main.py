@@ -28,12 +28,14 @@ if _settings.e2e_log_suppress:
 import logging
 from pathlib import Path
 
+from fastapi import Depends
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 # Logging configuration
+from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
 from zerg.logging_config import configure_logging
 from zerg.services.avatar_storage import avatar_storage_dir
 
@@ -395,7 +397,10 @@ SHORT_LINK_MIN_PREFIX = 8
 
 
 @app.get("/s/{prefix}", include_in_schema=False)
-async def short_session_link(prefix: str):
+async def short_session_link(
+    prefix: str,
+    owner_id: int = Depends(get_current_browser_user_id_short_lived),
+):
     """Resolve a short session link (/s/<id-prefix>) to the full timeline URL.
 
     Lets the CLI print a clean `https://host/s/111a5a5d` instead of the full
@@ -413,7 +418,7 @@ async def short_session_link(prefix: str):
         return RedirectResponse(url="/timeline", status_code=302)
 
     try:
-        resolution = await asyncio.to_thread(resolve_session_prefix, cleaned)
+        resolution = await asyncio.to_thread(resolve_session_prefix, cleaned, owner_id=owner_id)
     except CatalogReadError as exc:
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     if resolution.get("status") == "unique":
@@ -424,13 +429,14 @@ async def short_session_link(prefix: str):
 
 
 @app.get("/s/{prefix}/preview", include_in_schema=False)
-async def short_session_link_preview(prefix: str):
-    """Public-safe metadata for a short-link session preview.
+async def short_session_link_preview(
+    prefix: str,
+    owner_id: int = Depends(get_current_browser_user_id_short_lived),
+):
+    """Owner-scoped metadata for a short-link session preview.
 
-    Lets the login page tell a logged-out visitor whose session they were
-    trying to reach before they sign in. Returns only the provider, device
-    label, timing, and owner display info — never transcript, project, cwd,
-    summary, or any content-derived field.
+    Returns only the provider, device label, timing, and owner display info —
+    never transcript, project, cwd, summary, or any content-derived field.
 
     Same prefix resolution rules as /s/{prefix}: zero or ambiguous matches
     return 404 (don't guess, don't leak existence).
@@ -445,7 +451,7 @@ async def short_session_link_preview(prefix: str):
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        resolution = await asyncio.to_thread(resolve_session_prefix, cleaned)
+        resolution = await asyncio.to_thread(resolve_session_prefix, cleaned, owner_id=owner_id)
     except CatalogReadError as exc:
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     if resolution.get("status") != "unique":

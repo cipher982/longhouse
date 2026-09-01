@@ -426,7 +426,7 @@ def test_canonical_detail_requires_owner_scope_before_catalog_read(monkeypatch):
     )
 
     with pytest.raises(CatalogReadError) as raised:
-        read_live_catalog_session(uuid4())
+        read_live_catalog_session(uuid4(), owner_id=None)
 
     assert raised.value.code == "canonical_owner_required"
 
@@ -1734,7 +1734,7 @@ def test_live_catalog_timeline_returns_typed_archive_requirement_for_search(tmp_
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
     initialize_catalog_schema(engine)
     with pytest.raises(ValueError, match="search_requires_archive"):
-        list_live_catalog_timeline(params=_params(query="sqlite"))
+        list_live_catalog_timeline(params=_params(query="sqlite"), owner_id=1)
 
 
 def test_live_catalog_timeline_ignores_search_mode_without_query(tmp_path):

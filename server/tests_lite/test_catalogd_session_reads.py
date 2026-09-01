@@ -1580,13 +1580,12 @@ async def test_session_read_validation_and_prefix_missing_ambiguous_found(daemon
     await daemon.start()
     client = CatalogClient(socket_path)
     try:
-        missing_prefix = await client.call("session.prefix.resolve.v2", {"prefix": "bbbb"})
+        missing_prefix = await client.call("session.prefix.resolve.v2", {"prefix": "bbbb", "owner_id": 1})
         assert missing_prefix["status"] == "missing"
         assert missing_prefix["session"] is None and missing_prefix["owner"] is None
-        ambiguous = await client.call("session.prefix.resolve.v2", {"prefix": "aaaaaaaa"})
-        assert ambiguous["status"] == "ambiguous" and ambiguous["session_id"] is None
-        assert ambiguous["session"] is None and ambiguous["owner"] is None
-        found = await client.call("session.prefix.resolve.v2", {"prefix": "aaaaaaaa-1111"})
+        ambiguous = await client.call("session.prefix.resolve.v2", {"prefix": "aaaaaaaa", "owner_id": 1})
+        assert ambiguous["status"] == "unique" and ambiguous["session_id"] == first_id
+        found = await client.call("session.prefix.resolve.v2", {"prefix": "aaaaaaaa-1111", "owner_id": 1})
         assert found["status"] == "unique" and found["session_id"] == first_id
         assert found["session"] == {
             "session_id": first_id,
@@ -1598,15 +1597,21 @@ async def test_session_read_validation_and_prefix_missing_ambiguous_found(daemon
         assert found["owner"] == {"display_name": "David Rose", "email_local": "david010"}
         # An unbound session has no owner to preview: the first row in the users
         # table is not an owner of anything.
-        unbound = await client.call("session.prefix.resolve.v2", {"prefix": "aaaaaaaa-2222"})
-        assert unbound["status"] == "unique" and unbound["owner"] is None
+        unbound = await client.call("session.prefix.resolve.v2", {"prefix": "aaaaaaaa-2222", "owner_id": 1})
+        assert unbound["status"] == "missing" and unbound["owner"] is None
         assert set(found["session"]) == {"session_id", "provider", "device_name", "started_at", "ended_at"}
-        resolved_alias = await client.call("session.alias.resolve.v2", {"provider_session_id": f"provider-{first_id}"})
+        resolved_alias = await client.call(
+            "session.alias.resolve.v2",
+            {"provider_session_id": f"provider-{first_id}", "owner_id": 1},
+        )
         assert resolved_alias["found"] is True and resolved_alias["session_id"] == first_id
-        unknown_alias = await client.call("session.alias.resolve.v2", {"provider_session_id": "provider-unknown"})
+        unknown_alias = await client.call(
+            "session.alias.resolve.v2",
+            {"provider_session_id": "provider-unknown", "owner_id": 1},
+        )
         assert unknown_alias["found"] is False and unknown_alias["session_id"] is None
         with pytest.raises(CatalogRemoteError) as alias_exc_info:
-            await client.call("session.alias.resolve.v2", {"provider_session_id": ""})
+            await client.call("session.alias.resolve.v2", {"provider_session_id": "", "owner_id": 1})
         assert alias_exc_info.value.code == "invalid_request"
         missing = await client.call("session.read.v2", {"session_id": str(uuid4())})
         assert missing["found"] is False and missing["facts"] is None

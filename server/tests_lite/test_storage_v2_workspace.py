@@ -302,7 +302,7 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
     assert converged["session"]["capabilities"] == result["session"]["capabilities"]
     assert len(converged["projection"]["items"]) == 1
 
-    control_session = load_live_control_session_snapshot(session_id)
+    control_session = load_live_control_session_snapshot(session_id, owner_id=1)
     assert control_session is not None
     assert control_session.command_family == "console_turn"
 

@@ -24,11 +24,13 @@ from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
 from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.models.live_store import LiveUser
 from zerg.routers.session_chat import PauseRequestResponseRequest
 from zerg.routers.session_chat import SessionInputRequest
 from zerg.routers.session_chat import _create_session_input_response
@@ -48,6 +50,7 @@ def _seed_live_control(db):
     session_id = uuid4()
     thread_id = uuid4()
     run_id = uuid4()
+    db.add(LiveUser(id=7, email="owner@example.com", is_active=True))
     db.add(
         LiveSessionCatalog(
             session_id=str(session_id),
@@ -60,6 +63,18 @@ def _seed_live_control(db):
             last_activity_at=now,
             primary_thread_id=str(thread_id),
             created_at=now,
+            updated_at=now,
+        )
+    )
+    db.add(
+        LiveSession(
+            session_id=str(session_id),
+            owner_id="7",
+            provider="codex",
+            device_id="cinder",
+            state="attached",
+            started_at=now,
+            last_seen_at=now,
             updated_at=now,
         )
     )
@@ -407,13 +422,13 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
     monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
     monkeypatch.setattr(
         "zerg.services.catalog_read_gateway.session_snapshot",
-        lambda value, *, owner_id=None: catalog_store.read_session(session_id=value, owner_id=owner_id),
+        lambda value, *, owner_id: catalog_store.read_session(session_id=value, owner_id=owner_id),
     )
 
     from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
     with factory() as db:
-        session = load_live_control_session_snapshot(session_id)
+        session = load_live_control_session_snapshot(session_id, owner_id=7)
         assert session is not None
         response = await _create_session_input_response(
             source_session=session,

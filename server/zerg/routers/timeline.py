@@ -192,14 +192,14 @@ async def _search_storage_v2_timeline(
     return TimelineSessionsListResponse(sessions=page, total=len(cards), has_real_sessions=bool(cards))
 
 
-def _browser_owner_id(user) -> int | None:
+def _browser_owner_id(user) -> int:
     raw_owner_id = getattr(user, "id", None)
     if raw_owner_id is None:
-        return None
+        raise HTTPException(status_code=401, detail="Authenticated browser identity has no owner id")
     try:
         return int(raw_owner_id)
     except (TypeError, ValueError):
-        return None
+        raise HTTPException(status_code=401, detail="Authenticated browser identity has an invalid owner id") from None
 
 
 @router.get("/machines", response_model=MachineDirectoryResponse)
@@ -465,7 +465,7 @@ async def stream_timeline_sessions(
         request,
         params=params,
         skip_initial_replay=skip_initial_replay,
-        owner_id=current_user_id if isinstance(current_user_id, int) else None,
+        owner_id=int(current_user_id),
     )
     sse_response = EventSourceResponse(stream)
     sse_response.headers["X-Limit-Cap"] = "100"

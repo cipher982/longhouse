@@ -36,8 +36,8 @@ from zerg.routers.agents_search import search_storage_v2_semantic_sessions
 from zerg.routers.agents_search import search_storage_v2_sessions
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalog_read_gateway import canonical_timeline_snapshot
 from zerg.services.catalog_read_gateway import resolve_session_alias
-from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.console_turns import ConsoleTurnConflict
@@ -220,12 +220,12 @@ async def stream_agent_sessions(
         include_automation=False,
         context_mode="forensic",
     )
-    owner_id = getattr(_auth, "owner_id", None)
+    owner_id = _resolve_agents_owner_id(None, _auth)
     stream = stream_live_catalog_machine_sessions(
         request,
         params=params,
         skip_initial_replay=skip_initial_replay,
-        owner_id=owner_id if isinstance(owner_id, int) else None,
+        owner_id=owner_id,
     )
     response = EventSourceResponse(stream)
     response.headers["X-Limit-Cap"] = "100"
@@ -436,6 +436,7 @@ async def list_sessions(
         # hook-scope bound themselves, so it has to be applied here or it does
         # not apply in production at all.
         validate_managed_hook_scope(_auth, params)
+        owner_id = _resolve_agents_owner_id(db, _auth)
         if query is not None:
             if context_mode != "forensic":
                 raise HTTPException(
@@ -443,15 +444,6 @@ async def list_sessions(
                     detail={
                         "code": "search_mode_unsupported",
                         "message": "Storage-v2 search does not yet project active-context boundaries.",
-                    },
-                )
-            owner_id = getattr(_auth, "owner_id", None)
-            if owner_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "code": "owner_required",
-                        "message": "Storage-v2 search requires an owner-bound device token.",
                     },
                 )
             degraded: list[MachineSearchLaneFailure] = []
@@ -527,11 +519,10 @@ async def list_sessions(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "search_query_required", "message": "Semantic and hybrid modes require a query."},
             )
-        owner_id = getattr(_auth, "owner_id", None)
         listing = await asyncio.to_thread(
             list_live_catalog_sessions,
             params=params,
-            owner_id=owner_id if isinstance(owner_id, int) else None,
+            owner_id=owner_id,
         )
         return _machine_sessions_list(listing)
     except SessionListingError as exc:
@@ -573,7 +564,8 @@ def list_archive_manifest(
     `hide_autonomous=false` explicitly.
     """
     try:
-        snapshot = timeline_snapshot(
+        owner_id = _resolve_agents_owner_id(db, _auth)
+        snapshot = canonical_timeline_snapshot(
             {
                 "project": None,
                 "provider": None,
@@ -585,7 +577,8 @@ def list_archive_manifest(
                 "days_back": days_back,
                 "limit": limit,
                 "offset": offset,
-            }
+            },
+            owner_id=owner_id,
         )
         return build_storage_v2_archive_manifest(snapshot)
     except HTTPException:
@@ -685,7 +678,8 @@ async def wall_query(
     or UI decides what's relevant — no status bucketing, no pre-computed summaries.
     """
     fetch_limit = min(200, limit * 4 if repo else limit)
-    snapshot = timeline_snapshot(
+    owner_id = _resolve_agents_owner_id(db, _auth)
+    snapshot = canonical_timeline_snapshot(
         {
             "project": project,
             "provider": None,
@@ -697,7 +691,8 @@ async def wall_query(
             "days_back": days,
             "limit": fetch_limit,
             "offset": 0,
-        }
+        },
+        owner_id=owner_id,
     )
     items = project_storage_v2_wall(
         snapshot,
@@ -801,7 +796,7 @@ def _tail_response(
     }
 
 
-def _live_session_id_via_provider_alias(session_id: UUID) -> UUID | None:
+def _live_session_id_via_provider_alias(session_id: UUID, *, owner_id: int) -> UUID | None:
     """Resolve a provider-native id to its Longhouse session id (live catalog).
 
     Fallback for the live-catalog branches after a primary-key miss, so the id a
@@ -811,7 +806,7 @@ def _live_session_id_via_provider_alias(session_id: UUID) -> UUID | None:
     """
 
     try:
-        result = resolve_session_alias(str(session_id))
+        result = resolve_session_alias(str(session_id), owner_id=owner_id)
     except CatalogReadError:
         return None
     resolved = result.get("session_id") if result.get("found") is True else None
@@ -877,7 +872,7 @@ async def session_tail(
         anchor="tail",
     )
     if workspace is None:
-        resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id)
+        resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id, owner_id=int(owner_id))
         if resolved is not None:
             session_id = resolved
             workspace = await build_storage_v2_workspace(
@@ -1245,6 +1240,8 @@ def session_detail_payload(
     if effective_owner_id is None:
         raw_owner_id = getattr(_auth, "owner_id", None)
         effective_owner_id = int(raw_owner_id) if raw_owner_id is not None else None
+    if effective_owner_id is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Storage-v2 reads require an owner-scoped identity")
 
     def _read_live(sid: UUID):
         try:
@@ -1261,7 +1258,7 @@ def session_detail_payload(
 
     result, provider_session_id, commit_seq = _read_live(session_id)
     if result is None:
-        resolved = _live_session_id_via_provider_alias(session_id)
+        resolved = _live_session_id_via_provider_alias(session_id, owner_id=int(effective_owner_id))
         if resolved is not None:
             session_id = resolved
             result, provider_session_id, commit_seq = _read_live(session_id)
@@ -1478,7 +1475,7 @@ async def export_session(
     except HTTPException as exc:
         if exc.status_code != status.HTTP_404_NOT_FOUND:
             raise
-        resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id)
+        resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id, owner_id=int(owner_id))
         if resolved is None:
             raise
         return await build_storage_v2_raw_export(

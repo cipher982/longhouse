@@ -74,10 +74,6 @@ class CatalogReadError(RuntimeError):
         self.message = message
 
 
-def timeline_snapshot(params: dict[str, Any]) -> dict[str, Any]:
-    return _call("session.timeline.list.v2", params)
-
-
 def canonical_timeline_snapshot(params: dict[str, Any], *, owner_id: int) -> dict[str, Any]:
     return _call(
         "session.timeline.list.v2",
@@ -85,11 +81,8 @@ def canonical_timeline_snapshot(params: dict[str, Any], *, owner_id: int) -> dic
     )
 
 
-def session_snapshot(session_id: str, *, owner_id: int | None = None) -> dict[str, Any]:
-    params: dict[str, Any] = {"session_id": session_id}
-    if owner_id is not None:
-        params["owner_id"] = owner_id
-    return _call("session.read.v2", params)
+def session_snapshot(session_id: str, *, owner_id: int) -> dict[str, Any]:
+    return _call("session.read.v2", {"session_id": session_id, "owner_id": owner_id})
 
 
 def shadow_session_state_snapshot(session_id: str, *, owner_id: int) -> dict[str, Any]:
@@ -110,11 +103,14 @@ def shadow_session_state_health(*, owner_id: int) -> dict[str, Any]:
     return _call("session.shadow_state.health.v2", {"owner_id": owner_id})
 
 
-def session_batch_snapshot(session_ids: list[str], *, owner_id: int | None = None) -> dict[str, Any]:
-    params: dict[str, Any] = {"session_ids": session_ids}
-    if owner_id is not None:
-        params["owner_id"] = owner_id
-    return _call("session.read.batch.v2", params)
+def session_batch_snapshot(session_ids: list[str], *, owner_id: int) -> dict[str, Any]:
+    return _call("session.read.batch.v2", {"session_ids": session_ids, "owner_id": owner_id})
+
+
+def internal_session_batch_snapshot(session_ids: list[str]) -> dict[str, Any]:
+    """Read process-internal facts with no user-object authorization claim."""
+
+    return _call("session.read.batch.v2", {"session_ids": session_ids})
 
 
 def active_session_ids(*, limit: int, days_back: int, observed_at: str) -> dict[str, Any]:
@@ -124,12 +120,12 @@ def active_session_ids(*, limit: int, days_back: int, observed_at: str) -> dict[
     )
 
 
-def resolve_session_prefix(prefix: str) -> dict[str, Any]:
-    return _call("session.prefix.resolve.v2", {"prefix": prefix})
+def resolve_session_prefix(prefix: str, *, owner_id: int) -> dict[str, Any]:
+    return _call("session.prefix.resolve.v2", {"prefix": prefix, "owner_id": owner_id})
 
 
-def resolve_session_alias(provider_session_id: str) -> dict[str, Any]:
-    return _call("session.alias.resolve.v2", {"provider_session_id": provider_session_id})
+def resolve_session_alias(provider_session_id: str, *, owner_id: int) -> dict[str, Any]:
+    return _call("session.alias.resolve.v2", {"provider_session_id": provider_session_id, "owner_id": owner_id})
 
 
 def enrolled_machines(owner_id: int) -> dict[str, Any]:
@@ -257,6 +253,7 @@ __all__ = [
     "machine_operation",
     "machine_heartbeats",
     "machine_workspaces",
+    "internal_session_batch_snapshot",
     "recent_visible_web_presence",
     "rename_machine",
     "resolve_session_alias",
@@ -266,6 +263,6 @@ __all__ = [
     "shadow_session_states_snapshot",
     "shadow_session_state_health",
     "session_batch_snapshot",
-    "timeline_snapshot",
+    "canonical_timeline_snapshot",
     "title_dependency_health",
 ]

@@ -607,9 +607,12 @@ def _response_from_catalog(
 def list_live_catalog_timeline(
     *,
     params: TimelineSessionListParams,
-    owner_id: int | None = None,
+    owner_id: int,
 ) -> TimelineSessionsListResponse:
     """List timeline cards from one catalogd-owned SQLite snapshot."""
+
+    if type(owner_id) is not int or owner_id <= 0:
+        raise CatalogReadError("canonical_owner_required", "Canonical timeline projection requires an owner-scoped request.")
 
     # A mode with no query has nothing to search; only an actual query
     # needs the archive path.
@@ -627,11 +630,6 @@ def list_live_catalog_timeline(
         "limit": params.limit,
         "offset": params.offset,
     }
-    if owner_id is None:
-        raise CatalogReadError(
-            "canonical_owner_required",
-            "Canonical timeline projection requires an owner-scoped request.",
-        )
     snapshot = canonical_timeline_snapshot(snapshot_params, owner_id=owner_id)
     return project_catalog_timeline_snapshot(snapshot)
 
@@ -702,7 +700,7 @@ def _timeline_card_signature(card: TimelineSessionCardResponse) -> str:
 def list_live_catalog_sessions(
     *,
     params: TimelineSessionListParams,
-    owner_id: int | None = None,
+    owner_id: int,
 ) -> SessionsListResponse:
     """Machine-facing flat session list from the same bounded card projection."""
 
@@ -728,16 +726,14 @@ def project_catalog_sessions_snapshot(snapshot: dict[str, Any]) -> SessionsListR
 def read_live_catalog_session(
     session_id: UUID,
     *,
-    owner_id: int | None = None,
+    owner_id: int,
     include_hidden: bool = True,
 ) -> tuple[SessionResponse | None, str | None, str]:
     """Read one session shell and its provider alias from one catalog snapshot."""
 
-    if owner_id is None:
-        raise CatalogReadError(
-            "canonical_owner_required",
-            "Canonical session detail requires an owner-scoped request.",
-        )
+    if type(owner_id) is not int or owner_id <= 0:
+        raise CatalogReadError("canonical_owner_required", "Canonical session detail requires an owner-scoped request.")
+
     snapshot = shadow_session_state_snapshot(str(session_id), owner_id=owner_id)
     return _project_live_catalog_session_snapshot(snapshot, include_hidden=include_hidden)
 
@@ -745,16 +741,14 @@ def read_live_catalog_session(
 def read_live_catalog_sessions(
     session_ids: list[UUID],
     *,
-    owner_id: int | None = None,
+    owner_id: int,
     include_hidden: bool = True,
 ) -> list[tuple[SessionResponse | None, str | None, str]]:
     """Project a bounded session page from one catalog snapshot."""
 
-    if owner_id is None:
-        raise CatalogReadError(
-            "canonical_owner_required",
-            "Canonical session detail requires an owner-scoped request.",
-        )
+    if type(owner_id) is not int or owner_id <= 0:
+        raise CatalogReadError("canonical_owner_required", "Canonical session detail requires an owner-scoped request.")
+
     snapshot = shadow_session_states_snapshot([str(session_id) for session_id in session_ids], owner_id=owner_id)
     commit_seq = str(snapshot.get("commit_seq") or "0")
     observed_at = snapshot.get("observed_at")
@@ -892,7 +886,7 @@ async def stream_live_catalog_machine_sessions(
     *,
     params: TimelineSessionListParams,
     skip_initial_replay: bool,
-    owner_id: int | None = None,
+    owner_id: int,
 ):
     """Slim, targeted machine session stream; never serializes browser cards."""
 
@@ -985,7 +979,7 @@ async def stream_live_catalog_timeline(
     *,
     params: TimelineSessionListParams,
     skip_initial_replay: bool,
-    owner_id: int | None = None,
+    owner_id: int,
 ):
     """SSE list stream driven by the existing timeline pubsub wake signal."""
 

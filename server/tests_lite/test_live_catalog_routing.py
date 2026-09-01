@@ -127,8 +127,8 @@ def _request_with_headers(**headers: str) -> Request:
 
 def test_catalog_wall_handles_empty_snapshot(monkeypatch):
     monkeypatch.setattr(
-        "zerg.routers.agents_sessions.timeline_snapshot",
-        lambda _params: {"observed_at": datetime.now(timezone.utc).isoformat(), "rows": [], "total": 0},
+        "zerg.routers.agents_sessions.canonical_timeline_snapshot",
+        lambda _params, *, owner_id: {"observed_at": datetime.now(timezone.utc).isoformat(), "rows": [], "total": 0},
     )
 
     response = asyncio.run(

@@ -106,17 +106,14 @@ def load_live_control_session(db: Session, session_id: UUID | str) -> LiveContro
     )
 
 
-def load_live_control_session_snapshot(session_id: UUID | str, *, owner_id: int | None = None) -> LiveControlSession | None:
+def load_live_control_session_snapshot(session_id: UUID | str, *, owner_id: int) -> LiveControlSession | None:
     """Load bounded control facts through catalogd without opening SQLite."""
 
     from zerg.services.catalog_read_gateway import CatalogReadError
     from zerg.services.catalog_read_gateway import session_snapshot
 
     try:
-        if owner_id is None:
-            result = session_snapshot(str(session_id))
-        else:
-            result = session_snapshot(str(session_id), owner_id=owner_id)
+        result = session_snapshot(str(session_id), owner_id=owner_id)
     except CatalogReadError:
         # Do not answer "no such session" when the catalog could not answer at
         # all. None here reaches callers that raise 404, so a timed-out or

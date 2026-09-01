@@ -1,9 +1,8 @@
-"""Tests for the anonymous /s/<prefix>/preview endpoint used by the login page.
+"""Tests for the owner-authorized /s/<prefix>/preview endpoint.
 
-The endpoint surfaces public-safe session metadata (provider, device label,
-timing, owner display info) to logged-out visitors so the login page can tell
-them whose session they were trying to reach. It must not leak transcript,
-project, cwd, or any content-derived field.
+The endpoint surfaces a small metadata shape after browser authentication. It
+must not leak another owner's session through prefix enumeration, nor expose
+transcript, project, cwd, or any content-derived field.
 
 The route resolves the prefix through catalogd, so every test that expects a
 match provisions a real live catalog and seeds the session in it. The prefix
@@ -55,6 +54,10 @@ def _seed_user(live: LiveCatalog, *, display_name: str | None = "David Rose", em
     return owner_id
 
 
+def _cookies(live: LiveCatalog, owner_id: int, *, email: str = "david010@example.com") -> dict[str, str]:
+    return {"longhouse_session": live.browser_cookie(owner_id=owner_id, email=email)}
+
+
 def _seed_session(
     live: LiveCatalog,
     *,
@@ -90,7 +93,7 @@ def test_preview_returns_public_safe_metadata(live_catalog):  # noqa: F811
     session_id = _seed_session(live_catalog, owner_id=owner_id)
     prefix = session_id.split("-")[0]
 
-    resp = TestClient(app).get(f"/s/{prefix}/preview")
+    resp = TestClient(app).get(f"/s/{prefix}/preview", cookies=_cookies(live_catalog, owner_id))
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -116,8 +119,7 @@ def test_preview_returns_public_safe_metadata(live_catalog):  # noqa: F811
         "device_id",
     ):
         assert forbidden not in body, f"{forbidden!r} leaked into preview response"
-    # Never shared-cacheable: this is per-session metadata on an
-    # unauthenticated route.
+    # Never shared-cacheable: this is per-session metadata.
     assert resp.headers.get("cache-control") == "private, no-store"
 
 
@@ -126,7 +128,7 @@ def test_preview_falls_back_to_email_local_when_display_name_is_blank(live_catal
     session_id = _seed_session(live_catalog, owner_id=owner_id)
     prefix = session_id.split("-")[0]
 
-    resp = TestClient(app).get(f"/s/{prefix}/preview")
+    resp = TestClient(app).get(f"/s/{prefix}/preview", cookies=_cookies(live_catalog, owner_id))
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -140,38 +142,38 @@ def test_preview_falls_back_to_email_local_when_display_name_is_blank(live_catal
 
 
 def test_preview_404_on_unknown_prefix(live_catalog):  # noqa: F811
-    resp = TestClient(app).get("/s/deadbeef/preview")
+    owner_id = _seed_user(live_catalog)
+    resp = TestClient(app).get("/s/deadbeef/preview", cookies=_cookies(live_catalog, owner_id))
 
     assert resp.status_code == 404
 
 
-def test_preview_404_on_invalid_prefix():
+def test_preview_404_on_invalid_prefix(live_catalog):  # noqa: F811
     # Refused on shape alone, before any catalog read: a short or non-hex
     # prefix stops being a link and starts being instance enumeration.
-    resp = TestClient(app).get("/s/zzzznotahex/preview")
+    owner_id = _seed_user(live_catalog)
+    resp = TestClient(app).get("/s/zzzznotahex/preview", cookies=_cookies(live_catalog, owner_id))
 
     assert resp.status_code == 404
 
 
 def test_preview_404_when_no_sessions_match(live_catalog):  # noqa: F811
-    _seed_user(live_catalog)
+    owner_id = _seed_user(live_catalog)
 
     # 8 hex chars but no session in the catalog.
-    resp = TestClient(app).get("/s/00000000/preview")
+    resp = TestClient(app).get("/s/00000000/preview", cookies=_cookies(live_catalog, owner_id))
 
     assert resp.status_code == 404
 
 
-def test_preview_does_not_require_auth(live_catalog):  # noqa: F811
+def test_preview_requires_auth(live_catalog):  # noqa: F811
     owner_id = _seed_user(live_catalog)
     session_id = _seed_session(live_catalog, owner_id=owner_id)
     prefix = session_id.split("-")[0]
 
-    # No cookies, no auth headers -- and the harness runs with authentication
-    # switched on, so this is the real public-route claim.
     resp = TestClient(app).get(f"/s/{prefix}/preview")
 
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 401, resp.text
 
 
 def test_preview_404_on_ambiguous_prefix(live_catalog):  # noqa: F811
@@ -190,20 +192,16 @@ def test_preview_404_on_ambiguous_prefix(live_catalog):  # noqa: F811
             provider="claude",
         )
 
-    resp = TestClient(app).get(f"/s/{same_prefix}/preview")
+    resp = TestClient(app).get(f"/s/{same_prefix}/preview", cookies=_cookies(live_catalog, owner_id))
 
     assert resp.status_code == 404
 
 
-def test_preview_works_when_no_user_is_configured(live_catalog):  # noqa: F811
-    # A session whose owner has no user row -- owner fields must be null, not
-    # a 500 out of an unauthenticated route.
+def test_preview_hides_session_owned_by_another_identity(live_catalog):  # noqa: F811
+    owner_id = _seed_user(live_catalog)
     session_id = _seed_session(live_catalog, owner_id=999_999, device_id="ghost")
     prefix = session_id.split("-")[0]
 
-    resp = TestClient(app).get(f"/s/{prefix}/preview")
+    resp = TestClient(app).get(f"/s/{prefix}/preview", cookies=_cookies(live_catalog, owner_id))
 
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["owner_display_name"] is None
-    assert "owner_email_local" not in body
+    assert resp.status_code == 404, resp.text

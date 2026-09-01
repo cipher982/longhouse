@@ -78,7 +78,10 @@ def _helm_session(
             headers=headers,
         )
         assert bound.status_code == 204, bound.text
-        assert live_catalog.rpc("session.alias.resolve.v2", {"provider_session_id": native_id})["found"] is True
+        assert live_catalog.rpc(
+            "session.alias.resolve.v2",
+            {"provider_session_id": native_id, "owner_id": owner_id},
+        )["found"] is True
     return session_id
 
 
@@ -159,7 +162,10 @@ def test_primary_key_wins_over_a_colliding_alias(live_catalog, live_catalog_clie
     assert resp.status_code == 200, resp.text
     assert resp.json()["id"] == str(a_id), "PK lookup must win over the alias"
     # The alias still resolves for a direct resolver call.
-    resolved = live_catalog.rpc("session.alias.resolve.v2", {"provider_session_id": str(a_id)})
+    resolved = live_catalog.rpc(
+        "session.alias.resolve.v2",
+        {"provider_session_id": str(a_id), "owner_id": owner_id},
+    )
     assert resolved["found"] is True
     assert UUID(resolved["session_id"]) == b_id
 

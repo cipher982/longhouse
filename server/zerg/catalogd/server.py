@@ -2317,9 +2317,10 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_session_prefix(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"prefix"}:
-            return self._error(request, "invalid_request", "session.prefix.resolve.v2 requires prefix")
+        if set(request.params) != {"prefix", "owner_id"}:
+            return self._error(request, "invalid_request", "session.prefix.resolve.v2 requires prefix and owner_id")
         prefix = request.params["prefix"]
+        owner_id = request.params["owner_id"]
         if (
             not isinstance(prefix, str)
             or not 1 <= len(prefix) <= 36
@@ -2327,14 +2328,17 @@ class CatalogDaemon:
             or any(character not in "0123456789abcdef-" for character in prefix)
         ):
             return self._error(request, "invalid_request", "prefix must be 1 to 36 lowercase UUID characters")
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
         assert self._store is not None
-        result = await self._run_read_store(self._store.resolve_session_prefix, prefix=prefix)
+        result = await self._run_read_store(self._store.resolve_session_prefix, prefix=prefix, owner_id=owner_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_session_alias(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"provider_session_id"}:
-            return self._error(request, "invalid_request", "session.alias.resolve.v2 requires provider_session_id")
+        if set(request.params) != {"provider_session_id", "owner_id"}:
+            return self._error(request, "invalid_request", "session.alias.resolve.v2 requires provider_session_id and owner_id")
         provider_session_id = request.params["provider_session_id"]
+        owner_id = request.params["owner_id"]
         # Provider-native ids are UUIDs for Claude but provider-shaped strings
         # elsewhere (Codex rollouts, OpenCode), so bound rather than parse.
         if (
@@ -2343,8 +2347,14 @@ class CatalogDaemon:
             or provider_session_id != provider_session_id.strip()
         ):
             return self._error(request, "invalid_request", "provider_session_id must be a trimmed string of 1 to 256 characters")
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
         assert self._store is not None
-        result = await self._run_read_store(self._store.resolve_session_alias, provider_session_id=provider_session_id)
+        result = await self._run_read_store(
+            self._store.resolve_session_alias,
+            provider_session_id=provider_session_id,
+            owner_id=owner_id,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_session_subagents(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

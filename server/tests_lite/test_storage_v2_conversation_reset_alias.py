@@ -43,6 +43,7 @@ from zerg.catalogd.server import CatalogDaemon
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
@@ -199,6 +200,18 @@ def _seed_helm_session(database_path: Path, *, session_id: str, previous_native_
             )
         )
         connection.execute(
+            LiveSession.__table__.insert().values(
+                session_id=session_id,
+                owner_id="1",
+                provider="claude",
+                device_id="cinder",
+                state="attached",
+                started_at=now - timedelta(hours=1),
+                last_seen_at=now,
+                updated_at=now,
+            )
+        )
+        connection.execute(
             LiveSessionThread.__table__.insert().values(
                 id=thread_id,
                 session_id=session_id,
@@ -261,7 +274,7 @@ async def test_conversation_reset_ingest_makes_the_new_native_id_resolve_to_the_
     try:
         # Negative control: the rotated id resolves nowhere before ingest, so
         # the positive assertion below can only pass via the ingest alias write.
-        before = await catalog.call("session.alias.resolve.v2", {"provider_session_id": new_native_id})
+        before = await catalog.call("session.alias.resolve.v2", {"provider_session_id": new_native_id, "owner_id": 1})
         assert before["found"] is False
 
         payload = _reset_envelope(
@@ -278,12 +291,12 @@ async def test_conversation_reset_ingest_makes_the_new_native_id_resolve_to_the_
         payload["session"].pop("provider_session_id")
         await _ingest(app, payload)
 
-        after = await catalog.call("session.alias.resolve.v2", {"provider_session_id": new_native_id})
+        after = await catalog.call("session.alias.resolve.v2", {"provider_session_id": new_native_id, "owner_id": 1})
         assert after["found"] is True, "conversation_reset ingest must alias the new native id"
         assert after["session_id"] == session_id
         # The pre-rotation id keeps resolving too — rotation adds identity, it
         # never destroys it.
-        old = await catalog.call("session.alias.resolve.v2", {"provider_session_id": previous_native_id})
+        old = await catalog.call("session.alias.resolve.v2", {"provider_session_id": previous_native_id, "owner_id": 1})
         assert old["found"] is True
         assert old["session_id"] == session_id
     finally:
@@ -334,7 +347,7 @@ async def test_reset_record_without_structured_ids_is_ignored_not_fatal(monkeypa
         # head is removed too, so nothing may invent one.
         payload["session"].pop("provider_session_id")
         await _ingest(app, payload)
-        resolved = await catalog.call("session.alias.resolve.v2", {"provider_session_id": new_native_id})
+        resolved = await catalog.call("session.alias.resolve.v2", {"provider_session_id": new_native_id, "owner_id": 1})
         assert resolved["found"] is False
     finally:
         await workers.close()
@@ -392,11 +405,11 @@ async def test_rotation_claimed_by_another_session_survives_the_routing_index(mo
         await _ingest(app, payload)
 
         # Existing thread wins: the stolen id keeps routing to its first owner.
-        resolved = await catalog.call("session.alias.resolve.v2", {"provider_session_id": stolen_native_id})
+        resolved = await catalog.call("session.alias.resolve.v2", {"provider_session_id": stolen_native_id, "owner_id": 1})
         assert resolved["found"] is True
         assert resolved["session_id"] == other_session_id
         # The ingesting session's own prior identity is untouched.
-        own = await catalog.call("session.alias.resolve.v2", {"provider_session_id": previous_native_id})
+        own = await catalog.call("session.alias.resolve.v2", {"provider_session_id": previous_native_id, "owner_id": 1})
         assert own["found"] is True
         assert own["session_id"] == session_id
     finally:

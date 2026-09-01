@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy import DateTime
 
-from zerg.services.catalog_read_gateway import session_batch_snapshot
+from zerg.services.catalog_read_gateway import internal_session_batch_snapshot
 from zerg.utils.time import normalize_utc
 
 
@@ -43,7 +43,7 @@ def session_facts_map(session_ids: list[str]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     unique_ids = list(dict.fromkeys(session_ids))
     for offset in range(0, len(unique_ids), 20):
-        snapshot = session_batch_snapshot(unique_ids[offset : offset + 20])
+        snapshot = internal_session_batch_snapshot(unique_ids[offset : offset + 20])
         for facts in snapshot.get("facts", []):
             if not isinstance(facts, dict):
                 continue

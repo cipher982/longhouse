@@ -6346,9 +6346,11 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
-    def resolve_session_prefix(self, *, prefix: str) -> dict[str, Any]:
+    def resolve_session_prefix(self, *, prefix: str, owner_id: int) -> dict[str, Any]:
         observed_at = datetime.now(UTC)
         catalog = LiveSessionCatalog.__table__
+        live = LiveSession.__table__
+        storage = StorageSession.__table__
         user = LiveUser.__table__
         with _read_snapshot(self.engine) as connection:
             matches = list(
@@ -6360,7 +6362,17 @@ class CatalogStore:
                         catalog.c.started_at,
                         catalog.c.ended_at,
                     )
-                    .where(catalog.c.session_id.like(f"{prefix}%"))
+                    .where(
+                        catalog.c.session_id.like(f"{prefix}%"),
+                        or_(
+                            select(live.c.session_id)
+                            .where(live.c.session_id == catalog.c.session_id, live.c.owner_id == str(owner_id))
+                            .exists(),
+                            select(storage.c.session_id)
+                            .where(storage.c.session_id == catalog.c.session_id, storage.c.owner_id == str(owner_id))
+                            .exists(),
+                        ),
+                    )
                     .order_by(catalog.c.session_id.asc())
                     .limit(2)
                 ).mappings()
@@ -6461,7 +6473,7 @@ class CatalogStore:
         ]
         return {"session_id": session_id, "children": children}
 
-    def resolve_session_alias(self, *, provider_session_id: str) -> dict[str, Any]:
+    def resolve_session_alias(self, *, provider_session_id: str, owner_id: int) -> dict[str, Any]:
         """Resolve a provider-native session id alias to its Longhouse session id.
 
         Read-side counterpart of the ``provider_session_id`` thread-alias upserts:
@@ -6473,6 +6485,8 @@ class CatalogStore:
         observed_at = datetime.now(UTC)
         alias = LiveSessionThreadAlias.__table__
         thread = LiveSessionThread.__table__
+        live = LiveSession.__table__
+        storage = StorageSession.__table__
         with _read_snapshot(self.engine) as connection:
             row = (
                 connection.execute(
@@ -6480,6 +6494,16 @@ class CatalogStore:
                     .select_from(alias.join(thread, alias.c.thread_id == thread.c.id))
                     .where(alias.c.alias_kind == "provider_session_id")
                     .where(alias.c.alias_value == provider_session_id)
+                    .where(
+                        or_(
+                            select(live.c.session_id)
+                            .where(live.c.session_id == thread.c.session_id, live.c.owner_id == str(owner_id))
+                            .exists(),
+                            select(storage.c.session_id)
+                            .where(storage.c.session_id == thread.c.session_id, storage.c.owner_id == str(owner_id))
+                            .exists(),
+                        )
+                    )
                     .order_by(alias.c.last_seen_at.desc(), alias.c.id.desc())
                     .limit(1)
                 )
