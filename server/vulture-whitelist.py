@@ -41,3 +41,11 @@ force_macos = None
 src = None
 dst = None
 follow_symlinks = None
+
+# FastAPI query parameters the web client still sends but the storage-v2
+# handlers do not consume yet. They stay on the signature so the contract does
+# not change under the client; see the comments at their declarations in
+# routers/timeline.py.
+shared_by
+share_token
+snapshot_event_id
