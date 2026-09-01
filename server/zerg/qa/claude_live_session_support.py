@@ -431,10 +431,13 @@ def launch_claude_session(
     confirmed_trust = False
     confirmed_channel = False
     confirmed_permission_bypass = False
+    permission_prompt_seen_at: float | None = None
+    permission_selection_sent_at: float | None = None
     resolved_provider_session_id: str | None = None
 
     def channel_ready() -> str | None:
-        nonlocal confirmed_trust, confirmed_channel, confirmed_permission_bypass, resolved_provider_session_id
+        nonlocal confirmed_trust, confirmed_channel, confirmed_permission_bypass
+        nonlocal permission_prompt_seen_at, permission_selection_sent_at, resolved_provider_session_id
         if not session.alive():
             raise ScenarioError(f"longhouse claude exited before channel readiness (exit={session.process.returncode})")
         compact = re.sub(r"\s+", "", terminal_text(terminal_path))
@@ -446,9 +449,20 @@ def launch_claude_session(
         # this helper never learned to, so every producer built on top of it
         # hung at this exact prompt indefinitely (found registering the 12
         # non-Resume producers' real end-to-end verification).
-        if not confirmed_permission_bypass and "1.No,exit" in compact and "2.Yes,Iaccept" in compact:
-            session.write(b"2\r")
-            confirmed_permission_bypass = True
+        if not confirmed_permission_bypass:
+            if "1.No,exit" in compact and "2.Yes,Iaccept" in compact:
+                session.write(b"2\r")
+                confirmed_permission_bypass = True
+            elif "No,exit" in compact and "Yes,Iaccept" in compact:
+                now = time.monotonic()
+                if permission_prompt_seen_at is None:
+                    permission_prompt_seen_at = now
+                elif permission_selection_sent_at is None and now - permission_prompt_seen_at >= 1.0:
+                    session.write(b"\x1b[B")
+                    permission_selection_sent_at = now
+                elif permission_selection_sent_at is not None and now - permission_selection_sent_at >= 1.0:
+                    session.write(b"\r")
+                    confirmed_permission_bypass = True
         if not confirmed_trust and "Yes,Itrustthisfolder" in compact:
             # The first choice is intentionally ``No, exit``. Select the
             # explicit trust choice and allow its repaint to settle before

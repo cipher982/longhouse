@@ -2590,6 +2590,31 @@ def test_claude_permission_prompt_is_acknowledged_once(tmp_path: Path) -> None:
     assert process.claude_permission_acceptance_sent is True
 
 
+def test_unnumbered_claude_permission_prompt_waits_across_both_repaints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recording = tmp_path / "claude.tty"
+    recording.write_text("No, exit\nYes, I accept\n", encoding="utf-8")
+
+    class FakeProcess:
+        claude_permission_acceptance_sent = False
+
+        def __init__(self) -> None:
+            self.recording = recording
+            self.sent: list[str] = []
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    ticks = iter((0.0, 0.5, 1.0, 1.5, 2.0))
+    monkeypatch.setattr(live_session_toolkit.time, "monotonic", lambda: next(ticks))
+    process = FakeProcess()
+
+    for _ in range(5):
+        _accept_claude_permission_prompt(process)  # type: ignore[arg-type]
+
+    assert process.sent == ["\x1b[B", "\r"]
+    assert process.claude_permission_acceptance_sent is True
+
+
 def test_claude_development_channel_prompt_selects_local_development_once(tmp_path: Path) -> None:
     recording = tmp_path / "claude.tty"
     recording.write_text(

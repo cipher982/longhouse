@@ -1048,6 +1048,29 @@ def _accept_claude_permission_prompt(process: PtyProcess) -> None:
         # currently installed normal- or application-cursor mode.
         process.send("2\r")
         process.claude_permission_acceptance_sent = True
+        return
+    if "No,exit" not in compact or "Yes,Iaccept" not in compact:
+        return
+
+    # Claude 2.1.252 also renders this as an unnumbered, safety-first
+    # selector. Give the initial screen and the selection repaint their own
+    # boundaries; either key can be lost when it shares a render boundary.
+    now = time.monotonic()
+    seen_at = getattr(process, "claude_permission_prompt_seen_at", None)
+    if seen_at is None:
+        process.claude_permission_prompt_seen_at = now
+        return
+    selected_at = getattr(process, "claude_permission_selection_sent_at", None)
+    if selected_at is None:
+        if now - seen_at < 1.0:
+            return
+        process.send("\x1b[B")
+        process.claude_permission_selection_sent_at = now
+        return
+    if now - selected_at < 1.0:
+        return
+    process.send("\r")
+    process.claude_permission_acceptance_sent = True
 
 
 def _accept_claude_development_channel_prompt(process: PtyProcess) -> None:
