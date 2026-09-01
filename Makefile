@@ -543,8 +543,8 @@ validate-public-surface: ## @internal Guard public docs against private/local le
 validate-format: ## @internal Backend formatting is uniform tree-wide
 	@# Tree-wide on purpose. The pre-commit hook only formats files you staged,
 	@# so anything nobody happens to touch drifts forever -- which is how 154
-	@# files ended up unformatted. Fix drift with: cd server && uv run ruff format zerg tests_lite
-	@cd server && uv run ruff format --check zerg tests_lite
+	@# files ended up unformatted. Fix drift with: cd server && uv run --extra dev ruff format zerg tests_lite
+	@cd server && uv run --extra dev ruff format --check zerg tests_lite
 
 validate-legacy-nouns: ## @internal Guard against pre-pivot product nouns
 	@python3 scripts/qa/legacy-nouns-check
