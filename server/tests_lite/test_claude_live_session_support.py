@@ -3,11 +3,53 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from zerg.qa import claude_live_session_support as m
 from zerg.qa import managed_claude_live
+
+
+def test_launch_selects_workspace_trust_instead_of_default_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeSession:
+        process = SimpleNamespace(returncode=None)
+
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        def alive(self) -> bool:
+            return True
+
+        def write(self, value: bytes) -> None:
+            self.writes.append(value)
+
+        def close(self) -> None:
+            pass
+
+    session = FakeSession()
+    monkeypatch.setattr(m.ProviderPtySession, "start", lambda **_kwargs: session)
+    monkeypatch.setattr(m, "terminal_text", lambda _path: "No, exit  Yes, I trust this folder")
+    monkeypatch.setattr(m, "find_channel_session_id", lambda *_args, **_kwargs: "session-1")
+    monkeypatch.setattr(m, "wait_for_channel_ready", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(m, "read_provider_session_id", lambda *_args, **_kwargs: "provider-session-1")
+    monkeypatch.setattr(m, "wait_until", lambda predicate, **_kwargs: predicate())
+
+    launched, session_id, provider_session_id = m.launch_claude_session(
+        workspace=tmp_path,
+        project="test",
+        name="test",
+        env={"HOME": str(tmp_path)},
+        terminal_path=tmp_path / "terminal.log",
+        launch_timeout_secs=1.0,
+    )
+
+    assert launched is session
+    assert session_id == "session-1"
+    assert provider_session_id == "provider-session-1"
+    assert session.writes == [b"\x1b[B\r"]
 
 
 def test_managed_claude_helpers_respect_an_explicit_isolated_home(tmp_path: Path) -> None:

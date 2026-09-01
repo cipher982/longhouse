@@ -450,7 +450,9 @@ def launch_claude_session(
             session.write(b"2\r")
             confirmed_permission_bypass = True
         if not confirmed_trust and "Yes,Itrustthisfolder" in compact:
-            session.write(b"\r")
+            # The first choice is intentionally ``No, exit``. Select the
+            # explicit trust choice before submitting the prompt.
+            session.write(b"\x1b[B\r")
             confirmed_trust = True
         if not confirmed_channel and "Iamusingthisforlocaldevelopment" in compact:
             session.write(b"\r")

@@ -1283,7 +1283,10 @@ def prepare_claude_profile(
                 process.send("\r")
                 security_notes_attempts += 1
             elif not confirmed_trust and "Yes,Itrustthisfolder" in compact:
-                process.send("\r")
+                # Claude's safety-first selector defaults to ``No, exit``.
+                # Move to the visible trust choice before accepting it; a
+                # bare Enter records a false-positive receipt and exits.
+                process.send("\x1b[B\r")
                 confirmed_trust = True
             else:
                 try:
