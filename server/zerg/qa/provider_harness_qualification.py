@@ -27,6 +27,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -249,7 +250,12 @@ def _scenario_result(harness_payload: dict[str, Any], *, provider: str, scenario
     return matches[0]
 
 
-def _copy_live_model_evidence(observation: dict[str, Any], scenario_result: Mapping[str, Any]) -> None:
+def _copy_live_model_evidence(
+    observation: dict[str, Any],
+    scenario_result: Mapping[str, Any],
+    *,
+    retained_root: Path,
+) -> None:
     """Carry the universal harness's native receipt into the release envelope.
 
     The universal provider adapters produce this envelope for every
@@ -261,8 +267,37 @@ def _copy_live_model_evidence(observation: dict[str, Any], scenario_result: Mapp
 
     data = scenario_result.get("data")
     evidence = data.get("live_model_evidence") if isinstance(data, Mapping) else None
-    if isinstance(evidence, Mapping):
-        observation["live_model_evidence"] = dict(evidence)
+    if not isinstance(evidence, Mapping):
+        return
+
+    retained = dict(evidence)
+    sources = retained.get("source_artifacts")
+    if isinstance(sources, list):
+        retained_sources: list[Any] = []
+        for index, source_value in enumerate(sources):
+            if not isinstance(source_value, Mapping) or not isinstance(source_value.get("path"), str):
+                retained_sources.append(source_value)
+                continue
+            source = dict(source_value)
+            try:
+                source_path = Path(source["path"]).expanduser().resolve(strict=True)
+                if not source_path.is_file():
+                    raise OSError(f"native source is not a file: {source_path}")
+                expected_digest = str(source.get("sha256") or "")
+                actual_digest = identity_bridge._sha256_file(source_path).removeprefix("sha256:")  # noqa: SLF001
+                if expected_digest.removeprefix("sha256:") not in {"", actual_digest}:
+                    raise RequestError("native source artifact changed before retention")
+                retained_root.mkdir(parents=True, exist_ok=True)
+                destination = retained_root / f"{index:02d}-{source_path.name}"
+                if source_path != destination.resolve():
+                    shutil.copyfile(source_path, destination)
+                source["path"] = str(destination)
+                source["sha256"] = identity_bridge._sha256_file(destination).removeprefix("sha256:")  # noqa: SLF001
+            except OSError as exc:
+                raise RequestError("native source artifact could not be retained") from exc
+            retained_sources.append(source)
+        retained["source_artifacts"] = retained_sources
+    observation["live_model_evidence"] = retained
 
 
 def _reported_version(probe_result: dict[str, Any], expected_version: str) -> tuple[AssertionOutcome, str]:
@@ -584,7 +619,7 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
         "probe_identity": probe_result,
         "codex_tool_call_result_strict": strict_result,
     }
-    _copy_live_model_evidence(observation, strict_result)
+    _copy_live_model_evidence(observation, strict_result, retained_root=output_root / "native-sources")
     return codex_tool_call_result.emit_proof_bundle(
         request=request,
         output_root=output_root,
@@ -775,7 +810,7 @@ def _claude_full_column_executor(
         LIVE_TOKEN_HARNESS_SCENARIO: live_result,
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
     }
-    _copy_live_model_evidence(observation, live_result)
+    _copy_live_model_evidence(observation, live_result, retained_root=evidence_root / "native-sources")
     return observation, assertions, secrets
 
 
@@ -895,7 +930,7 @@ def _opencode_full_column_executor(
         "full_column_failures": full_column_failures,
         "provider_execution_coverage_matrix_path": harness_payload.get("provider_execution_coverage_matrix_path"),
     }
-    _copy_live_model_evidence(observation, live_result)
+    _copy_live_model_evidence(observation, live_result, retained_root=evidence_root / "native-sources")
     return observation, assertions, secrets
 
 
@@ -1120,7 +1155,7 @@ def _cursor_observed_install_executor(
     # token usage, and subscription accounting. Gate 0 proves the wider
     # managed-session surface, while this envelope proves one bounded
     # model-backed request without copying a daily Cursor profile.
-    _copy_live_model_evidence(observation, interaction_result)
+    _copy_live_model_evidence(observation, interaction_result, retained_root=evidence_root / "native-sources")
     secrets = tuple(value for name in ("CURSOR_API_KEY",) if (value := str(os.environ.get(name) or "").strip()))
     return observation, (assertion,), secrets
 

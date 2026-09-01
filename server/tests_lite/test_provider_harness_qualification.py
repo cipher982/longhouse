@@ -403,11 +403,15 @@ def _passing_antigravity_full_column_payload(evidence_root: Path) -> dict:
     }
 
 
-def test_release_bridge_preserves_native_source_artifacts_for_each_model_backed_lane() -> None:
+def test_release_bridge_retains_native_source_artifacts_for_each_model_backed_lane(tmp_path: Path) -> None:
+    source_path = tmp_path / "scratch" / "provider.jsonl"
+    source_path.parent.mkdir()
+    source_path.write_text('{"type":"result"}\n', encoding="utf-8")
+    source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
     source_artifacts = [
         {
-            "path": "evidence/provider.jsonl",
-            "sha256": "a" * 64,
+            "path": str(source_path),
+            "sha256": source_digest,
             "kind": "provider_jsonl_stream",
             "event_type": "result",
             "event_sha256": "b" * 64,
@@ -425,10 +429,14 @@ def test_release_bridge_preserves_native_source_artifacts_for_each_model_backed_
         bridge._copy_live_model_evidence(  # noqa: SLF001
             observation,
             {"data": {"live_model_evidence": evidence}},
+            retained_root=tmp_path / "retained" / provider,
         )
 
-        assert observation["live_model_evidence"] == evidence
         assert observation["live_model_evidence"] is not evidence
+        retained_source = observation["live_model_evidence"]["source_artifacts"][0]
+        assert retained_source["path"] == str(tmp_path / "retained" / provider / "00-provider.jsonl")
+        assert retained_source["sha256"] == source_digest
+        assert Path(retained_source["path"]).read_bytes() == source_path.read_bytes()
 
 
 def test_full_column_gate_accepts_only_the_complete_known_codex_surface() -> None:
