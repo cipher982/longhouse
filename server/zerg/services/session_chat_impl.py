@@ -207,7 +207,11 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
 
         resolved = active_owner_id()
         if resolved is None:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="No Longhouse user is configured")
+            # A fresh AUTH_DISABLED single-user catalog has no user row yet.
+            # Its bootstrap identity is always owner 1 (the same identity the
+            # dev auth strategy exposes), so an empty local install must not
+            # fail its first read. Authenticated requests never reach here.
+            return 1
         return resolved
     if owner_id is not None:
         owner = db.query(User.id).filter(User.id == int(owner_id)).first()
