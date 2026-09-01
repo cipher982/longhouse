@@ -7,7 +7,7 @@
 The Runner is a WebSocket daemon that executes shell commands on a user-owned machine on behalf of the Longhouse Runtime Host. It connects to the server, authenticates, and waits for execution requests.
 
 Use cases:
-- Oikos can run diagnostic commands on the user's machine
+- The Runtime Host can run diagnostic commands on the user's machine
 - Future: remote session launch and management
 
 ## Security model

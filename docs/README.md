@@ -15,9 +15,9 @@ public checkout.
 
 - [`contracts/truth-plane.md`](contracts/truth-plane.md) — public truth-plane
   contract
-- [`../ARCHITECTURE.md`](../ARCHITECTURE.md) — system map and terminology
-- [`../VISION.md`](../VISION.md) — product thesis and invariants
-- [`scripting-and-automation.md`](scripting-and-automation.md) — scripting, background daemons, and timeline curation
+- [`scripting-and-automation.md`](scripting-and-automation.md) — background
+  scripts, cron jobs, and keeping them off your timeline
+
 Private implementation specifications are intentionally not mirrored here.
 When working in the shared workspace, use the private control-plane spec index
 as the routing map for those documents.

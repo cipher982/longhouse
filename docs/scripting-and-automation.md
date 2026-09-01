@@ -1,68 +1,70 @@
-# Scripting and Background Automation with Longhouse
+# Scripting and background automation
 
-Longhouse is mission control for your interactive agent sessions. This guide explains how Longhouse discovers sessions, and how to run background scripts, cron jobs, and CI workflows cleanly.
+Longhouse timelines are for the sessions you drove yourself. Cron jobs, watchdogs, and CI
+runs still deserve an archive — they just don't belong in the feed you scroll. This is how to
+get both.
 
----
+## What Longhouse watches
 
-## 1. How Longhouse Discovers Sessions
+The Machine Agent discovers unmanaged (Shadow) sessions by watching each provider's own
+history directory:
 
-By default, the Longhouse Machine Agent watches your local interactive provider directories:
+- Claude Code — `~/.claude/projects/`
+- Codex CLI — `~/.codex/sessions/`
+- OpenCode — `~/.local/share/opencode/opencode.db`
+- Cursor — `~/.cursor/`
 
-* **Claude Code:** `~/.claude/projects/`
-* **Codex CLI:** `~/.codex/sessions/`
-* **OpenCode:** `~/.local/share/opencode/`
-* **Cursor:** `~/.cursor/`
+Anything a provider writes there is your interactive history, the AI-coding equivalent of
+`~/.bash_history`, and it lands on your timeline. A background script that shells out to
+`claude` writes to the same place, which is why it shows up next to work you actually did.
 
-Longhouse treats these paths as your **interactive human history** (the AI-coding equivalent of `~/.bash_history`). Any native transcript discovered in these directories appears directly on your Longhouse timeline.
+## Keep automation archived but off the timeline
 
----
+Tag the run as automation. Longhouse still ingests, indexes, and full-text-searches the whole
+transcript; it just stays out of the default feed.
 
-## 2. Running Background Scripts & Daemons
+For a raw provider CLI, set the provenance in the environment:
 
-When running automated scripts, watchdogs, or cron jobs that invoke `claude`, `codex`, or `opencode`, you have two options depending on your goal:
+```bash
+LONGHOUSE_ORIGIN_KIND=hatch_automation \
+LONGHOUSE_LAUNCH_ACTOR=automation \
+LONGHOUSE_LAUNCH_SURFACE=ci \
+  ./nightly-triage.sh
+```
 
-### Option A: Tracked Automation (Log to Longhouse with Hidden Timeline Provenance)
+The engine reads those three variables when it ships the session, so every session the script
+starts inherits the provenance without touching the script itself.
 
-If you want Longhouse to record, index, and make your automated runs searchable without cluttering your home timeline:
-
-1. **Via Managed Launches or Hatch:** Run with `launch_actor="automation"` or `hatch` (which attaches automation provenance automatically).
-2. **Via Canonical Machine API:**
+When you create the session through the machine API, declare it on the request instead:
 
 ```http
 POST /api/agents/sessions
 {
   "launch_actor": "automation",
   "launch_surface": "ci",
-  "project": "my-project",
-  "environment": "test"
+  "project": "my-project"
 }
 ```
 
-* **Outcome:** The full transcript is permanently archived and searchable, but excluded from the default interactive timeline feed.
+`launch_surface` must be one of `test`, `e2e`, `product-e2e`, `qa`, `ci`, `canary`, or
+`factory_assurance`. That declaration is what hides the session — a project name that merely
+looks internal will not. Read hidden sessions back with `include_test=true`.
 
----
+## Skip the archive entirely
 
-### Option B: Isolated State Roots for Raw CLI Scripts
+If the run is disposable and should not write history to disk at all, point the provider at a
+throwaway state root:
 
-When running bare provider CLIs in background scripts outside Longhouse's managed control path, isolate the provider's transcript directory from your interactive roots:
+```bash
+claude --no-session-persistence -p "check build status"
+CODEX_HOME=$(mktemp -d) codex exec "check build status"
+XDG_DATA_HOME=$(mktemp -d) opencode run "check build status"
+```
 
-* **Claude Code:** Pass `--no-session-persistence` (keeps default login, skips writing session JSONL to `~/.claude/projects/`):
-  ```bash
-  claude --no-session-persistence -p "check build status"
-  ```
-* **Codex CLI:** Set a dedicated state directory:
-  ```bash
-  CODEX_HOME=$(mktemp -d) codex exec "check build status"
-  ```
-* **OpenCode:** Set a dedicated data directory:
-  ```bash
-  XDG_DATA_HOME=$(mktemp -d) opencode run "check build status"
-  ```
----
+Nothing is ingested, because nothing is written where the Machine Agent looks.
 
-## 3. Curating Existing Sessions
+## Curating after the fact
 
-If an automated script or experimental command was run without flags and appears on your home timeline, you can curate it manually at any time:
-
-* Click **"..."** on the session card $\rightarrow$ **"Hide from timeline"**.
-* This sets `user_hidden_from_timeline=1`. The transcript remains 100% intact, permanently stored, and searchable, but is removed from your home feed.
+For the script you already ran without any of the above: open the session and press **Hide**
+in the detail header. That sets `user_hidden_from_timeline` and drops it from your feed. The
+transcript stays stored and searchable, and **Restore** puts it back.

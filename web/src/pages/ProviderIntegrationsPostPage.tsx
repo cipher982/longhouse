@@ -159,10 +159,11 @@ export default function ProviderIntegrationsPostPage() {
 
           <section>
             <h2>Antigravity</h2>
-            <p>Antigravity sessions are currently Shadow-only: Longhouse can archive and search their native session data, but it does not launch or remotely control them.</p>
+            <p><code>longhouse antigravity</code> launches the user-installed Antigravity CLI under a hook-inbox control path. The launcher requires the Longhouse hook to be installed and refuses rather than starting an unmanaged session wearing a managed session id. Bare Antigravity sessions remain Shadow and are still archived and searched.</p>
             <CapabilityList>
-              <li>Searchable and inspectable after import.</li>
-              <li>No Helm, Console, or remote-control claim until the native runtime is complete.</li>
+              <li>Supports Helm launch, send, and turn-scoped Console execution.</li>
+              <li>Send availability is gated per session on observed hook readiness.</li>
+              <li>Does not advertise interrupt, terminate, reattach, active-turn steer, pause-answer, or resume.</li>
             </CapabilityList>
           </section>
 
