@@ -66,10 +66,8 @@ mod process_identity;
 mod provider_readiness;
 mod raw_records;
 mod scheduler;
-mod shipper;
 mod shipping;
 mod shipping_stats;
-mod source_line_claims;
 mod state;
 mod storage_v2_contract;
 mod storage_v2_shipper;
@@ -412,10 +410,6 @@ enum Commands {
         /// Number of parallel workers (default: num_cpus)
         #[arg(long, default_value = "0")]
         workers: usize,
-
-        /// Dry run: parse and compress but don't POST
-        #[arg(long)]
-        dry_run: bool,
 
         /// JSON output (machine readable)
         #[arg(long)]
@@ -1567,7 +1561,6 @@ fn main() -> anyhow::Result<()> {
             file,
             provider,
             workers,
-            dry_run,
             json,
             compression,
             max_batch_bytes,
@@ -1594,7 +1587,6 @@ fn main() -> anyhow::Result<()> {
                     url.as_deref(),
                     token.as_deref(),
                     db.as_deref(),
-                    dry_run,
                     json,
                     algo,
                     max_batch_bytes,
@@ -1609,7 +1601,6 @@ fn main() -> anyhow::Result<()> {
                     token.as_deref(),
                     db.as_deref(),
                     workers,
-                    dry_run,
                     json,
                     algo,
                     max_batch_bytes,

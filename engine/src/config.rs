@@ -17,8 +17,6 @@ pub struct ShipperConfig {
     pub workers: usize,
     pub max_batch_bytes: u64,
     pub timeout_seconds: u64,
-    pub max_retries_429: u32,
-    pub base_backoff_seconds: f64,
     /// Human-readable machine label (set by user during `longhouse connect --install`).
     /// Stored in `~/.longhouse/machine/state.json`. Defaults to hostname.
     pub machine_name: String,
@@ -39,8 +37,6 @@ impl Default for ShipperConfig {
             workers: num_cpus::get(),
             max_batch_bytes: 50 * 1024 * 1024, // 50 MB
             timeout_seconds: 60,
-            max_retries_429: 5,
-            base_backoff_seconds: 1.0,
             machine_name: default_machine_name(),
         }
     }

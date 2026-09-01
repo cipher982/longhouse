@@ -252,9 +252,159 @@ fn is_lower_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+/// First Runtime Host release that serves storage-v2 with the cutover enabled.
+/// `server/zerg/storage_v2/cutover.py` landed in b193fb439 and first shipped in
+/// this tag; every host at or above it advertises `cutover: true`.
+/// Not the first host that advertises cutover — that is v0.1.29, and steering a
+/// user there is worse than saying nothing. This engine sends
+/// `StorageV2SessionFacts.is_subagent`, which v0.1.29 through v0.1.36 reject as
+/// an unknown field: the capability probe passes, the daemon starts, and then
+/// every envelope 422s and quarantines its source. v0.1.37 (67aaca9a5) is the
+/// first tag that accepts the envelope this engine actually sends.
+pub const STORAGE_V2_MINIMUM_RUNTIME_HOST: &str = "v0.1.37";
+
+/// Why a Runtime Host cannot accept transcripts from this Machine Agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageV2Unavailable {
+    /// The host answered the capability probe but has not cut over.
+    CutoverDisabled,
+    /// The host has no `/api/agents/storage/v2/capabilities` route at all.
+    NotAdvertised,
+}
+
+impl StorageV2Unavailable {
+    fn observed(self) -> &'static str {
+        match self {
+            Self::CutoverDisabled => {
+                "it advertises storage-v2 but answers the capability probe with cutover=false"
+            }
+            Self::NotAdvertised => {
+                "it does not serve GET /api/agents/storage/v2/capabilities at all"
+            }
+        }
+    }
+}
+
+/// The one message a user gets when the Runtime Host cannot take transcripts.
+/// It has to be self-contained: it is what a launchd log line, a terminal exit,
+/// and a support paste all carry, with no surrounding context.
+pub fn runtime_host_too_old_message(api_url: &str, reason: StorageV2Unavailable) -> String {
+    format!(
+        "Runtime Host at {api_url} is too old for this Machine Agent: {observed}. \
+         longhouse-engine {engine} ships transcripts only over storage-v2 — the legacy \
+         /api/agents/ingest lane has been deleted from both the engine and the Runtime Host, \
+         so there is nothing to fall back to and no transcript can be shipped to this host. \
+         Nothing has been lost: your session files are untouched on disk, and the engine will \
+         ship them from where it left off once the host can accept them. The Machine Agent \
+         does not start at all against such a host, so remote control and machine presence \
+         stop with it. \
+         Fix: upgrade the Runtime Host to {minimum} or newer, then start the Machine Agent again.",
+        observed = reason.observed(),
+        engine = env!("CARGO_PKG_VERSION"),
+        minimum = STORAGE_V2_MINIMUM_RUNTIME_HOST,
+    )
+}
+
+/// Resolve a capability probe into the only transcript lane this Machine Agent
+/// has. There is deliberately no second arm: a host without the storage-v2
+/// cutover gets a loud refusal, never a shipping loop that silently drops
+/// Source-tier history.
+pub fn require_storage_v2_cutover(
+    capabilities: Option<StorageV2Capabilities>,
+    api_url: &str,
+) -> Result<StorageV2Capabilities> {
+    match capabilities {
+        Some(capabilities) if capabilities.cutover => Ok(capabilities),
+        Some(_) => bail!(
+            "{}",
+            runtime_host_too_old_message(api_url, StorageV2Unavailable::CutoverDisabled)
+        ),
+        None => bail!(
+            "{}",
+            runtime_host_too_old_message(api_url, StorageV2Unavailable::NotAdvertised)
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn capabilities(cutover: bool) -> StorageV2Capabilities {
+        StorageV2Capabilities {
+            protocol_version: 2,
+            cutover,
+            tenant_id: "tenant".to_string(),
+            machine_id: "cinder".to_string(),
+            ingest_path: STORAGE_V2_ENVELOPES_PATH.to_string(),
+            max_wire_body_bytes: 8 * 1024 * 1024,
+            max_raw_record_bytes: 4 * 1024 * 1024,
+            max_records: 1000,
+            media_claim_path: "/api/agents/storage/v2/media/claims".to_string(),
+            media_upload_path_template: "/api/agents/storage/v2/media/{sha256}".to_string(),
+            max_media_bytes: 32 * 1024 * 1024,
+            max_media_claims: 512,
+            range_kinds: vec!["byte_offset".to_string(), "record_ordinal".to_string()],
+            lanes: vec!["live".to_string(), "repair".to_string()],
+            lane_header: STORAGE_V2_LANE_HEADER.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_cut_over_host_is_the_only_accepted_lane() {
+        let resolved =
+            require_storage_v2_cutover(Some(capabilities(true)), "https://longhouse.test").unwrap();
+        assert!(resolved.cutover);
+        assert_eq!(resolved.tenant_id, "tenant");
+    }
+
+    /// Both refusal arms have to be self-contained. This is the only thing a
+    /// user sees when the daemon exits or `ship` fails, so it must name the
+    /// host, say that nothing was lost, and give the fix — without the reader
+    /// having to know that a v1 lane ever existed.
+    #[test]
+    fn every_refusal_names_the_host_the_safety_and_the_fix() {
+        for capabilities in [None, Some(capabilities(false))] {
+            let error = require_storage_v2_cutover(capabilities, "https://longhouse.test")
+                .expect_err("a host without the storage-v2 cutover must be refused");
+            let message = error.to_string();
+            assert!(message.contains("https://longhouse.test"), "{message}");
+            assert!(
+                message.contains("too old for this Machine Agent"),
+                "{message}"
+            );
+            assert!(message.contains("untouched on disk"), "{message}");
+            // Against the constant, not a literal: a test that restates the
+            // version can disagree with the code, and this one did.
+            assert!(
+                message.contains(&format!(
+                    "upgrade the Runtime Host to {STORAGE_V2_MINIMUM_RUNTIME_HOST}"
+                )),
+                "{message}"
+            );
+        }
+    }
+
+    /// The two arms are different observations with the same fix, and the
+    /// message has to say which one happened: "no such route" and "the route
+    /// says cutover=false" are diagnosed differently even though both mean the
+    /// host is behind.
+    #[test]
+    fn the_two_refusal_arms_are_distinguishable() {
+        let absent = require_storage_v2_cutover(None, "https://longhouse.test")
+            .unwrap_err()
+            .to_string();
+        let disabled =
+            require_storage_v2_cutover(Some(capabilities(false)), "https://longhouse.test")
+                .unwrap_err()
+                .to_string();
+        assert!(
+            absent.contains("does not serve GET /api/agents/storage/v2/capabilities"),
+            "{absent}"
+        );
+        assert!(disabled.contains("cutover=false"), "{disabled}");
+        assert_ne!(absent, disabled);
+    }
 
     #[test]
     fn capability_validation_refuses_contract_drift() {

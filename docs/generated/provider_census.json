@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 250,
+  "file_count": 249,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -250,15 +250,6 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
-      ]
-    },
-    {
-      "path": "engine/src/shipper/mod.rs",
-      "providers": [
-        "antigravity",
-        "claude",
-        "codex",
         "opencode"
       ]
     },

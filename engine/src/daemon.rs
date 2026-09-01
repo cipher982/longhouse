@@ -39,9 +39,8 @@ use crate::managed_resume_scan;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
 use crate::scheduler::{AdaptiveLimiter, ObservationTrace, PathJob, PathScheduler, WorkPriority};
-use crate::shipper;
 use crate::shipping::client::ShipperClient;
-use crate::shipping::storage_v2::StorageV2Capabilities;
+use crate::shipping::storage_v2::{require_storage_v2_cutover, StorageV2Capabilities};
 use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome, ShipLane};
 use crate::state::db::open_db;
 use crate::state::db_pool::ConnectionPool;
@@ -107,8 +106,6 @@ const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(15);
 
 const INITIAL_SPOOL_PATH_LIMIT: usize = 64;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 128;
-const PATH_SPOOL_REPLAY_LIMIT_PRESSURE: usize = 1;
-const PATH_SPOOL_REPLAY_LIMIT_BASE: usize = 2;
 const ARCHIVE_TRICKLE_TICK_BYTES: u64 = 512 * 1024 * 1024;
 const ARCHIVE_DRAIN_TICK_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const ARCHIVE_BACKPRESSURE_MAX_DEFER: Duration = Duration::from_secs(90);
@@ -142,13 +139,6 @@ const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 
-fn failed_shipment_retry_path_limit(limiter: &AdaptiveLimiter) -> usize {
-    if limiter.archive_target_batch_bytes() >= crate::scheduler::ARCHIVE_BATCH_TARGET_BASE_BYTES {
-        PATH_SPOOL_REPLAY_LIMIT_BASE
-    } else {
-        PATH_SPOOL_REPLAY_LIMIT_PRESSURE
-    }
-}
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
 /// How long to coalesce a burst of phase-ledger writes before rebuilding the
@@ -260,18 +250,14 @@ impl OfflineState {
 
 #[derive(Clone)]
 struct PathTaskContext {
-    shipper_config: ShipperConfig,
     client: ShipperClient,
-    algo: CompressionAlgo,
     tracker: ConsecutiveErrorTracker,
-    parse_tracker: RecentIssueTracker,
     ship_stats: RecentShipStatsTracker,
-    flight_recorder: Option<FlightRecorder>,
     limiter: std::sync::Arc<crate::scheduler::AdaptiveLimiter>,
     /// Reusable shipper-DB connections. Schema bootstrap has already run
     /// during `run()`; per-job code uses leases instead of `open_db`.
     db_pool: ConnectionPool,
-    storage_v2: Option<std::sync::Arc<StorageV2Capabilities>>,
+    storage_v2: std::sync::Arc<StorageV2Capabilities>,
 }
 
 struct PathTaskResult {
@@ -709,6 +695,29 @@ fn archive_startup_replay_warmup_delay(
     )
 }
 
+/// Write the reason a daemon start was refused, for `local-health` to read.
+///
+/// Best-effort by construction: the process is already exiting on a real error,
+/// and failing to write the explanation must not replace it with an I/O error.
+fn record_startup_refusal(message: &str) {
+    let Ok(status_path) = config::get_agent_status_path() else {
+        return;
+    };
+    if let Some(parent) = status_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Deliberately no engine_pulse_at: the daemon is exiting, and a fresh pulse
+    // would tell every local-health surface the engine is alive. The file exists
+    // only to carry the reason; liveness still reads as down, which is true.
+    let payload = serde_json::json!({
+        "startup_refused": true,
+        "startup_refusal": message,
+    });
+    if let Ok(serialized) = serde_json::to_vec_pretty(&payload) {
+        let _ = std::fs::write(&status_path, serialized);
+    }
+}
+
 /// Run the connect daemon. This function blocks until shutdown signal.
 pub async fn run(config: ConnectConfig) -> Result<()> {
     // 1. Open state DB
@@ -717,13 +726,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut conn = open_db(Some(&projection_db_path))?;
     crate::state::source_inventory::abandon_open_reconciliation(&conn)?;
 
-    // 2. Startup recovery
-    let recovered = shipper::run_startup_recovery(&conn)?;
-    if recovered > 0 {
-        tracing::info!("Recovered {} unacked file gaps into spool", recovered);
-    }
-
-    // 2b. Prune stale file_state entries (files deleted from disk, >30 days old)
+    // 2. Prune stale file_state entries (files deleted from disk, >30 days old)
     {
         let fs = FileState::new(&conn);
         match fs.prune_stale(30) {
@@ -733,35 +736,35 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         }
     }
 
-    // 3. Create HTTP client
+    // 3. Create HTTP client and settle the one transcript lane this engine has.
+    // Storage-v2 is not a preference here: it is the only shipping protocol the
+    // Machine Agent still implements. A host that cannot accept it gets a
+    // refusal, not a shipping loop that would drop the user's history in
+    // silence.
     let client = ShipperClient::with_compression(&config.shipper_config, config.algo)?;
-    tracing::info!("Shipping to: {}", client.ingest_url());
-    let storage_v2 = match client
+    tracing::info!("Shipping to: {}", config.shipper_config.api_url);
+    let negotiated = client
         .storage_v2_capabilities(
             &config.shipper_config.machine_name,
             Some(Duration::from_secs(5)),
         )
-        .await?
-    {
-        Some(capabilities) if capabilities.cutover => {
+        .await?;
+    let storage_v2 = match require_storage_v2_cutover(negotiated, &config.shipper_config.api_url) {
+        Ok(capabilities) => {
             tracing::info!(
                 tenant_id = %capabilities.tenant_id,
-                "Runtime Host requires storage-v2 transcript shipping"
+                "Runtime Host accepts storage-v2 transcript shipping"
             );
-            Some(std::sync::Arc::new(capabilities))
+            std::sync::Arc::new(capabilities)
         }
-        Some(capabilities) => {
-            tracing::info!(
-                tenant_id = %capabilities.tenant_id,
-                "Runtime Host accepts storage-v2 but has not enabled cutover"
-            );
-            None
-        }
-        None => {
-            tracing::info!(
-                "Runtime Host does not advertise storage-v2; using the legacy ingest protocol"
-            );
-            None
+        Err(error) => {
+            tracing::error!("{error}");
+            // Leave the reason where a human can find it. The daemon exits
+            // before it ever writes engine-status.json, so without this the
+            // only record is a launchd log and every local-health surface just
+            // says the engine is missing -- which is true and useless.
+            record_startup_refusal(&error.to_string());
+            return Err(error);
         }
     };
 
@@ -807,13 +810,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         config.shipper_config.workers.max(1) + 4,
     )?;
     let task_context = PathTaskContext {
-        shipper_config: config.shipper_config.clone(),
         client: client.clone(),
-        algo: config.algo,
         tracker: tracker.clone(),
-        parse_tracker: parse_tracker.clone(),
         ship_stats: ship_stats.clone(),
-        flight_recorder: flight_recorder.clone(),
         limiter: std::sync::Arc::clone(&adaptive_limiter),
         db_pool: db_pool.clone(),
         storage_v2,
@@ -868,22 +867,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut deferred_retries = HashMap::new();
     let startup_archive_mode =
         read_archive_repair_control().normalized_mode(config.archive_repair_mode);
-    if task_context.storage_v2.is_some() {
-        match queue_storage_v2_pending_retry_paths(
-            &mut scheduler,
-            &conn,
-            config.archive_repair_mode,
-        ) {
-            Ok(queued) if queued > 0 => tracing::info!(
-                queued,
-                "Queued immutable storage-v2 exact retries at startup"
-            ),
-            Ok(_) => {}
-            Err(error) => tracing::warn!(
-                error = %error,
-                "Unable to queue immutable storage-v2 exact retries at startup"
-            ),
-        }
+    match queue_storage_v2_pending_retry_paths(&mut scheduler, &conn, config.archive_repair_mode) {
+        Ok(queued) if queued > 0 => tracing::info!(
+            queued,
+            "Queued immutable storage-v2 exact retries at startup"
+        ),
+        Ok(_) => {}
+        Err(error) => tracing::warn!(
+            error = %error,
+            "Unable to queue immutable storage-v2 exact retries at startup"
+        ),
     }
     let startup_archive_replay_delay =
         archive_startup_replay_warmup_delay(startup_archive_mode, rand::random::<f64>());
@@ -1051,7 +1044,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 PERIODIC_SPOOL_PATH_LIMIT,
                 Some(adaptive_limiter.as_ref()),
                 config.archive_repair_mode,
-                task_context.storage_v2.is_some(),
             ) {
                 Ok(queued) if queued > 0 => {
                     tracing::info!(
@@ -2191,34 +2183,32 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Err(e) => tracing::warn!("Failed-shipment retry error: {}", e),
                 }
-                if task_context.storage_v2.is_some() {
-                    match queue_storage_v2_pending_retry_paths(
-                        &mut scheduler,
-                        &conn,
-                        config.archive_repair_mode,
-                    ) {
-                        Ok(queued) => queued_retries = queued_retries.saturating_add(queued),
-                        Err(error) => tracing::warn!(
-                            error = %error,
-                            "Immutable storage-v2 retry error"
-                        ),
-                    }
-                    // Copied Cursor bytes are only needed until the host
-                    // receipts them; nothing deleted them before, so they grew
-                    // to 8.5GB of a 9.7GB local database. Runs after the retry
-                    // queueing above so anything still owed a retry is visibly
-                    // pending and therefore excluded by the predicate.
-                    match crate::state::cursor_store_records::drain_receipted_cursor_records(&conn) {
-                        Ok(0) => {}
-                        Ok(deleted) => tracing::info!(
-                            deleted,
-                            "drained receipted Cursor records from the local store"
-                        ),
-                        Err(error) => tracing::warn!(
-                            error = %error,
-                            "Cursor record drain error"
-                        ),
-                    }
+                match queue_storage_v2_pending_retry_paths(
+                    &mut scheduler,
+                    &conn,
+                    config.archive_repair_mode,
+                ) {
+                    Ok(queued) => queued_retries = queued_retries.saturating_add(queued),
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "Immutable storage-v2 retry error"
+                    ),
+                }
+                // Copied Cursor bytes are only needed until the host
+                // receipts them; nothing deleted them before, so they grew
+                // to 8.5GB of a 9.7GB local database. Runs after the retry
+                // queueing above so anything still owed a retry is visibly
+                // pending and therefore excluded by the predicate.
+                match crate::state::cursor_store_records::drain_receipted_cursor_records(&conn) {
+                    Ok(0) => {}
+                    Ok(deleted) => tracing::info!(
+                        deleted,
+                        "drained receipted Cursor records from the local store"
+                    ),
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "Cursor record drain error"
+                    ),
                 }
                 if queued_retries > 0 {
                     tracing::debug!(
@@ -3008,25 +2998,6 @@ fn storage_v2_backpressure_retry_delay(priority: WorkPriority, retry_after: Dura
     } else {
         retry_after
     }
-}
-
-fn spool_retry_delay_for_path(conn: &rusqlite::Connection, path: &Path) -> Option<Duration> {
-    let retry_at = match Spool::new(conn).next_retry_at_for_path(&path.to_string_lossy()) {
-        Ok(retry_at) => retry_at?,
-        Err(err) => {
-            tracing::warn!(
-                path = %path.display(),
-                "Could not read next spool retry time: {}",
-                err
-            );
-            return None;
-        }
-    };
-    let min_delay = Duration::from_secs(LOCAL_RETRY_DELAY_SECS);
-    let delay = (retry_at - chrono::Utc::now())
-        .to_std()
-        .unwrap_or(Duration::ZERO);
-    Some(delay.max(min_delay))
 }
 
 fn enqueue_discovered_files(
@@ -3963,21 +3934,20 @@ fn queue_failed_shipment_retries_if_idle(
     limit: usize,
     limiter: Option<&AdaptiveLimiter>,
     archive_repair_mode: ArchiveRepairMode,
-    storage_v2_enabled: bool,
 ) -> Result<usize> {
     if offline || scheduler.has_pending_work() {
         return Ok(0);
     }
-    let mut queued =
+    // Legacy v1 spool rows still name real source paths. Queueing them lets the
+    // storage-v2 lane re-ship those sources from disk and retire the leftover
+    // pointer rows; it is the only thing that still drains that table.
+    let queued =
         queue_failed_shipment_retry_paths(scheduler, conn, limit, limiter, archive_repair_mode)?;
-    if storage_v2_enabled {
-        queued = queued.saturating_add(queue_storage_v2_pending_retry_paths(
-            scheduler,
-            conn,
-            archive_repair_mode,
-        )?);
-    }
-    Ok(queued)
+    Ok(queued.saturating_add(queue_storage_v2_pending_retry_paths(
+        scheduler,
+        conn,
+        archive_repair_mode,
+    )?))
 }
 
 fn work_context(priority: WorkPriority) -> &'static str {
@@ -3985,14 +3955,6 @@ fn work_context(priority: WorkPriority) -> &'static str {
         WorkPriority::Live => "live_transcript",
         WorkPriority::Retry => FAILED_SHIPMENT_RETRY_CONTEXT,
         WorkPriority::Scan => "reconciliation_scan",
-    }
-}
-
-fn batch_band_for_priority(priority: WorkPriority) -> shipper::BatchBand {
-    match priority {
-        WorkPriority::Live => shipper::BatchBand::Live,
-        WorkPriority::Scan => shipper::BatchBand::BackgroundRepair,
-        WorkPriority::Retry => shipper::BatchBand::Archive,
     }
 }
 
@@ -4336,119 +4298,6 @@ fn find_transcript_path(
     }
 }
 
-struct PreparedPathJobFile {
-    prepared: shipper::PreparedFile,
-    trace_timings: shipper::PrepareTraceTimings,
-}
-
-#[tracing::instrument(
-    level = "info",
-    name = "engine.ship.prepare",
-    skip(task_context),
-    fields(
-        longhouse.provider = %job.provider,
-        longhouse.work_context = %work_context(job.priority),
-    )
-)]
-async fn prepare_file_for_job(
-    job: &PathJob,
-    task_context: &PathTaskContext,
-) -> Result<Option<PreparedPathJobFile>> {
-    let path = job.path.clone();
-    let provider = job.provider;
-    let work_context_label = work_context(job.priority);
-    let algo = task_context.algo;
-    let max_batch_bytes = task_context.shipper_config.max_batch_bytes;
-    let parse_tracker = task_context.parse_tracker.clone();
-    let session_id_hint = job.observation.session_id.clone();
-    let db_pool = task_context.db_pool.clone();
-    let source_line_mode = if job.priority == WorkPriority::Live && provider == "codex" {
-        shipper::SourceLineMode::EventOnly
-    } else {
-        shipper::SourceLineMode::Full
-    };
-    // Band is keyed off WorkPriority, NOT SourceLineMode. Live work stays
-    // latency-sized; background repair stays tiny so it cannot monopolize the
-    // hosted write lane; explicit retry still amortizes the round trip.
-    let batch_band = batch_band_for_priority(job.priority);
-    let blocking_span = tracing::info_span!(
-        "engine.ship.prepare.blocking",
-        longhouse.provider = %provider,
-        longhouse.work_context = %work_context_label,
-    );
-    let blocking_queued_at = Instant::now();
-
-    tokio::task::spawn_blocking(move || {
-        let _enter = blocking_span.enter();
-        let mut trace_timings = shipper::PrepareTraceTimings::default();
-        trace_timings.blocking_queue_wait_ms =
-            Some(blocking_queued_at.elapsed().as_millis() as u64);
-        let open_db_started = Instant::now();
-        let conn = db_pool.get()?;
-        trace_timings.open_db_ms = Some(open_db_started.elapsed().as_millis() as u64);
-        let identity_started = Instant::now();
-        let canonical = std::fs::canonicalize(&path)
-            .unwrap_or_else(|_| path.clone())
-            .to_string_lossy()
-            .to_string();
-
-        // Wake-originated managed Codex jobs carry the session identity from
-        // the bridge, so they can skip the offset-0 binding race wait.
-        let mut session_id_override = session_id_hint;
-        let mut binding_wait_ms = 0u64;
-        let session_id_source = if session_id_override.is_some() {
-            "wake"
-        } else {
-            let binding = crate::state::session_binding::SessionBinding::new(&conn);
-            session_id_override = binding.get_for_provider(&canonical, &provider)?;
-            if session_id_override.is_none() {
-                let file_state = crate::state::file_state::FileState::new(&conn);
-                let current_offset = file_state
-                    .get_offset(&canonical)
-                    .or_else(|_| file_state.get_offset(&path.to_string_lossy()))?;
-                if current_offset == 0 {
-                    let binding_wait_started = Instant::now();
-                    std::thread::sleep(std::time::Duration::from_millis(300));
-                    binding_wait_ms = binding_wait_started.elapsed().as_millis() as u64;
-                    session_id_override = binding.get_for_provider(&canonical, &provider)?;
-                }
-            }
-            if session_id_override.is_some() {
-                "binding"
-            } else {
-                "parsed"
-            }
-        };
-        trace_timings.identity_ms = Some(identity_started.elapsed().as_millis() as u64);
-        tracing::debug!(
-            path = %path.display(),
-            provider,
-            session_id_source,
-            binding_wait_ms,
-            "Prepared session identity for ship job"
-        );
-        trace_timings.binding_wait_ms = Some(binding_wait_ms);
-
-        let prepared = shipper::prepare_file_batches_with_source_line_mode_parse_tracker_and_trace(
-            &path,
-            provider,
-            algo,
-            &conn,
-            max_batch_bytes,
-            session_id_override.as_deref(),
-            Some(&parse_tracker),
-            source_line_mode,
-            batch_band,
-            Some(&mut trace_timings),
-        )?;
-        Ok(prepared.map(|prepared| PreparedPathJobFile {
-            prepared,
-            trace_timings,
-        }))
-    })
-    .await?
-}
-
 #[tracing::instrument(
     level = "info",
     name = "engine.path_job",
@@ -4460,7 +4309,6 @@ async fn prepare_file_for_job(
 )]
 async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskResult {
     let task_started = Instant::now();
-    let job_started_at_ms = chrono::Utc::now().timestamp_millis();
     let mut result = PathTaskResult {
         job,
         events_shipped: 0,
@@ -4505,555 +4353,265 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
     };
 
-    // Cursor stores are source-faithful only through the native storage-v2
-    // adapter. Never replay an old pointer spool or parse/post a lossy legacy
-    // projection when this Runtime Host lacks the v2 cutover.
-    if (is_cursor_database_job(&result.job) || is_cursor_acp_source_job(&result.job))
-        && task_context.storage_v2.is_none()
-    {
-        if let Err(error) = Spool::new(&conn).dead_letter_pending_for_provider(
-            "cursor",
-            "Cursor legacy pointer spool retired: storage-v2 source receipt is required",
-        ) {
-            tracing::warn!(error = %error, "Unable to retire legacy Cursor spool entries");
-        }
-        tracing::warn!(
-            path = %result.job.path.display(),
-            "Cursor store is not shipped: Runtime Host has no storage-v2 cutover"
-        );
-        return finish_path_task(result, task_started);
-    }
-
-    if result.job.priority != WorkPriority::Live && task_context.storage_v2.is_none() {
-        let replay_prepare_at_ms = chrono::Utc::now().timestamp_millis();
-        let replay_trace = shipper::ShipTraceContext {
-            work_context: FAILED_SHIPMENT_RETRY_CONTEXT,
-            observation_source: result.job.observation.source,
-            observed_at_ms: result.job.observation.observed_at_ms,
-            latest_observed_at_ms: result.job.observation.latest_observed_at_ms,
-            wake_received_at_ms: result.job.observation.wake_received_at_ms,
-            enqueued_at_ms: result.job.observation.enqueued_at_ms,
-            job_started_at_ms,
-            prepare_started_at_ms: replay_prepare_at_ms,
-            prepare_finished_at_ms: replay_prepare_at_ms,
-            prepare_blocking_queue_wait_ms: None,
-            prepare_open_db_ms: None,
-            prepare_identity_ms: None,
-            prepare_cursor_ms: None,
-            prepare_binding_wait_ms: None,
-            prepare_parse_ms: None,
-            prepare_batch_build_ms: None,
-            session_id_hint: result.job.observation.session_id.clone(),
-            turn_id: result.job.observation.turn_id.clone(),
-            wake_reason: result.job.observation.wake_reason.clone(),
-            file_len_hint: result.job.observation.file_len_hint,
-        };
-        match shipper::replay_ready_spool_for_path_with_batch_bytes_and_parse_tracker(
-            &conn,
+    // Storage-v2 is the only transcript lane this engine has; `run` refuses
+    // to start without it, so capabilities are always present here.
+    let capabilities = task_context.storage_v2.as_ref();
+    let lane = if result.job.priority == WorkPriority::Live {
+        "live"
+    } else {
+        "repair"
+    };
+    let stats_lane = if result.job.priority == WorkPriority::Live {
+        ShipLane::Live
+    } else {
+        ShipLane::Repair
+    };
+    let timeout = if lane == "live" {
+        Duration::from_secs(20)
+    } else {
+        Duration::from_secs(75)
+    };
+    let ship_started = Instant::now();
+    let ship_result = if is_opencode_database_job(&result.job) {
+        crate::storage_v2_shipper::ship_next_opencode_envelope(
+            &mut conn,
             &task_context.client,
-            task_context.algo,
+            capabilities,
             &result.job.path,
-            failed_shipment_retry_path_limit(task_context.limiter.as_ref()),
-            task_context.shipper_config.max_batch_bytes,
-            Some(&task_context.parse_tracker),
-            Some(&task_context.ship_stats),
-            task_context.flight_recorder.as_ref(),
-            Some(&replay_trace),
-            Some(task_context.limiter.as_ref()),
+            lane,
+            timeout,
         )
         .await
-        {
-            Ok(replay_outcome) => {
-                result.resolved_spool = replay_outcome.resolved;
-                result.failed_spool = replay_outcome.failed;
-                result.had_connect_error = replay_outcome.had_connect_error;
+        .map(|outcome| {
+            outcome.map_or(
+                PathStorageV2ShipResult::Current,
+                PathStorageV2ShipResult::Shipped,
+            )
+        })
+    } else if is_cursor_database_job(&result.job) {
+        crate::storage_v2_shipper::ship_next_cursor_envelope(
+            &mut conn,
+            &task_context.client,
+            capabilities,
+            &result.job.path,
+            lane,
+            timeout,
+        )
+        .await
+        .map(|outcome| match outcome {
+            crate::storage_v2_shipper::CursorStorageV2ShipResult::Shipped(outcome) => {
+                PathStorageV2ShipResult::Shipped(outcome)
             }
-            Err(e) => {
-                if task_context.tracker.record_error() {
-                    tracing::warn!(
-                        "Error replaying spool for {}: {}",
-                        result.job.path.display(),
-                        e
-                    );
-                }
-                result.local_retry_after = Some(local_retry_delay(result.job.priority));
-                return finish_path_task(result, task_started);
+            crate::storage_v2_shipper::CursorStorageV2ShipResult::Current => {
+                PathStorageV2ShipResult::Current
             }
-        }
-
-        if result.had_connect_error {
-            return finish_path_task(result, task_started);
-        }
-
-        let ready_spool_remaining = Spool::new(&conn)
-            .pending_entries_for_path_ready(&result.job.path.to_string_lossy(), 1)
-            .map(|entries| !entries.is_empty())
-            .unwrap_or(false);
-        if result.failed_spool > 0 {
-            result.local_retry_after = spool_retry_delay_for_path(&conn, &result.job.path);
-            result.local_retry_priority = Some(WorkPriority::Retry);
-            return finish_path_task(result, task_started);
-        } else if ready_spool_remaining {
-            result.rerun_priority = Some(WorkPriority::Retry);
-        }
-    }
-
-    if let Some(capabilities) = task_context.storage_v2.as_deref() {
-        let lane = if result.job.priority == WorkPriority::Live {
-            "live"
-        } else {
-            "repair"
-        };
-        let stats_lane = if result.job.priority == WorkPriority::Live {
-            ShipLane::Live
-        } else {
-            ShipLane::Repair
-        };
-        let timeout = if lane == "live" {
-            Duration::from_secs(20)
-        } else {
-            Duration::from_secs(75)
-        };
-        let ship_started = Instant::now();
-        let ship_result = if is_opencode_database_job(&result.job) {
-            crate::storage_v2_shipper::ship_next_opencode_envelope(
-                &mut conn,
-                &task_context.client,
-                capabilities,
-                &result.job.path,
-                lane,
-                timeout,
+            crate::storage_v2_shipper::CursorStorageV2ShipResult::WaitingOnClaim => {
+                PathStorageV2ShipResult::WaitingOnClaim
+            }
+            crate::storage_v2_shipper::CursorStorageV2ShipResult::Continue => {
+                PathStorageV2ShipResult::Continue
+            }
+        })
+    } else if is_cursor_acp_source_job(&result.job) {
+        crate::storage_v2_shipper::ship_next_cursor_acp_envelope(
+            &mut conn,
+            &task_context.client,
+            capabilities,
+            &result.job.path,
+            lane,
+            timeout,
+        )
+        .await
+        .map(|outcome| {
+            outcome.map_or(
+                PathStorageV2ShipResult::Current,
+                PathStorageV2ShipResult::Shipped,
             )
-            .await
-            .map(|outcome| {
-                outcome.map_or(
-                    PathStorageV2ShipResult::Current,
-                    PathStorageV2ShipResult::Shipped,
-                )
-            })
-        } else if is_cursor_database_job(&result.job) {
-            crate::storage_v2_shipper::ship_next_cursor_envelope(
-                &mut conn,
-                &task_context.client,
-                capabilities,
-                &result.job.path,
-                lane,
-                timeout,
+        })
+    } else {
+        crate::storage_v2_shipper::ship_next_envelope(
+            &mut conn,
+            &task_context.client,
+            capabilities,
+            &result.job.path,
+            result.job.provider,
+            result.job.observation.session_id.as_deref(),
+            lane,
+            timeout,
+        )
+        .await
+        .map(|outcome| {
+            outcome.map_or(
+                PathStorageV2ShipResult::Current,
+                PathStorageV2ShipResult::Shipped,
             )
-            .await
-            .map(|outcome| match outcome {
-                crate::storage_v2_shipper::CursorStorageV2ShipResult::Shipped(outcome) => {
-                    PathStorageV2ShipResult::Shipped(outcome)
-                }
-                crate::storage_v2_shipper::CursorStorageV2ShipResult::Current => {
-                    PathStorageV2ShipResult::Current
-                }
-                crate::storage_v2_shipper::CursorStorageV2ShipResult::WaitingOnClaim => {
-                    PathStorageV2ShipResult::WaitingOnClaim
-                }
-                crate::storage_v2_shipper::CursorStorageV2ShipResult::Continue => {
-                    PathStorageV2ShipResult::Continue
-                }
-            })
-        } else if is_cursor_acp_source_job(&result.job) {
-            crate::storage_v2_shipper::ship_next_cursor_acp_envelope(
-                &mut conn,
-                &task_context.client,
-                capabilities,
-                &result.job.path,
-                lane,
-                timeout,
-            )
-            .await
-            .map(|outcome| {
-                outcome.map_or(
-                    PathStorageV2ShipResult::Current,
-                    PathStorageV2ShipResult::Shipped,
-                )
-            })
-        } else {
-            crate::storage_v2_shipper::ship_next_envelope(
-                &mut conn,
-                &task_context.client,
-                capabilities,
-                &result.job.path,
-                result.job.provider,
-                result.job.observation.session_id.as_deref(),
-                lane,
-                timeout,
-            )
-            .await
-            .map(|outcome| {
-                outcome.map_or(
-                    PathStorageV2ShipResult::Current,
-                    PathStorageV2ShipResult::Shipped,
-                )
-            })
-        };
-        match ship_result {
-            Ok(PathStorageV2ShipResult::Shipped(outcome)) => {
-                let latency_ms = ship_started.elapsed().as_millis() as u64;
-                task_context.ship_stats.record_with_lane_detail_and_stages(
-                    stats_lane,
-                    ShipAttemptOutcome::Ok,
-                    latency_ms,
-                    None,
-                    None,
-                    None,
-                    outcome.events_shipped as u32,
-                    outcome.bytes_shipped,
-                    false,
-                    None,
-                );
-                task_context.ship_stats.record_events_and_bytes_shipped(
-                    stats_lane,
-                    outcome.events_shipped as u32,
-                    outcome.bytes_shipped,
-                    latency_ms,
-                );
-                if let Some(failures) = task_context.tracker.record_success() {
-                    tracing::info!(
-                        failures,
-                        "Storage-v2 shipping recovered after consecutive failures"
-                    );
-                }
-                result.events_shipped = outcome.events_shipped;
-                if outcome.has_more {
-                    result.rerun_priority = Some(result.job.priority);
-                } else {
-                    match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
-                        Ok(_) => result.reconciled_to_head = true,
-                        Err(error) => {
-                            tracing::warn!(
-                                path = %result.job.path.display(),
-                                error = %error,
-                                "Storage-v2 reached source head but legacy spool retirement failed"
-                            );
-                            result.local_retry_after = Some(local_retry_delay(result.job.priority));
-                        }
-                    }
-                }
+        })
+    };
+    match ship_result {
+        Ok(PathStorageV2ShipResult::Shipped(outcome)) => {
+            let latency_ms = ship_started.elapsed().as_millis() as u64;
+            task_context.ship_stats.record_with_lane_detail_and_stages(
+                stats_lane,
+                ShipAttemptOutcome::Ok,
+                latency_ms,
+                None,
+                None,
+                None,
+                outcome.events_shipped as u32,
+                outcome.bytes_shipped,
+                false,
+                None,
+            );
+            task_context.ship_stats.record_events_and_bytes_shipped(
+                stats_lane,
+                outcome.events_shipped as u32,
+                outcome.bytes_shipped,
+                latency_ms,
+            );
+            if let Some(failures) = task_context.tracker.record_success() {
                 tracing::info!(
-                    path = %result.job.path.display(),
-                    provider = result.job.provider,
-                    lane,
-                    bytes_shipped = outcome.bytes_shipped,
-                    events_shipped = outcome.events_shipped,
-                    "Shipped storage-v2 source envelope"
+                    failures,
+                    "Storage-v2 shipping recovered after consecutive failures"
                 );
             }
-            Ok(PathStorageV2ShipResult::Current) => {
+            result.events_shipped = outcome.events_shipped;
+            if outcome.has_more {
+                result.rerun_priority = Some(result.job.priority);
+            } else {
                 match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
                     Ok(_) => result.reconciled_to_head = true,
                     Err(error) => {
                         tracing::warn!(
                             path = %result.job.path.display(),
                             error = %error,
-                            "Storage-v2 source is current but legacy spool retirement failed"
+                            "Storage-v2 reached source head but legacy spool retirement failed"
                         );
                         result.local_retry_after = Some(local_retry_delay(result.job.priority));
                     }
                 }
             }
-            Ok(PathStorageV2ShipResult::WaitingOnClaim) => {
-                return finish_path_task(result, task_started);
-            }
-            Ok(PathStorageV2ShipResult::Continue) => {
-                result.rerun_priority = Some(result.job.priority);
-            }
-            Err(error) => {
-                if let Some(blocked) =
-                    error.downcast_ref::<crate::storage_v2_shipper::StorageV2SourceBlocked>()
-                {
-                    if blocked.newly_blocked {
-                        task_context.ship_stats.record_with_lane_detail_and_stages(
-                            stats_lane,
-                            ShipAttemptOutcome::PayloadRejected,
-                            ship_started.elapsed().as_millis() as u64,
-                            Some(409),
-                            Some("storage_v2_source_blocked"),
-                            Some(&blocked.to_string()),
-                            0,
-                            0,
-                            false,
-                            None,
-                        );
-                        tracing::warn!(
-                            path = %result.job.path.display(),
-                            provider = result.job.provider,
-                            source_epoch = %blocked.source_epoch,
-                            kind = blocked.kind,
-                            detail = blocked.detail,
-                            "Storage-v2 source quarantined; automatic retries stopped"
-                        );
-                    } else {
-                        tracing::debug!(
-                            path = %result.job.path.display(),
-                            provider = result.job.provider,
-                            source_epoch = %blocked.source_epoch,
-                            "Skipped already-quarantined storage-v2 source without a network attempt"
-                        );
-                    }
-                    return finish_path_task(result, task_started);
-                }
-                if error
-                    .downcast_ref::<crate::storage_v2_shipper::StorageV2PreparationError>()
-                    .is_some()
-                {
-                    if task_context.tracker.record_error() {
-                        tracing::warn!(
-                            path = %result.job.path.display(),
-                            provider = result.job.provider,
-                            error = %error,
-                            "Storage-v2 source preparation failed; retrying locally"
-                        );
-                    }
-                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
-                    return finish_path_task(result, task_started);
-                }
-                let backpressure =
-                    error.downcast_ref::<crate::shipping::client::StorageV2Backpressure>();
-                task_context.ship_stats.record_with_lane_detail_and_stages(
-                    stats_lane,
-                    ShipAttemptOutcome::RetryableClientError,
-                    ship_started.elapsed().as_millis() as u64,
-                    backpressure.map(|_| 503),
-                    Some(if backpressure.is_some() {
-                        "storage_lane_busy"
-                    } else {
-                        "storage_v2_ship_failed"
-                    }),
-                    Some(&error.to_string()),
-                    0,
-                    0,
-                    backpressure.is_some(),
-                    None,
-                );
-                if let Some(backpressure) = backpressure {
-                    task_context
-                        .limiter
-                        .observe_backpressure(Some(backpressure.retry_after));
-                }
-                if crate::shipping::client::is_connect_error(&error) {
-                    result.had_connect_error = true;
-                }
-                if task_context.tracker.record_error() {
+            tracing::info!(
+                path = %result.job.path.display(),
+                provider = result.job.provider,
+                lane,
+                bytes_shipped = outcome.bytes_shipped,
+                events_shipped = outcome.events_shipped,
+                "Shipped storage-v2 source envelope"
+            );
+        }
+        Ok(PathStorageV2ShipResult::Current) => {
+            match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
+                Ok(_) => result.reconciled_to_head = true,
+                Err(error) => {
                     tracing::warn!(
                         path = %result.job.path.display(),
-                        provider = result.job.provider,
-                        lane,
                         error = %error,
-                        "Storage-v2 ship failed; durable cursor remains unchanged"
+                        "Storage-v2 source is current but legacy spool retirement failed"
                     );
+                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
                 }
-                result.local_retry_after = Some(
-                    backpressure
-                        .map(|value| {
-                            storage_v2_backpressure_retry_delay(
-                                result.job.priority,
-                                value.retry_after,
-                            )
-                        })
-                        .unwrap_or_else(|| local_retry_delay(result.job.priority)),
-                );
             }
         }
-        return finish_path_task(result, task_started);
-    }
-
-    if is_opencode_database_job(&result.job) {
-        let file_start = Instant::now();
-        let opencode_trace = shipper::ShipTraceContext {
-            work_context: work_context(result.job.priority),
-            observation_source: result.job.observation.source,
-            observed_at_ms: result.job.observation.observed_at_ms,
-            latest_observed_at_ms: result.job.observation.latest_observed_at_ms,
-            wake_received_at_ms: result.job.observation.wake_received_at_ms,
-            enqueued_at_ms: result.job.observation.enqueued_at_ms,
-            job_started_at_ms,
-            prepare_started_at_ms: job_started_at_ms,
-            prepare_finished_at_ms: chrono::Utc::now().timestamp_millis(),
-            prepare_blocking_queue_wait_ms: None,
-            prepare_open_db_ms: None,
-            prepare_identity_ms: None,
-            prepare_cursor_ms: None,
-            prepare_binding_wait_ms: None,
-            prepare_parse_ms: None,
-            prepare_batch_build_ms: None,
-            session_id_hint: result.job.observation.session_id.clone(),
-            turn_id: result.job.observation.turn_id.clone(),
-            wake_reason: result.job.observation.wake_reason.clone(),
-            file_len_hint: result.job.observation.file_len_hint,
-        };
-        match shipper::ship_opencode_database_with_trace(
-            &result.job.path,
-            &conn,
-            &task_context.client,
-            task_context.algo,
-            task_context.shipper_config.max_batch_bytes,
-            Some(&task_context.tracker),
-            Some(&task_context.parse_tracker),
-            if result.job.priority == WorkPriority::Scan {
-                shipper::OpenCodeShipMode::ReconcileDurability
-            } else {
-                shipper::OpenCodeShipMode::ChangedOnly
-            },
-            Some(&opencode_trace),
-        )
-        .await
-        {
-            Ok(outcome) => {
-                let sessions_shipped = outcome.sessions_shipped;
-                let events_shipped = outcome.events_shipped;
-                if sessions_shipped > 0 {
-                    tracing::info!(
-                        context = work_context(result.job.priority),
+        Ok(PathStorageV2ShipResult::WaitingOnClaim) => {
+            return finish_path_task(result, task_started);
+        }
+        Ok(PathStorageV2ShipResult::Continue) => {
+            result.rerun_priority = Some(result.job.priority);
+        }
+        Err(error) => {
+            if let Some(blocked) =
+                error.downcast_ref::<crate::storage_v2_shipper::StorageV2SourceBlocked>()
+            {
+                if blocked.newly_blocked {
+                    task_context.ship_stats.record_with_lane_detail_and_stages(
+                        stats_lane,
+                        ShipAttemptOutcome::PayloadRejected,
+                        ship_started.elapsed().as_millis() as u64,
+                        Some(409),
+                        Some("storage_v2_source_blocked"),
+                        Some(&blocked.to_string()),
+                        0,
+                        0,
+                        false,
+                        None,
+                    );
+                    tracing::warn!(
                         path = %result.job.path.display(),
                         provider = result.job.provider,
-                        sessions_shipped,
-                        events_shipped,
-                        elapsed_ms = file_start.elapsed().as_millis() as u64,
-                        "Shipped OpenCode SQLite database"
+                        source_epoch = %blocked.source_epoch,
+                        kind = blocked.kind,
+                        detail = blocked.detail,
+                        "Storage-v2 source quarantined; automatic retries stopped"
+                    );
+                } else {
+                    tracing::debug!(
+                        path = %result.job.path.display(),
+                        provider = result.job.provider,
+                        source_epoch = %blocked.source_epoch,
+                        "Skipped already-quarantined storage-v2 source without a network attempt"
                     );
                 }
-                shipper::log_slow_file_processing(
-                    work_context(result.job.priority),
-                    Path::new(&result.job.path),
-                    result.job.provider,
-                    events_shipped,
-                    0,
-                    0,
-                    file_start.elapsed(),
-                );
-                result.events_shipped = events_shipped;
-                if outcome.reconciliation_pending {
-                    result.rerun_priority = Some(WorkPriority::Scan);
-                } else {
-                    result.reconciled_to_head = true;
-                }
+                return finish_path_task(result, task_started);
             }
-            Err(e) => {
+            if error
+                .downcast_ref::<crate::storage_v2_shipper::StorageV2PreparationError>()
+                .is_some()
+            {
                 if task_context.tracker.record_error() {
                     tracing::warn!(
-                        "Error shipping OpenCode database {}: {}",
-                        result.job.path.display(),
-                        e
+                        path = %result.job.path.display(),
+                        provider = result.job.provider,
+                        error = %error,
+                        "Storage-v2 source preparation failed; retrying locally"
                     );
                 }
                 result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                return finish_path_task(result, task_started);
             }
-        }
-        return finish_path_task(result, task_started);
-    }
-
-    let file_start = Instant::now();
-    let prepare_started_at_ms = chrono::Utc::now().timestamp_millis();
-    match prepare_file_for_job(&result.job, &task_context).await {
-        Ok(Some(prepared_for_job)) => {
-            let PreparedPathJobFile {
-                prepared,
-                trace_timings,
-            } = prepared_for_job;
-            let prepare_finished_at_ms = chrono::Utc::now().timestamp_millis();
-            let event_count = prepared.total_event_count();
-            let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
-            let prepared_offset = prepared.offset;
-            let prepared_new_offset = prepared.new_offset;
-            let ship_trace = shipper::ShipTraceContext {
-                work_context: work_context(result.job.priority),
-                observation_source: result.job.observation.source,
-                observed_at_ms: result.job.observation.observed_at_ms,
-                latest_observed_at_ms: result.job.observation.latest_observed_at_ms,
-                wake_received_at_ms: result.job.observation.wake_received_at_ms,
-                enqueued_at_ms: result.job.observation.enqueued_at_ms,
-                job_started_at_ms,
-                prepare_started_at_ms,
-                prepare_finished_at_ms,
-                prepare_blocking_queue_wait_ms: trace_timings.blocking_queue_wait_ms,
-                prepare_open_db_ms: trace_timings.open_db_ms,
-                prepare_identity_ms: trace_timings.identity_ms,
-                prepare_cursor_ms: trace_timings.cursor_ms,
-                prepare_binding_wait_ms: trace_timings.binding_wait_ms,
-                prepare_parse_ms: trace_timings.parse_ms,
-                prepare_batch_build_ms: trace_timings.batch_build_ms,
-                session_id_hint: result.job.observation.session_id.clone(),
-                turn_id: result.job.observation.turn_id.clone(),
-                wake_reason: result.job.observation.wake_reason.clone(),
-                file_len_hint: result.job.observation.file_len_hint,
-            };
-            match shipper::ship_prepared_file_with_trace(
-                prepared,
-                &task_context.client,
-                &conn,
-                Some(&task_context.tracker),
-                Some(&task_context.ship_stats),
-                Some(&ship_trace),
-                task_context.flight_recorder.as_ref(),
-                Some(task_context.limiter.as_ref()),
-            )
-            .await
-            {
-                Ok(outcome) => {
-                    if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
-                        tracing::info!(
-                            context = work_context(result.job.priority),
-                            path = %result.job.path.display(),
-                            provider = result.job.provider,
-                            offset = prepared_offset,
-                            new_offset = prepared_new_offset,
-                            event_count,
-                            events_shipped = outcome.events_shipped,
-                            byte_count,
-                            bytes_shipped = outcome.bytes_shipped,
-                            dead_lettered = outcome.dead_lettered,
-                            elapsed_ms = file_start.elapsed().as_millis() as u64,
-                            "Shipped transcript path"
-                        );
-                    }
-                    shipper::log_slow_file_processing(
-                        work_context(result.job.priority),
-                        Path::new(&result.job.path),
-                        result.job.provider,
-                        event_count,
-                        byte_count,
-                        outcome.dead_lettered,
-                        file_start.elapsed(),
-                    );
-                    result.events_shipped = outcome.events_shipped;
-                    if outcome.had_connect_error {
-                        result.had_connect_error = true;
-                    }
-                    if !outcome.fully_processed && result.job.priority == WorkPriority::Live {
-                        result.local_retry_after = Some(LIVE_LOCAL_RETRY_DELAY);
-                        result.local_retry_priority = Some(WorkPriority::Retry);
-                    } else if outcome.fully_processed && !outcome.had_connect_error {
-                        result.reconciled_to_head = true;
-                    }
-                }
-                Err(e) => {
-                    if task_context.tracker.record_error() {
-                        tracing::warn!("Error shipping {}: {}", result.job.path.display(), e);
-                    }
-                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
-                }
+            let backpressure =
+                error.downcast_ref::<crate::shipping::client::StorageV2Backpressure>();
+            task_context.ship_stats.record_with_lane_detail_and_stages(
+                stats_lane,
+                ShipAttemptOutcome::RetryableClientError,
+                ship_started.elapsed().as_millis() as u64,
+                backpressure.map(|_| 503),
+                Some(if backpressure.is_some() {
+                    "storage_lane_busy"
+                } else {
+                    "storage_v2_ship_failed"
+                }),
+                Some(&error.to_string()),
+                0,
+                0,
+                backpressure.is_some(),
+                None,
+            );
+            if let Some(backpressure) = backpressure {
+                task_context
+                    .limiter
+                    .observe_backpressure(Some(backpressure.retry_after));
             }
-        }
-        Ok(None) => result.reconciled_to_head = true,
-        Err(e) => {
+            if crate::shipping::client::is_connect_error(&error) {
+                result.had_connect_error = true;
+            }
             if task_context.tracker.record_error() {
                 tracing::warn!(
                     path = %result.job.path.display(),
-                    error = %e,
-                    "Source preparation failed; waiting for new filesystem evidence"
+                    provider = result.job.provider,
+                    lane,
+                    error = %error,
+                    "Storage-v2 ship failed; durable cursor remains unchanged"
                 );
             }
-            // Preparation errors are deterministic for the current source
-            // bytes. A timer retry only burns CPU and transport capacity. The
-            // watcher will enqueue immediately when the source changes; the
-            // slow fallback scan remains the crash/restart safety net.
+            result.local_retry_after = Some(
+                backpressure
+                    .map(|value| {
+                        storage_v2_backpressure_retry_delay(result.job.priority, value.retry_after)
+                    })
+                    .unwrap_or_else(|| local_retry_delay(result.job.priority)),
+            );
         }
     }
-
     finish_path_task(result, task_started)
 }
 
@@ -5469,7 +5027,6 @@ mod tests {
             2
         );
         assert_eq!(file_state.get_offset(&target_path).unwrap(), 200);
-        assert_eq!(shipper::run_startup_recovery(&conn).unwrap(), 0);
         assert!(spool
             .pending_entries_for_path_now(&target_path, 10)
             .unwrap()
@@ -6672,7 +6229,6 @@ mod tests {
             10,
             None,
             ArchiveRepairMode::Drain,
-            false,
         )
         .unwrap();
 
@@ -7007,7 +6563,6 @@ mod tests {
             10,
             Some(limiter.as_ref()),
             ArchiveRepairMode::Drain,
-            false,
         )
         .unwrap();
 
@@ -7018,15 +6573,6 @@ mod tests {
         assert_eq!(job.path, PathBuf::from("/tmp/small-ready.jsonl"));
         assert_eq!(job.priority, WorkPriority::Retry);
         assert!(scheduler.pop_launchable().is_none());
-    }
-
-    #[test]
-    fn test_failed_shipment_retry_path_limit_tracks_archive_pressure() {
-        let limiter = AdaptiveLimiter::new();
-        assert_eq!(failed_shipment_retry_path_limit(limiter.as_ref()), 2);
-
-        limiter.observe_backpressure(Some(Duration::from_secs(5)));
-        assert_eq!(failed_shipment_retry_path_limit(limiter.as_ref()), 1);
     }
 
     #[test]
@@ -7046,26 +6592,6 @@ mod tests {
         assert_eq!(job.priority, WorkPriority::Scan);
         assert_eq!(job.observation.source, "reconciliation_scan");
         assert_eq!(work_context(job.priority), "reconciliation_scan");
-        assert_eq!(
-            batch_band_for_priority(job.priority),
-            shipper::BatchBand::BackgroundRepair
-        );
-    }
-
-    #[test]
-    fn test_batch_band_for_priority_keeps_retry_archive_sized() {
-        assert_eq!(
-            batch_band_for_priority(WorkPriority::Live),
-            shipper::BatchBand::Live
-        );
-        assert_eq!(
-            batch_band_for_priority(WorkPriority::Retry),
-            shipper::BatchBand::Archive
-        );
-        assert_eq!(
-            batch_band_for_priority(WorkPriority::Scan),
-            shipper::BatchBand::BackgroundRepair
-        );
     }
 
     #[test]

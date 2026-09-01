@@ -1096,7 +1096,18 @@ fn native_fast_health_from_parts(
         .unwrap_or_default();
     let managed_launch_recovery = collect_managed_launch_recovery(status_path, &known_session_ids);
 
+    // A refused start writes the reason and nothing else, so surface it ahead of
+    // the generic liveness verdicts. Without this the operator sees only
+    // "engine_status_missing", which is true and tells them nothing.
+    let startup_refusal = object
+        .and_then(|value| value.get("startup_refusal"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
     let mut reasons = Vec::new();
+    if let Some(refusal) = startup_refusal.as_deref() {
+        reasons.push(format!("startup_refused: {refusal}"));
+    }
     if error.is_some() {
         reasons.push("engine_status_unreadable".to_string());
     } else if !exists {

@@ -1,13 +1,13 @@
-//! HTTP client for shipping compressed payloads to the Longhouse API.
+//! HTTP client for the Longhouse Machine Agent surface.
 //!
-//! POST `{api_url}/api/agents/ingest` with gzip-compressed JSON body.
-//! Handles 429 rate limiting with exponential backoff + Retry-After.
+//! Storage-v2 envelopes, media objects, source manifests, and the small JSON
+//! posts around them. `api_url` still carries the historical
+//! `/api/agents/ingest` suffix as the string every other path is derived from;
+//! the route itself no longer exists on either side.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use rand::Rng;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -21,24 +21,11 @@ use crate::shipping::storage_v2::{
     STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
 };
 
-const SHIP_TRACE_HEADER: &str = "X-Longhouse-Ship-Trace";
-const INGEST_BACKPRESSURE_HEADER: &str = "X-Ingest-Backpressure";
-const INGEST_ERROR_KIND_HEADER: &str = "X-Ingest-Error-Kind";
-const INGEST_LANE_HEADER: &str = "X-Ingest-Lane";
 const WRITE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Write-Backpressure";
 const WRITE_ERROR_KIND_HEADER: &str = "X-Longhouse-Write-Error-Kind";
 const WRITE_LANE_HEADER: &str = "X-Longhouse-Write-Lane";
 const STORAGE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Storage-Backpressure";
-const ARCHIVE_INGEST_BACKPRESSURE_KIND: &str = "archive_ingest_backpressure";
-const LIVE_INGEST_BACKPRESSURE_KIND: &str = "live_ingest_backpressure";
 const HOT_WRITE_BACKPRESSURE_KIND: &str = "hot_write_backpressure";
-
-/// Structured details for a network-layer ingest failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectErrorDetail {
-    pub kind: &'static str,
-    pub message: String,
-}
 
 /// Structured details for server-declared ingest backpressure.
 #[derive(Debug, Clone, PartialEq)]
@@ -145,62 +132,6 @@ struct StorageV2ErrorDetail {
     details: serde_json::Value,
 }
 
-/// Server-side ingest timing parsed from response headers.
-///
-/// Phase 1 instrumentation: the Runtime Host emits timing, lane, and
-/// admission headers on every successful ingest so the engine can adapt
-/// concurrency without re-instrumenting in phase 2.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ServerIngestTiming {
-    pub queue_wait_ms: Option<f64>,
-    pub exec_ms: Option<f64>,
-    pub commit_count: Option<u64>,
-    pub commit_ms: Option<f64>,
-    pub chunk_size: Option<u64>,
-    pub store_stage_ms: Option<BTreeMap<String, f64>>,
-    pub label: Option<String>,
-    pub lane: Option<String>,
-    pub admission_state: Option<String>,
-}
-
-impl ServerIngestTiming {
-    /// True if the server returned at least one of the phase-1 headers.
-    pub fn is_observed(&self) -> bool {
-        self.queue_wait_ms.is_some()
-            || self.exec_ms.is_some()
-            || self.commit_count.is_some()
-            || self.commit_ms.is_some()
-            || self.chunk_size.is_some()
-            || self.store_stage_ms.is_some()
-            || self.label.is_some()
-            || self.lane.is_some()
-            || self.admission_state.is_some()
-    }
-}
-
-/// Result of a shipping attempt.
-#[derive(Debug)]
-pub enum ShipResult {
-    /// Successfully shipped. `server_timing` is populated when the Runtime
-    /// Host returned phase-1 instrumentation headers; `None` against older
-    /// servers.
-    Ok { server_timing: ServerIngestTiming },
-    /// Rate limited and retries exhausted. Should spool for later.
-    RateLimited,
-    /// Server error (5xx). Should spool for later.
-    ServerError(u16, String),
-    /// Server explicitly rejected reconstructable archive work due to pressure.
-    ServerBackpressure(ServerBackpressureDetail),
-    /// Request was rejected because the payload itself is invalid.
-    PayloadRejected(u16, String),
-    /// Payload is valid but too large for the current server/proxy limits.
-    PayloadTooLarge(String),
-    /// Auth/config/wrong-host style client error. Should stay replayable.
-    RetryableClientError(u16, String),
-    /// Connection error (DNS, timeout, refused). Should spool for later.
-    ConnectError(ConnectErrorDetail),
-}
-
 /// 4xx statuses that a later attempt can still satisfy.
 const RETRYABLE_CLIENT_STATUS: &[u16] = &[
     401, // token refreshed between queue and drain
@@ -255,9 +186,9 @@ impl std::error::Error for JsonPostError {}
 #[derive(Clone)]
 pub struct ShipperClient {
     client: reqwest::Client,
+    /// Base URL every request path is derived from. Historical name: the
+    /// `/api/agents/ingest` suffix is a string template, not a live route.
     ingest_url: String,
-    max_retries_429: u32,
-    base_backoff: f64,
 }
 
 impl ShipperClient {
@@ -294,117 +225,7 @@ impl ShipperClient {
 
         let ingest_url = format!("{}/api/agents/ingest", config.api_url.trim_end_matches('/'));
 
-        Ok(Self {
-            client,
-            ingest_url,
-            max_retries_429: config.max_retries_429,
-            base_backoff: config.base_backoff_seconds,
-        })
-    }
-
-    /// Ship a gzip-compressed payload. Handles 429 retries internally.
-    pub async fn ship(&self, compressed_payload: Vec<u8>) -> ShipResult {
-        self.ship_with_trace_and_timeout(compressed_payload, None, None)
-            .await
-    }
-
-    /// Ship a compressed payload with an optional request timeout override.
-    pub async fn ship_with_trace_and_timeout(
-        &self,
-        compressed_payload: Vec<u8>,
-        trace_header: Option<&str>,
-        request_timeout: Option<Duration>,
-    ) -> ShipResult {
-        let mut retries = 0u32;
-        let mut backoff = self.base_backoff;
-
-        loop {
-            let mut request = self
-                .client
-                .post(&self.ingest_url)
-                .body(compressed_payload.clone());
-            if let Some(trace_header) = trace_header {
-                request = request.header(SHIP_TRACE_HEADER, trace_header);
-            }
-            if let Some(request_timeout) = request_timeout {
-                request = request.timeout(request_timeout);
-            }
-            let result = request.send().await;
-
-            match result {
-                Err(e) => {
-                    return ShipResult::ConnectError(classify_connect_error(&e));
-                }
-                Ok(response) => {
-                    let status = response.status().as_u16();
-
-                    match status {
-                        200..=299 => {
-                            let server_timing = parse_server_timing(response.headers());
-                            return ShipResult::Ok { server_timing };
-                        }
-                        429 => {
-                            if retries >= self.max_retries_429 {
-                                tracing::warn!("Rate limited after {} retries, giving up", retries);
-                                return ShipResult::RateLimited;
-                            }
-
-                            let retry_after_seconds = parse_retry_after_seconds(response.headers());
-                            let wait = rate_limit_retry_wait_seconds(
-                                retry_after_seconds,
-                                backoff,
-                                rand::thread_rng().gen::<f64>(),
-                            );
-
-                            tracing::info!(
-                                "Rate limited (429), retry {}/{}, waiting {:.1}s",
-                                retries + 1,
-                                self.max_retries_429,
-                                wait
-                            );
-
-                            tokio::time::sleep(Duration::from_secs_f64(wait)).await;
-                            retries += 1;
-                            backoff *= 2.0;
-                        }
-                        401 | 403 => {
-                            let body = response.text().await.unwrap_or_default();
-                            return ShipResult::RetryableClientError(status, body);
-                        }
-                        400 | 422 => {
-                            let body = response.text().await.unwrap_or_default();
-                            return ShipResult::PayloadRejected(status, body);
-                        }
-                        426 => {
-                            let body = response.text().await.unwrap_or_default();
-                            return ShipResult::RetryableClientError(status, body);
-                        }
-                        413 => {
-                            let body = response.text().await.unwrap_or_default();
-                            return ShipResult::PayloadTooLarge(body);
-                        }
-                        400..=499 => {
-                            let body = response.text().await.unwrap_or_default();
-                            return ShipResult::RetryableClientError(status, body);
-                        }
-                        500..=599 => {
-                            let headers = response.headers().clone();
-                            let body = response.text().await.unwrap_or_default();
-                            if let Some(detail) =
-                                parse_server_backpressure(status, &headers, body.clone())
-                            {
-                                return ShipResult::ServerBackpressure(detail);
-                            }
-                            return ShipResult::ServerError(status, body);
-                        }
-                        _ => {
-                            let body = response.text().await.unwrap_or_default();
-                            return ShipResult::RetryableClientError(status, body);
-                        }
-                    }
-                }
-            }
-        }
+        Ok(Self { client, ingest_url })
     }
 
     /// POST a small JSON payload with an optional request-level timeout.
@@ -701,11 +522,6 @@ impl ShipperClient {
     }
 
     /// Get the ingest URL (for logging).
-    pub fn ingest_url(&self) -> &str {
-        &self.ingest_url
-    }
-
-    /// Check if the API is reachable (health check).
     pub async fn health_check(&self) -> Result<bool> {
         let health_url = self.ingest_url.replace("/api/agents/ingest", "/api/health");
         match self.client.get(&health_url).send().await {
@@ -775,57 +591,6 @@ fn parse_storage_v2_backpressure(
     })
 }
 
-fn parse_server_timing(headers: &reqwest::header::HeaderMap) -> ServerIngestTiming {
-    fn parse_f64(headers: &reqwest::header::HeaderMap, name: &str) -> Option<f64> {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<f64>().ok())
-            .filter(|v| v.is_finite())
-    }
-    fn parse_u64(headers: &reqwest::header::HeaderMap, name: &str) -> Option<u64> {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<u64>().ok())
-    }
-    fn parse_stage_map(
-        headers: &reqwest::header::HeaderMap,
-        name: &str,
-    ) -> Option<BTreeMap<String, f64>> {
-        let raw = headers.get(name).and_then(|v| v.to_str().ok())?;
-        let parsed: BTreeMap<String, f64> = serde_json::from_str(raw).ok()?;
-        let filtered: BTreeMap<String, f64> = parsed
-            .into_iter()
-            .filter(|(key, value)| !key.trim().is_empty() && value.is_finite() && *value >= 0.0)
-            .collect();
-        (!filtered.is_empty()).then_some(filtered)
-    }
-    ServerIngestTiming {
-        queue_wait_ms: parse_f64(headers, "X-Ingest-Queue-Wait-Ms"),
-        exec_ms: parse_f64(headers, "X-Ingest-Exec-Ms"),
-        commit_count: parse_u64(headers, "X-Ingest-Commit-Count"),
-        commit_ms: parse_f64(headers, "X-Ingest-Commit-Ms"),
-        chunk_size: parse_u64(headers, "X-Ingest-Chunk-Size"),
-        store_stage_ms: parse_stage_map(headers, "X-Ingest-Store-Stage-Ms"),
-        label: headers
-            .get("X-Ingest-Label")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
-        lane: headers
-            .get("X-Ingest-Lane")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
-        admission_state: headers
-            .get("X-Ingest-Admission-State")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
-    }
-}
-
 fn parse_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -840,47 +605,6 @@ fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<f64
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse::<f64>().ok())
         .filter(|v| v.is_finite() && *v > 0.0)
-}
-
-fn rate_limit_retry_wait_seconds(
-    retry_after_seconds: Option<f64>,
-    backoff_seconds: f64,
-    jitter_seed: f64,
-) -> f64 {
-    let jitter_seed = jitter_seed.clamp(0.0, 1.0);
-    if let Some(retry_after) = retry_after_seconds {
-        let jitter_window = (retry_after * 0.10).clamp(0.1, 5.0);
-        return retry_after + (jitter_window * jitter_seed);
-    }
-
-    let jitter_factor = 0.5 + jitter_seed * 0.5;
-    (backoff_seconds * jitter_factor).min(30.0)
-}
-
-fn parse_server_backpressure(
-    status_code: u16,
-    headers: &reqwest::header::HeaderMap,
-    body: String,
-) -> Option<ServerBackpressureDetail> {
-    if status_code != 503 {
-        return None;
-    }
-    let header_kind = parse_header_string(headers, INGEST_BACKPRESSURE_HEADER)
-        .or_else(|| parse_header_string(headers, INGEST_ERROR_KIND_HEADER));
-    let legacy_body_match = body.contains("Archive ingest backlog is throttled");
-    let kind = match header_kind.as_deref() {
-        Some(ARCHIVE_INGEST_BACKPRESSURE_KIND) => ARCHIVE_INGEST_BACKPRESSURE_KIND,
-        Some(LIVE_INGEST_BACKPRESSURE_KIND) => LIVE_INGEST_BACKPRESSURE_KIND,
-        _ if legacy_body_match => ARCHIVE_INGEST_BACKPRESSURE_KIND,
-        _ => return None,
-    };
-    Some(ServerBackpressureDetail {
-        status_code,
-        kind,
-        body,
-        lane: parse_header_string(headers, INGEST_LANE_HEADER),
-        retry_after_seconds: parse_retry_after_seconds(headers),
-    })
 }
 
 fn parse_server_write_backpressure(
@@ -906,20 +630,7 @@ fn parse_server_write_backpressure(
     })
 }
 
-fn classify_connect_error(error: &reqwest::Error) -> ConnectErrorDetail {
-    ConnectErrorDetail {
-        kind: classify_connect_error_kind(
-            error.is_timeout(),
-            error.is_connect(),
-            error.is_request(),
-            &error.to_string(),
-        ),
-        message: error.to_string(),
-    }
-}
-
-/// Whether an anyhow error chain contains the same transport failure that the
-/// legacy ingest path reports as `ShipResult::ConnectError`.
+/// Whether an anyhow error chain bottoms out in a transport failure.
 ///
 /// Storage-v2 uses anyhow contexts around reqwest, so checking only the outer
 /// error silently bypasses the daemon's shared offline circuit during DNS and
@@ -932,60 +643,15 @@ pub fn is_connect_error(error: &anyhow::Error) -> bool {
     })
 }
 
-fn classify_connect_error_kind(
-    is_timeout: bool,
-    is_connect: bool,
-    is_request: bool,
-    message: &str,
-) -> &'static str {
-    let lower = message.to_ascii_lowercase();
-    if is_timeout || lower.contains("timed out") || lower.contains("timeout") {
-        return "timeout";
-    }
-    if lower.contains("dns")
-        || lower.contains("resolve")
-        || lower.contains("name or service not known")
-        || lower.contains("nodename nor servname")
-        || lower.contains("no such host")
-    {
-        return "dns";
-    }
-    if lower.contains("connection refused")
-        || lower.contains("os error 61")
-        || lower.contains("os error 111")
-    {
-        return "connection_refused";
-    }
-    if lower.contains("connection reset")
-        || lower.contains("connection closed")
-        || lower.contains("broken pipe")
-    {
-        return "connection_closed";
-    }
-    if lower.contains("tls") || lower.contains("ssl") || lower.contains("certificate") {
-        return "tls";
-    }
-    if is_connect {
-        return "connect";
-    }
-    if is_request {
-        return "request";
-    }
-    "network"
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use rand::Rng;
-
     use reqwest::header::{HeaderMap, HeaderValue};
 
     use super::{
-        classify_connect_error_kind, is_connect_error, parse_server_backpressure,
-        parse_server_timing, parse_server_write_backpressure, parse_storage_v2_backpressure,
-        parse_storage_v2_conflict, rate_limit_retry_wait_seconds, ShipResult,
+        is_connect_error, parse_server_write_backpressure, parse_storage_v2_backpressure,
+        parse_storage_v2_conflict,
     };
 
     #[tokio::test]
@@ -1006,46 +672,6 @@ mod tests {
 
         assert!(is_connect_error(&error));
         assert!(!is_connect_error(&anyhow::anyhow!("HTTP 409 conflict")));
-    }
-
-    fn classify_status(status: u16, body: &str) -> ShipResult {
-        match status {
-            400 | 422 => ShipResult::PayloadRejected(status, body.to_string()),
-            426 => ShipResult::RetryableClientError(status, body.to_string()),
-            413 => ShipResult::PayloadTooLarge(body.to_string()),
-            401 | 403 | 400..=499 => ShipResult::RetryableClientError(status, body.to_string()),
-            500..=599 => ShipResult::ServerError(status, body.to_string()),
-            _ => ShipResult::RetryableClientError(status, body.to_string()),
-        }
-    }
-
-    #[test]
-    fn test_429_without_retry_after_keeps_legacy_bounded_jitter() {
-        let base_wait = 20.0_f64;
-        let mut rng = rand::thread_rng();
-
-        for _ in 0..1000 {
-            let wait = rate_limit_retry_wait_seconds(None, base_wait, rng.gen::<f64>());
-
-            assert!(
-                wait >= base_wait * 0.5,
-                "wait {:.2} should be >= {:.2}",
-                wait,
-                base_wait * 0.5
-            );
-            assert!(wait <= 30.0, "wait {:.2} should be capped at 30s", wait);
-        }
-
-        let large_base = 100.0_f64;
-        let wait = rate_limit_retry_wait_seconds(None, large_base, rng.gen::<f64>());
-        assert_eq!(wait, 30.0, "Large base_wait should be capped at 30s");
-    }
-
-    #[test]
-    fn test_429_retry_after_is_floor_with_jitter_on_top() {
-        assert_eq!(rate_limit_retry_wait_seconds(Some(120.0), 1.0, 0.0), 120.0);
-        assert_eq!(rate_limit_retry_wait_seconds(Some(120.0), 1.0, 1.0), 125.0);
-        assert_eq!(rate_limit_retry_wait_seconds(Some(2.0), 1.0, 0.5), 2.1);
     }
 
     #[test]
@@ -1098,214 +724,6 @@ mod tests {
         assert!(
             parse_storage_v2_conflict(409, r#"{"detail":{"code":"other","message":"no"}}"#)
                 .is_none()
-        );
-    }
-
-    #[test]
-    fn test_classify_payload_rejections_vs_retryable_client_errors() {
-        assert!(matches!(
-            classify_status(400, "invalid json"),
-            ShipResult::PayloadRejected(400, _)
-        ));
-        assert!(matches!(
-            classify_status(422, "invalid payload"),
-            ShipResult::PayloadRejected(422, _)
-        ));
-        assert!(matches!(
-            classify_status(426, "storage v2 required"),
-            ShipResult::RetryableClientError(426, _)
-        ));
-        assert!(matches!(
-            classify_status(413, "too large"),
-            ShipResult::PayloadTooLarge(_)
-        ));
-        assert!(matches!(
-            classify_status(401, "bad token"),
-            ShipResult::RetryableClientError(401, _)
-        ));
-        assert!(matches!(
-            classify_status(405, "method not allowed"),
-            ShipResult::RetryableClientError(405, _)
-        ));
-    }
-
-    #[test]
-    fn test_classify_connect_error_kind_from_reqwest_shape_and_message() {
-        assert_eq!(
-            classify_connect_error_kind(true, true, false, "operation timed out"),
-            "timeout"
-        );
-        assert_eq!(
-            classify_connect_error_kind(false, true, false, "dns error: failed to lookup address"),
-            "dns"
-        );
-        assert_eq!(
-            classify_connect_error_kind(
-                false,
-                true,
-                false,
-                "tcp connect error: Connection refused (os error 61)"
-            ),
-            "connection_refused"
-        );
-        assert_eq!(
-            classify_connect_error_kind(
-                false,
-                true,
-                false,
-                "connection closed before message completed"
-            ),
-            "connection_closed"
-        );
-        assert_eq!(
-            classify_connect_error_kind(false, false, true, "builder error"),
-            "request"
-        );
-    }
-
-    #[test]
-    fn test_parse_server_timing_full_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert("X-Ingest-Queue-Wait-Ms", HeaderValue::from_static("12.5"));
-        headers.insert("X-Ingest-Exec-Ms", HeaderValue::from_static("48.2"));
-        headers.insert("X-Ingest-Commit-Count", HeaderValue::from_static("3"));
-        headers.insert("X-Ingest-Commit-Ms", HeaderValue::from_static("24.5"));
-        headers.insert("X-Ingest-Chunk-Size", HeaderValue::from_static("100"));
-        headers.insert(
-            "X-Ingest-Store-Stage-Ms",
-            HeaderValue::from_static("{\"provider_event_observations\":42.5,\"total\":123.0}"),
-        );
-        headers.insert("X-Ingest-Label", HeaderValue::from_static("ingest-replay"));
-        headers.insert("X-Ingest-Lane", HeaderValue::from_static("archive"));
-        headers.insert(
-            "X-Ingest-Admission-State",
-            HeaderValue::from_static("archive_slot_acquired"),
-        );
-
-        let timing = parse_server_timing(&headers);
-        assert_eq!(timing.queue_wait_ms, Some(12.5));
-        assert_eq!(timing.exec_ms, Some(48.2));
-        assert_eq!(timing.commit_count, Some(3));
-        assert_eq!(timing.commit_ms, Some(24.5));
-        assert_eq!(timing.chunk_size, Some(100));
-        assert_eq!(
-            timing
-                .store_stage_ms
-                .as_ref()
-                .and_then(|map| map.get("total")),
-            Some(&123.0)
-        );
-        assert_eq!(timing.label.as_deref(), Some("ingest-replay"));
-        assert_eq!(timing.lane.as_deref(), Some("archive"));
-        assert_eq!(
-            timing.admission_state.as_deref(),
-            Some("archive_slot_acquired")
-        );
-        assert!(timing.is_observed());
-    }
-
-    #[test]
-    fn test_parse_server_timing_missing_headers_returns_unobserved() {
-        let headers = HeaderMap::new();
-        let timing = parse_server_timing(&headers);
-        assert_eq!(timing, super::ServerIngestTiming::default());
-        assert!(!timing.is_observed());
-    }
-
-    #[test]
-    fn test_parse_server_timing_garbage_values_drop_silently() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "X-Ingest-Queue-Wait-Ms",
-            HeaderValue::from_static("not-a-number"),
-        );
-        headers.insert("X-Ingest-Exec-Ms", HeaderValue::from_static("inf"));
-        headers.insert("X-Ingest-Commit-Count", HeaderValue::from_static("-1"));
-        headers.insert("X-Ingest-Commit-Ms", HeaderValue::from_static("nan"));
-        headers.insert(
-            "X-Ingest-Chunk-Size",
-            HeaderValue::from_static("one hundred"),
-        );
-        headers.insert(
-            "X-Ingest-Store-Stage-Ms",
-            HeaderValue::from_static("{\"bad\":-1,\"nan\":NaN}"),
-        );
-        headers.insert("X-Ingest-Label", HeaderValue::from_static(""));
-        headers.insert("X-Ingest-Lane", HeaderValue::from_static(""));
-        headers.insert("X-Ingest-Admission-State", HeaderValue::from_static(""));
-        let timing = parse_server_timing(&headers);
-        assert_eq!(timing.queue_wait_ms, None);
-        // "inf" parses to f64::INFINITY then is filtered by is_finite
-        assert_eq!(timing.exec_ms, None);
-        assert_eq!(timing.commit_count, None);
-        assert_eq!(timing.commit_ms, None);
-        assert_eq!(timing.chunk_size, None);
-        assert_eq!(timing.store_stage_ms, None);
-        assert_eq!(timing.label, None);
-        assert_eq!(timing.lane, None);
-        assert_eq!(timing.admission_state, None);
-        assert!(!timing.is_observed());
-    }
-
-    #[test]
-    fn test_parse_server_backpressure_from_typed_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "X-Ingest-Backpressure",
-            HeaderValue::from_static("archive_ingest_backpressure"),
-        );
-        headers.insert("X-Ingest-Lane", HeaderValue::from_static("archive"));
-        headers.insert("Retry-After", HeaderValue::from_static("5"));
-
-        let detail =
-            parse_server_backpressure(503, &headers, "{\"detail\":\"throttled\"}".to_string())
-                .expect("typed backpressure should parse");
-
-        assert_eq!(detail.status_code, 503);
-        assert_eq!(detail.kind, "archive_ingest_backpressure");
-        assert_eq!(detail.lane.as_deref(), Some("archive"));
-        assert_eq!(detail.retry_after_seconds, Some(5.0));
-    }
-
-    #[test]
-    fn test_parse_server_backpressure_from_live_typed_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "X-Ingest-Backpressure",
-            HeaderValue::from_static("live_ingest_backpressure"),
-        );
-        headers.insert("X-Ingest-Lane", HeaderValue::from_static("live"));
-        headers.insert("Retry-After", HeaderValue::from_static("7"));
-
-        let detail =
-            parse_server_backpressure(503, &headers, "{\"detail\":\"live throttled\"}".to_string())
-                .expect("typed live backpressure should parse");
-
-        assert_eq!(detail.status_code, 503);
-        assert_eq!(detail.kind, "live_ingest_backpressure");
-        assert_eq!(detail.lane.as_deref(), Some("live"));
-        assert_eq!(detail.retry_after_seconds, Some(7.0));
-    }
-
-    #[test]
-    fn test_parse_server_backpressure_keeps_legacy_body_match() {
-        let headers = HeaderMap::new();
-        let detail = parse_server_backpressure(
-            503,
-            &headers,
-            "{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}".to_string(),
-        )
-        .expect("legacy archive backpressure body should parse");
-
-        assert_eq!(detail.kind, "archive_ingest_backpressure");
-        assert_eq!(detail.retry_after_seconds, None);
-    }
-
-    #[test]
-    fn test_parse_server_backpressure_ignores_generic_503() {
-        let headers = HeaderMap::new();
-        assert!(
-            parse_server_backpressure(503, &headers, "upstream unavailable".to_string()).is_none()
         );
     }
 

@@ -490,17 +490,11 @@ pub fn run_benchmark_ship(
         client
             .storage_v2_capabilities(machine_id, Some(std::time::Duration::from_secs(10)))
             .await
-    })?
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "Runtime Host does not advertise storage-v2 capabilities; Mode B requires storage-v2 (no legacy ingest fallback)"
-        )
     })?;
-    if !capabilities.cutover {
-        anyhow::bail!(
-            "Runtime Host has not cut over to storage-v2; Mode B refuses the legacy ingest path"
-        );
-    }
+    // One gate, shared with the daemon. A private copy here would drift from the
+    // real refusal -- it already had, naming no minimum host version.
+    let capabilities =
+        crate::shipping::storage_v2::require_storage_v2_cutover(capabilities, api_url)?;
 
     eprintln!(
         "Negotiated storage-v2 (cutover={}); preparing durable envelopes...",
