@@ -43,6 +43,7 @@ from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_server_qualification
 from zerg.qa import provider_interaction_semantics as interaction_semantics
 from zerg.qa import provider_release_identity
+from zerg.qa import provider_release_identity as release_identity
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.provider_build_store import OBSERVED_INSTALL_PROVENANCE
@@ -284,7 +285,7 @@ def _copy_live_model_evidence(
                 if not source_path.is_file():
                     raise OSError(f"native source is not a file: {source_path}")
                 expected_digest = str(source.get("sha256") or "")
-                actual_digest = identity_bridge._sha256_file(source_path).removeprefix("sha256:")  # noqa: SLF001
+                actual_digest = release_identity.sha256_file(source_path).removeprefix("sha256:")
                 if expected_digest.removeprefix("sha256:") not in {"", actual_digest}:
                     raise RequestError("native source artifact changed before retention")
                 retained_root.mkdir(parents=True, exist_ok=True)
@@ -292,7 +293,7 @@ def _copy_live_model_evidence(
                 if source_path != destination.resolve():
                     shutil.copyfile(source_path, destination)
                 source["path"] = str(destination)
-                source["sha256"] = identity_bridge._sha256_file(destination).removeprefix("sha256:")  # noqa: SLF001
+                source["sha256"] = release_identity.sha256_file(destination).removeprefix("sha256:")
             except OSError as exc:
                 raise RequestError("native source artifact could not be retained") from exc
             retained_sources.append(source)
