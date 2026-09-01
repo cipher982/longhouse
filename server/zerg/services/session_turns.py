@@ -573,6 +573,7 @@ def materialize_recent_managed_transcript_turns(
     device_id: str | None = None,
     hours_back: int = 24,
     session_limit: int = RECENT_MANAGED_TURN_MATERIALIZATION_LIMIT,
+    owned_session_ids: frozenset[str] | None = None,
 ) -> int:
     lookback_start = utc_now() - timedelta(hours=max(1, hours_back))
     activity_anchor = func.coalesce(AgentSession.last_activity_at, AgentSession.started_at)
@@ -582,6 +583,10 @@ def materialize_recent_managed_transcript_turns(
     query = db.query(AgentSession.id).filter(
         activity_anchor >= lookback_start,
     )
+    if owned_session_ids is not None:
+        if not owned_session_ids:
+            return 0
+        query = query.filter(AgentSession.id.in_(owned_session_ids))
     if provider:
         query = query.filter(AgentSession.provider == provider)
     if project:
@@ -855,6 +860,7 @@ def list_slow_session_turns(
     stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
     limit: int = 20,
     offset: int = 0,
+    owned_session_ids: frozenset[str] | None = None,
 ) -> tuple[list[ManagedCompletedTurnSummary], int]:
     summaries = list_managed_completed_turns(
         db,
@@ -866,6 +872,7 @@ def list_slow_session_turns(
         min_total_turn_time_ms=min_total_turn_time_ms,
         hours_back=hours_back,
         stale_after_seconds=stale_after_seconds,
+        owned_session_ids=owned_session_ids,
     )
     # Keep the threshold authoritative even if a future dialect cannot express
     # the SQL pre-filter and list_managed_completed_turns returns the broader
@@ -897,6 +904,7 @@ def list_managed_completed_turns(
     min_total_turn_time_ms: int | None = None,
     hours_back: int = 24,
     stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
+    owned_session_ids: frozenset[str] | None = None,
 ) -> list[ManagedCompletedTurnSummary]:
     submitted_after = utc_now() - timedelta(hours=max(1, hours_back))
     completed_at_expr = func.coalesce(SessionTurn.durable_at, SessionTurn.terminal_at)
@@ -929,6 +937,10 @@ def list_managed_completed_turns(
             managed_session_exists,
         )
     )
+    if owned_session_ids is not None:
+        if not owned_session_ids:
+            return []
+        query = query.filter(AgentSession.id.in_(owned_session_ids))
     if provider:
         query = query.filter(AgentSession.provider == provider)
     if project:

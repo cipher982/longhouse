@@ -64,6 +64,7 @@ from zerg.storage_v2.media_objects import MAX_MEDIA_BYTES
 from zerg.storage_v2.media_objects import MediaObjectCorruptError
 from zerg.storage_v2.media_objects import MediaObjectSpec
 from zerg.storage_v2.media_objects import MediaObjectValidationError
+from zerg.storage_v2.media_objects import media_object_relative_path
 from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import MAX_RECORDS
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
@@ -689,7 +690,7 @@ def _media_content_type(request: Request) -> str:
 @router.post("/media/claims")
 async def claim_storage_v2_media(
     request: Request,
-    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
+    auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     """Return the exact media hashes that still need verified immutable bytes."""
@@ -729,7 +730,10 @@ async def claim_storage_v2_media(
         raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Storage-v2 catalog is unavailable.")
     hashes = sorted(metadata)
     try:
-        result = await catalogd.call("storage.media.exists.batch.v2", {"media_hashes": hashes})
+        result = await catalogd.call(
+            "storage.media.exists.batch.v2",
+            {"media_hashes": hashes, "owner_id": str(auth.owner_id)},
+        )
     except CatalogRemoteError as exc:
         _raise_catalog_error(exc)
     except CatalogUnavailable as exc:
@@ -756,7 +760,7 @@ async def claim_storage_v2_media(
 async def put_storage_v2_media(
     media_hash: str,
     request: Request,
-    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
+    auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     """Hash-verify, fsync, rename, then publish one immutable media manifest."""
@@ -784,19 +788,31 @@ async def put_storage_v2_media(
         if catalogd is None:
             raise CatalogUnavailable("catalogd is not supervised")
         if lane == "repair":
-            existing = await catalogd.call("storage.media.exists.batch.v2", {"media_hashes": [canonical_hash]})
-            objects = existing.get("objects")
-            if not isinstance(objects, list) or len(objects) != 1 or not isinstance(objects[0], dict):
-                raise CatalogUnavailable("catalog returned an invalid media existence result")
-            media_replay = objects[0]
-            if media_replay.get("state") == "present" and media_replay.get("byte_size") == len(data):
+            try:
+                decoded = await workers.read_media(media_object_relative_path(canonical_hash).as_posix(), canonical_hash)
+            except (RawObjectWorkerError, MediaObjectCorruptError):
+                decoded = None
+            if decoded is not None and decoded.data == data:
+                replay = await catalogd.call(
+                    "storage.media.commit.v2",
+                    {
+                        "media_hash": canonical_hash,
+                        "state": "present",
+                        "mime_type": mime_type,
+                        "byte_size": len(data),
+                        "object_path": media_object_relative_path(canonical_hash).as_posix(),
+                        "session_refs": [],
+                        "observed_at": datetime.now(UTC).isoformat(),
+                    },
+                    timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
+                )
                 return {
                     "v": 2,
                     "sha256": canonical_hash,
-                    "mime_type": media_replay.get("mime_type") or mime_type,
+                    "mime_type": replay["media"]["mime_type"] or mime_type,
                     "byte_size": len(data),
                     "created": False,
-                    "commit_seq": media_replay.get("commit_seq"),
+                    "commit_seq": replay.get("commit_seq"),
                 }
         await _admit_historical_storage(admitted_bytes=len(data), path="storage_v2_media", lane=lane)
         async with workers.admission(lane):
@@ -840,7 +856,7 @@ async def put_storage_v2_media(
     }
 
 
-async def _storage_v2_media_manifest(media_hash: str) -> tuple[str, dict[str, object]]:
+async def _storage_v2_media_manifest(media_hash: str, *, owner_id: int) -> tuple[str, dict[str, object]]:
     try:
         canonical_hash = _lower_hash(media_hash, "media_hash")
     except ValueError as exc:
@@ -851,7 +867,7 @@ async def _storage_v2_media_manifest(media_hash: str) -> tuple[str, dict[str, ob
     try:
         result = await catalogd.call(
             "storage.media.read.v2",
-            {"media_hash": canonical_hash, "session_id": None, "limit": 1},
+            {"media_hash": canonical_hash, "session_id": None, "owner_id": str(owner_id), "limit": 1},
         )
         media = result.get("media")
         if result.get("found") is not True or not isinstance(media, dict) or media.get("state") != "present":
@@ -866,10 +882,10 @@ async def _storage_v2_media_manifest(media_hash: str) -> tuple[str, dict[str, ob
 @router.get("/media/{media_hash}/blob")
 async def get_storage_v2_media(
     media_hash: str,
-    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
+    auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> Response:
-    canonical_hash, media = await _storage_v2_media_manifest(media_hash)
+    canonical_hash, media = await _storage_v2_media_manifest(media_hash, owner_id=auth.owner_id)
     try:
         decoded = await get_raw_object_worker_pool().read_media(str(media["object_path"]), canonical_hash)
     except RawObjectWorkerBusy as exc:
@@ -887,10 +903,10 @@ async def get_storage_v2_media(
 @router.head("/media/{media_hash}")
 async def head_storage_v2_media(
     media_hash: str,
-    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
+    auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> Response:
-    canonical_hash, media = await _storage_v2_media_manifest(media_hash)
+    canonical_hash, media = await _storage_v2_media_manifest(media_hash, owner_id=auth.owner_id)
     return Response(
         status_code=status.HTTP_200_OK,
         media_type=str(media["mime_type"]),

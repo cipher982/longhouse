@@ -18,6 +18,7 @@ os.environ.setdefault("TESTING", "1")
 
 import pytest
 
+import zerg.routers.observability as observability_routes
 import zerg.services.agent_heartbeat_health as machine_health_service
 import zerg.services.session_turns as session_turns_service
 from zerg.database import Base
@@ -87,6 +88,15 @@ def _make_client(SessionLocal):
     api_app.dependency_overrides[require_single_tenant] = override_require_single_tenant
     client = TestClient(api_app)
     return client, api_app
+
+
+def _patch_catalog_scope(monkeypatch, pinned_now: datetime) -> None:
+    monkeypatch.setattr(observability_routes, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(
+        observability_routes,
+        "owned_session_ids",
+        lambda session_ids, *, owner_id: frozenset(session_ids),
+    )
 
 
 _TRANSPORT_TO_CONTROL_PLANE = {
@@ -221,6 +231,7 @@ def test_slow_turns_route_returns_managed_completed_turns_with_machine_health(tm
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    _patch_catalog_scope(monkeypatch, pinned_now)
 
     with SessionLocal() as db:
         broken_session = _seed_session(
@@ -398,6 +409,7 @@ def test_slow_turns_route_supports_filters_machine_status_and_pagination(tmp_pat
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    _patch_catalog_scope(monkeypatch, pinned_now)
 
     with SessionLocal() as db:
         broken_a = _seed_session(
@@ -537,6 +549,7 @@ def test_turn_summary_route_returns_overall_and_provider_percentiles(tmp_path, m
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    _patch_catalog_scope(monkeypatch, pinned_now)
 
     with SessionLocal() as db:
         claude_a = _seed_session(
@@ -672,6 +685,7 @@ def test_turn_summary_route_respects_machine_status_and_state_filters(tmp_path, 
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    _patch_catalog_scope(monkeypatch, pinned_now)
 
     with SessionLocal() as db:
         broken_a = _seed_session(
@@ -813,6 +827,7 @@ def test_slow_turns_route_excludes_old_turns_and_preserves_total_for_overflow_of
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    _patch_catalog_scope(monkeypatch, pinned_now)
 
     with SessionLocal() as db:
         recent_session = _seed_session(
@@ -865,6 +880,7 @@ def test_slow_turns_route_supports_completed_failed_state_filter(tmp_path, monke
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    _patch_catalog_scope(monkeypatch, pinned_now)
 
     with SessionLocal() as db:
         failed_session = _seed_session(
@@ -920,6 +936,7 @@ def test_turn_summary_route_materializes_managed_native_turns(tmp_path, monkeypa
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    _patch_catalog_scope(monkeypatch, pinned_now)
 
     with SessionLocal() as db:
         session = _seed_session(

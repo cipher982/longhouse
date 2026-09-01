@@ -7,11 +7,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.models import MediaObject
 from zerg.catalogd.models import SessionTombstone
+from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
@@ -57,6 +59,28 @@ async def test_media_manifest_is_content_addressed_idempotent_and_restart_durabl
     await daemon.start()
     client = CatalogClient(socket_path)
     try:
+        engine = create_catalog_engine(database_path)
+        with Session(engine) as db:
+            db.add(
+                StorageSession(
+                    session_id=session_id,
+                    tenant_id="default",
+                    owner_id="1",
+                    provider="codex",
+                    environment="test",
+                    machine_id="test",
+                    started_at=now,
+                    last_activity_at=now,
+                    raw_state="durable",
+                    render_state="ready",
+                    media_state="complete",
+                    commit_seq=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.commit()
+        engine.dispose()
         missing = _media_params(
             media_hash=media_hash,
             state="missing",
@@ -107,14 +131,24 @@ async def test_media_manifest_is_content_addressed_idempotent_and_restart_durabl
         )
         existence = await client.call(
             "storage.media.exists.batch.v2",
-            {"media_hashes": [media_hash, corrupt_hash, deleted_hash, "d" * 64]},
+            {"media_hashes": [media_hash, corrupt_hash, deleted_hash, "d" * 64], "owner_id": "1"},
         )
         assert [row["state"] for row in existence["objects"]] == [
             "present",
-            "corrupt",
-            "deleted",
+            "missing",
+            "missing",
             "missing",
         ]
+        other_owner = await client.call(
+            "storage.media.exists.batch.v2",
+            {"media_hashes": [media_hash], "owner_id": "2"},
+        )
+        assert other_owner["objects"][0]["state"] == "missing"
+        hidden = await client.call(
+            "storage.media.read.v2",
+            {"media_hash": media_hash, "session_id": None, "owner_id": "2", "limit": 10},
+        )
+        assert hidden["found"] is False
         with pytest.raises(CatalogRemoteError) as resurrection:
             await client.call(
                 "storage.media.commit.v2",
@@ -131,7 +165,7 @@ async def test_media_manifest_is_content_addressed_idempotent_and_restart_durabl
     try:
         read = await client.call(
             "storage.media.read.v2",
-            {"media_hash": media_hash, "session_id": session_id, "limit": 100},
+            {"media_hash": media_hash, "session_id": session_id, "owner_id": "1", "limit": 100},
         )
         assert read["found"] is True
         assert read["media"]["state"] == "present"

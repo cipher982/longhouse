@@ -18,7 +18,7 @@ def _make_client():
     from zerg.main import app
 
     def override_verify_agents_token():
-        return SimpleNamespace(device_id="testclient", id="token-1")
+        return SimpleNamespace(device_id="testclient", id="token-1", owner_id=1)
 
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     api_app.dependency_overrides[require_single_tenant] = lambda: None

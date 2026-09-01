@@ -10406,12 +10406,29 @@ class CatalogStore:
         *,
         media_hash: str,
         session_id: UUID | None,
+        owner_id: str,
         limit: int,
     ) -> dict[str, Any]:
         media = MediaObject.__table__
         refs = SessionMediaRef.__table__
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
+            owned_session_ids = select(StorageSession.__table__.c.session_id).where(StorageSession.__table__.c.owner_id == owner_id)
+            authorized = connection.execute(
+                select(refs.c.id)
+                .where(
+                    refs.c.media_hash == media_hash,
+                    refs.c.session_id.in_(owned_session_ids),
+                    *([refs.c.session_id == str(session_id)] if session_id is not None else []),
+                )
+                .limit(1)
+            ).first()
+            if authorized is None:
+                return {
+                    "found": False,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "observed_at": observed_at.isoformat(),
+                }
             row = connection.execute(select(media).where(media.c.media_hash == media_hash)).mappings().first()
             if row is None:
                 return {
@@ -10419,7 +10436,10 @@ class CatalogStore:
                     "commit_seq": str(_current_commit_seq(connection)),
                     "observed_at": observed_at.isoformat(),
                 }
-            statement = select(refs).where(refs.c.media_hash == media_hash)
+            statement = select(refs).where(
+                refs.c.media_hash == media_hash,
+                refs.c.session_id.in_(owned_session_ids),
+            )
             if session_id is not None:
                 statement = statement.where(refs.c.session_id == str(session_id))
             ref_rows = connection.execute(statement.order_by(refs.c.id.asc()).limit(limit)).mappings().all()
@@ -10431,11 +10451,27 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
-    def media_objects_exist_batch(self, *, media_hashes: tuple[str, ...]) -> dict[str, Any]:
+    def media_objects_exist_batch(self, *, media_hashes: tuple[str, ...], owner_id: str) -> dict[str, Any]:
         media = MediaObject.__table__
+        refs = SessionMediaRef.__table__
+        sessions = StorageSession.__table__
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
-            rows = connection.execute(select(media).where(media.c.media_hash.in_(media_hashes))).mappings().all()
+            rows = (
+                connection.execute(
+                    select(media)
+                    .join(refs, refs.c.media_hash == media.c.media_hash)
+                    .join(sessions, sessions.c.session_id == refs.c.session_id)
+                    .where(
+                        media.c.media_hash.in_(media_hashes),
+                        refs.c.state == "active",
+                        sessions.c.owner_id == owner_id,
+                    )
+                    .distinct()
+                )
+                .mappings()
+                .all()
+            )
             by_hash = {str(row["media_hash"]): row for row in rows}
             return {
                 "objects": [

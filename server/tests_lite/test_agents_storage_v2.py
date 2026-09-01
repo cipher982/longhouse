@@ -980,7 +980,9 @@ async def test_storage_v2_media_must_be_durable_before_complete_receipt(monkeypa
                     ]
                 },
             )
-            assert alias_claim.json() == {"needed": [], "present": [media_hash], "rejected": []}
+            # An uploaded blob does not become visible to claims until an owned
+            # session envelope references it.
+            assert alias_claim.json() == {"needed": [media_hash], "present": [], "rejected": []}
 
             committed = await client.post(
                 "/agents/storage/v2/envelopes",
@@ -1008,7 +1010,7 @@ async def test_storage_v2_media_must_be_durable_before_complete_receipt(monkeypa
 
             manifest = await catalog.call(
                 "storage.media.read.v2",
-                {"media_hash": media_hash, "session_id": payload["session_id"], "limit": 10},
+                {"media_hash": media_hash, "session_id": payload["session_id"], "owner_id": "1", "limit": 10},
             )
             assert manifest["media"]["state"] == "present"
             assert manifest["refs"][0]["envelope_id"] == payload["expected_envelope_id"]

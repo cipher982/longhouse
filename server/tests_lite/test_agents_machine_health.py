@@ -417,7 +417,7 @@ def _make_client(SessionLocal):
             yield db
 
     def override_verify_agents_token():
-        return SimpleNamespace(device_id="testclient", id="token-1")
+        return SimpleNamespace(device_id="testclient", id="token-1", owner_id=1)
 
     def override_require_single_tenant():
         return None

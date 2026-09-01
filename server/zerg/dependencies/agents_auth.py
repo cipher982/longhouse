@@ -237,16 +237,10 @@ def verify_agents_caller(principal=Depends(verify_agents_token)) -> Caller:
         try:
             owner_id = active_owner_id()
         except CatalogReadError:
-            # Isolated route tests intentionally use in-memory archive stores
-            # with no catalogd process. Their fixed single-tenant identity is
-            # owner 1; real Runtime Hosts still fail closed below.
-            if get_settings().testing:
-                owner_id = 1
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="The live catalog is temporarily unavailable",
-                ) from None
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The live catalog is temporarily unavailable",
+            ) from None
     if owner_id is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -3255,13 +3255,14 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_media_object(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"media_hash", "session_id", "limit"}:
+        if set(request.params) != {"media_hash", "session_id", "owner_id", "limit"}:
             return self._error(request, "invalid_request", "storage.media.read.v2 has invalid parameters")
         media_hash = request.params["media_hash"]
         if not _is_hash(media_hash):
             return self._error(request, "invalid_request", "media_hash must be lowercase SHA-256 hex")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id") if request.params["session_id"] is not None else None
+            owner_id = _bounded_text(request.params["owner_id"], "owner_id", 64)
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         limit = request.params["limit"]
@@ -3272,19 +3273,25 @@ class CatalogDaemon:
             self._store.read_media_object,
             media_hash=media_hash,
             session_id=session_id,
+            owner_id=owner_id,
             limit=limit,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _media_objects_exist_batch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"media_hashes"}:
-            return self._error(request, "invalid_request", "storage.media.exists.batch.v2 requires media_hashes")
+        if set(request.params) != {"media_hashes", "owner_id"}:
+            return self._error(request, "invalid_request", "storage.media.exists.batch.v2 requires media_hashes and owner_id")
         try:
             media_hashes = _validate_hash_batch(request.params["media_hashes"], field="media_hashes")
+            owner_id = _bounded_text(request.params["owner_id"], "owner_id", 64)
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_read_store(self._store.media_objects_exist_batch, media_hashes=media_hashes)
+        result = await self._run_read_store(
+            self._store.media_objects_exist_batch,
+            media_hashes=media_hashes,
+            owner_id=owner_id,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

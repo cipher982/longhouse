@@ -1790,6 +1790,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
+              "assurance_priority": "sampled",
               "oracle_digest": "83e04690e1871918ea99447feb6be2cad56e1d302a73d96dc31bbd15f1b5f318"
             }
           ]
@@ -1870,6 +1871,7 @@
                 "live_token"
               ],
               "max_age_seconds": 86400,
+              "assurance_priority": "sampled",
               "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
             }
           ]

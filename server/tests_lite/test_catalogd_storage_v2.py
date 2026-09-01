@@ -2483,7 +2483,7 @@ async def test_source_epoch_replacement_retires_only_superseded_membership(daemo
         assert session["session"]["missing_media_hashes"] == []
         media = await client.call(
             "storage.media.read.v2",
-            {"media_hash": missing_hash, "session_id": str(session_id), "limit": 10},
+            {"media_hash": missing_hash, "session_id": str(session_id), "owner_id": "42", "limit": 10},
         )
         assert media["refs"][0]["state"] == "retired"
         with pytest.raises(CatalogRemoteError) as stale_retry:
@@ -2529,7 +2529,7 @@ async def test_raw_receipt_derives_explicit_missing_media_and_records_envelope_r
 
         manifest = await client.call(
             "storage.media.read.v2",
-            {"media_hash": media_hash, "session_id": str(session_id), "limit": 10},
+            {"media_hash": media_hash, "session_id": str(session_id), "owner_id": "42", "limit": 10},
         )
         assert manifest["media"]["state"] == "missing"
         assert manifest["refs"][0]["envelope_id"] == raw["envelope_id"]

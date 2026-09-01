@@ -11,10 +11,11 @@ from fastapi import HTTPException
 from fastapi import Query
 from sqlalchemy.orm import Session
 
+from zerg.auth.caller import Caller
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.auth import get_current_user
+from zerg.dependencies.browser_auth import get_current_browser_caller
 from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.schemas.observability import ManagedTurnsSummaryEnvelopeResponse
@@ -26,11 +27,10 @@ from zerg.schemas.observability import RealtimePropagationSessionReportResponse
 from zerg.schemas.observability import SlowTurnsListResponse
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
-from zerg.services.agent_heartbeat_health import list_machine_transport_health
 from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
 from zerg.services.catalog_read_gateway import CatalogReadError
-from zerg.services.catalog_read_gateway import active_owner_id
 from zerg.services.catalog_read_gateway import machine_heartbeats
+from zerg.services.catalog_read_gateway import owned_session_ids
 from zerg.services.observability_views import build_machine_health_list_response
 from zerg.services.observability_views import build_managed_turns_summary_envelope_response
 from zerg.services.observability_views import build_observability_overview_response
@@ -47,7 +47,7 @@ from zerg.utils.time import utc_now
 router = APIRouter(
     prefix="/observability",
     tags=["observability"],
-    dependencies=[Depends(get_current_user), Depends(require_single_tenant)],
+    dependencies=[Depends(get_current_browser_caller), Depends(require_single_tenant)],
 )
 
 agents_router = APIRouter(
@@ -66,6 +66,16 @@ _machine_health_db_dependency = _live_catalog_no_db
 
 def _resolve_recent_machine_window_seconds(*, recent_within_hours: int) -> int:
     return max(1, recent_within_hours) * 60 * 60
+
+
+def _owned_legacy_sessions(db: Session, *, caller: Caller, hours_back: int = 24 * 7) -> frozenset[str]:
+    """Authorize legacy telemetry joins before they load session details."""
+
+    from zerg.models.agents import AgentSession
+
+    del hours_back
+    candidates = db.query(AgentSession.id).order_by(AgentSession.started_at.desc()).limit(2_000).all()
+    return owned_session_ids([str(row[0]) for row in candidates], owner_id=caller.owner_id)
 
 
 @router.get("/checks", response_model=ProductHealthCheckListResponse)
@@ -143,12 +153,18 @@ async def read_session_realtime_latency(
     event_limit: int = Query(20, ge=1, le=100, description="Recent durable transcript events to inspect"),
     surface: str | None = Query(None, description="Optional client surface filter such as web or ios"),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_current_browser_caller),
 ) -> RealtimePropagationSessionReportResponse:
+    try:
+        owned = owned_session_ids([str(session_id)], owner_id=caller.owner_id)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     report = build_realtime_propagation_session_report(
         db,
         session_id=session_id,
         event_limit=event_limit,
         surface=surface,
+        owned_session_ids=owned,
     )
     if report is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -173,16 +189,14 @@ async def list_machine_health(
         description="Only include machines with a heartbeat in this recent window",
     ),
     db: Session | None = Depends(_machine_health_db_dependency),
+    caller: Caller = Depends(get_current_browser_caller),
 ) -> MachineHealthListResponse:
     recent_within_seconds = _resolve_recent_machine_window_seconds(
         recent_within_hours=recent_within_hours,
     )
     try:
-        owner_id = active_owner_id()
-        if owner_id is None:
-            raise CatalogReadError("owner_unavailable", "No active Longhouse owner is configured.")
         payload = machine_heartbeats(
-            owner_id=owner_id,
+            owner_id=caller.owner_id,
             device_id=device_id,
             recent_after=(utc_now() - timedelta(seconds=recent_within_seconds)).isoformat(),
             limit=100,
@@ -232,13 +246,19 @@ async def list_slow_turns(
         description="Treat heartbeats older than this as offline when enriching machine status",
     ),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_current_browser_caller),
 ) -> SlowTurnsListResponse:
+    try:
+        owned = _owned_legacy_sessions(db, caller=caller, hours_back=hours_back)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     if materialize_recent_managed_transcript_turns(
         db,
         provider=provider,
         project=project,
         device_id=device_id,
         hours_back=hours_back,
+        owned_session_ids=owned,
     ):
         db.commit()
 
@@ -254,6 +274,7 @@ async def list_slow_turns(
         stale_after_seconds=stale_after_seconds,
         limit=limit,
         offset=offset,
+        owned_session_ids=owned,
     )
     return build_slow_turns_list_response(
         summaries,
@@ -295,13 +316,19 @@ async def summarize_turns(
         description="Treat heartbeats older than this as offline when enriching machine status",
     ),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_current_browser_caller),
 ) -> ManagedTurnsSummaryEnvelopeResponse:
+    try:
+        owned = _owned_legacy_sessions(db, caller=caller, hours_back=hours_back)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     if materialize_recent_managed_transcript_turns(
         db,
         provider=provider,
         project=project,
         device_id=device_id,
         hours_back=hours_back,
+        owned_session_ids=owned,
     ):
         db.commit()
 
@@ -314,6 +341,7 @@ async def summarize_turns(
         machine_status=machine_status,
         hours_back=hours_back,
         stale_after_seconds=stale_after_seconds,
+        owned_session_ids=owned,
     )
     return build_managed_turns_summary_envelope_response(
         summaries,
@@ -365,13 +393,19 @@ async def read_observability_overview(
         description="Only include machines with a heartbeat in this recent window",
     ),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_current_browser_caller),
 ) -> ObservabilityOverviewResponse:
+    try:
+        owned = _owned_legacy_sessions(db, caller=caller, hours_back=hours_back)
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     if materialize_recent_managed_transcript_turns(
         db,
         provider=provider,
         project=project,
         device_id=device_id,
         hours_back=hours_back,
+        owned_session_ids=owned,
     ):
         db.commit()
 
@@ -387,14 +421,22 @@ async def read_observability_overview(
         machine_status=machine_status,
         hours_back=hours_back,
         stale_after_seconds=stale_after_seconds,
+        owned_session_ids=owned,
     )
-    machine_summaries, _ = list_machine_transport_health(
-        db,
-        device_id=device_id,
+    try:
+        heartbeat_payload = machine_heartbeats(
+            owner_id=caller.owner_id,
+            device_id=device_id,
+            recent_after=(utc_now() - timedelta(seconds=recent_within_seconds)).isoformat(),
+            limit=100,
+        )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    machine_summaries, _ = machine_transport_health_from_catalog_rows(
+        heartbeat_payload.get("heartbeats", []),
         status=machine_status,
         stale_after_seconds=stale_after_seconds,
-        recent_within_seconds=recent_within_seconds,
-        limit=10_000,
+        limit=100,
     )
     return build_observability_overview_response(
         turn_summaries=turn_summaries,

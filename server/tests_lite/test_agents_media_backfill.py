@@ -51,7 +51,7 @@ def _setup_app(tmp_path, monkeypatch):
             db.close()
 
     api_app.dependency_overrides[get_db] = _override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: None
+    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=1)
     api_app.dependency_overrides[require_single_tenant] = lambda: None
 
     def _cleanup():

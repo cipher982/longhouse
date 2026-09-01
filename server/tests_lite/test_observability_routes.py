@@ -16,11 +16,12 @@ from sqlalchemy.orm import sessionmaker
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+import zerg.routers.observability as observability_routes
 import zerg.services.agent_heartbeat_health as machine_health_service
 import zerg.services.observability_views as observability_views
 import zerg.services.session_turns as session_turns_service
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog  # noqa: F401, F811
+from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401, F811
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
@@ -66,6 +67,34 @@ def _make_client(SessionLocal):
     )
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     return TestClient(api_app)
+
+
+def _patch_legacy_catalog_scope(monkeypatch, SessionLocal) -> None:
+    """Keep archive-view tests focused while emulating the catalog owner gate."""
+
+    monkeypatch.setattr(
+        observability_routes,
+        "owned_session_ids",
+        lambda session_ids, *, owner_id: frozenset(session_ids),
+    )
+
+    def legacy_heartbeats(*, owner_id, device_id, recent_after, limit):
+        del owner_id
+        with SessionLocal() as db:
+            query = db.query(AgentHeartbeat)
+            if device_id is not None:
+                query = query.filter(AgentHeartbeat.device_id == device_id)
+            if recent_after is not None:
+                query = query.filter(AgentHeartbeat.received_at >= datetime.fromisoformat(recent_after))
+            rows = query.order_by(AgentHeartbeat.received_at.desc()).limit(limit).all()
+            return {
+                "heartbeats": [
+                    {column.name: getattr(row, column.name) for column in AgentHeartbeat.__table__.columns}
+                    for row in rows
+                ]
+            }
+
+    monkeypatch.setattr(observability_routes, "machine_heartbeats", legacy_heartbeats)
 
 
 def _seed_session(
@@ -199,7 +228,13 @@ def _seed_heartbeat(
     return heartbeat
 
 
-def _apply_catalog_heartbeat(live_catalog, *, device_id: str, received_at: datetime, **overrides) -> None:
+def _apply_catalog_heartbeat(
+    live_catalog,  # noqa: F811
+    *,
+    device_id: str,
+    received_at: datetime,
+    **overrides,
+) -> None:
     """One heartbeat stamp in the live catalog, via the RPC the ingest route calls."""
 
     heartbeat = {
@@ -249,10 +284,12 @@ def _dt_from_ms(ms: int) -> datetime:
 
 def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
+    _patch_legacy_catalog_scope(monkeypatch, SessionLocal)
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(observability_views, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(observability_routes, "utc_now", lambda: pinned_now)
 
     with SessionLocal() as db:
         broken_session = _seed_session(
@@ -417,7 +454,7 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
         api_app.dependency_overrides.clear()
 
 
-def test_machine_health_route_reads_the_live_catalog(live_catalog, live_catalog_client):
+def test_machine_health_route_reads_the_live_catalog(live_catalog, live_catalog_client):  # noqa: F811
     """`/observability/machines/health` is served from catalogd heartbeat stamps.
 
     Everything else on this router still reads the archive; this one route reads
@@ -485,10 +522,12 @@ def test_machine_health_route_reads_the_live_catalog(live_catalog, live_catalog_
 
 def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
+    _patch_legacy_catalog_scope(monkeypatch, SessionLocal)
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(observability_views, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(observability_routes, "utc_now", lambda: pinned_now)
 
     archive_backlog = {
         "state": "pending",
@@ -582,8 +621,9 @@ def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(t
         api_app.dependency_overrides.clear()
 
 
-def test_session_latency_report_stitches_existing_evidence(tmp_path):
+def test_session_latency_report_stitches_existing_evidence(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
+    _patch_legacy_catalog_scope(monkeypatch, SessionLocal)
 
     provider_at = _dt_from_ms(1_779_391_436_648)
     engine_observed_at = _dt_from_ms(1_779_391_437_009)
@@ -798,8 +838,9 @@ def test_session_latency_report_stitches_existing_evidence(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_session_latency_report_404s_for_unknown_session(tmp_path):
+def test_session_latency_report_404s_for_unknown_session(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
+    _patch_legacy_catalog_scope(monkeypatch, SessionLocal)
     client = _make_client(SessionLocal)
     try:
         response = client.get(f"/observability/sessions/{uuid4()}/latency")
@@ -810,10 +851,12 @@ def test_session_latency_report_404s_for_unknown_session(tmp_path):
 
 def test_browser_observability_overview_materializes_managed_native_turns(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
+    _patch_legacy_catalog_scope(monkeypatch, SessionLocal)
     pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
     monkeypatch.setattr(observability_views, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(observability_routes, "utc_now", lambda: pinned_now)
 
     with SessionLocal() as db:
         session = _seed_session(

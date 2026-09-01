@@ -110,6 +110,7 @@ def build_realtime_propagation_session_report(
     db: Session,
     *,
     session_id: UUID,
+    owned_session_ids: frozenset[str],
     event_limit: int = 20,
     surface: str | None = None,
 ) -> RealtimePropagationSessionReportResponse | None:
@@ -119,6 +120,8 @@ def build_realtime_propagation_session_report(
     explicit gaps instead of being inferred from aggregate metrics.
     """
 
+    if str(session_id) not in owned_session_ids:
+        return None
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
         return None

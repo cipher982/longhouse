@@ -107,6 +107,21 @@ def session_batch_snapshot(session_ids: list[str], *, owner_id: int) -> dict[str
     return _call("session.read.batch.v2", {"session_ids": session_ids, "owner_id": owner_id})
 
 
+def owned_session_ids(session_ids: list[str], *, owner_id: int) -> frozenset[str]:
+    """Authorize a bounded legacy-id set through catalogd's owner predicate."""
+
+    owned: set[str] = set()
+    canonical = list(dict.fromkeys(str(value) for value in session_ids))
+    for offset in range(0, len(canonical), 20):
+        snapshot = session_batch_snapshot(canonical[offset : offset + 20], owner_id=owner_id)
+        for facts in snapshot.get("facts") or []:
+            catalog = facts.get("catalog") if isinstance(facts, dict) else None
+            session_id = catalog.get("session_id") if isinstance(catalog, dict) else None
+            if isinstance(session_id, str):
+                owned.add(session_id)
+    return frozenset(owned)
+
+
 def internal_session_batch_snapshot(session_ids: list[str]) -> dict[str, Any]:
     """Read process-internal facts with no user-object authorization claim."""
 
@@ -253,6 +268,7 @@ __all__ = [
     "machine_operation",
     "machine_heartbeats",
     "machine_workspaces",
+    "owned_session_ids",
     "internal_session_batch_snapshot",
     "recent_visible_web_presence",
     "rename_machine",

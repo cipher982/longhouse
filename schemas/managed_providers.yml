@@ -1083,6 +1083,7 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+        assurance_priority: sampled
     session.resume.helm:
       disposition: policy_disabled
       reason_code: policy_disabled
@@ -1129,6 +1130,7 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 86400
+        assurance_priority: sampled
   can_resume: false
   turn_start: true
   fork_thread: false

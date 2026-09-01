@@ -123,8 +123,14 @@ def _read_verified(path: Path, expected_hash: str) -> bytes:
     return data
 
 
-def _relative_path(media_hash: str) -> Path:
+def media_object_relative_path(media_hash: str) -> Path:
+    if not _is_hash(media_hash):
+        raise MediaObjectValidationError("media_hash must be lowercase SHA-256 hex")
     return Path("media") / "v2" / "sha256" / media_hash[:2] / media_hash[2:4] / f"{media_hash}.bin"
+
+
+def _relative_path(media_hash: str) -> Path:
+    return media_object_relative_path(media_hash)
 
 
 def _safe_path(root: Path, relative_path: Path) -> Path:
@@ -156,6 +162,7 @@ __all__ = [
     "MediaObjectSpec",
     "MediaObjectValidationError",
     "SealedMediaObject",
+    "media_object_relative_path",
     "read_media_object",
     "seal_media_object",
     "validate_media_object_spec",

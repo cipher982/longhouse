@@ -207,7 +207,7 @@ def _client(monkeypatch, tmp_path: Path, *, factory_token: str | None = "factory
         "get_settings",
         lambda: SimpleNamespace(provider_capability_factory_token=factory_token),
     )
-    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="machine-1")
+    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="machine-1", owner_id=1)
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     return TestClient(app, backend="asyncio")
 
@@ -640,6 +640,7 @@ def test_admin_provider_capabilities_mirrors_the_agents_surface(monkeypatch, tmp
     _write_trusted(store, proof)
     api_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, is_admin=True)
     api_app.dependency_overrides[require_admin] = lambda: None
+    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="machine-1", owner_id=1)
     client = TestClient(app, backend="asyncio")
     try:
         agents_response = client.get(
