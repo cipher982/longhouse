@@ -2131,9 +2131,7 @@ def test_claude_profile_bootstrap_uses_newer_prompt_after_retained_permission(
         live_session_toolkit,
         "_terminal_text",
         lambda _recording: (
-            "No, exit  Yes, I accept  Choose the text style"
-            if not FakePtyProcess.instance.sent
-            else "Claude Code  Welcome back!"
+            "No, exit  Yes, I accept  Choose the text style" if not FakePtyProcess.instance.sent else "Claude Code  Welcome back!"
         ),
     )
     moments = iter((0.0, 0.0, 0.1, 0.2))
