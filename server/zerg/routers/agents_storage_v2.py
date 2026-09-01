@@ -23,12 +23,13 @@ from fastapi import Request
 from fastapi import Response
 from fastapi import status
 
+from zerg.auth.caller import caller_principal
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.catalogd.store import storage_projectors_for_provider
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
@@ -642,6 +643,7 @@ def _conversation_resets(render_spec: RenderObjectSpec | None) -> list[dict[str,
 
 
 def _authenticated_machine_id(auth_token: DeviceToken | object | None, payload: dict[str, Any]) -> str:
+    auth_token = caller_principal(auth_token)
     if auth_token is not None:
         machine_id = getattr(auth_token, "device_id", None)
     else:
@@ -686,7 +688,7 @@ def _media_content_type(request: Request) -> str:
 @router.post("/media/claims")
 async def claim_storage_v2_media(
     request: Request,
-    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     """Return the exact media hashes that still need verified immutable bytes."""
@@ -753,7 +755,7 @@ async def claim_storage_v2_media(
 async def put_storage_v2_media(
     media_hash: str,
     request: Request,
-    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     """Hash-verify, fsync, rename, then publish one immutable media manifest."""
@@ -863,7 +865,7 @@ async def _storage_v2_media_manifest(media_hash: str) -> tuple[str, dict[str, ob
 @router.get("/media/{media_hash}/blob")
 async def get_storage_v2_media(
     media_hash: str,
-    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> Response:
     canonical_hash, media = await _storage_v2_media_manifest(media_hash)
@@ -884,7 +886,7 @@ async def get_storage_v2_media(
 @router.head("/media/{media_hash}")
 async def head_storage_v2_media(
     media_hash: str,
-    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> Response:
     canonical_hash, media = await _storage_v2_media_manifest(media_hash)
@@ -898,7 +900,7 @@ async def head_storage_v2_media(
 @router.get("/capabilities")
 async def storage_v2_capabilities(
     request: Request,
-    auth_token: DeviceToken | object | None = Depends(verify_agents_token),
+    auth_token: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     settings = get_settings()
@@ -931,7 +933,7 @@ async def storage_v2_source_epoch_manifest(
     source_epoch: UUID,
     after_position: int | None = Query(None, ge=0),
     limit: int = Query(1000, ge=1, le=1000),
-    auth_token: DeviceToken | object | None = Depends(verify_agents_token),
+    auth_token: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     """Return bounded per-range proof for one authenticated machine source."""
@@ -1326,7 +1328,7 @@ async def list_storage_v2_sessions(
     provider: str | None = Query(None, min_length=1, max_length=32),
     include_test: bool = Query(False),
     limit: int = Query(50, ge=1, le=100),
-    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     if (before_last_activity_at is None) != (before_session_id is None):
@@ -1407,7 +1409,7 @@ async def read_storage_v2_session_raw(
     session_id: UUID,
     response: Response,
     cursor: str | None = Query(None, description="Exclusive source-ordered raw-object cursor"),
-    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     timing = ServerTimingRecorder(surface="raw_export")
@@ -1788,7 +1790,7 @@ async def read_storage_v2_session_events(
     cursor: str | None = Query(None, description="Exclusive generation-qualified render cursor"),
     anchor: str = Query("start", description="Page from the beginning or latest tail: start|tail"),
     limit: int = Query(100, ge=1, le=500),
-    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     owner_value = getattr(_auth, "owner_id", None)
@@ -1810,7 +1812,7 @@ async def read_storage_v2_session_events(
 @router.post("/envelopes")
 async def commit_storage_v2_envelope(
     request: Request,
-    auth_token: DeviceToken | object | None = Depends(verify_agents_token),
+    auth_token: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     lane = request.headers.get("X-Longhouse-Storage-Lane", "").strip().lower()

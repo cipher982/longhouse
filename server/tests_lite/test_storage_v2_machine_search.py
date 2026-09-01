@@ -403,7 +403,7 @@ def test_browser_recall_delegates_to_requested_canonical_pipeline(monkeypatch):
             since_days=90,
             max_results=5,
             mode="lexical",
-            current_user=SimpleNamespace(id=7),
+            current_user=SimpleNamespace(owner_id=7),
         )
     )
 

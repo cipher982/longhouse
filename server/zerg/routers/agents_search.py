@@ -30,7 +30,7 @@ from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.database import catalog_db_dependency
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import read_live_catalog_sessions
@@ -1483,7 +1483,7 @@ async def semantic_search_sessions(
     days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineSessionsListResponse:
     """Search sessions by semantic similarity, scoped to the owner's storage-v2 catalog."""
@@ -1532,7 +1532,7 @@ async def recall_context(
     before: int = Query(2, ge=0, le=5, description="Conversation turns before the match"),
     after: int = Query(2, ge=0, le=5, description="Conversation turns after the match"),
     max_content_bytes: int = Query(1_200, ge=200, le=RECALL_CONTEXT_MAX_TURN_BYTES),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> RecallContextResponse:
     """Open one recall card under a fixed total evidence budget."""
@@ -1604,7 +1604,7 @@ async def recall_sessions(
     max_results: int = Query(5, ge=1, le=RECALL_SEARCH_RESULT_LIMIT, description="Max search-result cards"),
     include_automation: bool = Query(False, description="Include Hatch automation sessions in recall results"),
     mode: Literal["auto", "lexical", "semantic"] = "auto",
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> RecallResponse:
     """Recall specific knowledge from past sessions."""

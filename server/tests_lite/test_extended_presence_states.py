@@ -213,7 +213,7 @@ def test_presence_releases_request_db_before_serialized_write(tmp_path, monkeypa
             db.close()
 
     def override_verify_agents_token():
-        return SimpleNamespace(device_id="presence-release", id="token-1")
+        return SimpleNamespace(device_id="presence-release", id="token-1", owner_id=1)
 
     monkeypatch.delenv("TESTING", raising=False)
     monkeypatch.setattr("zerg.routers.presence.get_write_serializer", lambda: _Serializer())

@@ -18,7 +18,7 @@ from fastapi import status
 
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.product_assurance_proof_archive import ProductAssuranceProofArchive
 from zerg.services.provider_assurance_plan_projection import validate_plan_projection
@@ -272,7 +272,7 @@ async def publish_provider_capability_proofs(
 
 @router.get("/agents/provider-capability-proofs")
 def list_provider_capability_proofs(
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
     store = _proof_store()
@@ -409,7 +409,7 @@ def build_capability_projection_payload(
 
 @router.get("/agents/provider-capabilities")
 def list_provider_capabilities(
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
     """Capability projection from the contract, proof status attached

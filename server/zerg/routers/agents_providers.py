@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from fastapi import Query
 
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.schemas.provider_action_coverage import ProviderActionCoverageResponse
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.provider_action_coverage import ActionCoverageState
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/agents/providers", tags=["agents"])
 @router.get("/action-coverage", response_model=ProviderActionCoverageResponse)
 def list_provider_action_coverage(
     provider: str | None = Query(None, description="Filter to one managed provider"),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ProviderActionCoverageResponse:
     providers = _requested_providers(provider)

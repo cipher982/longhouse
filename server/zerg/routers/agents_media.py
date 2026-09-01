@@ -16,13 +16,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from zerg.auth.caller import Caller
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
-from zerg.models.user import User
 from zerg.services.catalog_read_gateway import session_batch_snapshot
 from zerg.services.media_store import MAX_MEDIA_BYTES
 from zerg.services.media_store import absolute_media_path
@@ -173,7 +173,7 @@ def _head_media_row(row: MediaObject) -> Response:
 @router.post(
     "/claims",
     response_model=MediaClaimsResponse,
-    dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
+    dependencies=[Depends(verify_agents_caller), Depends(require_single_tenant)],
 )
 async def create_media_claims(request: MediaClaimsRequest, db: Session = Depends(get_db)) -> MediaClaimsResponse:
     """Return which content-addressed media blobs this Runtime Host needs."""
@@ -187,7 +187,7 @@ async def create_media_claims(request: MediaClaimsRequest, db: Session = Depends
 @router.put(
     "/{sha256}",
     response_model=MediaUploadResponse,
-    dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
+    dependencies=[Depends(verify_agents_caller), Depends(require_single_tenant)],
 )
 async def put_media_blob(
     sha256: str,
@@ -226,7 +226,7 @@ async def put_media_blob(
 async def get_media_blob(
     sha256: str,
     db: Session = Depends(get_db),
-    auth: object = Depends(verify_agents_token),
+    auth: object = Depends(verify_agents_caller),
 ) -> StreamingResponse:
     """Fetch a media blob by sha256 over machine-token auth."""
 
@@ -241,7 +241,7 @@ async def get_media_blob(
 async def head_media_blob(
     sha256: str,
     db: Session = Depends(get_db),
-    auth: object = Depends(verify_agents_token),
+    auth: object = Depends(verify_agents_caller),
 ) -> Response:
     """Cheap integrity probe for a media blob."""
 
@@ -253,7 +253,7 @@ async def head_media_blob(
 async def get_browser_media_blob(
     sha256: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> StreamingResponse:
     """Fetch a browser-visible media blob by sha256."""
 
@@ -265,7 +265,7 @@ async def get_browser_media_blob(
 async def get_browser_media_thumbnail(
     sha256: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> StreamingResponse:
     """Fetch a derived thumbnail for a browser-visible media object."""
 
@@ -280,7 +280,7 @@ async def get_browser_media_thumbnail(
 async def head_browser_media_blob(
     sha256: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> Response:
     """Cheap browser integrity probe for a visible media blob."""
 

@@ -20,7 +20,7 @@ from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_runtime import RuntimeEventBatchIngest
@@ -52,7 +52,7 @@ async def ingest_runtime_observation_batch(
     payload: RuntimeEventBatchIngest,
     response: Response,
     db: Session | None = Depends(_runtime_db_dependency),
-    _token: object = Depends(verify_agents_token),
+    _token: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> RuntimeEventBatchResult:
     """Ingest normalized runtime observations and materialize runtime state."""

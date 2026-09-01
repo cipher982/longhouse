@@ -1,5 +1,6 @@
 """Validation shared by the canonical catalog-backed session readers."""
 
+from zerg.auth.caller import caller_principal
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.services.session_listing_types import SessionListingError
 from zerg.services.session_listing_types import SessionListParams
@@ -10,6 +11,7 @@ __all__ = ["SessionListingError", "SessionListParams", "SessionListResult", "val
 
 def validate_managed_hook_scope(auth: object, params: SessionListParams) -> None:
     """Restrict managed-session hook tokens to their bounded project lookup."""
+    auth = caller_principal(auth)
     if not isinstance(auth, ManagedSessionToken):
         return
 

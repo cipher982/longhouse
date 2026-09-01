@@ -29,14 +29,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import zerg.database as database_module  # noqa: F401  # tests_lite monkeypatches session_chat.database_module
+from zerg.auth.caller import Caller
+from zerg.auth.caller import caller_principal
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
 from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
-from zerg.models.user import User
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.console_turns import ConsoleTurnConflict
@@ -841,7 +842,7 @@ async def send_to_live_session(
     session_id: str,
     body: SessionMessageRequest,
     db: Session = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ):
     """Send text into the live managed-local session and return a fast JSON ack."""
     request_id = str(uuid.uuid4())[:8]
@@ -875,7 +876,7 @@ async def draft_reply_for_live_session(
     session_id: str,
     body: SessionDraftReplyRequest | None = None,
     db: Session | None = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ):
     """Generate a suggested next user message for a live managed-local session."""
     request_id = str(uuid.uuid4())[:8]
@@ -906,12 +907,13 @@ async def send_to_live_session_agents(
     body: SessionMessageRequest,
     request: Request,
     db: Session = Depends(_catalog_control_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ):
     """Machine-facing explicit live-send surface for managed-local sessions."""
     settings = get_settings()
-    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+    principal = caller_principal(device_token)
+    resolved_device_token = principal if isinstance(principal, DeviceToken) else None
 
     request_id = str(uuid.uuid4())[:8]
     # Authorize and resolve the caller before any session read, so the load can
@@ -953,12 +955,13 @@ async def draft_reply_for_live_session_agents(
     request: Request,
     body: SessionDraftReplyRequest | None = None,
     db: Session | None = Depends(_catalog_control_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ):
     """Machine-facing draft-reply surface for managed-local sessions."""
     settings = get_settings()
-    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+    principal = caller_principal(device_token)
+    resolved_device_token = principal if isinstance(principal, DeviceToken) else None
 
     request_id = str(uuid.uuid4())[:8]
     _authorize_live_send(
@@ -993,7 +996,7 @@ async def draft_reply_for_live_session_agents(
 async def interrupt_live_session(
     session_id: str,
     db: Session = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionInterruptResponse:
     """Browser-authenticated explicit interrupt for managed-local sessions."""
     request_id = str(uuid.uuid4())[:8]
@@ -1011,7 +1014,7 @@ async def interrupt_live_session(
 async def interrupt_current_console_turn(
     session_id: UUID,
     db: Session | None = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionInterruptResponse:
     """Interrupt the current headless Console invocation on its owning machine."""
     try:
@@ -1028,7 +1031,7 @@ async def interrupt_live_session_agents(
     session_id: str,
     request: Request,
     db: Session = Depends(_catalog_control_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> SessionInterruptResponse:
     """Machine-facing explicit interrupt for managed-local sessions.
@@ -1037,7 +1040,8 @@ async def interrupt_live_session_agents(
     source runner. It does not confirm that the provider stopped the turn.
     """
     settings = get_settings()
-    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+    principal = caller_principal(device_token)
+    resolved_device_token = principal if isinstance(principal, DeviceToken) else None
 
     request_id = str(uuid.uuid4())[:8]
     _authorize_live_send(
@@ -1061,11 +1065,12 @@ async def interrupt_current_console_turn_agents(
     session_id: UUID,
     request: Request,
     db: Session | None = Depends(_catalog_control_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> SessionInterruptResponse:
     settings = get_settings()
-    resolved_token = device_token if isinstance(device_token, DeviceToken) else None
+    principal = caller_principal(device_token)
+    resolved_token = principal if isinstance(principal, DeviceToken) else None
     _authorize_live_send(request=request, device_token=resolved_token, auth_disabled=settings.auth_disabled)
     owner_id = _resolve_agents_owner_id(db, resolved_token)
     try:
@@ -1081,7 +1086,7 @@ async def interrupt_current_console_turn_agents(
 async def terminate_live_session(
     session_id: str,
     db: Session = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionTerminateResponse:
     """Browser-authenticated explicit terminate for managed-local sessions."""
     request_id = str(uuid.uuid4())[:8]
@@ -1100,7 +1105,7 @@ async def terminate_live_session_agents(
     session_id: str,
     request: Request,
     db: Session = Depends(_catalog_control_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> SessionTerminateResponse:
     """Machine-facing explicit terminate for managed-local sessions.
@@ -1111,7 +1116,8 @@ async def terminate_live_session_agents(
     transports kill the child synchronously.
     """
     settings = get_settings()
-    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+    principal = caller_principal(device_token)
+    resolved_device_token = principal if isinstance(principal, DeviceToken) else None
 
     request_id = str(uuid.uuid4())[:8]
     _authorize_live_send(
@@ -1135,7 +1141,7 @@ async def list_pause_requests_endpoint(
     session_id: str,
     status_filter: str | None = PAUSE_PENDING_STATUS,
     db: Session = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> PauseRequestListResponse:
     source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     return await _list_pause_requests_response(
@@ -1151,7 +1157,7 @@ async def respond_to_pause_request_endpoint(
     pause_request_id: str,
     body: PauseRequestResponseRequest,
     db: Session = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> PauseRequestResponseResponse:
     source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     return await _respond_to_pause_request(
@@ -1169,11 +1175,12 @@ async def list_pause_requests_agents(
     request: Request,
     status_filter: str | None = PAUSE_PENDING_STATUS,
     db: Session = Depends(_catalog_control_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> PauseRequestListResponse:
     settings = get_settings()
-    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+    principal = caller_principal(device_token)
+    resolved_device_token = principal if isinstance(principal, DeviceToken) else None
     _authorize_live_send(
         request=request,
         device_token=resolved_device_token,
@@ -1195,11 +1202,12 @@ async def respond_to_pause_request_agents(
     body: PauseRequestResponseRequest,
     request: Request,
     db: Session = Depends(_catalog_control_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> PauseRequestResponseResponse:
     settings = get_settings()
-    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+    principal = caller_principal(device_token)
+    resolved_device_token = principal if isinstance(principal, DeviceToken) else None
     _authorize_live_send(
         request=request,
         device_token=resolved_device_token,
@@ -1220,7 +1228,7 @@ async def respond_to_pause_request_agents(
 async def launch_managed_local_this_device(
     body: ManagedLocalThisDeviceLaunchRequest,
     db: Session = Depends(_catalog_control_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ):
     """Start a managed local AI agent session on the calling machine's connected runner."""
@@ -1308,7 +1316,7 @@ async def launch_managed_local_this_device(
 async def create_console_session_endpoint(
     body: ConsoleSessionCreateRequest,
     db: Session | None = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> ConsoleSessionCreateResponse:
     """Create an empty Console conversation without starting a provider."""
 
@@ -1350,7 +1358,7 @@ async def create_session_branch_endpoint(
     body: SessionBranchCreateRequest,
     response: Response,
     db: Session | None = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionBranchCreateResponse:
     """Branch an ended Helm session into a new Console session on its machine."""
 
@@ -1410,7 +1418,7 @@ async def create_session_branch_endpoint(
 async def get_session_lock_status(
     session_id: str,
     db: Session = Depends(_catalog_control_db_dependency),
-    _current_user=Depends(get_current_browser_route_user),
+    _current_user=Depends(get_current_browser_route_caller),
 ) -> SessionLockInfo:
     """Check if a session is currently locked.
 
@@ -1926,7 +1934,7 @@ async def create_session_input_endpoint(
     session_id: str,
     body: SessionInputRequest,
     db: Session = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionInputResponse:
     source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     return await _create_session_input_response(
@@ -1943,7 +1951,7 @@ async def list_session_inputs_endpoint(
     request: Request,
     response: Response,
     db: Session = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ):
     """List queued + recently-failed inputs for the chip UI.
 
@@ -1978,7 +1986,7 @@ async def cancel_live_session_input_endpoint(
     session_id: str,
     live_input_id: str,
     db: Session = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> dict:
     source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     row = await cancel_live_queued_receipt_catalog(
@@ -1998,7 +2006,7 @@ async def cancel_session_input_endpoint(
     session_id: str,
     input_id: int,
     db: Session | None = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> dict:
     source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
     state = await _catalog_recent_input_summaries(source_session.id)
@@ -2038,7 +2046,7 @@ async def cancel_session_input_endpoint(
 async def force_release_lock(
     session_id: str,
     db: Session = Depends(_catalog_control_db_dependency),
-    _current_user=Depends(get_current_browser_route_user),
+    _current_user=Depends(get_current_browser_route_caller),
 ) -> dict:
     """Force release a session lock (admin operation).
 

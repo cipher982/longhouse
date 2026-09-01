@@ -14,7 +14,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import active_owner_id
@@ -172,7 +172,7 @@ def _supported_operations(provider: str | None) -> set[str]:
 
 @health_router.get("/health", response_model=SessionStateReducerHealthResponse)
 def get_session_state_reducer_health(
-    auth: object | None = Depends(verify_agents_token),
+    auth: object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> SessionStateReducerHealthResponse:
     """Expose bounded reducer health without claiming cutover readiness."""
@@ -223,7 +223,7 @@ def get_session_state_reducer_health(
 @router.get("/{session_id}/state-diagnostics", response_model=SessionStateDiagnosticsResponse)
 def get_session_state_diagnostics(
     session_id: UUID,
-    auth: object | None = Depends(verify_agents_token),
+    auth: object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> SessionStateDiagnosticsResponse:
     """Compare canonical reducer axes without changing served or authorized state."""

@@ -23,7 +23,7 @@ from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
@@ -66,7 +66,7 @@ async def backfill_summaries(
     project: Optional[str] = Query(None, description="Optional project filter"),
     force: bool = Query(False, description="Re-summarize sessions that already have summaries"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> BackfillSummariesResponse:
     """Start backfilling missing summaries as a background task."""
@@ -117,7 +117,7 @@ async def backfill_summaries(
 
 @router.get("/backfill-summaries", response_model=BackfillProgressResponse)
 async def backfill_progress(
-    _auth: None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> BackfillProgressResponse:
     """Check backfill progress."""
@@ -230,7 +230,7 @@ async def backfill_inline_data_url_media(
         description="Minimum free bytes to leave on the media filesystem when writing",
     ),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MediaBackfillInlineDataUrlsResponse:
     """Opportunistically backfill legacy inline image data URLs into media objects."""
@@ -266,7 +266,7 @@ async def backfill_cursor_roles(
     after_id: int = Query(0, ge=0, description="Only scan Cursor user events with id greater than this value"),
     batch_size: int = Query(5000, ge=1, le=20000, description="Max events to scan in this batch"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> CursorRoleBackfillResponse:
     """Repair one batch of legacy Cursor ``role="user"`` events.
@@ -299,7 +299,7 @@ async def backfill_cursor_roles(
 @router.get("/ingest-health", response_model=IngestHealthResponse)
 async def get_ingest_health(
     db: Session | None = Depends(_ingest_health_db_dependency),
-    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> IngestHealthResponse:
     """Check ingest freshness -- detects if sessions have stopped shipping."""
@@ -331,7 +331,7 @@ async def get_ingest_health(
 async def get_usage_stats(
     days: int = Query(30, ge=1, le=365, description="Days to look back (max 365)"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> UsageStatsResponse:
     """Session activity statistics by provider, queried live from sessions table."""

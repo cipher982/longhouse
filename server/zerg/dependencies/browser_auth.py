@@ -10,6 +10,7 @@ from fastapi import Request
 from fastapi import status
 
 import zerg.dependencies.auth as auth_deps
+from zerg.auth.caller import Caller
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.config import get_settings
 from zerg.database import catalog_db_session
@@ -101,6 +102,19 @@ def get_current_browser_user(request: Request, db=Depends(auth_deps._auth_compat
     return user
 
 
+def get_current_browser_caller(user=Depends(get_current_browser_user)) -> Caller:
+    """Return the browser principal through the shared owner-scoped boundary."""
+
+    try:
+        owner_id = int(user.id)
+    except (AttributeError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated browser identity has no valid owner id",
+        ) from None
+    return Caller(owner_id=owner_id, principal=user)
+
+
 def _get_current_browser_user_short_lived(request: Request):
     """Authenticate a browser stream without pinning a DB connection.
 
@@ -127,6 +141,12 @@ def get_current_browser_user_id_short_lived(request: Request) -> int:
     return int(user.id)
 
 
+def get_current_browser_caller_short_lived(
+    owner_id: int = Depends(get_current_browser_user_id_short_lived),
+) -> Caller:
+    return Caller(owner_id=int(owner_id))
+
+
 def require_current_browser_user_short_lived(request: Request) -> None:
     _get_current_browser_user_short_lived(request)
 
@@ -139,6 +159,8 @@ def get_optional_browser_user(request: Request, db=Depends(auth_deps._auth_compa
 __all__ = [
     "_get_browser_session_user",
     "get_current_browser_user",
+    "get_current_browser_caller",
+    "get_current_browser_caller_short_lived",
     "get_current_browser_user_id_short_lived",
     "get_optional_browser_user",
     "require_current_browser_user_short_lived",

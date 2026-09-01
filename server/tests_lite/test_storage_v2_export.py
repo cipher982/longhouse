@@ -114,7 +114,7 @@ async def test_workspace_never_falls_back_to_legacy_sqlite(monkeypatch):
             cursor=None,
             shared_by=None,
             share_token=None,
-            current_user=SimpleNamespace(id=7),
+            current_user=SimpleNamespace(owner_id=7),
         )
 
     assert error.value.status_code == 404

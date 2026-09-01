@@ -42,11 +42,12 @@ from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.auth.caller import caller_principal
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.agents import AgentSession
 from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
 from zerg.services.apns_sender import clear_live_activity_push_stamp
@@ -132,13 +133,14 @@ async def upsert_presence(
     payload: PresenceIn,
     request: Request,
     db: Session | None = Depends(_presence_db_dependency),
-    _token: object = Depends(verify_agents_token),
+    _token: object = Depends(verify_agents_caller),
 ) -> Response:
     """Upsert real-time presence state for a session."""
     if payload.state not in VALID_STATES:
         # Silently ignore unknown states rather than erroring hooks
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    if isinstance(_token, ManagedSessionToken) and payload.session_id != _token.session_id:
+    managed_principal = caller_principal(_token)
+    if isinstance(managed_principal, ManagedSessionToken) and payload.session_id != managed_principal.session_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Managed-session hook scope does not match session",

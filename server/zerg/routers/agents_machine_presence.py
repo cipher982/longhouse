@@ -14,9 +14,10 @@ from pydantic import Field
 from pydantic import field_validator
 from sqlalchemy.orm import Session
 
+from zerg.auth.caller import caller_principal
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.utils.time import UTCBaseModel
@@ -80,6 +81,7 @@ class MachinePresencePolicyResponse(UTCBaseModel):
 
 
 def _machine_presence_identity(db: Session | None, token: DeviceToken | None) -> tuple[int, str]:
+    token = caller_principal(token)
     if token is not None and not isinstance(token, DeviceToken):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -101,7 +103,7 @@ def _machine_presence_identity(db: Session | None, token: DeviceToken | None) ->
 @router.get("/machine-presence/policy", response_model=MachinePresencePolicyResponse)
 async def get_machine_presence_policy(
     db: Session | None = Depends(_machine_presence_db_dependency),
-    token: DeviceToken | None = Depends(verify_agents_token),
+    token: DeviceToken | None = Depends(verify_agents_caller),
 ) -> MachinePresencePolicyResponse:
     owner_id, _device_id = _machine_presence_identity(db, token)
     result = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})
@@ -112,7 +114,7 @@ async def get_machine_presence_policy(
 async def update_machine_presence(
     payload: MachinePresenceIn,
     db: Session | None = Depends(_machine_presence_db_dependency),
-    token: DeviceToken | None = Depends(verify_agents_token),
+    token: DeviceToken | None = Depends(verify_agents_caller),
 ) -> MachinePresenceResponse:
     owner_id, device_id = _machine_presence_identity(db, token)
     policy = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})

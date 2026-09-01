@@ -8,6 +8,7 @@ from fastapi import Query
 from fastapi import Request
 from fastapi import status
 
+from zerg.auth.caller import Caller
 from zerg.config import get_settings
 from zerg.dependencies.auth import _auth_compat_db
 from zerg.dependencies.auth import _get_strategy
@@ -37,6 +38,22 @@ def get_current_browser_route_user(
     return get_current_browser_user(request, db)
 
 
+def get_current_browser_route_caller(
+    user=Depends(get_current_browser_route_user),
+) -> Caller:
+    """Resolve the SSE-capable browser credential to the shared caller type."""
+
+    try:
+        owner_id = int(user.id)
+    except (AttributeError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated browser identity has no valid owner id",
+        ) from None
+    return Caller(owner_id=owner_id, principal=user)
+
+
 __all__ = [
+    "get_current_browser_route_caller",
     "get_current_browser_route_user",
 ]

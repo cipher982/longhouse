@@ -16,7 +16,6 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from time import monotonic
-from types import SimpleNamespace
 from typing import Literal
 from typing import Optional
 from uuid import UUID
@@ -31,11 +30,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 from sse_starlette.sse import EventSourceResponse
 
+from zerg.auth.caller import Caller
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.browser_auth import get_current_browser_user
-from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
+from zerg.dependencies.browser_auth import get_current_browser_caller
+from zerg.dependencies.browser_auth import get_current_browser_caller_short_lived
 from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
@@ -94,7 +94,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/timeline",
     tags=["timeline"],
-    dependencies=[Depends(get_current_browser_user), Depends(require_single_tenant)],
+    dependencies=[Depends(get_current_browser_caller), Depends(require_single_tenant)],
 )
 timeline_stream_router = APIRouter(
     prefix="/timeline",
@@ -192,22 +192,16 @@ async def _search_storage_v2_timeline(
     return TimelineSessionsListResponse(sessions=page, total=len(cards), has_real_sessions=bool(cards))
 
 
-def _browser_owner_id(user) -> int:
-    raw_owner_id = getattr(user, "id", None)
-    if raw_owner_id is None:
-        raise HTTPException(status_code=401, detail="Authenticated browser identity has no owner id")
-    try:
-        return int(raw_owner_id)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=401, detail="Authenticated browser identity has an invalid owner id") from None
+def _browser_owner_id(caller: Caller) -> int:
+    return caller.owner_id
 
 
 @router.get("/machines", response_model=MachineDirectoryResponse)
 def list_browser_machines(
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> MachineDirectoryResponse:
     """Browser machines directory. Same body shape as ``/api/agents/machines``."""
-    owner_id = int(current_user.id)
+    owner_id = int(current_user.owner_id)
     try:
         enrollments = enrolled_machines(owner_id).get("enrollments", [])
     except CatalogReadError as exc:
@@ -221,10 +215,10 @@ def list_browser_machine_workspaces(
     device_id: str,
     limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
     days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> WorkspaceSuggestionsResponse:
     """Browser launch-picker workspaces. Same body shape as ``/api/agents/machines/{id}/workspaces``."""
-    owner_id = int(current_user.id)
+    owner_id = int(current_user.owner_id)
     try:
         payload = machine_workspaces(
             owner_id=owner_id,
@@ -251,7 +245,7 @@ async def semantic_search_timeline_sessions(
     days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     timing = ServerTimingRecorder(surface="search")
     if context_mode != "forensic":
@@ -264,7 +258,7 @@ async def semantic_search_timeline_sessions(
         )
     with timing.span("search_query"):
         sessions = await _search_router.search_storage_v2_semantic_sessions(
-            owner_id=int(current_user.id),
+            owner_id=int(current_user.owner_id),
             query=query,
             project=project,
             provider=provider,
@@ -285,7 +279,7 @@ async def recall_timeline_context(
     before: int = Query(2, ge=0, le=5),
     after: int = Query(2, ge=0, le=5),
     max_content_bytes: int = Query(1_200, ge=200, le=4_000),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> RecallContextResponse:
     return await _search_router.recall_context(
         request=request,
@@ -293,7 +287,7 @@ async def recall_timeline_context(
         before=before,
         after=after,
         max_content_bytes=max_content_bytes,
-        _auth=SimpleNamespace(owner_id=current_user.id),
+        _auth=current_user,
         _single=None,
     )
 
@@ -312,7 +306,7 @@ async def recall_timeline_sessions(
         "auto",
         description="Recall lane: auto fuses lexical and semantic; lexical and semantic run one lane only.",
     ),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     # The browser is a presentation client of the canonical machine surface.
     # Keeping a second lexical-only implementation here made the web panel's
@@ -330,7 +324,7 @@ async def recall_timeline_sessions(
         max_results=max_results,
         include_automation=False,
         mode=mode,
-        _auth=SimpleNamespace(owner_id=current_user.id),
+        _auth=current_user,
         _single=None,
     )
 
@@ -361,7 +355,7 @@ async def list_timeline_sessions(
     ),
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     effective_limit = min(limit, 100)
     response.headers["X-Limit-Cap"] = "100"
@@ -386,14 +380,14 @@ async def list_timeline_sessions(
         with timing.span("catalog_search" if query else "catalog_list"):
             if query:
                 result = await _search_storage_v2_timeline(
-                    owner_id=int(current_user.id),
+                    owner_id=int(current_user.owner_id),
                     params=params,
                 )
             else:
                 result = await asyncio.to_thread(
                     list_live_catalog_timeline,
                     params=params,
-                    owner_id=int(current_user.id),
+                    owner_id=int(current_user.owner_id),
                 )
         timing.apply(response)
         return result
@@ -436,7 +430,7 @@ async def stream_timeline_sessions(
         False,
         description="When true, subscribe without immediately replaying the already-fresh default timeline snapshot.",
     ),
-    current_user_id: int = Depends(get_current_browser_user_id_short_lived),
+    caller: Caller = Depends(get_current_browser_caller_short_lived),
 ) -> EventSourceResponse:
     try:
         validate_timeline_stream_contract(query=query, sort=sort, mode=mode)
@@ -465,7 +459,7 @@ async def stream_timeline_sessions(
         request,
         params=params,
         skip_initial_replay=skip_initial_replay,
-        owner_id=int(current_user_id),
+        owner_id=caller.owner_id,
     )
     sse_response = EventSourceResponse(stream)
     sse_response.headers["X-Limit-Cap"] = "100"
@@ -492,7 +486,7 @@ async def list_timeline_session_summaries(
         False,
         description="Include Hatch automation sessions in otherwise default-hidden summaries",
     ),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     effective_limit = min(limit, 100)
     response.headers["X-Limit-Cap"] = "100"
@@ -513,14 +507,14 @@ async def list_timeline_session_summaries(
         context_mode="forensic",
     )
     if query:
-        searched = await _search_storage_v2_timeline(owner_id=int(current_user.id), params=params)
+        searched = await _search_storage_v2_timeline(owner_id=int(current_user.owner_id), params=params)
         listed_sessions = [card.head for card in searched.sessions]
         listed_total = searched.total
     else:
         listed = await asyncio.to_thread(
             list_live_catalog_sessions,
             params=params,
-            owner_id=int(current_user.id),
+            owner_id=int(current_user.owner_id),
         )
         listed_sessions = listed.sessions
         listed_total = listed.total
@@ -551,11 +545,11 @@ async def list_timeline_session_summaries(
 async def preview_timeline_session(
     session_id: UUID,
     last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     workspace = await build_storage_v2_workspace(
         session_id=session_id,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         branch_mode="head",
         limit=last_n,
     )
@@ -578,7 +572,7 @@ async def preview_timeline_session(
 async def get_timeline_filters(
     response: Response,
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     response.headers["Cache-Control"] = "private, max-age=60"
 
@@ -622,13 +616,13 @@ async def set_timeline_session_action(
     session_id: UUID,
     body: SessionActionRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.set_session_action(
         session_id=session_id,
         body=body,
         db=db,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         _single=None,
     )
 
@@ -638,13 +632,13 @@ async def mark_timeline_session_read(
     session_id: UUID,
     body: SessionReadRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.mark_session_read(
         session_id=session_id,
         body=body,
         db=db,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         _single=None,
     )
 
@@ -654,13 +648,13 @@ async def set_timeline_session_loop_mode(
     session_id: UUID,
     body: SessionLoopModeRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.set_session_loop_mode(
         session_id=session_id,
         body=body,
         db=db,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         _single=None,
     )
 
@@ -670,13 +664,13 @@ async def set_timeline_session_notification_watch(
     session_id: UUID,
     body: SessionNotificationWatchRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.set_session_notification_watch(
         session_id=session_id,
         body=body,
         db=db,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         _single=None,
     )
 
@@ -686,13 +680,13 @@ async def set_timeline_session_visibility(
     session_id: UUID,
     body: SessionTimelineVisibilityRequest,
     db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.set_session_timeline_visibility(
         session_id=session_id,
         body=body,
         db=db,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         _single=None,
     )
 
@@ -702,7 +696,7 @@ def get_timeline_session(
     session_id: UUID,
     response: Response,
     db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     # Deliberately not the machine route: that one narrows the payload to the
     # archival projection an agent needs, and the browser needs the control and
@@ -721,7 +715,7 @@ def create_timeline_session_resume_intent(
     session_id: UUID,
     response: Response,
     db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> SessionResumeIntentResponse:
     session = _sessions_router.session_detail_payload(
         session_id=session_id,
@@ -737,7 +731,7 @@ def create_timeline_session_resume_intent(
 async def get_timeline_session_thread(
     session_id: UUID,
     response: Response,
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     owner_id = _browser_owner_id(current_user)
     session, _provider_alias, commit_seq = read_live_catalog_session(
@@ -773,7 +767,7 @@ async def get_timeline_session_turns(
 @router.get("/sessions/{session_id}/workflows")
 def get_timeline_session_workflow_runs(
     session_id: UUID,
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> dict:
     """List dynamic-workflow runs whose subagent threads live under this session.
 
@@ -787,7 +781,7 @@ def get_timeline_session_workflow_runs(
 @router.get("/sessions/{session_id}/subagents")
 async def get_timeline_session_subagents(
     session_id: UUID,
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> dict:
     """Workers this session spawned (browser-auth mirror of the machine route).
 
@@ -814,7 +808,7 @@ async def get_timeline_session_subagents(
 @router.get("/sessions/{session_id}/graph")
 def get_timeline_session_graph(
     session_id: UUID,
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> dict:
     return {"session_id": str(session_id), "nodes": [], "edges": []}
 
@@ -822,7 +816,7 @@ def get_timeline_session_graph(
 @router.get("/workflows/{workflow_run_id}")
 def get_timeline_workflow_run(
     workflow_run_id: str,
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> dict:
     """Return one dynamic-workflow run's subagent threads (browser-auth mirror of
     ``/agents/workflows/{run_id}``)."""
@@ -854,12 +848,12 @@ async def get_timeline_session_events(
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     timing = ServerTimingRecorder(surface="session_detail")
     storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
@@ -904,11 +898,11 @@ async def get_timeline_session_projection(
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
@@ -939,7 +933,7 @@ async def get_timeline_session_workspace(
         None,
         description="Signed share token. When valid, this supersedes unsigned shared_by attribution.",
     ),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     # ``shared_by``/``share_token`` are accepted and currently unused: sharer
     # attribution only ever resolved inside the deleted archive branch, and the
@@ -950,7 +944,7 @@ async def get_timeline_session_workspace(
     response.headers["Cache-Control"] = "no-store"
     storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
@@ -978,13 +972,13 @@ async def get_timeline_session_mobile_tail(
         description="Previous snapshot marker for older-page drift detection",
     ),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ):
     timing = ServerTimingRecorder(surface="session_detail")
     response.headers["Cache-Control"] = "no-store"
     storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         branch_mode=branch_mode,
         limit=limit,
         cursor=cursor,
@@ -1005,11 +999,11 @@ async def get_timeline_session_mobile_tail(
 async def export_timeline_session(
     session_id: UUID,
     branch_mode: str = Query("head", description="Branch projection mode for export: head|all"),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> Response:
     return await build_storage_v2_raw_export(
         session_id=session_id,
-        owner_id=int(current_user.id),
+        owner_id=int(current_user.owner_id),
         branch_mode=branch_mode,
     )
 
@@ -1529,7 +1523,7 @@ async def stream_session_workspace(
         None,
         description="Fingerprint from the client's rendered workspace snapshot; when stale, skip_initial is ignored.",
     ),
-    current_user_id: int = Depends(get_current_browser_user_id_short_lived),
+    caller: Caller = Depends(get_current_browser_caller_short_lived),
 ) -> EventSourceResponse:
     """SSE stream that emits workspace_changed when the session's data mutates.
 
@@ -1555,7 +1549,7 @@ async def stream_session_workspace(
         owned_session, _provider_alias, _commit_seq = await asyncio.to_thread(
             read_live_catalog_session,
             session_id,
-            owner_id=current_user_id,
+            owner_id=caller.owner_id,
         )
     except CatalogReadError as exc:
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
@@ -1568,6 +1562,6 @@ async def stream_session_workspace(
             skip_initial=skip_initial,
             last_event_id=last_event_id,
             known_workspace_fingerprint=known_workspace_fingerprint,
-            owner_id=current_user_id,
+            owner_id=caller.owner_id,
         )
     )

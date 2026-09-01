@@ -10,10 +10,12 @@ import time
 from collections import deque
 from datetime import datetime
 
+from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 
+from zerg.auth.caller import Caller
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.auth.managed_session_tokens import validate_managed_session_token
 from zerg.config import get_settings
@@ -224,6 +226,35 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
     )
 
 
+def verify_agents_caller(principal=Depends(verify_agents_token)) -> Caller:
+    """Authenticate one machine caller and bind it to a required owner."""
+
+    owner_id = getattr(principal, "owner_id", None)
+    if owner_id is None:
+        from zerg.services.catalog_read_gateway import CatalogReadError
+        from zerg.services.catalog_read_gateway import active_owner_id
+
+        try:
+            owner_id = active_owner_id()
+        except CatalogReadError:
+            # Isolated route tests intentionally use in-memory archive stores
+            # with no catalogd process. Their fixed single-tenant identity is
+            # owner 1; real Runtime Hosts still fail closed below.
+            if get_settings().testing:
+                owner_id = 1
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="The live catalog is temporarily unavailable",
+                ) from None
+    if owner_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No Longhouse user is configured",
+        )
+    return Caller(owner_id=int(owner_id), principal=principal)
+
+
 def require_single_tenant() -> None:
     """Enforce single-tenant mode for agents endpoints."""
     settings = get_settings()
@@ -240,5 +271,6 @@ def require_single_tenant() -> None:
 
 __all__ = [
     "require_single_tenant",
+    "verify_agents_caller",
     "verify_agents_token",
 ]

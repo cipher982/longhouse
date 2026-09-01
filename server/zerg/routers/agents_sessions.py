@@ -23,13 +23,14 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from zerg.auth.caller import caller_principal
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
 from zerg.routers.agents_search import read_search_coverage
 from zerg.routers.agents_search import search_storage_v2_semantic_sessions
@@ -162,7 +163,7 @@ def _no_viewer_owner_id() -> int | None:
 
 def _session_preferences_owner_id(
     db: Session | None = Depends(session_preferences_db_dependency),
-    auth: object = Depends(verify_agents_token),
+    auth: object = Depends(verify_agents_caller),
 ) -> int:
     """Owner every preference write is scoped to.
 
@@ -195,7 +196,7 @@ async def stream_agent_sessions(
     days_back: int = Query(14, ge=1, le=90),
     limit: int = Query(40, ge=1, le=100),
     skip_initial_replay: bool = Query(False),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> EventSourceResponse:
     """Stream the canonical session projection to machine clients.
@@ -239,7 +240,7 @@ async def export_worklog_day(
     timezone_name: str = Query("America/New_York", alias="timezone", description="IANA timezone for day boundaries"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
     db: Session | None = Depends(session_detail_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> WorklogDayExportResponse:
     """Return one day of session messages for machine worklog consumers."""
@@ -313,6 +314,7 @@ def _resolve_directed_input_actor(
     request: Request,
     token: object | None,
 ):
+    token = caller_principal(token)
     if not isinstance(token, ManagedSessionToken) or token.scope != "coordination":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -406,7 +408,7 @@ async def list_sessions(
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session | None = Depends(session_detail_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineSessionsListResponse:
     """List sessions with optional filters."""
@@ -554,7 +556,7 @@ def list_archive_manifest(
     limit: int = Query(100, ge=1, le=200, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session | None = Depends(session_detail_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> SessionArchiveManifestResponse:
     """List sessions for archive sync/backfill without product-surface pagination limits.
@@ -612,15 +614,16 @@ def get_startup_context(
         description="Days to look back for recent project activity",
     ),
     db: Session = Depends(get_db),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> StartupContextResponse:
     """Return a small project-scoped continuity block for session-start hooks."""
 
-    if isinstance(_auth, ManagedSessionToken):
+    managed_principal = caller_principal(_auth)
+    if isinstance(managed_principal, ManagedSessionToken):
         # Absence is not a match: a token with no project must not satisfy the
         # bound, the same way it must not on /agents/sessions.
-        token_project = str(_auth.project or "").strip()
+        token_project = str(managed_principal.project or "").strip()
         if not token_project or token_project != str(project or "").strip():
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -669,7 +672,7 @@ async def wall_query(
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     include_automation: bool = Query(False, description="Include Hatch automation sessions in wall results"),
     db: Session | None = Depends(coordination_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> WallResponse:
     """Wall query: raw signal metadata for sessions on a repo.
@@ -836,7 +839,7 @@ async def session_tail(
             "_content_truncated and _content_full_chars so the caller can re-request it."
         ),
     ),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict:
     """Return the last N events from a session for cross-session reading.
@@ -917,7 +920,7 @@ async def session_tail(
 async def create_console_session(
     body: ConsoleSessionCreate,
     db: Session | None = Depends(_console_write_db),
-    auth: object = Depends(verify_agents_token),
+    auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ConsoleSessionCreateResponse:
     """Create one idle Console thread; no provider process starts here."""
@@ -964,7 +967,7 @@ async def create_console_turn(
     session_id: UUID,
     body: ConsoleTurnCreate,
     db: Session | None = Depends(_console_write_db),
-    auth: object = Depends(verify_agents_token),
+    auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ConsoleTurnCreateResponse:
     """Accept one normal Console message and start or queue its turn."""
@@ -1119,7 +1122,7 @@ def get_session(
     session_id: UUID,
     response: Response,
     db: Session | None = Depends(session_detail_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
     owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> MachineSessionResponse:
@@ -1163,7 +1166,7 @@ class SessionSubagentsResponse(UTCBaseModel):
 @router.get("/sessions/{session_id}/subagents", response_model=SessionSubagentsResponse)
 async def list_session_subagents(
     session_id: UUID,
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
     owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> SessionSubagentsResponse:
@@ -1207,7 +1210,7 @@ def create_session_resume_intent(
     session_id: UUID,
     response: Response,
     db: Session | None = Depends(session_detail_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
     owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> SessionResumeIntentResponse:
@@ -1278,7 +1281,7 @@ def session_detail_payload(
 async def get_session_thread(
     session_id: UUID,
     response: Response,
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
     owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> SessionThreadResponse:
@@ -1316,7 +1319,7 @@ async def get_session_events(
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next page"),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> EventsListResponse:
     """Get events for a session."""
@@ -1393,7 +1396,7 @@ async def get_session_projection(
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next page"),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> SessionProjectionResponse:
     """Get the stitched lineage-path projection for a focused session."""
@@ -1428,7 +1431,7 @@ async def get_session_workspace(
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
-    _auth: DeviceToken | ManagedSessionToken | None = Depends(verify_agents_token),
+    _auth: DeviceToken | ManagedSessionToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> SessionWorkspaceResponse | dict[str, object]:
     """Get the focused session, its thread, and the first projection page in one round trip."""
@@ -1459,7 +1462,7 @@ async def export_session(
     session_id: UUID,
     branch_mode: str = Query("head", description="Branch projection mode for export: head|all"),
     db: Session | None = Depends(session_detail_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> Response:
     """Export session as JSONL for Claude Code --resume."""
@@ -1490,7 +1493,7 @@ async def export_session_archive_bundle(
     session_id: UUID,
     branch_mode: str = Query("head", description="Archive bundle branch projection mode. v1 supports head only."),
     db: Session | None = Depends(session_detail_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> SessionArchiveBundleResponse:
     """Export a versioned archive bundle for the current session head."""
@@ -1556,12 +1559,12 @@ class ManagedLocalLaunchOutcomeRequest(UTCBaseModel):
 async def record_managed_local_launch_outcome(
     session_id: UUID,
     body: ManagedLocalLaunchOutcomeRequest,
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, str | bool | None]:
     """Confirm provider readiness or abort a registered launch, exactly once."""
 
-    if isinstance(_auth, ManagedSessionToken):
+    if isinstance(caller_principal(_auth), ManagedSessionToken):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A device token is required")
     device_id = str(getattr(_auth, "device_id", "") or "").strip()
     if not device_id:
@@ -1616,12 +1619,12 @@ async def record_managed_local_launch_outcome(
 @router.post("/sessions/{session_id}/coordination-token")
 async def issue_session_coordination_token(
     session_id: UUID,
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, str]:
     """Issue fresh adapter-only authority when a managed session is resumed."""
 
-    if isinstance(_auth, ManagedSessionToken):
+    if isinstance(caller_principal(_auth), ManagedSessionToken):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A device token is required")
     from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
     from zerg.auth.managed_session_tokens import issue_managed_session_token
@@ -1859,7 +1862,7 @@ async def create_directed_input(
     request: Request,
     payload: DirectedInputCreate,
     db: Session | None = Depends(coordination_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
     """Persist attributed input for another session, then deliver when safe."""
@@ -1886,7 +1889,7 @@ async def list_directed_inputs(
     after_id: int = Query(0, ge=0, description="Return inputs after this stable id cursor"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     db: Session | None = Depends(coordination_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
     """Recover durable directed input for the authenticated current session."""
@@ -1919,7 +1922,7 @@ async def reply_to_directed_input(
     request: Request,
     payload: DirectedInputReply,
     db: Session | None = Depends(coordination_db_dependency),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
     """Reply to an inbound directed input without copying a session id."""

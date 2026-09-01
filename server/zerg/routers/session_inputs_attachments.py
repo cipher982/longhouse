@@ -30,16 +30,16 @@ from fastapi import status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from zerg.auth.caller import Caller
 from zerg.config import get_settings
 from zerg.config import resolve_cors_origins
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
 from zerg.metrics import session_input_attachment_blob_fetches_total
 from zerg.metrics import session_input_attachment_bytes
 from zerg.metrics import session_input_attachments_total
 from zerg.models.device_token import DeviceToken
-from zerg.models.user import User
 from zerg.routers.session_chat import QueuedInputSummary
 from zerg.routers.session_chat import SessionInputResponse
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
@@ -194,7 +194,7 @@ async def create_session_input_with_attachments(
     attachments: List[UploadFile] = File(...),
     user_agent: str | None = Header(default=None),
     db: Session | None = Depends(_attachment_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
+    current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> SessionInputResponse:
     """Send a user input with one or more image attachments.
 
@@ -424,7 +424,7 @@ async def fetch_attachment_blob(
     input_id: str,
     attachment_id: str,
     db: Session | None = Depends(_attachment_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> StreamingResponse:
     """Stream a single attachment blob to the engine.

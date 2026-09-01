@@ -32,12 +32,13 @@ from pydantic import field_validator
 from pydantic import model_validator
 from sqlalchemy.orm import Session
 
+from zerg.auth.caller import caller_principal
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_requests_total
@@ -776,13 +777,14 @@ async def ingest_heartbeat(
     payload: HeartbeatIn,
     request: Request,
     db: Session | None = Depends(_heartbeat_db_dependency),
-    _token: DeviceToken | None = Depends(verify_agents_token),
+    _token: DeviceToken | None = Depends(verify_agents_caller),
 ) -> Response:
     """Accept a heartbeat from an engine daemon.
 
     Upserts (inserts) a new heartbeat row per device. History is retained
     for 30 days; older rows are cleaned up by the stale agent detection job.
     """
+    _token = caller_principal(_token)
     tracer = get_tracer(__name__)
     auth_kind_label = "device_token" if _token is not None else "none"
     request_status_label = "internal_error"

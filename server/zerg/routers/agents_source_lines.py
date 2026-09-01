@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.services.archive_transcript import load_session_source_line_bytes
@@ -103,7 +103,7 @@ def _normalized_claim(item: SourceLineClaimItem) -> tuple[SourceLineClaimRespons
 @router.post(
     "/claims",
     response_model=SourceLineClaimsResponse,
-    dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
+    dependencies=[Depends(verify_agents_caller), Depends(require_single_tenant)],
 )
 async def create_source_line_claims(
     request: SourceLineClaimsRequest,

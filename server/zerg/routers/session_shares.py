@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.browser_auth import get_current_browser_user
+from zerg.dependencies.browser_auth import get_current_browser_caller
 from zerg.services.session_shares import DEFAULT_SHARE_TTL_DAYS
 from zerg.services.session_shares import SessionShareError
 from zerg.services.session_shares import SessionShareNotFound
@@ -160,7 +160,7 @@ def create_timeline_session_share(
     session_id: UUID,
     body: CreateSessionShareRequest | None = None,
     db: Session | None = Depends(_share_store_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> SessionShareResponse:
     body = body or CreateSessionShareRequest()
     # Ownership first, on both backends, so no deployment can mint a link for a
@@ -195,7 +195,7 @@ def create_timeline_session_share(
 def revoke_timeline_session_share(
     share_id: int,
     db: Session | None = Depends(_share_store_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> SessionShareResolveResponse:
     db = _require_share_store(db)
     try:
@@ -215,7 +215,7 @@ def revoke_timeline_session_share(
 def resolve_timeline_session_share(
     token: str,
     db: Session | None = Depends(_share_store_db_dependency),
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> SessionShareResolveResponse:
     db = _require_share_store(db)
     try:

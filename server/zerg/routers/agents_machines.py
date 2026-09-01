@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
 from zerg.schemas.machines import ArchiveBacklogControlRequest
 from zerg.schemas.machines import ArchiveBacklogControlResponse
@@ -86,7 +86,7 @@ def archive_backlog_control_command_type(mode: str) -> str:
 @router.get("", response_model=MachineDirectoryResponse)
 def list_machines(
     db: Session | None = Depends(_machine_read_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineDirectoryResponse:
     """List enrolled machines for this owner with live control-channel status."""
@@ -104,7 +104,7 @@ async def update_machine_name(
     device_id: str,
     request: MachineRenameRequest,
     db: Session | None = Depends(_machine_read_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineRenameResponse:
     """Rename one enrolled machine without changing its routing identity."""
@@ -136,7 +136,7 @@ def list_machine_health(
         description="Treat heartbeats older than this as offline",
     ),
     db: Session | None = Depends(_machine_read_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineHealthListResponse:
     try:
@@ -163,7 +163,7 @@ def list_machine_workspaces(
     limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
     days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
     db: Session | None = Depends(_machine_read_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> WorkspaceSuggestionsResponse:
     """Frecency-ranked recent workspaces for the launch picker, scoped to one machine."""
@@ -185,7 +185,7 @@ def list_machine_workspaces(
 def get_machine_archive_backlog(
     device_id: str,
     db: Session = Depends(get_db),
-    _auth: object = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ArchiveBacklogResponse:
     summaries, _total = list_machine_transport_health(
@@ -206,7 +206,7 @@ async def control_machine_archive_backlog(
     device_id: str,
     request: ArchiveBacklogControlRequest,
     db: Session | None = Depends(_machine_read_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ArchiveBacklogControlResponse:
     owner_id = _request_owner_id(db, device_token)
@@ -248,7 +248,7 @@ async def control_machine_archive_backlog(
 def get_machine_control_operation(
     operation_id: str,
     db: Session | None = Depends(_machine_read_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineControlOperationResponse:
     owner_id = _request_owner_id(db, device_token)
@@ -267,7 +267,7 @@ async def run_provider_live_proof(
     device_id: str,
     request: ProviderLiveProofRequest,
     db: Session | None = Depends(_machine_read_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ProviderLiveProofAcceptedResponse:
     """Run a typed provider-live proof on a connected provider-capable machine."""

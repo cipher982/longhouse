@@ -24,7 +24,7 @@ from fastapi import status
 from pydantic import Field
 
 from zerg.dependencies.agents_auth import require_single_tenant
-from zerg.dependencies.browser_auth import get_current_browser_user
+from zerg.dependencies.browser_auth import get_current_browser_caller
 from zerg.services.data_deletion import DataDeletionUnavailable
 from zerg.services.data_deletion import SessionNotFound
 from zerg.services.data_deletion import delete_account_data
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/user-data",
     tags=["user-data"],
-    dependencies=[Depends(get_current_browser_user), Depends(require_single_tenant)],
+    dependencies=[Depends(get_current_browser_caller), Depends(require_single_tenant)],
 )
 
 _COMPLETE_DESCRIPTION = "True only when nothing was left behind. When false, `partial` names every store that still holds data."
@@ -80,7 +80,7 @@ class AccountDeletionResponse(UTCBaseModel):
 @router.delete("/sessions/{session_id}", response_model=SessionDeletionResponse)
 async def delete_user_session(
     session_id: UUID,
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> SessionDeletionResponse:
     """Delete one of the caller's sessions from every store that can be reached.
 
@@ -107,7 +107,7 @@ async def delete_user_session(
 @router.delete("/account", response_model=AccountDeletionResponse)
 async def delete_user_account_data(
     body: AccountDeletionRequest,
-    current_user=Depends(get_current_browser_user),
+    current_user=Depends(get_current_browser_caller),
 ) -> AccountDeletionResponse:
     """Delete every session of the caller's that can be reached owner-scoped."""
     if not body.confirm:
