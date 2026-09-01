@@ -33,7 +33,7 @@ on:
         type: string
 
 permissions:
-  actions: write
+  actions: read
   contents: read
   packages: read
 
@@ -269,7 +269,7 @@ jobs:
           lh_hosted_reprovision "${{ steps.instance.outputs.instance_id }}" "${{ needs.gate.outputs.runtime_image_ref }}"
 
   fast_smoke:
-    name: "Fast smoke + hosted QA dispatch"
+    name: "Fast smoke"
     runs-on: cube-deploy
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 20
@@ -301,32 +301,6 @@ jobs:
         id: fast_smoke
         run: ./scripts/qa/smoke-prod.sh --fast --no-llm
 
-      - name: Trigger hosted live QA asynchronously
-        id: hosted_live_qa_dispatch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.gate.outputs.head_sha }}
-          SOURCE_REF: ${{ needs.gate.outputs.head_branch }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          payload="$(python3 - <<'PY'
-          import json
-          import os
-
-          print(json.dumps({
-              "ref": os.environ["SOURCE_REF"],
-              "inputs": {"source_sha": os.environ["SOURCE_SHA"]},
-          }))
-          PY
-          )"
-          curl -fsS \
-            -X POST \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -d "$payload" \
-            "https://api.github.com/repos/${REPOSITORY}/actions/workflows/hosted-live-qa.yml/dispatches"
-
       - name: Summary
         if: always()
         run: |
@@ -340,7 +314,6 @@ jobs:
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
             echo "- **Demo image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
             echo "- **fast smoke:** \`${{ steps.fast_smoke.outcome || 'skipped' }}\`"
-            echo "- **hosted live QA dispatch:** \`${{ steps.hosted_live_qa_dispatch.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload live QA artifacts
@@ -378,6 +351,15 @@ jobs:
           EOF_BODY
           )" \
             --label "deploy-failure"
+
+  hosted_live_qa:
+    name: "Hosted live QA"
+    needs: [gate, fast_smoke]
+    if: github.repository == 'cipher982/longhouse'
+    uses: ./.github/workflows/hosted-live-qa.yml
+    with:
+      source_sha: ${{ needs.gate.outputs.head_sha }}
+    secrets: inherit
 
   profile-deploy:
     timeout-minutes: 30

@@ -17,7 +17,7 @@ Cuts a stable Longhouse release:
      when you run this script.
    2. Commits the versioned candidate locally and runs the full validation.
    3. Pushes the validated candidate to main.
-   4. Waits for exact-SHA CI, deploy, installer, hosted QA, and live-surface gates.
+   4. Waits for exact-SHA CI, deploy (including hosted QA), installer, and live-surface gates.
    5. Creates the GitHub release with tag VERSION (fires publish.yml + local-runtime-release.yml).
    6. Waits for both release workflows to finish. Notarization can take up to ~330m in the worst case.
    7. Verifies the release has the expected artifacts and that macOS notarization is notarized.
@@ -154,11 +154,10 @@ echo "Waiting for pre-release exact-SHA gates before creating $VERSION..."
   --required-workflow "Deploy and Verify" \
   --required-workflow "Launch Gate" \
   --required-workflow "Installer Validation Ring" \
-  --required-workflow "Hosted Live QA" \
   --skip-release \
   --skip-public-package \
   --skip-runtime-artifacts \
-  --wait --timeout 3600 --discovery-grace 1800 --poll 30
+  --wait --timeout 7200 --discovery-grace 1800 --poll 30
 
 echo "Creating GitHub release $VERSION (this triggers publish.yml + local-runtime-release.yml)..."
 PREV_TAG="$(git -C "$ROOT" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)"
