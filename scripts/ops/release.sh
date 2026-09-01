@@ -147,6 +147,24 @@ if ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
   exit 1
 fi
 
+# GitHub path filters may omit installer/launch workflows even though every
+# release requires their exact-SHA evidence. Give push-triggered runs a moment
+# to register, then dispatch only the gates GitHub did not create.
+sleep 10
+for workflow in test-install.yml launch-gate.yml; do
+  run_count="$(gh run list \
+    --repo cipher982/longhouse \
+    --workflow "$workflow" \
+    --commit "$BUMP_SHA" \
+    --limit 1 \
+    --json databaseId \
+    --jq 'length')"
+  if [[ "$run_count" == "0" ]]; then
+    echo "Dispatching missing exact-SHA workflow: $workflow"
+    gh workflow run "$workflow" --repo cipher982/longhouse --ref main
+  fi
+done
+
 echo "Waiting for pre-release exact-SHA gates before creating $VERSION..."
 "$ROOT/scripts/ops/launch-readiness.py" \
   --sha "$BUMP_SHA" \
