@@ -2097,6 +2097,63 @@ def test_claude_profile_bootstrap_selects_trust_instead_of_default_exit(
     assert FakePtyProcess.instance.sent[:2] == ["\x1b[B", "\r"]
 
 
+def test_claude_profile_bootstrap_uses_newer_prompt_after_retained_permission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePtyProcess:
+        instance: "FakePtyProcess"
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.process = SimpleNamespace(poll=lambda: None)
+            self.sent: list[str] = []
+            self.recording = Path(str(_kwargs["recording"]))
+            self.claude_permission_acceptance_sent = True
+            FakePtyProcess.instance = self
+
+        def drain(self) -> None:
+            pass
+
+        def send(self, value: str) -> None:
+            self.sent.append(value)
+
+        def wait(self, _timeout: float) -> int:
+            return 0
+
+        def kill_group(self, _signal: int) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(live_session_toolkit, "PtyProcess", FakePtyProcess)
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_terminal_text",
+        lambda _recording: (
+            "No, exit  Yes, I accept  Choose the text style"
+            if not FakePtyProcess.instance.sent
+            else "Claude Code  Welcome back!"
+        ),
+    )
+    moments = iter((0.0, 0.0, 0.1, 0.2))
+    monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: next(moments))
+    monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
+
+    result = live_session_toolkit.prepare_claude_profile(
+        binary=tmp_path / "claude",
+        home=tmp_path / "home",
+        workspace=tmp_path,
+        environment={},
+        recording=tmp_path / "recording.tty",
+        timeout=1.0,
+    )
+
+    assert result["status"] == "pass"
+    assert result["theme_attempts"] == 1
+    assert FakePtyProcess.instance.sent[:2] == ["\r", "\x04"]
+
+
 def test_codex_resume_receipts_normalize_path_values(tmp_path: Path) -> None:
     receipt = tmp_path / "receipt.json"
     write_codex_json(receipt, {"path": tmp_path / "provider"})
