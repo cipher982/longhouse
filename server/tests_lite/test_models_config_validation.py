@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import importlib
+import json
 
 import pytest
 
@@ -120,6 +121,24 @@ def test_is_capability_available_text_requires_active_provider_key(tmp_path, mon
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     assert mc.is_capability_available("text") is True
+
+
+def test_openrouter_client_enforces_provider_data_collection_deny(tmp_path, monkeypatch):
+    cfg = _write_test_config(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    mc = _reload_models_config(monkeypatch, cfg)
+
+    client, _model, provider = mc.get_llm_client_for_use_case("summarization")
+    try:
+        assert provider == mc.ModelProvider.OPENROUTER
+        assert mc.llm_request_policy_kwargs(client) == {
+            "extra_body": {"provider": {"data_collection": "deny"}}
+        }
+        first = mc.llm_request_policy_kwargs(client)
+        first["extra_body"]["provider"]["data_collection"] = "allow"
+        assert mc.llm_request_policy_kwargs(client)["extra_body"]["provider"]["data_collection"] == "deny"
+    finally:
+        asyncio.run(client.close())
 
 
 def test_is_capability_available_embedding_requires_local_contract_not_key(tmp_path, monkeypatch):

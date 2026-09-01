@@ -233,6 +233,7 @@ async def quick_summary(
         )
 
     user_prompt = _build_user_prompt(transcript)
+    from zerg.models_config import llm_request_policy_kwargs
 
     response = await client.chat.completions.create(
         model=model,
@@ -240,6 +241,7 @@ async def quick_summary(
             {"role": "system", "content": _QUICK_SYSTEM},
             {"role": "user", "content": user_prompt},
         ],
+        **llm_request_policy_kwargs(client),
     )
 
     if not response.choices:
@@ -411,6 +413,7 @@ async def incremental_summary(
     parts.append("New messages:\n" + "\n".join(msg_lines))
 
     user_prompt = "\n\n".join(parts)
+    from zerg.models_config import llm_request_policy_kwargs
 
     response = await asyncio.wait_for(
         client.chat.completions.create(
@@ -419,6 +422,7 @@ async def incremental_summary(
                 {"role": "system", "content": _INCREMENTAL_SYSTEM},
                 {"role": "user", "content": user_prompt},
             ],
+            **llm_request_policy_kwargs(client),
         ),
         timeout=timeout_seconds,
     )

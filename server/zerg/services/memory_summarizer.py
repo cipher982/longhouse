@@ -110,6 +110,7 @@ async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | Non
     user_prompt = f"Task:\\n{task}\\n\\nResult:\\n{result_text}\\n"
 
     client, model, _provider = get_llm_client_for_use_case("summarization")
+    from zerg.models_config import llm_request_policy_kwargs
 
     try:
         response = await client.chat.completions.create(
@@ -118,6 +119,7 @@ async def _generate_summary(task: str, result_text: str) -> dict[str, Any] | Non
                 {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
+            **llm_request_policy_kwargs(client),
         )
     finally:
         await client.close()

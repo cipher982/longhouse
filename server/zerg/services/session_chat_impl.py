@@ -514,9 +514,12 @@ async def _build_managed_local_draft_reply_response(
         ) from exc
 
     try:
+        from zerg.models_config import llm_request_policy_kwargs
+
         response = await client.chat.completions.create(
             model=model,
             messages=_build_draft_reply_messages(source_session=source_session, events=events, max_chars=max_chars),
+            **llm_request_policy_kwargs(client),
         )
     except Exception as exc:
         logger.exception("[%s] Draft reply generation failed for session %s", request_id, source_session.id)

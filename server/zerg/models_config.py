@@ -225,6 +225,26 @@ def build_openai_compatible_client_kwargs(
     return kwargs
 
 
+def llm_request_policy_kwargs(client: object) -> dict:
+    """Return provider policy fields bound by the shared client factory."""
+
+    extra_body = getattr(client, "_longhouse_request_extra_body", None)
+    if not isinstance(extra_body, dict):
+        return {}
+    # Each SDK call may normalize its input in place. Return a fresh nested
+    # object so one request cannot weaken the next request's routing policy.
+    provider = extra_body.get("provider")
+    return (
+        {
+            "extra_body": {
+                "provider": dict(provider),
+            }
+        }
+        if isinstance(provider, dict)
+        else {}
+    )
+
+
 # =============================================================================
 # TIER CONSTANTS - Plain strings (no lazy magic)
 # =============================================================================
@@ -443,7 +463,12 @@ def get_llm_client_for_use_case(use_case: str) -> tuple:
     from openai import AsyncOpenAI
 
     kwargs = build_openai_compatible_client_kwargs(provider=provider, api_key=api_key, base_url=base_url)
-    return AsyncOpenAI(**kwargs), model_id, provider
+    client = AsyncOpenAI(**kwargs)
+    if provider == ModelProvider.OPENROUTER:
+        client._longhouse_request_extra_body = {  # type: ignore[attr-defined]
+            "provider": {"data_collection": "deny"}
+        }
+    return client, model_id, provider
 
 
 # =============================================================================

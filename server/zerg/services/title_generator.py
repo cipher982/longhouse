@@ -114,6 +114,7 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
     transcript = "\n".join(f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in normalized)
 
     client, model, _provider = get_llm_client_for_use_case("summary_update")
+    from zerg.models_config import llm_request_policy_kwargs
 
     try:
         response = await client.chat.completions.create(
@@ -122,6 +123,7 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
                 {"role": "system", "content": TITLE_SYSTEM_PROMPT + ' Return JSON only: {"title":"..."}'},
                 {"role": "user", "content": transcript},
             ],
+            **llm_request_policy_kwargs(client),
         )
     finally:
         await client.close()
@@ -186,6 +188,8 @@ async def generate_initial_session_title(
     if not user_prompt:
         return None
 
+    from zerg.models_config import llm_request_policy_kwargs
+
     response = await asyncio.wait_for(
         client.chat.completions.create(
             model=model,
@@ -193,6 +197,7 @@ async def generate_initial_session_title(
                 {"role": "system", "content": INITIAL_SESSION_TITLE_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
+            **llm_request_policy_kwargs(client),
         ),
         timeout=timeout_seconds,
     )
