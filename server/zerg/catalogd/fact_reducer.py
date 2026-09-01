@@ -24,10 +24,14 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Connection
+from sqlalchemy import String
+from sqlalchemy import and_
 from sqlalchemy import delete
 from sqlalchemy import func
+from sqlalchemy import literal
 from sqlalchemy import select
 from sqlalchemy import tuple_
+from sqlalchemy import union_all
 from sqlalchemy import update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -477,6 +481,36 @@ def _candidate_key(fact: ReducerFact) -> tuple[str, str, str, str]:
     return fact.family, fact.subject_key, fact.source, fact.source_epoch
 
 
+def _candidate_scope(candidates: list[tuple[str, str, str, str]], *, name: str):
+    """Materialize candidate keys so SQLite performs indexed seeks.
+
+    SQLite plans a composite row-value ``IN (VALUES ...)`` as a full table
+    scan, even when the table has an exact composite index. Joining the same
+    bounded values relation makes the values the outer loop and probes that
+    index once per candidate.
+    """
+
+    rows = [
+        select(
+            literal(family, String(32)).label("family"),
+            literal(subject_key, String(1024)).label("subject_key"),
+            literal(source, String(64)).label("source"),
+            literal(source_epoch, String(255)).label("source_epoch"),
+        )
+        for family, subject_key, source, source_epoch in candidates
+    ]
+    return union_all(*rows).cte(name)
+
+
+def _candidate_scope_join(table, scope):
+    return and_(
+        table.c.family == scope.c.family,
+        table.c.subject_key == scope.c.subject_key,
+        table.c.source == scope.c.source,
+        table.c.source_epoch == scope.c.source_epoch,
+    )
+
+
 def _ordering_mode(fact: ReducerFact) -> str:
     return "sequenced" if fact.source_seq is not None else "observed_at"
 
@@ -547,7 +581,7 @@ def _prune_candidate_rows_setwise(connection: Connection, table, candidates: lis
 
     if not candidates:
         return
-    scope = tuple_(table.c.family, table.c.subject_key, table.c.source, table.c.source_epoch)
+    scope = _candidate_scope(candidates, name=f"{table.name}_prune_scope")
     ranked = (
         select(
             table.c.id,
@@ -558,7 +592,7 @@ def _prune_candidate_rows_setwise(connection: Connection, table, candidates: lis
             )
             .label("rank"),
         )
-        .where(scope.in_(candidates))
+        .select_from(table.join(scope, _candidate_scope_join(table, scope)))
         .subquery()
     )
     doomed = select(ranked.c.id).where(ranked.c.rank > keep)
@@ -722,14 +756,7 @@ def reduce_fact_batch_setwise(
         )
 
     candidate_list = sorted(candidates)
-    receipt_scope = tuple_(receipts.c.family, receipts.c.subject_key, receipts.c.source, receipts.c.source_epoch)
-    head_scope = tuple_(heads.c.family, heads.c.subject_key, heads.c.source, heads.c.source_epoch)
-    conflict_scope = tuple_(
-        conflict_table.c.family,
-        conflict_table.c.subject_key,
-        conflict_table.c.source,
-        conflict_table.c.source_epoch,
-    )
+    candidate_scope = _candidate_scope(candidate_list, name="reducer_candidate_scope")
 
     # Three reads for the whole batch, replacing three reads per fact.
     dedupe_index: dict[tuple[str, str, str, str], dict[str, str]] = {}
@@ -743,14 +770,16 @@ def reduce_fact_batch_setwise(
             receipts.c.dedupe_key,
             receipts.c.position_key,
             receipts.c.evidence_hash,
-        ).where(receipt_scope.in_(candidate_list))
+        ).select_from(receipts.join(candidate_scope, _candidate_scope_join(receipts, candidate_scope)))
     ).mappings():
         key = (row["family"], row["subject_key"], row["source"], row["source_epoch"])
         dedupe_index.setdefault(key, {})[str(row["dedupe_key"])] = str(row["evidence_hash"])
         position_index.setdefault(key, {})[str(row["position_key"])] = str(row["evidence_hash"])
 
     head_index: dict[tuple[str, str, str, str], dict[str, Any]] = {}
-    for row in connection.execute(select(heads).where(head_scope.in_(candidate_list))).mappings():
+    for row in connection.execute(
+        select(heads).select_from(heads.join(candidate_scope, _candidate_scope_join(heads, candidate_scope)))
+    ).mappings():
         key = (row["family"], row["subject_key"], row["source"], row["source_epoch"])
         head_index[key] = {
             "ordering_mode": str(row["ordering_mode"]),
@@ -768,7 +797,7 @@ def reduce_fact_batch_setwise(
             conflict_table.c.source_epoch,
             conflict_table.c.position_key,
             conflict_table.c.incoming_hash,
-        ).where(conflict_scope.in_(candidate_list))
+        ).select_from(conflict_table.join(candidate_scope, _candidate_scope_join(conflict_table, candidate_scope)))
     ):
         known_conflicts.add(((row[0], row[1], row[2], row[3]), str(row[4]), str(row[5])))
 

@@ -18,6 +18,8 @@ from __future__ import annotations
 import random
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy import select
 
 from tests_lite._fact_reducer_oracle import BASE_TIME
 from tests_lite._fact_reducer_oracle import coverage_of
@@ -26,8 +28,30 @@ from tests_lite._fact_reducer_oracle import random_batch
 from tests_lite._fact_reducer_oracle import reference_reduce
 from tests_lite._fact_reducer_oracle import run_scenario
 from tests_lite._fact_reducer_oracle import setwise_reduce
+from zerg.catalogd.fact_reducer import _candidate_scope
+from zerg.catalogd.fact_reducer import _candidate_scope_join
+from zerg.catalogd.models import CatalogBase
+from zerg.catalogd.models import FactReceipt
 
 CANDIDATE_REDUCERS = [setwise_reduce]
+
+
+def test_candidate_scope_uses_composite_index_instead_of_scanning_receipts():
+    engine = create_engine("sqlite://")
+    CatalogBase.metadata.create_all(engine)
+    receipts = FactReceipt.__table__
+    scope = _candidate_scope(
+        [("activity", "session:one", "engine", "epoch:one")],
+        name="query_plan_scope",
+    )
+    statement = select(receipts.c.id).select_from(receipts.join(scope, _candidate_scope_join(receipts, scope)))
+    sql = str(statement.compile(dialect=engine.dialect, compile_kwargs={"literal_binds": True}))
+
+    with engine.connect() as connection:
+        details = [row[-1] for row in connection.exec_driver_sql(f"EXPLAIN QUERY PLAN {sql}")]
+
+    assert any("SEARCH fact_receipts USING" in detail for detail in details), details
+    assert not any("SCAN fact_receipts" in detail for detail in details), details
 
 
 def assert_equivalent(tmp_path, *, name, seed_batches, batch):
