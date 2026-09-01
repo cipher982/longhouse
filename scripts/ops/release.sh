@@ -147,11 +147,11 @@ if ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
   exit 1
 fi
 
-# GitHub path filters may omit the combined launch gate even though every
-# release requires its exact-SHA evidence. Give a push-triggered run a moment
-# to register, then dispatch the gate only when GitHub did not create it.
+# GitHub path filters may omit required release gates when the final candidate
+# only changes another product surface. Give push-triggered runs a moment to
+# register, then dispatch only the exact-SHA gates GitHub did not create.
 sleep 10
-for workflow in launch-gate.yml; do
+for workflow in deploy-and-verify.yml launch-gate.yml; do
   run_count="$(gh run list \
     --repo cipher982/longhouse \
     --workflow "$workflow" \
