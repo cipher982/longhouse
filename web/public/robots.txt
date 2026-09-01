@@ -1,0 +1,16 @@
+User-agent: *
+Allow: /
+
+# The SPA catch-all answers 200 for these, but they are the signed-in app,
+# not content. Keep them out of the index.
+Disallow: /admin
+Disallow: /health
+Disallow: /observability
+Disallow: /profile
+Disallow: /runners
+Disallow: /sessions
+Disallow: /settings
+Disallow: /timeline
+Disallow: /landing
+
+Sitemap: https://longhouse.ai/sitemap.xml

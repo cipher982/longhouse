@@ -99,13 +99,7 @@ export default [
   },
   {
     files: ["src/pages/*Page.tsx"],
-    ignores: [
-      "src/pages/ChatPage.tsx",
-      "src/pages/LoginPage.tsx",
-      "src/pages/OikosChatPage.tsx",
-      "src/pages/SessionsPage.tsx",
-      "src/pages/SwarmOpsPage.tsx",
-    ],
+    ignores: ["src/pages/LoginPage.tsx", "src/pages/SessionsPage.tsx"],
     rules: {
       "no-restricted-imports": [
         "error",

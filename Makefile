@@ -827,7 +827,7 @@ validate-ws: ## @internal WebSocket contract check
 
 validate-sdk: ## @internal OpenAPI/SDK drift check
 	@$(MAKE) generate-sdk >/dev/null
-	@if ! git diff --quiet -- openapi.json web/src/generated/openapi-types.ts ios/Sources/Shared/Generated/SessionAPI.generated.swift; then \
+	@if ! git diff --quiet -- web/src/generated/openapi-types.ts ios/Sources/Shared/Generated/SessionAPI.generated.swift; then \
 		echo "OpenAPI/SDK out of sync — run 'make generate-sdk'"; \
 		exit 1; \
 	fi
