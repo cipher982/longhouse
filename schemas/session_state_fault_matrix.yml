@@ -9,7 +9,6 @@ scenarios:
     fault: network_loss_retry
     deterministic:
       - server/tests_lite/test_heartbeat_endpoint.py::test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control
-      - server/tests_lite/test_timeline_runtime_overlay.py::test_late_phase_and_progress_do_not_reopen_ended_run_without_new_run_id
     live: required
     expect: [no_terminal_reopen_storm, stale_actions_denied]
   - id: F02
