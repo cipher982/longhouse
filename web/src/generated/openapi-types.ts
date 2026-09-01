@@ -2385,11 +2385,7 @@ export interface paths {
         put?: never;
         /**
          * Ingest Session
-         * @description Reject v1 transcript ingest.
-         *
-         *     A Runtime Host accepts transcript ingest only through storage-v2; shippers
-         *     still calling this route are told to upgrade rather than silently writing
-         *     to the archive.
+         * @description Require storage-v2 rather than retaining a second transcript writer.
          */
         post: operations["ingest_session_agents_ingest_post"];
         delete?: never;
