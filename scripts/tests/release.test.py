@@ -44,7 +44,8 @@ def test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha() -> 
     readiness = SOURCE.index('echo "Waiting for pre-release exact-SHA gates')
     dispatch = SOURCE[push:readiness]
 
-    assert "for workflow in test-install.yml launch-gate.yml" in dispatch
+    assert "for workflow in launch-gate.yml" in dispatch
+    assert "test-install.yml" not in dispatch
     assert '--commit "$BUMP_SHA"' in dispatch
     assert 'if [[ "$run_count" == "0" ]]' in dispatch
     assert 'gh workflow run "$workflow"' in dispatch
