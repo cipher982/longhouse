@@ -4839,6 +4839,9 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                         .limiter
                         .observe_backpressure(Some(backpressure.retry_after));
                 }
+                if crate::shipping::client::is_connect_error(&error) {
+                    result.had_connect_error = true;
+                }
                 if task_context.tracker.record_error() {
                     tracing::warn!(
                         path = %result.job.path.display(),

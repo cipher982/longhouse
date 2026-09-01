@@ -918,6 +918,20 @@ fn classify_connect_error(error: &reqwest::Error) -> ConnectErrorDetail {
     }
 }
 
+/// Whether an anyhow error chain contains the same transport failure that the
+/// legacy ingest path reports as `ShipResult::ConnectError`.
+///
+/// Storage-v2 uses anyhow contexts around reqwest, so checking only the outer
+/// error silently bypasses the daemon's shared offline circuit during DNS and
+/// connection outages.
+pub fn is_connect_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|source| source.is_connect() || source.is_timeout())
+    })
+}
+
 fn classify_connect_error_kind(
     is_timeout: bool,
     is_connect: bool,
@@ -969,10 +983,30 @@ mod tests {
     use reqwest::header::{HeaderMap, HeaderValue};
 
     use super::{
-        classify_connect_error_kind, parse_server_backpressure, parse_server_timing,
-        parse_server_write_backpressure, parse_storage_v2_backpressure, parse_storage_v2_conflict,
-        rate_limit_retry_wait_seconds, ShipResult,
+        classify_connect_error_kind, is_connect_error, parse_server_backpressure,
+        parse_server_timing, parse_server_write_backpressure, parse_storage_v2_backpressure,
+        parse_storage_v2_conflict, rate_limit_retry_wait_seconds, ShipResult,
     };
+
+    #[tokio::test]
+    async fn context_wrapped_storage_transport_error_reaches_offline_classifier() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+
+        let source = reqwest::Client::builder()
+            .timeout(Duration::from_secs(1))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .unwrap_err();
+        let error = anyhow::Error::new(source).context("storage-v2 envelope POST failed");
+
+        assert!(is_connect_error(&error));
+        assert!(!is_connect_error(&anyhow::anyhow!("HTTP 409 conflict")));
+    }
 
     fn classify_status(status: u16, body: &str) -> ShipResult {
         match status {
