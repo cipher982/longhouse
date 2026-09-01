@@ -3959,24 +3959,26 @@ pub(crate) async fn ship_next_cursor_envelope(
     ))?;
     match prepared {
         CursorPreparationOutcome::Envelope(prepared) => {
-            let source_is_blocked =
+            if let Some(pending) =
                 pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
-                    .is_some_and(|pending| pending.blocked_at.is_some());
-            if source_is_blocked {
-                return if reconcile_blocked_cursor_replacement(
-                    conn,
-                    client,
-                    &prepared,
-                    request_timeout,
-                )
-                .await?
-                    || reconcile_blocked_cursor_lineage(conn, client, &prepared, request_timeout)
-                        .await?
-                {
-                    Ok(CursorStorageV2ShipResult::Continue)
-                } else {
-                    Ok(CursorStorageV2ShipResult::Current)
-                };
+            {
+                if pending.blocked_at.is_some() {
+                    return if reexamine_blocked_source(
+                        conn,
+                        client,
+                        capabilities,
+                        &pending,
+                        &prepared,
+                        lane,
+                        request_timeout,
+                    )
+                    .await?
+                    {
+                        Ok(CursorStorageV2ShipResult::Continue)
+                    } else {
+                        Ok(CursorStorageV2ShipResult::Current)
+                    };
+                }
             }
             ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
                 .await
@@ -5689,6 +5691,136 @@ mod tests {
                 .envelope
                 .predecessor_source_epoch,
             Some(first_epoch.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn blocked_cursor_reexamines_missing_local_epoch_through_host_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let _store = make_cursor_store(&path);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        pending_source_envelope::quarantine(
+            &mut conn,
+            prepared.source_epoch,
+            "source_epoch_conflict_unresolved",
+            "source_epoch_not_found: fixture missing local epoch",
+        )
+        .unwrap();
+
+        let host_epoch = Uuid::new_v4();
+        let host_manifest = serde_json::json!({
+            "v": 2,
+            "source_epoch": {
+                "source_epoch": host_epoch.to_string(),
+                "tenant_id": prepared.envelope.tenant_id,
+                "machine_id": prepared.envelope.machine_id,
+                "provider": "cursor",
+                "opaque_source_id": prepared.envelope.opaque_source_id,
+                "range_kind": "record_ordinal",
+                "state": "open",
+                "predecessor_source_epoch": null,
+                "replaced_by_source_epoch": null,
+                "accepted_through": "2"
+            },
+            "objects": [{
+                "envelope_id": "host-envelope",
+                "tenant_id": prepared.envelope.tenant_id,
+                "session_id": prepared.envelope.session_id,
+                "machine_id": prepared.envelope.machine_id,
+                "provider": "cursor",
+                "opaque_source_id": prepared.envelope.opaque_source_id,
+                "source_epoch": host_epoch.to_string(),
+                "range_kind": "record_ordinal",
+                "range_start": "0",
+                "range_end": "2",
+                "retired_at": null
+            }],
+            "commit_seq": "1",
+            "observed_at": "2026-09-01T00:00:00Z"
+        })
+        .to_string();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let expected_source_epoch = prepared.source_epoch;
+        let expected_host_epoch = host_epoch;
+        let server = tokio::spawn(async move {
+            for request_index in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (request_line, body) = read_http_request(&mut socket).await;
+                let (status, response_body) = match request_index {
+                    0 => {
+                        assert!(request_line.contains(&expected_source_epoch.to_string()));
+                        ("404 Not Found", r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#.to_string())
+                    }
+                    1 => {
+                        let posted: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                        assert_eq!(posted.source_epoch, expected_source_epoch.to_string());
+                        (
+                            "409 Conflict",
+                            serde_json::json!({
+                                "detail": {
+                                    "code": "source_epoch_conflict",
+                                    "message": "source range overlaps or conflicts with the registered epoch",
+                                    "details": {
+                                        "reason": "another_epoch_is_already_open_for_this_source",
+                                        "open_source_epochs": [expected_host_epoch.to_string()]
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        )
+                    }
+                    _ => {
+                        assert!(request_line.contains(&expected_host_epoch.to_string()));
+                        ("200 OK", host_manifest.clone())
+                    }
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let client = ShipperClient::with_compression(
+            &ShipperConfig {
+                api_url: format!("http://{address}"),
+                timeout_seconds: 5,
+                ..ShipperConfig::default()
+            },
+            CompressionAlgo::Gzip,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            ship_next_cursor_envelope(
+                &mut conn,
+                &client,
+                &capabilities(),
+                &path,
+                "repair",
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap(),
+            CursorStorageV2ShipResult::Continue
+        ));
+        server.await.unwrap();
+        let repaired = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .unwrap();
+        assert!(repaired.blocked_at.is_none());
+        assert_eq!(
+            pending_to_prepared(repaired)
+                .unwrap()
+                .envelope
+                .predecessor_source_epoch,
+            Some(host_epoch.to_string())
         );
     }
 
