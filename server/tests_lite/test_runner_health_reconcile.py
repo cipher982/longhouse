@@ -233,11 +233,7 @@ async def test_reconcile_commits_runner_and_incident_before_alert_await(tmp_path
         def _send_email_alert(_user, _subject, _body):
             with SessionLocal() as probe_db:
                 stored_runner = probe_db.query(Runner).filter(Runner.id == runner.id).one()
-                stored_incident = (
-                    probe_db.query(RunnerHealthIncident)
-                    .filter(RunnerHealthIncident.id == incident.id)
-                    .one()
-                )
+                stored_incident = probe_db.query(RunnerHealthIncident).filter(RunnerHealthIncident.id == incident.id).one()
                 observed["runner_status"] = stored_runner.status
                 observed["incident_summary"] = stored_incident.summary
                 observed["incident_last_observed_at"] = stored_incident.last_observed_at
@@ -422,7 +418,6 @@ async def test_reconcile_does_not_open_incident_for_on_demand_runner(tmp_path: P
         assert incidents == []
     finally:
         db.close()
-
 
 
 async def test_reconcile_resolves_open_incident_when_runner_returns_online(tmp_path: Path):

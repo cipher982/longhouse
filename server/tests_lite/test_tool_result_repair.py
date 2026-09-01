@@ -198,10 +198,12 @@ def test_scan_classifies_orphan_without_matching_source_result_as_genuine_gap(tm
 def test_scan_recovers_empty_success_tool_result(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid4()
-    raw = _tool_results_raw([
-        ("toolu_empty", ""),
-        ("toolu_null", None),
-    ])
+    raw = _tool_results_raw(
+        [
+            ("toolu_empty", ""),
+            ("toolu_null", None),
+        ]
+    )
 
     with factory() as db:
         _seed_session(db, session_id)
@@ -282,10 +284,13 @@ def test_scan_contains_corrupt_source_line_without_aborting_batch(tmp_path):
 def test_scan_reads_slim_source_line_from_archive(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid4()
-    raw = _tool_result_raw("toolu_refs", [
-        {"type": "tool_reference", "tool_name": "TaskCreate"},
-        {"type": "tool_reference", "tool_name": "TaskUpdate"},
-    ])
+    raw = _tool_result_raw(
+        "toolu_refs",
+        [
+            {"type": "tool_reference", "tool_name": "TaskCreate"},
+            {"type": "tool_reference", "tool_name": "TaskUpdate"},
+        ],
+    )
     line_hash = _line_hash(raw)
     archive_store = FilesystemArchiveStore(tmp_path / "archive")
 
@@ -444,10 +449,12 @@ def test_repair_orphan_tool_results_apply_is_idempotent(tmp_path):
 def test_repair_orphan_tool_results_handles_multiple_results_in_one_source_line(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid4()
-    raw = _tool_results_raw([
-        ("toolu_first", "first output"),
-        ("toolu_second", "second output"),
-    ])
+    raw = _tool_results_raw(
+        [
+            ("toolu_first", "first output"),
+            ("toolu_second", "second output"),
+        ]
+    )
 
     with factory() as db:
         _seed_session(db, session_id)
@@ -873,10 +880,7 @@ def _tool_results_raw(results) -> str:
             "uuid": "tool-result-line",
             "timestamp": "2026-01-01T00:00:02Z",
             "message": {
-                "content": [
-                    {"type": "tool_result", "tool_use_id": tool_call_id, "content": content}
-                    for tool_call_id, content in results
-                ]
+                "content": [{"type": "tool_result", "tool_use_id": tool_call_id, "content": content} for tool_call_id, content in results]
             },
         },
         separators=(",", ":"),

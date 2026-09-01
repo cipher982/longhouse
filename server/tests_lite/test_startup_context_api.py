@@ -61,13 +61,13 @@ def _seed_session(
         git_branch="main",
         started_at=started_at,
         last_activity_at=last_activity_at,
-                        user_messages=user_messages,
+        user_messages=user_messages,
         assistant_messages=1,
         tool_calls=0,
         summary=summary,
         summary_title=summary_title,
-                user_state=user_state,
-            )
+        user_state=user_state,
+    )
     db.add(session)
     db.commit()
     db.refresh(session)

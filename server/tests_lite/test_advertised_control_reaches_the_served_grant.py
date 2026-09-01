@@ -237,9 +237,7 @@ def _reduce_control_fact(engine, *, provider, session_id, run_id, connection_id,
 
 
 @pytest.mark.parametrize(("provider", "operation", "capability"), _advertised_controls())
-def test_advertised_control_reaches_the_served_grant(
-    provider: str, operation: str, capability: str, live_engine
-) -> None:
+def test_advertised_control_reaches_the_served_grant(provider: str, operation: str, capability: str, live_engine) -> None:
     """Bind the identity, reduce the fact, and the grant must come out."""
 
     session_id, run_id, connection_id, lease_generation = _seed_bound_session(live_engine, provider)

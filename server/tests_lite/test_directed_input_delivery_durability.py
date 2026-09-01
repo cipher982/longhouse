@@ -221,11 +221,7 @@ def test_expired_receipt_stops_blocking_the_queue(orm: Session):
 
     requeue_live_receipt(orm, receipt_id=receipt_id, error="still down", now=later)
 
-    remaining = (
-        orm.query(LiveSessionInputReceipt)
-        .filter(LiveSessionInputReceipt.status == "queued")
-        .count()
-    )
+    remaining = orm.query(LiveSessionInputReceipt).filter(LiveSessionInputReceipt.status == "queued").count()
     assert remaining == 0
 
 
@@ -296,18 +292,12 @@ def test_command_id_is_stable_across_delivery_attempts():
     session = SimpleNamespace(id=uuid4())
     receipt_id = str(uuid4())
 
-    first = _engine_command_id(
-        session=session, command_type="session.send_text", request_id=receipt_id, run_id=None
-    )
-    second = _engine_command_id(
-        session=session, command_type="session.send_text", request_id=receipt_id, run_id=None
-    )
+    first = _engine_command_id(session=session, command_type="session.send_text", request_id=receipt_id, run_id=None)
+    second = _engine_command_id(session=session, command_type="session.send_text", request_id=receipt_id, run_id=None)
 
     assert first == second
     # And a different receipt must not collide with it.
-    other = _engine_command_id(
-        session=session, command_type="session.send_text", request_id=str(uuid4()), run_id=None
-    )
+    other = _engine_command_id(session=session, command_type="session.send_text", request_id=str(uuid4()), run_id=None)
     assert other != first
 
 

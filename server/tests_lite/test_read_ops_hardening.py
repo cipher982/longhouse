@@ -120,7 +120,17 @@ def test_metrics_access_helper_denies_remote_unauthenticated(monkeypatch):
     from zerg.routers import metrics as metrics_mod
 
     # Simulate a remote, unauthenticated request with auth enabled.
-    monkeypatch.setattr(metrics_mod, "get_settings", lambda: SimpleNamespace(auth_disabled=False, internal_api_secret="x" * 32, public_site_url="https://demo.longhouse.ai", app_public_url=None, public_api_url=None))
+    monkeypatch.setattr(
+        metrics_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            auth_disabled=False,
+            internal_api_secret="x" * 32,
+            public_site_url="https://demo.longhouse.ai",
+            app_public_url=None,
+            public_api_url=None,
+        ),
+    )
 
     class _Req:
         client = SimpleNamespace(host="203.0.113.9")
@@ -135,7 +145,13 @@ def test_metrics_access_helper_allows_loopback_when_no_public_origin(monkeypatch
     from zerg.routers import metrics as metrics_mod
 
     # No public origin configured → loopback is a safe trust signal.
-    monkeypatch.setattr(metrics_mod, "get_settings", lambda: SimpleNamespace(auth_disabled=False, internal_api_secret="x" * 32, public_site_url=None, app_public_url=None, public_api_url=None))
+    monkeypatch.setattr(
+        metrics_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            auth_disabled=False, internal_api_secret="x" * 32, public_site_url=None, app_public_url=None, public_api_url=None
+        ),
+    )
 
     class _Req:
         client = SimpleNamespace(host="127.0.0.1")
@@ -150,7 +166,17 @@ def test_metrics_access_helper_denies_loopback_behind_public_proxy(monkeypatch):
 
     from zerg.routers import metrics as metrics_mod
 
-    monkeypatch.setattr(metrics_mod, "get_settings", lambda: SimpleNamespace(auth_disabled=False, internal_api_secret="x" * 32, public_site_url="https://demo.longhouse.ai", app_public_url=None, public_api_url=None))
+    monkeypatch.setattr(
+        metrics_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            auth_disabled=False,
+            internal_api_secret="x" * 32,
+            public_site_url="https://demo.longhouse.ai",
+            app_public_url=None,
+            public_api_url=None,
+        ),
+    )
 
     class _Req:
         client = SimpleNamespace(host="127.0.0.1")
@@ -164,7 +190,17 @@ def test_metrics_access_helper_allows_metrics_token(monkeypatch):
 
     from zerg.routers import metrics as metrics_mod
 
-    monkeypatch.setattr(metrics_mod, "get_settings", lambda: SimpleNamespace(auth_disabled=False, internal_api_secret="x" * 32, public_site_url="https://demo.longhouse.ai", app_public_url=None, public_api_url=None))
+    monkeypatch.setattr(
+        metrics_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            auth_disabled=False,
+            internal_api_secret="x" * 32,
+            public_site_url="https://demo.longhouse.ai",
+            app_public_url=None,
+            public_api_url=None,
+        ),
+    )
     monkeypatch.setenv("LONGHOUSE_METRICS_TOKEN", "secret-metrics-token")
 
     class _Req:

@@ -58,10 +58,10 @@ def _seed_session(db):
         project="zerg",
         cwd="/Users/example/git/zerg",
         started_at=datetime.now(timezone.utc),
-                                user_messages=0,
+        user_messages=0,
         assistant_messages=0,
         tool_calls=0,
-                        loop_mode="assist",
+        loop_mode="assist",
     )
     db.add(session)
     db.commit()
@@ -980,10 +980,10 @@ def test_execute_session_turn_write_uses_bound_database_when_serializer_is_confi
             project="zerg",
             cwd="/Users/example/git/zerg",
             started_at=datetime.now(timezone.utc),
-                                                user_messages=0,
+            user_messages=0,
             assistant_messages=0,
             tool_calls=0,
-                                    loop_mode="assist",
+            loop_mode="assist",
         )
         primary_db.add(primary_session)
         primary_db.commit()
@@ -995,10 +995,10 @@ def test_execute_session_turn_write_uses_bound_database_when_serializer_is_confi
             project="zerg",
             cwd="/Users/example/git/zerg",
             started_at=datetime.now(timezone.utc),
-                                                user_messages=0,
+            user_messages=0,
             assistant_messages=0,
             tool_calls=0,
-                                    loop_mode="assist",
+            loop_mode="assist",
         )
         secondary_db.add(secondary_session)
         secondary_db.commit()

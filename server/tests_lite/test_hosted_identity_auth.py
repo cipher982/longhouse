@@ -231,9 +231,7 @@ def test_hosted_browser_auth_accepts_runtime_bearer(monkeypatch, db_session):
             assert token == "cp.runtime.jwt"
             return user
 
-    monkeypatch.setattr(
-        browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai")
-    )
+    monkeypatch.setattr(browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"))
     monkeypatch.setattr(browser_auth.auth_deps, "AUTH_DISABLED", False)
     monkeypatch.setattr(browser_auth.auth_deps, "_get_strategy", lambda: Strategy())
     request = Request(
@@ -264,9 +262,7 @@ def test_hosted_browser_auth_rejects_legacy_jwt_bearer(monkeypatch, db_session):
         "test-jwt-secret-1234",
     )
 
-    monkeypatch.setattr(
-        browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai")
-    )
+    monkeypatch.setattr(browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"))
     monkeypatch.setattr(browser_auth.auth_deps, "AUTH_DISABLED", False)
     monkeypatch.setattr(browser_auth.auth_deps, "_get_strategy", lambda: HostedCPAuthStrategy())
     request = Request(

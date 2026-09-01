@@ -69,9 +69,7 @@ def _install_cli_identity(monkeypatch: pytest.MonkeyPatch):
 
 def test_no_restart_pending_when_installed_and_engine_agree(_install_cli_identity) -> None:
     engine_build = {**CLI_PAYLOAD}
-    result = local_health_service._collect_build_identity(
-        engine_status=_engine_status(engine_build)
-    )
+    result = local_health_service._collect_build_identity(engine_status=_engine_status(engine_build))
 
     assert result["engine_restart_pending"] is False
     assert result["installed"]["commit_short"] == "aaaaaaaa"
@@ -82,9 +80,7 @@ def test_no_restart_pending_when_installed_and_engine_agree(_install_cli_identit
 
 def test_flags_restart_pending_when_short_shas_differ(_install_cli_identity) -> None:
     engine_build = {**CLI_PAYLOAD, "commit_short": "bbbbbbbb"}
-    result = local_health_service._collect_build_identity(
-        engine_status=_engine_status(engine_build)
-    )
+    result = local_health_service._collect_build_identity(engine_status=_engine_status(engine_build))
 
     assert result["engine_restart_pending"] is True
     assert result["installed"]["commit_short"] == "aaaaaaaa"
@@ -94,9 +90,7 @@ def test_flags_restart_pending_when_short_shas_differ(_install_cli_identity) -> 
 def test_engine_missing_build_block_does_not_mark_restart_pending(_install_cli_identity) -> None:
     """An engine that predates the build block still registers as "same" —
     we only flag restart pending when we have two short SHAs that disagree."""
-    result = local_health_service._collect_build_identity(
-        engine_status=_engine_status(None)
-    )
+    result = local_health_service._collect_build_identity(engine_status=_engine_status(None))
 
     assert result["engine_restart_pending"] is False
     assert result["engine"] is None
@@ -132,9 +126,7 @@ def test_cli_identity_missing_surfaces_error(monkeypatch: pytest.MonkeyPatch) ->
     _install_resource(monkeypatch, None)
 
     engine_build = {**CLI_PAYLOAD, "commit_short": "ccccc111"}
-    result = local_health_service._collect_build_identity(
-        engine_status=_engine_status(engine_build)
-    )
+    result = local_health_service._collect_build_identity(engine_status=_engine_status(engine_build))
 
     assert result["installed"]["error"] == "missing"
     # With CLI missing we only have one short SHA — nothing to compare.

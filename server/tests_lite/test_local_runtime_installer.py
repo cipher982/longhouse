@@ -192,9 +192,7 @@ def test_install_local_runtime_removes_obsolete_claude_managed_local_state_only(
     assert raw_transcript.read_text() == '{"type":"user"}\n'
 
 
-def test_obsolete_claude_managed_local_cleanup_skips_global_claude_when_scratch_home_has_no_provider_dir(
-    tmp_path, monkeypatch
-):
+def test_obsolete_claude_managed_local_cleanup_skips_global_claude_when_scratch_home_has_no_provider_dir(tmp_path, monkeypatch):
     home = tmp_path / "home"
     global_state = home / ".claude" / "managed-local" / "codex-bridge" / "state.json"
     global_state.parent.mkdir(parents=True)

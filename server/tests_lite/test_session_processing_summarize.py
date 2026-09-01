@@ -551,9 +551,7 @@ class TestSafeParseJson:
     def test_unquoted_title(self):
         from zerg.services.session_processing.summarize import safe_parse_json
 
-        result = safe_parse_json(
-            '{\n  "title": Fixed Docker Build Error,\n  "summary": "Fixed the build."\n}'
-        )
+        result = safe_parse_json('{\n  "title": Fixed Docker Build Error,\n  "summary": "Fixed the build."\n}')
         assert result is not None
         assert result["title"] == "Fixed Docker Build Error"
         assert result["summary"] == "Fixed the build."
@@ -561,9 +559,7 @@ class TestSafeParseJson:
     def test_unquoted_title_and_summary(self):
         from zerg.services.session_processing.summarize import safe_parse_json
 
-        result = safe_parse_json(
-            '{\n  "title": My Cool Title,\n  "summary": Did some work on things\n}'
-        )
+        result = safe_parse_json('{\n  "title": My Cool Title,\n  "summary": Did some work on things\n}')
         assert result is not None
         assert result["title"] == "My Cool Title"
 
@@ -571,9 +567,7 @@ class TestSafeParseJson:
         """LLM returns JSON with only a title key, no summary."""
         from zerg.services.session_processing.summarize import _parse_quick_summary_raw
 
-        result = _parse_quick_summary_raw(
-            '{\n  "title": "S3 Helper API Fixes"\n}', "test-id"
-        )
+        result = _parse_quick_summary_raw('{\n  "title": "S3 Helper API Fixes"\n}', "test-id")
         assert result.title == "S3 Helper API Fixes"
         # Should use title as summary, not raw JSON
         assert not result.summary.startswith("{")
@@ -582,8 +576,6 @@ class TestSafeParseJson:
         """If JSON can't be parsed, don't store it verbatim as summary."""
         from zerg.services.session_processing.summarize import _parse_quick_summary_raw
 
-        result = _parse_quick_summary_raw(
-            '{ broken json with no closing', "test-id"
-        )
+        result = _parse_quick_summary_raw("{ broken json with no closing", "test-id")
         assert result.summary == "No summary generated."
         assert not result.summary.startswith("{")

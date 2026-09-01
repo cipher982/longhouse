@@ -72,7 +72,6 @@ def _make_client(SessionLocal):
     from zerg.dependencies.auth import get_current_user
     from zerg.main import api_app
 
-
     def override_get_db():
         with SessionLocal() as db:
             yield db
@@ -669,9 +668,7 @@ def test_turn_summary_route_returns_overall_and_provider_percentiles(tmp_path, m
             },
         ]
 
-        higher_threshold = client.get(
-            "/observability/turns/summary?hours_back=24&slow_threshold_ms=60000&stale_after_seconds=3600"
-        )
+        higher_threshold = client.get("/observability/turns/summary?hours_back=24&slow_threshold_ms=60000&stale_after_seconds=3600")
         assert higher_threshold.status_code == 200, higher_threshold.text
         higher_payload = higher_threshold.json()
         assert higher_payload["summary"]["completed_turns"] == 3

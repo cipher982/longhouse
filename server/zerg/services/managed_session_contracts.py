@@ -282,7 +282,7 @@ def _issues_for_contract(contract: Mapping[str, Any]) -> list[ManagedSessionCont
                     created_at=created_at,
                     severity="yellow",
                     headline="A provider session working directory disappeared",
-                    action=("Restart or reattach the affected provider session from an existing directory; " f"missing cwd: {cwd}"),
+                    action=(f"Restart or reattach the affected provider session from an existing directory; missing cwd: {cwd}"),
                     source_path=source_path,
                     detail={"cwd": cwd},
                 )

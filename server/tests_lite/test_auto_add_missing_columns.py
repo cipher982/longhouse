@@ -254,8 +254,7 @@ def test_skips_foreign_key_column(tmp_path, caplog):
     assert ("children", "parent_id") not in added
     assert "parent_id" not in _live_columns(engine, "children")
     assert any(
-        "foreign-key constraint" in rec.message and "children" in rec.message and "parent_id" in rec.message
-        for rec in caplog.records
+        "foreign-key constraint" in rec.message and "children" in rec.message and "parent_id" in rec.message for rec in caplog.records
     )
 
 

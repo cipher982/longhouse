@@ -307,9 +307,7 @@ def _floor_client_rpc_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
     original_call = CatalogClient.call
 
     async def _floored(self, method, params=None, *, timeout_seconds=None):
-        return await original_call(
-            self, method, params, timeout_seconds=floored_rpc_timeout(timeout_seconds)
-        )
+        return await original_call(self, method, params, timeout_seconds=floored_rpc_timeout(timeout_seconds))
 
     monkeypatch.setattr(CatalogClient, "call", _floored)
 

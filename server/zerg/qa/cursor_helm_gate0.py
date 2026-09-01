@@ -1129,9 +1129,7 @@ def _ship_cursor_store(
         raise RuntimeError(f"Longhouse Cursor source ship returned an invalid result: {summary!r}")
     events_shipped = summary.get("events_shipped")
     if isinstance(events_shipped, bool) or not isinstance(events_shipped, int) or events_shipped <= 0:
-        raise RuntimeError(
-            "Longhouse Cursor source ship reported no shipped events; " f"the source-binding proof is incomplete: {summary!r}"
-        )
+        raise RuntimeError(f"Longhouse Cursor source ship reported no shipped events; the source-binding proof is incomplete: {summary!r}")
     return {
         "engine": engine,
         "store": str(store),

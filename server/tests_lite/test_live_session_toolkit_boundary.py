@@ -78,9 +78,7 @@ def test_toolkit_exposes_the_shared_surface_publicly() -> None:
 def test_toolkit_does_not_import_the_resume_producer() -> None:
     """The dependency runs one way: producers depend on the library."""
     imported = {
-        node.module
-        for node in ast.walk(ast.parse(TOOLKIT.read_text(encoding="utf-8")))
-        if isinstance(node, ast.ImportFrom) and node.module
+        node.module for node in ast.walk(ast.parse(TOOLKIT.read_text(encoding="utf-8"))) if isinstance(node, ast.ImportFrom) and node.module
     }
     assert not any(module.startswith("zerg.qa.") and module.endswith("_resume") for module in imported)
 

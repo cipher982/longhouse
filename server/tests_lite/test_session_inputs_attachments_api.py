@@ -193,9 +193,7 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
     assert calls["store"]["input_receipt_id"] == receipt_id
     assert calls["dispatch"]["db"] is None
     assert f"/inputs/{receipt_id}/attachments/{attachment_id}/blob" in calls["dispatch"]["attachments"][0]["blob_url"]
-    assert calls["finishes"] == [
-        {"receipt_id": receipt_id, "delivery_request_id": calls["receipt"]["delivery_request_id"]}
-    ]
+    assert calls["finishes"] == [{"receipt_id": receipt_id, "delivery_request_id": calls["receipt"]["delivery_request_id"]}]
 
 
 @pytest.mark.asyncio
@@ -662,9 +660,7 @@ def test_multipart_upload_succeeds_on_codex(live_catalog, live_catalog_client, m
         ref = forwarded[0]
         assert ref["mime_type"] == "image/png"
         assert ref["sha256"] == hashlib.sha256(_PNG_BYTES).hexdigest()
-        assert ref["blob_url"] == (
-            f"/api/agents/sessions/{session_id}/inputs/{body['live_input_id']}/attachments/{ref['id']}/blob"
-        )
+        assert ref["blob_url"] == (f"/api/agents/sessions/{session_id}/inputs/{body['live_input_id']}/attachments/{ref['id']}/blob")
 
         receipt = _live_catalog_receipt(
             live_catalog,

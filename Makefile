@@ -23,7 +23,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
-.PHONY: validate-legacy-nouns
+.PHONY: validate-format validate-legacy-nouns
 .PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
 .PHONY: test-provider-contract
 # ---------------------------------------------------------------------------
@@ -510,6 +510,7 @@ validate: ## Run all contract checks
 	@$(MAKE) validate-build-scripts
 	@$(MAKE) validate-playwright-install
 	@$(MAKE) validate-public-surface
+	@$(MAKE) validate-format
 	@$(MAKE) validate-provider-brands
 	@$(MAKE) validate-legacy-nouns
 	@$(MAKE) validate-managed-codex-contract
@@ -538,6 +539,12 @@ validate-playwright-install: ## @internal Playwright installer wrapper regressio
 
 validate-public-surface: ## @internal Guard public docs against private/local leakage
 	@python3 scripts/tests/public-surface-scan.test.py
+
+validate-format: ## @internal Backend formatting is uniform tree-wide
+	@# Tree-wide on purpose. The pre-commit hook only formats files you staged,
+	@# so anything nobody happens to touch drifts forever -- which is how 154
+	@# files ended up unformatted. Fix drift with: cd server && uv run ruff format zerg tests_lite
+	@cd server && uv run ruff format --check zerg tests_lite
 
 validate-legacy-nouns: ## @internal Guard against pre-pivot product nouns
 	@python3 scripts/qa/legacy-nouns-check

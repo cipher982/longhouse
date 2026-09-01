@@ -565,7 +565,7 @@ def decode_store_db(
             # A field-1 entry that is not pure JSON => legacy chunked format.
             diag.unsupported_gap = GAP_LEGACY_CHUNKED
             diag.unsupported_reason = (
-                "field-1 message blob is not pure JSON; legacy chunked format " "is not supported in v1 (see cursor-transcript-format.md)"
+                "field-1 message blob is not pure JSON; legacy chunked format is not supported in v1 (see cursor-transcript-format.md)"
             )
             return CursorDecodeResult(None, diag)
         if not isinstance(msg, dict) or "role" not in msg:

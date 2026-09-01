@@ -85,11 +85,7 @@ def test_string_tool_input_survives_parser_ingest_and_response_contracts():
             {
                 "uuid": "message-1",
                 "timestamp": "2026-07-23T12:00:00Z",
-                "message": {
-                    "content": [
-                        {"type": "tool_use", "id": "call-1", "name": "exec", "input": raw_input}
-                    ]
-                },
+                "message": {"content": [{"type": "tool_use", "id": "call-1", "name": "exec", "input": raw_input}]},
             },
             "session-1",
             0,

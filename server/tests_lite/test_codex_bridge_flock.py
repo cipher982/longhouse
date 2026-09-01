@@ -102,14 +102,9 @@ def test_second_bridge_bails_when_lock_is_held(tmp_path: Path) -> None:
     finally:
         os.close(held_fd)
 
-    assert result.returncode != 0, (
-        f"engine unexpectedly succeeded while lock was held:\n"
-        f"stdout={result.stdout}\nstderr={result.stderr}"
-    )
+    assert result.returncode != 0, f"engine unexpectedly succeeded while lock was held:\nstdout={result.stdout}\nstderr={result.stderr}"
     combined = (result.stderr or "") + (result.stdout or "")
-    assert "another codex bridge already owns lock" in combined, (
-        "expected lock-contention error but got:\n" + combined
-    )
+    assert "another codex bridge already owns lock" in combined, "expected lock-contention error but got:\n" + combined
 
 
 def test_lock_becomes_acquirable_after_holder_releases(tmp_path: Path) -> None:

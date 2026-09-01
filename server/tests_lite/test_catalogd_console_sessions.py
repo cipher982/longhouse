@@ -711,11 +711,7 @@ def test_branch_create_persists_child_lineage_and_first_turn_together(tmp_path):
         # Provider-tier lineage rides the non-routing alias kind; the routing
         # alias belongs to whichever thread owns that provider session, and the
         # child claims its own once the fork returns a new id.
-        alias = (
-            db.query(LiveSessionThreadAlias)
-            .filter(LiveSessionThreadAlias.thread_id == request["thread_id"])
-            .one()
-        )
+        alias = db.query(LiveSessionThreadAlias).filter(LiveSessionThreadAlias.thread_id == request["thread_id"]).one()
         assert alias.alias_kind == "forked_from_provider_session_id"
         assert alias.alias_value == "parent-provider-thread"
         assert db.query(LiveConsoleTurn).count() == 1

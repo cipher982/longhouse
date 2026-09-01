@@ -47,10 +47,10 @@ def test_codex_hook_script_has_managed_session_id_support():
 
 def test_codex_hook_does_not_fetch_dynamic_startup_context():
     # Coordination awareness is carried by durable MCP server metadata.
-    assert '/api/agents/sessions/startup-context' not in CODEX_HOOK_SCRIPT
-    assert 'LONGHOUSE_HOOK_URL' not in CODEX_HOOK_SCRIPT
-    assert 'LONGHOUSE_HOOK_TOKEN' not in CODEX_HOOK_SCRIPT
-    assert 'LONGHOUSE_COORDINATION_BOOTSTRAP' not in CODEX_HOOK_SCRIPT
+    assert "/api/agents/sessions/startup-context" not in CODEX_HOOK_SCRIPT
+    assert "LONGHOUSE_HOOK_URL" not in CODEX_HOOK_SCRIPT
+    assert "LONGHOUSE_HOOK_TOKEN" not in CODEX_HOOK_SCRIPT
+    assert "LONGHOUSE_COORDINATION_BOOTSTRAP" not in CODEX_HOOK_SCRIPT
 
 
 def test_codex_hook_hot_path_stays_local_only():
@@ -185,13 +185,7 @@ def test_install_codex_hooks_preserves_existing_hooks_json(tmp_path, monkeypatch
     codex_dir.mkdir()
 
     # Pre-existing hooks.json with a user hook
-    existing = {
-        "hooks": {
-            "SessionStart": [
-                {"hooks": [{"type": "command", "command": "/usr/local/bin/my-hook.sh"}]}
-            ]
-        }
-    }
+    existing = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "/usr/local/bin/my-hook.sh"}]}]}}
     hooks_json = codex_dir / "hooks.json"
     hooks_json.write_text(json.dumps(existing))
 
@@ -218,9 +212,7 @@ def test_install_codex_hooks_removes_obsolete_longhouse_session_start_only(tmp_p
             }
         ]
     }
-    (codex_dir / "hooks.json").write_text(
-        json.dumps({"hooks": {"SessionStart": [user_hook, old_longhouse_hook]}})
-    )
+    (codex_dir / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [user_hook, old_longhouse_hook]}}))
 
     install_codex_hooks(engine_path="/usr/bin/longhouse-engine")
 
@@ -246,9 +238,7 @@ def test_install_codex_hooks_is_idempotent(tmp_path, monkeypatch):
         "PermissionRequest",
         "Stop",
     ):
-        assert len(data["hooks"][event]) == 1, (
-            f"{event} should have exactly 1 entry after double install"
-        )
+        assert len(data["hooks"][event]) == 1, f"{event} should have exactly 1 entry after double install"
 
 
 def test_install_codex_hooks_does_not_rewrite_unchanged_files(tmp_path, monkeypatch):
@@ -396,11 +386,11 @@ def test_install_hooks_points_lifecycle_hooks_at_longhouse_agent_state(tmp_path,
     )
 
     claude_hook = (claude_dir / "hooks" / "longhouse-hook.sh").read_text()
-    codex_hook = (codex_dir / "hooks" / "longhouse-codex-hook.sh")
+    codex_hook = codex_dir / "hooks" / "longhouse-codex-hook.sh"
     expected_home = str(tmp_path / ".longhouse")
 
     assert expected_home in claude_hook
-    assert f'{claude_dir / "hindsight"}' in claude_hook
+    assert f"{claude_dir / 'hindsight'}" in claude_hook
     assert "$LONGHOUSE_HOME/agent/outbox" in claude_hook
 
     codex_content = codex_hook.read_text()
@@ -434,11 +424,7 @@ def _run_codex_hook(tmp_path, hook_input: dict, env_overrides: dict[str, str]):
     engine.chmod(0o755)
 
     script = tmp_path / "longhouse-codex-hook.sh"
-    script.write_text(
-        CODEX_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(longhouse_home)).replace(
-            "__ENGINE_PATH__", str(engine)
-        )
-    )
+    script.write_text(CODEX_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(longhouse_home)).replace("__ENGINE_PATH__", str(engine)))
     script.chmod(0o755)
 
     env = {k: v for k, v in os.environ.items() if not k.startswith("LONGHOUSE_")}

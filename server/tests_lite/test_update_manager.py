@@ -450,15 +450,19 @@ def test_record_install_command_writes_metadata(monkeypatch, tmp_path):
 
 
 def test_check_for_updates_falls_back_without_packaging(monkeypatch):
-    monkeypatch.setattr(update_manager, "detect_install_metadata", lambda: update_manager.InstallMetadata(
-        install_method="uv",
-        install_source="pypi",
-        package_name="longhouse",
-        channel="stable",
-        installed_version="0.1.5",
-        installed_at="2026-04-07T00:00:00+00:00",
-        last_upgrade_at="2026-04-07T00:00:00+00:00",
-    ))
+    monkeypatch.setattr(
+        update_manager,
+        "detect_install_metadata",
+        lambda: update_manager.InstallMetadata(
+            install_method="uv",
+            install_source="pypi",
+            package_name="longhouse",
+            channel="stable",
+            installed_version="0.1.5",
+            installed_at="2026-04-07T00:00:00+00:00",
+            last_upgrade_at="2026-04-07T00:00:00+00:00",
+        ),
+    )
     monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.5")
     monkeypatch.setattr(update_manager, "fetch_latest_pypi_version", lambda package_name="longhouse": "0.1.6")
 

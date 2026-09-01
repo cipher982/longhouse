@@ -447,9 +447,7 @@ def test_antigravity_live_reset_accepts_workspace_trust_prompt(tmp_path: Path) -
 def test_antigravity_hook_fails_closed_when_transcript_binding_fails(tmp_path: Path) -> None:
     script = tmp_path / "hook.sh"
     script.write_text(
-        _ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path)).replace(
-            "__ENGINE_PATH__", "/usr/bin/false"
-        ),
+        _ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path)).replace("__ENGINE_PATH__", "/usr/bin/false"),
         encoding="utf-8",
     )
     script.chmod(0o755)
@@ -484,9 +482,7 @@ def test_antigravity_hook_fails_closed_when_transcript_binding_fails(tmp_path: P
 def test_antigravity_hook_ignores_managed_identity_from_another_provider(tmp_path: Path) -> None:
     script = tmp_path / "hook.sh"
     script.write_text(
-        _ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path)).replace(
-            "__ENGINE_PATH__", "/usr/bin/false"
-        ),
+        _ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path)).replace("__ENGINE_PATH__", "/usr/bin/false"),
         encoding="utf-8",
     )
     script.chmod(0o755)
@@ -516,7 +512,5 @@ def test_antigravity_hook_ignores_managed_identity_from_another_provider(tmp_pat
     )
 
     assert completed.returncode == 0
-    state = json.loads(
-        (tmp_path / "managed-local" / "antigravity" / "sessions" / f"{conversation_id}.json").read_text()
-    )
+    state = json.loads((tmp_path / "managed-local" / "antigravity" / "sessions" / f"{conversation_id}.json").read_text())
     assert state["session_id"] == conversation_id

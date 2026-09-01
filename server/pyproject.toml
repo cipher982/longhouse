@@ -135,9 +135,19 @@ cache-dir = "./.uv_cache"
 [tool.ruff]
 line-length = 140
 
+# Generated code is regenerated, never hand-edited. Without this a bare
+# `ruff check zerg` fails on output nobody is allowed to fix.
+exclude = ["zerg/generated"]
+
 [tool.ruff.lint]
 select = ["I", "E", "F", "Q000"]
 ignore = ["E501"]  # Line length - not a safety issue, and prompt templates are intentionally long
+
+[tool.ruff.lint.per-file-ignores]
+# Test modules put an os.environ preamble between their imports so each one can
+# run on its own; that is E402 by construction.
+"tests/**/*.py" = ["E402", "E501"]
+"tests_lite/**/*.py" = ["E402", "E501"]
 
 [tool.ruff.lint.isort]
 force-single-line = true

@@ -35,6 +35,7 @@ from zerg.services.session_processing import truncate
 # Fixtures — sample AgentEvent dicts
 # =====================================================================
 
+
 def _ts(hour: int, minute: int = 0) -> datetime:
     """Helper to build a UTC timestamp on a fixed date."""
     return datetime(2026, 2, 11, hour, minute, 0, tzinfo=timezone.utc)
@@ -213,6 +214,7 @@ SAMPLE_EVENTS: list[dict] = [
 # content.py — strip_noise
 # =====================================================================
 
+
 class TestStripNoise:
     def test_removes_system_reminder(self):
         text = "Hello <system-reminder>secret stuff</system-reminder> world"
@@ -260,6 +262,7 @@ class TestStripNoise:
 # =====================================================================
 # content.py — redact_secrets
 # =====================================================================
+
 
 class TestRedactSecrets:
     def test_openai_key(self):
@@ -322,6 +325,7 @@ class TestRedactSecrets:
 # content.py — is_tool_result
 # =====================================================================
 
+
 class TestIsToolResult:
     def test_tool_role(self):
         assert is_tool_result({"role": "tool"}) is True
@@ -346,6 +350,7 @@ class TestIsToolResult:
 # =====================================================================
 # tokens.py — count_tokens
 # =====================================================================
+
 
 class TestCountTokens:
     def test_uses_vendored_tiktoken_data_when_available(self, monkeypatch, tmp_path):
@@ -438,6 +443,7 @@ class TestCountTokens:
 # tokens.py — truncate
 # =====================================================================
 
+
 class TestTruncate:
     def test_no_truncation_needed(self):
         text = "short text"
@@ -449,9 +455,7 @@ class TestTruncate:
     def test_head_strategy(self):
         # Build a string that is definitely > 5 tokens
         text = "one two three four five six seven eight nine ten eleven twelve"
-        result, tokens, was_truncated = truncate(
-            text, max_tokens=5, strategy="head", encoding="cl100k_base"
-        )
+        result, tokens, was_truncated = truncate(text, max_tokens=5, strategy="head", encoding="cl100k_base")
         assert was_truncated is True
         assert tokens == 5
         # Head strategy keeps the beginning
@@ -459,9 +463,7 @@ class TestTruncate:
 
     def test_tail_strategy(self):
         text = "one two three four five six seven eight nine ten eleven twelve"
-        result, tokens, was_truncated = truncate(
-            text, max_tokens=5, strategy="tail", encoding="cl100k_base"
-        )
+        result, tokens, was_truncated = truncate(text, max_tokens=5, strategy="tail", encoding="cl100k_base")
         assert was_truncated is True
         assert tokens == 5
         # Tail strategy keeps the end
@@ -469,9 +471,7 @@ class TestTruncate:
 
     def test_sandwich_strategy(self):
         text = " ".join(f"word{i}" for i in range(200))
-        result, tokens, was_truncated = truncate(
-            text, max_tokens=50, strategy="sandwich", encoding="cl100k_base"
-        )
+        result, tokens, was_truncated = truncate(text, max_tokens=50, strategy="sandwich", encoding="cl100k_base")
         assert was_truncated is True
         assert tokens <= 50
         # Sandwich keeps head and tail with marker
@@ -499,6 +499,7 @@ class TestTruncate:
 # =====================================================================
 # transcript.py — detect_turns
 # =====================================================================
+
 
 class TestDetectTurns:
     def test_basic_turns(self):
@@ -553,6 +554,7 @@ class TestDetectTurns:
 # =====================================================================
 # transcript.py — build_transcript
 # =====================================================================
+
 
 class TestBuildTranscript:
     def test_basic_build(self):
@@ -654,6 +656,7 @@ class TestBuildTranscript:
 # transcript.py — token budget
 # =====================================================================
 
+
 class TestTokenBudget:
     def test_budget_truncates(self):
         """With a very small budget, fewer messages survive."""
@@ -681,6 +684,7 @@ class TestTokenBudget:
 # =====================================================================
 # Golden test — full pipeline verification
 # =====================================================================
+
 
 class TestGoldenTranscript:
     """End-to-end test: sample events -> expected transcript structure."""
@@ -759,8 +763,7 @@ class TestGoldenTranscript:
             {
                 "role": "user",
                 "content_text": (
-                    "<system-reminder>You are an AI</system-reminder>"
-                    "Deploy with key sk-abc123def456ghi789jkl012mno345 to production"
+                    "<system-reminder>You are an AI</system-reminder>Deploy with key sk-abc123def456ghi789jkl012mno345 to production"
                 ),
                 "timestamp": _ts(10, 0),
                 "session_id": "sess-golden",
@@ -789,6 +792,7 @@ class TestGoldenTranscript:
 # =====================================================================
 # Review Fix 1: Modern token format redaction
 # =====================================================================
+
 
 class TestRedactSecretsModernTokens:
     """Verify redaction catches modern API key / token formats."""
@@ -832,6 +836,7 @@ class TestRedactSecretsModernTokens:
 # Review Fix 2: Tool-result detection — assistant narration preserved
 # =====================================================================
 
+
 class TestToolResultFiltering:
     """Verify assistant events with tool_output_text are not dropped."""
 
@@ -849,7 +854,10 @@ class TestToolResultFiltering:
             },
         ]
         transcript = build_transcript(
-            events, include_tool_calls=False, strip_noise=False, redact_secrets=False,
+            events,
+            include_tool_calls=False,
+            strip_noise=False,
+            redact_secrets=False,
         )
         assistant_msgs = [m for m in transcript.messages if m.role == "assistant"]
         assert len(assistant_msgs) == 1
@@ -865,7 +873,10 @@ class TestToolResultFiltering:
             {"role": "assistant", "content_text": "Done.", "timestamp": _ts(11, 2), "session_id": "fix2b"},
         ]
         transcript = build_transcript(
-            events, include_tool_calls=False, strip_noise=False, redact_secrets=False,
+            events,
+            include_tool_calls=False,
+            strip_noise=False,
+            redact_secrets=False,
         )
         roles = [m.role for m in transcript.messages]
         assert "tool" not in roles
@@ -874,6 +885,7 @@ class TestToolResultFiltering:
 # =====================================================================
 # Review Fix 3: Unsorted events sorted by build_transcript
 # =====================================================================
+
 
 class TestEventSorting:
     """Verify build_transcript sorts events by timestamp."""
@@ -894,6 +906,7 @@ class TestEventSorting:
 # Review Fix 4: Token budget preserves goal signals
 # =====================================================================
 
+
 class TestTokenBudgetSignals:
     """Verify first_user_message and last_assistant_message survive budget truncation."""
 
@@ -903,21 +916,28 @@ class TestTokenBudgetSignals:
             {"role": "user", "content_text": "Please build the auth system", "timestamp": now, "session_id": "fix4"},
         ]
         for i in range(20):
-            events.append({
+            events.append(
+                {
+                    "role": "assistant",
+                    "content_text": f"Working on step {i}. " * 50,
+                    "timestamp": now + timedelta(seconds=i + 1),
+                    "session_id": "fix4",
+                }
+            )
+        events.append(
+            {
                 "role": "assistant",
-                "content_text": f"Working on step {i}. " * 50,
-                "timestamp": now + timedelta(seconds=i + 1),
+                "content_text": "All done! The auth system is complete.",
+                "timestamp": now + timedelta(seconds=100),
                 "session_id": "fix4",
-            })
-        events.append({
-            "role": "assistant",
-            "content_text": "All done! The auth system is complete.",
-            "timestamp": now + timedelta(seconds=100),
-            "session_id": "fix4",
-        })
+            }
+        )
 
         transcript = build_transcript(
-            events, token_budget=50, strip_noise=False, redact_secrets=False,
+            events,
+            token_budget=50,
+            strip_noise=False,
+            redact_secrets=False,
         )
         # Goal signals come from FULL session, not truncated view
         assert transcript.first_user_message == "Please build the auth system"
@@ -927,6 +947,7 @@ class TestTokenBudgetSignals:
 # =====================================================================
 # Review Fix 5: strip_noise preserves HTML/JSX
 # =====================================================================
+
 
 class TestStripNoiseAccuracy:
     """Verify strip_noise only removes known noise tags, not legitimate HTML/JSX."""

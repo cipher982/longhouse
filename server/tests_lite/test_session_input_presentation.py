@@ -104,6 +104,7 @@ def test_active_steerable_session_exposes_steer_as_primary_intent():
     assert response.composer_enabled is True
     assert response.send_disabled_reason is None
 
+
 def test_active_claude_channel_session_exposes_steer_as_primary_intent():
     session = _session(
         provider="claude",
@@ -170,9 +171,7 @@ def test_live_control_without_send_bit_exposes_typed_reason_not_offline_copy():
     assert response.input_mode == "read_only"
     assert response.default_input_intent == "none"
     assert response.composer_enabled is False
-    assert response.composer_disabled_reason == (
-        "This live Codex session is connected, but this control path cannot accept typed input."
-    )
+    assert response.composer_disabled_reason == ("This live Codex session is connected, but this control path cannot accept typed input.")
     assert response.send_disabled_reason == "input_not_supported"
 
 

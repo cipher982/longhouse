@@ -288,9 +288,7 @@ def test_collects_provider_status_artifacts_for_all_managed_providers(monkeypatc
 
     monkeypatch.setattr(prs.subprocess, "run", fake_run)
 
-    status = prs.collect_provider_release_status(
-        {provider: {"path": f"/opt/homebrew/bin/{provider}"} for provider in artifacts}
-    )
+    status = prs.collect_provider_release_status({provider: {"path": f"/opt/homebrew/bin/{provider}"} for provider in artifacts})
 
     assert status["enabled"] is True
     assert status["blocking_count"] == 0
@@ -459,9 +457,7 @@ def test_reads_provider_status_user_config_file_when_env_absent(monkeypatch, tmp
 
 
 def test_accepts_external_provider_status_url_envelope(monkeypatch) -> None:
-    monkeypatch.setenv(
-        prs.PROVIDER_RELEASE_STATUS_URL_ENV, "https://release-status.example/provider-release-status/{provider}"
-    )
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_URL_ENV, "https://release-status.example/provider-release-status/{provider}")
     monkeypatch.setattr(
         prs,
         "_read_json_url",

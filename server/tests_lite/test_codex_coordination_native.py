@@ -567,9 +567,7 @@ def test_run_coordination_dispatches_by_variant_and_uses_pass_not_passed(tmp_pat
     assert on_disk == result
 
 
-def test_run_coordination_mixed_scenario_status_matches_complete_assertion_map(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_coordination_mixed_scenario_status_matches_complete_assertion_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     args = _args(tmp_path)
     args.evidence_root = tmp_path / "evidence-mixed"
     args.variant = next(variant for variant, cell in m._CELL_BY_VARIANT.items() if cell[0] == "no_duplicate_visible_bootstrap")

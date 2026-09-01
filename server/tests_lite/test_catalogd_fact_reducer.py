@@ -97,9 +97,7 @@ def test_canonical_hash_rejects_integers_outside_serde_json_range(value):
     ],
 )
 def test_canonical_hash_preserves_unparseable_declared_timestamps(value):
-    assert canonical_value_json({"observed_at": value}) == json.dumps(
-        {"observed_at": value}, separators=(",", ":")
-    )
+    assert canonical_value_json({"observed_at": value}) == json.dumps({"observed_at": value}, separators=(",", ":"))
 
 
 def test_extraction_rejects_subject_that_does_not_match_explicit_run_id():
@@ -175,9 +173,7 @@ def test_batch_permutation_has_same_heads_and_commit_boundary(tmp_path):
         initialize_catalog_schema(engine)
         with engine.begin() as connection:
             result = reduce_fact_batch(connection, batch, received_at=NOW)
-            rows = connection.execute(
-                select(FactReceipt.subject_key, FactReceipt.evidence_hash).order_by(FactReceipt.subject_key)
-            ).all()
+            rows = connection.execute(select(FactReceipt.subject_key, FactReceipt.evidence_hash).order_by(FactReceipt.subject_key)).all()
         snapshots.append((result.commit_seq, result.changed_heads, rows))
 
     assert snapshots[0] == snapshots[1]
@@ -236,9 +232,7 @@ def test_same_position_batch_conflict_is_recorded_independent_of_order(tmp_path)
             with engine.begin() as connection:
                 result = reduce_fact_batch(connection, facts, received_at=NOW)
                 _, heads = read_fact_heads(connection, family="activity", subject_key=thinking.subject_key)
-                rows = connection.execute(
-                    select(FactConflict.existing_hash, FactConflict.incoming_hash, FactConflict.conflict_kind)
-                ).all()
+                rows = connection.execute(select(FactConflict.existing_hash, FactConflict.incoming_hash, FactConflict.conflict_kind)).all()
             snapshots.append((result, heads[0]["evidence_hash"], rows))
 
         assert snapshots[0] == snapshots[1]

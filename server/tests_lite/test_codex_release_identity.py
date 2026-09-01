@@ -175,10 +175,6 @@ def test_subject_mutation_during_execution_invalidates_identity_proof(tmp_path: 
 
 def test_bridge_imports_without_optional_server_dependencies() -> None:
     server_root = Path(bridge.__file__).resolve().parents[2]
-    command = (
-        "import sys; "
-        f"sys.path.insert(0, {str(server_root)!r}); "
-        "import zerg.qa.codex_release_identity"
-    )
+    command = f"import sys; sys.path.insert(0, {str(server_root)!r}); import zerg.qa.codex_release_identity"
     result = subprocess.run([sys.executable, "-S", "-c", command], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr

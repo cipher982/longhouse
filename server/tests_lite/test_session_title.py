@@ -13,16 +13,19 @@ def test_path_only_prompt_uses_project_fallback_for_timeline_copy():
     path = "/Users/davidrose/git/obsidian_vault/AI-Sessions/2026-08-14-provider-factory-audit.md"
 
     assert is_path_like_title(path)
-    assert resolve_timeline_title(
-        anchor_title=None,
-        first_user_message=path,
-        project="longhouse",
-        git_branch="main",
-        provider="claude",
-        user_messages=1,
-        assistant_messages=0,
-        tool_calls=0,
-    ) == "longhouse · main"
+    assert (
+        resolve_timeline_title(
+            anchor_title=None,
+            first_user_message=path,
+            project="longhouse",
+            git_branch="main",
+            provider="claude",
+            user_messages=1,
+            assistant_messages=0,
+            tool_calls=0,
+        )
+        == "longhouse · main"
+    )
     assert not is_path_like_title(f"{path} is throwing an exception")
 
 

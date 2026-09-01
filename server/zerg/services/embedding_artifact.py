@@ -70,7 +70,7 @@ def validate_embedding_artifact(model_dir: Path | None = None) -> dict[str, obje
 
 def _download_url(entry: EmbeddingArtifactFile) -> str:
     remote_path = quote(entry.path, safe="/")
-    return f"https://huggingface.co/{EMBEDDING_ARTIFACT_REPOSITORY}/resolve/" f"{EMBEDDING_ARTIFACT_REVISION}/{remote_path}"
+    return f"https://huggingface.co/{EMBEDDING_ARTIFACT_REPOSITORY}/resolve/{EMBEDDING_ARTIFACT_REVISION}/{remote_path}"
 
 
 def _open_url(url: str) -> BinaryIO:

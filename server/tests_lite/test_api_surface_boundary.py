@@ -100,8 +100,7 @@ def _under_api(path: str) -> bool:
 def test_api_is_served_by_exactly_one_mount_and_it_is_api_app(routes):
     api_mounts = [m for m in routes["mounts"] if m["path"] == API_MOUNT_PATH]
     assert len(api_mounts) == 1, (
-        f"expected exactly one mount at {API_MOUNT_PATH}, found {len(api_mounts)}. "
-        "Two mounts on one path means the second is unreachable."
+        f"expected exactly one mount at {API_MOUNT_PATH}, found {len(api_mounts)}. Two mounts on one path means the second is unreachable."
     )
     assert api_mounts[0]["is_api_app"], (
         f"{API_MOUNT_PATH} is mounted, but not to api_app. The OpenAPI schema is "
@@ -114,15 +113,10 @@ def test_no_route_on_the_outer_app_serves_an_api_path(routes):
 
     Such a route serves traffic and is invisible to every generated client.
     """
-    offenders = [
-        f"{r['kind']} {r['path']}"
-        for r in routes["outer"]
-        if _under_api(r["path"]) and not r["is_api_app_mount"]
-    ]
+    offenders = [f"{r['kind']} {r['path']}" for r in routes["outer"] if _under_api(r["path"]) and not r["is_api_app_mount"]]
     assert not offenders, (
         "these serve /api from the outer app instead of api_app, so they are "
-        "absent from the OpenAPI schema and every generated client:\n  "
-        + "\n  ".join(sorted(offenders))
+        "absent from the OpenAPI schema and every generated client:\n  " + "\n  ".join(sorted(offenders))
     )
 
 

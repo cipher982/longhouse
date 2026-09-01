@@ -78,10 +78,13 @@ def _helm_session(
             headers=headers,
         )
         assert bound.status_code == 204, bound.text
-        assert live_catalog.rpc(
-            "session.alias.resolve.v2",
-            {"provider_session_id": native_id, "owner_id": owner_id},
-        )["found"] is True
+        assert (
+            live_catalog.rpc(
+                "session.alias.resolve.v2",
+                {"provider_session_id": native_id, "owner_id": owner_id},
+            )["found"]
+            is True
+        )
     return session_id
 
 

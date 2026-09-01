@@ -161,10 +161,7 @@ def test_live_observation_uses_raw_capture_for_turn_and_state_assertions(tmp_pat
     effort["capture_complete"] = True
     effort["post_interaction_quiescent"] = True
     effort["raw_events"] = observation["raw_events"][:2]
-    lines = [
-        json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        for event in effort["raw_events"]
-    ]
+    lines = [json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True) for event in effort["raw_events"]]
     source_path = tmp_path / "history.jsonl"
     source_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     source_bytes = source_path.read_bytes()
@@ -173,9 +170,7 @@ def test_live_observation_uses_raw_capture_for_turn_and_state_assertions(tmp_pat
             "source_path": str(source_path),
             "source_offset": sum(len(line.encode("utf-8")) + 1 for line in lines[:index]),
             "line": lines[index],
-            "line_sha256": hashlib.sha256(
-                lines[index].encode("utf-8")
-            ).hexdigest(),
+            "line_sha256": hashlib.sha256(lines[index].encode("utf-8")).hexdigest(),
             "event_sha256": raw_event_digest(event),
             "source_binding": "file_bytes_at_offset",
             "source_file_bytes": len(source_bytes),
@@ -188,9 +183,7 @@ def test_live_observation_uses_raw_capture_for_turn_and_state_assertions(tmp_pat
         "stable_snapshots": 3,
         "stable_seconds": 1.5,
         "raw_event_count": len(source_rows),
-        "window_sha256": hashlib.sha256(
-            "".join(source["event_sha256"] for source in source_rows).encode("ascii")
-        ).hexdigest(),
+        "window_sha256": hashlib.sha256("".join(source["event_sha256"] for source in source_rows).encode("ascii")).hexdigest(),
     }
 
     result = evaluate_observation("claude", observation)
@@ -415,12 +408,8 @@ def test_claude_native_local_command_rows_are_not_user_or_title_events() -> None
     raw_command = {"type": "user", "isMeta": True, "message": {"role": "user", "content": command}}
     raw_output = {"type": "user", "isMeta": True, "message": {"role": "user", "content": output}}
 
-    command_semantics = classify_provider_interaction(
-        "claude", role="user", content_text=command, raw_json=json.dumps(raw_command)
-    )
-    output_semantics = classify_provider_interaction(
-        "claude", role="user", content_text=output, raw_json=raw_output
-    )
+    command_semantics = classify_provider_interaction("claude", role="user", content_text=command, raw_json=json.dumps(raw_command))
+    output_semantics = classify_provider_interaction("claude", role="user", content_text=output, raw_json=raw_output)
 
     assert command_semantics["interaction_kind"] == INTERACTION_LOCAL_CONTROL
     assert command_semantics["counts_as_user_message"] is False

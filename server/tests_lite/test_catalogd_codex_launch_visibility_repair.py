@@ -232,9 +232,7 @@ async def test_codex_visibility_repair_is_dry_run_first_cas_and_idempotent(
             },
         )
         assert replay["applied"] is False
-        assert {"launch_actor_already_set", "launch_surface_already_set", "not_policy_hidden"} <= set(
-            replay["refusals"]
-        )
+        assert {"launch_actor_already_set", "launch_surface_already_set", "not_policy_hidden"} <= set(replay["refusals"])
         assert replay["commit_seq"] == applied["commit_seq"]
     finally:
         await client.close()

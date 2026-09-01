@@ -1,4 +1,5 @@
 """Unit tests for hybrid RRF search fusion."""
+
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -9,6 +10,7 @@ from zerg.services.search import rrf_fuse, _RRF_K
 @dataclass
 class _FakeSession:
     """Minimal AgentSession-like object for RRF tests."""
+
     id: str
     started_at: datetime
     ended_at: Optional[datetime]

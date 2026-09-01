@@ -1,4 +1,5 @@
 """Unit tests for search ranking modes."""
+
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -9,6 +10,7 @@ from zerg.services.search import apply_sort
 @dataclass
 class _FakeSession:
     """Minimal AgentSession-like object for sorting tests."""
+
     id: str
     started_at: datetime
     ended_at: Optional[datetime]

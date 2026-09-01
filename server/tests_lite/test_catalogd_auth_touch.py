@@ -146,14 +146,10 @@ def test_a_stamp_already_taken_by_a_concurrent_login_is_not_rewritten(store):
 
 def test_a_revoked_device_is_not_stamped(store):
     with store.engine.begin() as connection:
-        connection.execute(
-            update(LiveDeviceToken.__table__).values(revoked_at=datetime.now(UTC), last_used_at=None)
-        )
+        connection.execute(update(LiveDeviceToken.__table__).values(revoked_at=datetime.now(UTC), last_used_at=None))
     before = _commit_seq(store)
 
-    stamped = store.touch_device_token(
-        token_id="11111111-1111-4111-8111-111111111111", touch_interval_seconds=300
-    )
+    stamped = store.touch_device_token(token_id="11111111-1111-4111-8111-111111111111", touch_interval_seconds=300)
 
     assert stamped["changed"] is False
     assert int(stamped["commit_seq"]) == before

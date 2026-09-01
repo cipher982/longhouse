@@ -894,7 +894,9 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
         wait_session_tail("https://runtime.example", "device-token", "session-1", timeout=0)
 
     missing = live_session_toolkit._RuntimeHostHTTPError(404, "session not found")
-    monkeypatch.setattr(live_session_toolkit, "_api_json",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_api_json",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(missing),
     )
 
@@ -1584,7 +1586,9 @@ def test_cursor_projection_diagnostics_are_non_authoritative_on_capture_or_write
     assert payload["schema"] == "cursor_projection_diagnostics_unavailable.v1"
     assert payload["status"] == "unavailable"
 
-    monkeypatch.setattr(live_session_toolkit, "write_json",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "write_json",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
     assert shipper.capture_cursor_projection_diagnostics(
@@ -2019,7 +2023,9 @@ def test_claude_profile_bootstrap_accepts_observed_main_tui_as_completion(
     monkeypatch.setattr(live_session_toolkit, "PtyProcess", FakePtyProcess)
     monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: next(moments))
     monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(live_session_toolkit, "_terminal_text",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_terminal_text",
         lambda _recording: "Claude Code v2.1.221  Longhouse qualification bootstrap  Welcome back!",
     )
 
@@ -2607,7 +2613,9 @@ def test_cursor_initial_seed_bootstraps_through_the_provider_pty(tmp_path: Path)
 
 def test_cursor_initial_idle_uses_qualification_live_send_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
-    monkeypatch.setattr(live_session_toolkit, "_wait_cursor_idle",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_wait_cursor_idle",
         lambda state, environment, **kwargs: calls.append(kwargs) or {"phase": "idle"},
     )
     args = _args(tmp_path)
@@ -2840,10 +2848,14 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
         def kill_group(_signal: int) -> None:
             raise AssertionError("idle clean stop must not need a fallback signal")
 
-    monkeypatch.setattr(live_session_toolkit, "_wait_cursor_idle",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_wait_cursor_idle",
         lambda state, environment, **kwargs: calls.append(("idle", kwargs)) or {"phase": "idle"},
     )
-    monkeypatch.setattr(live_session_toolkit, "_control_send",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_control_send",
         lambda spec, args, state, process, text, **kwargs: calls.append(("send", text)) or {"returncode": 0},
     )
     monkeypatch.setattr(live_session_toolkit, "wait_process_group_dead", lambda _pid: True)
@@ -2898,7 +2910,9 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
         "_cursor_interrupt_to_idle",
         lambda *_args, **kwargs: calls.append(("interrupt", kwargs)) or {"method": "cursor_ctrl_c_recovery"},
     )
-    monkeypatch.setattr(live_session_toolkit, "_control_send",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_control_send",
         lambda spec, args, state, process, text, **kwargs: calls.append(("send", text)) or {"returncode": 0},
     )
     monkeypatch.setattr(live_session_toolkit, "wait_process_group_dead", lambda _pid: True)
@@ -3072,7 +3086,9 @@ def test_cursor_interrupt_recovery_handles_error_stop_and_late_response(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(live_session_toolkit, "_wait_cursor_idle",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_wait_cursor_idle",
         lambda *_args, **_kwargs: {"phase": "idle", "generation_id": "generation-1"},
     )
     monkeypatch.setattr(live_session_toolkit, "wait_cursor_tui_ready", lambda *_args, **_kwargs: None)
@@ -3222,7 +3238,9 @@ def test_cursor_interrupt_recovery_records_late_normal_completion(tmp_path: Path
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(live_session_toolkit, "_wait_cursor_idle",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_wait_cursor_idle",
         lambda *_args, **_kwargs: {"phase": "idle", "generation_id": "generation-1"},
     )
     monkeypatch.setattr(live_session_toolkit, "wait_cursor_tui_ready", lambda *_args, **_kwargs: None)
@@ -3315,9 +3333,7 @@ def test_response_correlation_returns_measured_facts_for_strict_provider(
         "token",
         "session-1",
         marker,
-        prior_assistant_event_digests=live_session_toolkit.assistant_event_digests(
-            {"events": [{"role": "assistant", "content": "prior"}]}
-        ),
+        prior_assistant_event_digests=live_session_toolkit.assistant_event_digests({"events": [{"role": "assistant", "content": "prior"}]}),
         require_assistant_marker=True,
         timeout=1,
     )
@@ -3368,7 +3384,9 @@ def test_strict_response_correlation_rejects_unrelated_assistant_event(
 def test_claude_response_correlation_returns_false_facts_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(live_session_toolkit, "_api_json",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "_api_json",
         lambda *_args, **_kwargs: {"events": [{"role": "user", "content": "MARKER"}]},
     )
     ticks = iter((0.0, 0.0, 2.0))
@@ -3673,7 +3691,9 @@ def test_run_native_resume_refreshes_failure_manifest_after_finally_cleanup(
     monkeypatch.setattr(live_session_toolkit, "PtyProcess", FakeProcess)
     monkeypatch.setattr(live_session_toolkit, "start_transcript_shipper", fake_start_shipper)
     monkeypatch.setattr(live_session_toolkit, "wait_opencode_tui_ready", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(live_session_toolkit, "wait_state",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "wait_state",
         lambda *_args, **_kwargs: {
             "session_id": "session-1",
             "run_id": "run-1",
@@ -3686,7 +3706,9 @@ def test_run_native_resume_refreshes_failure_manifest_after_finally_cleanup(
     monkeypatch.setattr(live_session_toolkit, "wait_session_tail", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(live_session_toolkit, "assistant_event_digests", lambda *_args: set())
     monkeypatch.setattr(live_session_toolkit, "_control_send", lambda *_args, **_kwargs: {"returncode": 0})
-    monkeypatch.setattr(live_session_toolkit, "wait_assistant_response_after_marker",
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "wait_assistant_response_after_marker",
         lambda *_args, **_kwargs: ({}, {"marker_observed_in_transcript": False, "new_assistant_events": 0}),
     )
     monkeypatch.setattr(live_session_toolkit, "cleanup_processes", fake_cleanup)

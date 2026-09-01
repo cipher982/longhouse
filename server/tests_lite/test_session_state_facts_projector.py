@@ -90,9 +90,7 @@ def _head(
         f"run:{value['run_id']}"
         if family == "activity"
         else (
-            f"connection:{value['connection_id']}:{value['lease_generation']}"
-            if family == "control"
-            else f"resume:{value['session_id']}"
+            f"connection:{value['connection_id']}:{value['lease_generation']}" if family == "control" else f"resume:{value['session_id']}"
         )
     )
     return {
@@ -338,9 +336,7 @@ def test_projector_rejects_heads_not_bound_to_durable_run_and_connection():
         commit_seq=12,
         catalog_facts={
             **BOUND_CONTROL_CATALOG_FACTS,
-            "connections": [
-                {**BOUND_CONTROL_CATALOG_FACTS["connections"][0], "state": "released", "released_at": NOW.isoformat()}
-            ],
+            "connections": [{**BOUND_CONTROL_CATALOG_FACTS["connections"][0], "state": "released", "released_at": NOW.isoformat()}],
         },
         heads=[unbound_control],
         supported_operations={"send_input"},

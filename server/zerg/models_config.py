@@ -142,8 +142,7 @@ def _load_config() -> dict:
     config_path = _get_config_path()
     if not config_path.exists():
         raise FileNotFoundError(
-            f"Models config not found at {config_path}. "
-            f"Set MODELS_CONFIG_PATH env var to override, or ensure config/models.json exists."
+            f"Models config not found at {config_path}. Set MODELS_CONFIG_PATH env var to override, or ensure config/models.json exists."
         )
     return json.loads(config_path.read_text())
 

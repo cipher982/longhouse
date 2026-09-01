@@ -18,10 +18,7 @@ from zerg.services import opencode_bridge_state as bs
 
 def test_parse_listen_line_extracts_url():
     assert bs.parse_listen_line("opencode server listening on http://127.0.0.1:4096") == "http://127.0.0.1:4096"
-    assert (
-        bs.parse_listen_line("[ts] opencode server listening on http://0.0.0.0:54321/")
-        == "http://0.0.0.0:54321"
-    )
+    assert bs.parse_listen_line("[ts] opencode server listening on http://0.0.0.0:54321/") == "http://0.0.0.0:54321"
 
 
 def test_parse_listen_line_returns_none_for_unrelated():

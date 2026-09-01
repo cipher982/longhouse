@@ -96,6 +96,5 @@ def test_every_machine_control_support_maps_to_a_known_operation() -> None:
             provider, _, suffix = support.partition(".")
             assert provider == contract.provider, f"{support} is declared under {contract.provider}"
             assert suffix in MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX, (
-                f"{support} has no entry in MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX, so it "
-                "advertises a capability nothing can resolve"
+                f"{support} has no entry in MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX, so it advertises a capability nothing can resolve"
             )

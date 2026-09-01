@@ -33,9 +33,7 @@ from zerg.services.local_embedder import LocalEmbedderUnavailable
 
 DIMS = 4
 _GOLDEN_QUERY = "how do I repair a managed session?"
-_GOLDEN_VECTOR_BASE64 = (
-    "H/uCvhpb3DuXMk280CVxu/zizz1HvxA98XW/OkIhYrwlxC0981V5vcKicT3wZaG8PLRrPGZ/x7yRpXo8/9y3O7rjGj1TFio+AMDkvU4c1DyIiMo9sXKiuy+BAr3rcP48QKguPENvsj1imk89ewROvaihp71G0gq8aQz/PDqZIr35J7E92u+MvEsf5Dx6Abm9zCiQPIB/zD2xXqM9IUyuvMbeTbuzNZA905FTveb5Mz2UGbs9oVeMPcF4MD0W2zA9d1okPSmTfr38ode9qfTMPOw9Dj2Ymrq8Ein7vJ/xHT3eLjM9QtiivWLFJr0v/DI9xfYLvavX/DyCnKu9vQPTvLg0k7zZPxc9oxqsPSqiMbpwrd+77ipbPUl2pb28vf26obXWPBSfKb3dPDo+qaUqPQg5oLrVfLc85VGGPdU7Ab0Z02g730x1PGtff70rTqA9dZ9tPc3Dkj0/XaW9vb0hvcGdKD3MbwS9s7ScvWFaPb0zor69/yudvbJllD3326s9fuCUvSF/lb09qmi7blcAvdqJzj0K2+I7q3e0PTIVjz1S/by8vbhmPR48rr3qqRe9u/k9PS7OQj3HHOo8a4aFPGWIvL2XDt29ey6yvUHIFLyB5DE9j+mUPZ1nwj3OqWG9ITxOPQZlkbxmkGs9r92RvJ6M/b2WXpG8Zt1hvCMQDb2DSwu9l3AmvShzQzxDQFU9bWnBvOLwbjpdr1a9D2shvXQrTL1FFfs6pVX2u/BfE71qpuK9BagDPexCCz5I7se70ZDRvdc597zCNge9qYuoPB57Sjwq7Oy8WzeVvTai9bzKNyQ9q9SYvYB0hb2I9Q09FcJZu69WED2DeKK9z7BAvCpxF7yyYRo82ka2vayhMT540gw+3SA5Ppup2T0B7uA7fuSKva8TRb18w4W9Gp+GvYM3wTyVdRy8+DBpve4Ig71aEAW9gBYFPSlDuTzygCc9AL8PPhgFYTwmnsO9dZL0Pc8Zkz0On6o8rwGlPWZSbrx0Anq9qsI+PPY+qjs1e3+7gTfWPaICF72ZkLq8PFEhPRsLNT6UFTW9M10gPVUw2TxCZBo9pXvsPBItSL10nhy9P5OrvVp2hT0ViHq8ko4qPcGgI74JUp68q8jbvJRku7xkljO9oTSGPDMMfjt1Q7K5s8aWvIjqe70eEK080LyxvflXej3rfMI7yTu4PL1u/jy7krm9r4eivWeY+bz8FaC9lWyvvUm7NT2J1Cu8qwqnPFyUxz0LPia9zAI0vde7A71/62a9mu61PC6Ahj3AMi89x/aEvMtZVz3PkDC6a4qEPd/qpT0D5Gw9rIPcuxOdmLzb+gK8ZcrTvMwaMTvLtwO9hFxhPVD2Xj301+q9RwYPPA=="
-)
+_GOLDEN_VECTOR_BASE64 = "H/uCvhpb3DuXMk280CVxu/zizz1HvxA98XW/OkIhYrwlxC0981V5vcKicT3wZaG8PLRrPGZ/x7yRpXo8/9y3O7rjGj1TFio+AMDkvU4c1DyIiMo9sXKiuy+BAr3rcP48QKguPENvsj1imk89ewROvaihp71G0gq8aQz/PDqZIr35J7E92u+MvEsf5Dx6Abm9zCiQPIB/zD2xXqM9IUyuvMbeTbuzNZA905FTveb5Mz2UGbs9oVeMPcF4MD0W2zA9d1okPSmTfr38ode9qfTMPOw9Dj2Ymrq8Ein7vJ/xHT3eLjM9QtiivWLFJr0v/DI9xfYLvavX/DyCnKu9vQPTvLg0k7zZPxc9oxqsPSqiMbpwrd+77ipbPUl2pb28vf26obXWPBSfKb3dPDo+qaUqPQg5oLrVfLc85VGGPdU7Ab0Z02g730x1PGtff70rTqA9dZ9tPc3Dkj0/XaW9vb0hvcGdKD3MbwS9s7ScvWFaPb0zor69/yudvbJllD3326s9fuCUvSF/lb09qmi7blcAvdqJzj0K2+I7q3e0PTIVjz1S/by8vbhmPR48rr3qqRe9u/k9PS7OQj3HHOo8a4aFPGWIvL2XDt29ey6yvUHIFLyB5DE9j+mUPZ1nwj3OqWG9ITxOPQZlkbxmkGs9r92RvJ6M/b2WXpG8Zt1hvCMQDb2DSwu9l3AmvShzQzxDQFU9bWnBvOLwbjpdr1a9D2shvXQrTL1FFfs6pVX2u/BfE71qpuK9BagDPexCCz5I7se70ZDRvdc597zCNge9qYuoPB57Sjwq7Oy8WzeVvTai9bzKNyQ9q9SYvYB0hb2I9Q09FcJZu69WED2DeKK9z7BAvCpxF7yyYRo82ka2vayhMT540gw+3SA5Ppup2T0B7uA7fuSKva8TRb18w4W9Gp+GvYM3wTyVdRy8+DBpve4Ig71aEAW9gBYFPSlDuTzygCc9AL8PPhgFYTwmnsO9dZL0Pc8Zkz0On6o8rwGlPWZSbrx0Anq9qsI+PPY+qjs1e3+7gTfWPaICF72ZkLq8PFEhPRsLNT6UFTW9M10gPVUw2TxCZBo9pXvsPBItSL10nhy9P5OrvVp2hT0ViHq8ko4qPcGgI74JUp68q8jbvJRku7xkljO9oTSGPDMMfjt1Q7K5s8aWvIjqe70eEK080LyxvflXej3rfMI7yTu4PL1u/jy7krm9r4eivWeY+bz8FaC9lWyvvUm7NT2J1Cu8qwqnPFyUxz0LPia9zAI0vde7A71/62a9mu61PC6Ahj3AMi89x/aEvMtZVz3PkDC6a4qEPd/qpT0D5Gw9rIPcuxOdmLzb+gK8ZcrTvMwaMTvLtwO9hFxhPVD2Xj301+q9RwYPPA=="
 
 
 class _StubTokenizer:
@@ -45,10 +43,7 @@ class _StubTokenizer:
     def encode_batch(self, texts):
         self.seen.extend(texts)
         width = max(len(t.split()) for t in texts)
-        return [
-            type("E", (), {"ids": [1] * width, "attention_mask": [1] * width})()
-            for _ in texts
-        ]
+        return [type("E", (), {"ids": [1] * width, "attention_mask": [1] * width})() for _ in texts]
 
 
 class _StubSession:

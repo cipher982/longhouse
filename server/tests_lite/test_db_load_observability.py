@@ -17,7 +17,7 @@ def test_parse_prometheus_preserves_labels_and_skips_comments() -> None:
     samples = sampler.parse_prometheus(
         "# HELP ignored\n"
         'longhouse_write_serializer_exec_ms{label="ingest",quantile="p95"} 12.5\n'
-        "python_gc_objects_collected_total{generation=\"0\"} 9\n"
+        'python_gc_objects_collected_total{generation="0"} 9\n'
     )
 
     assert samples == [
@@ -63,12 +63,16 @@ def test_sample_keeps_resource_capture_running_after_runtime_error(monkeypatch, 
     monkeypatch.setattr(sampler, "runtime_sample", lambda _args: calls.append("runtime") or 1)
     monkeypatch.setattr(sampler, "resource_sample", lambda _args: calls.append("resources") or 0)
 
-    args = type("Args", (), {
-        "data_dir": tmp_path,
-        "runtime_container": "runtime",
-        "containers": "runtime,neighbor",
-        "mountpoint": "/data",
-    })()
+    args = type(
+        "Args",
+        (),
+        {
+            "data_dir": tmp_path,
+            "runtime_container": "runtime",
+            "containers": "runtime,neighbor",
+            "mountpoint": "/data",
+        },
+    )()
 
     assert sampler.sample(args) == 0
     assert calls == ["runtime", "resources"]

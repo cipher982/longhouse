@@ -37,9 +37,7 @@ def _get_client(session_factory, refresh_calls=None):
     def _resolve_local_user(**params):
         with session_factory() as db:
             user = db.query(User).filter(User.email == params["email"]).first()
-            existing = (
-                db.query(User).filter((User.provider != "service") | User.provider.is_(None)).order_by(User.id).first()
-            )
+            existing = db.query(User).filter((User.provider != "service") | User.provider.is_(None)).order_by(User.id).first()
             if user is None and existing is not None and params["require_email_match"]:
                 raise HTTPException(
                     status_code=409,
@@ -118,9 +116,7 @@ def test_password_login_rejects_legacy_user_mismatch(tmp_path):
         for client in _get_client(sf):
             resp = client.post("/auth/password", json={"password": "secret"})
             assert resp.status_code == 409
-            assert resp.json()["detail"] == (
-                "Password auth is bound to the configured owner. Existing user does not match OWNER_EMAIL."
-            )
+            assert resp.json()["detail"] == ("Password auth is bound to the configured owner. Existing user does not match OWNER_EMAIL.")
 
     with sf() as db:
         users = db.query(User).all()

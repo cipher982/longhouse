@@ -372,6 +372,7 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
 
     monkeypatch.setattr(m, "_launch_cursor_session", launch_on_machine)
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
+
     def wait_marker(*args, **_kwargs):  # noqa: ANN001 - test double
         steps.append(f"reply:{args[2]}")
         return args[3]

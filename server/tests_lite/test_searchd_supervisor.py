@@ -70,9 +70,7 @@ def test_status_logs_only_meaningful_transitions(supervisor_paths, caplog):
         supervisor._write_status("degraded", log_transition=False, ownership="owned", error="transient ping")
         supervisor._write_status("degraded", ownership="none", restart_count=1, last_exit_code=1)
 
-    transitions = [
-        record for record in caplog.records if getattr(record, "event", None) == "supervisor_state_changed"
-    ]
+    transitions = [record for record in caplog.records if getattr(record, "event", None) == "supervisor_state_changed"]
     assert [record.status for record in transitions] == ["starting", "degraded"]
     assert transitions[0].tag == "SEARCHD"
     assert transitions[1].last_exit_code == 1

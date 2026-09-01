@@ -59,9 +59,7 @@ def _toy_schema_entry(adapter_source: str) -> dict[str, object]:
         }
     )
     item.pop("adapter_digest", None)
-    item["machine_control_supports"] = [
-        str(support).replace("cursor.", f"{PROVIDER}.") for support in item["machine_control_supports"]
-    ]
+    item["machine_control_supports"] = [str(support).replace("cursor.", f"{PROVIDER}.") for support in item["machine_control_supports"]]
     return item
 
 

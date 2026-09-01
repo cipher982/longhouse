@@ -43,7 +43,9 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
     session_id = str(uuid4())
     now = datetime.now(UTC).replace(microsecond=0)
     with engine.begin() as connection:
-        connection.execute(LiveUser.__table__.insert().values(id=1, email="owner@catalogd-preferences.test", provider="test", is_active=True))
+        connection.execute(
+            LiveUser.__table__.insert().values(id=1, email="owner@catalogd-preferences.test", provider="test", is_active=True)
+        )
         connection.execute(
             LiveSession.__table__.insert().values(
                 session_id=session_id,

@@ -37,8 +37,7 @@ def _blob_digest(label: str) -> str:
 
 
 _BLOB_CONTENT = {
-    _blob_digest(label): label.encode()
-    for label in ("raw", "epoch", "verifier", "census", "compile", "plan", "sandbox", "cleanup")
+    _blob_digest(label): label.encode() for label in ("raw", "epoch", "verifier", "census", "compile", "plan", "sandbox", "cleanup")
 }
 
 
@@ -166,9 +165,7 @@ def _product_bundle(*, projected_plan: bool = False) -> tuple[dict, str]:
         projection_digest = f"sha256:{hashlib.sha256(projection).hexdigest()}"
         record["provenance_extension"]["plan_projection_digest"] = projection_digest
         contents[projection_digest] = projection
-    artifact_id = hashlib.sha256(
-        json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
-    ).hexdigest()
+    artifact_id = hashlib.sha256(json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
     record = {"artifact_id": artifact_id, **record}
     referenced = {
         *record["raw_reference_digests"],
@@ -190,10 +187,7 @@ def _product_bundle(*, projected_plan: bool = False) -> tuple[dict, str]:
             "auth_mechanism": record["auth_mechanism"],
             "published_at": "2026-07-22T18:01:00Z",
         },
-        "blobs": [
-            {"digest": digest, "content_base64": base64.b64encode(contents[digest]).decode()}
-            for digest in sorted(referenced)
-        ],
+        "blobs": [{"digest": digest, "content_base64": base64.b64encode(contents[digest]).decode()} for digest in sorted(referenced)],
     }
     payload["bundle_digest"] = routes._bundle_digest(payload)
     return payload, artifact_id
@@ -297,11 +291,15 @@ def test_product_assurance_publish_is_archived_but_never_projected_as_a_provider
         api_app.dependency_overrides.clear()
 
     assert first.status_code == 201, first.text
-    assert second.json() == first.json() == {
-        "schema_version": 2,
-        "accepted": 1,
-        "trusted_artifact_ids": [artifact_id],
-    }
+    assert (
+        second.json()
+        == first.json()
+        == {
+            "schema_version": 2,
+            "accepted": 1,
+            "trusted_artifact_ids": [artifact_id],
+        }
+    )
     archive = tmp_path / "trusted-product-assurance"
     assert len(list((archive / "bundles").glob("*.json"))) == 1
     assert len(list((archive / "events" / artifact_id).glob("*.json"))) == 1
@@ -378,11 +376,7 @@ def test_factory_rejects_new_v2_publication_but_keeps_old_history_non_admissible
         "reason_codes": ["proof_schema_legacy", "historical_schema_v2"],
     }
     assert legacy.artifact_id not in fetched.json()["trusted_artifact_ids"]
-    row = next(
-        item
-        for item in projection["capabilities"]
-        if item["provider"] == "codex" and item["assertion_id"] == legacy.assertion_id
-    )
+    row = next(item for item in projection["capabilities"] if item["provider"] == "codex" and item["assertion_id"] == legacy.assertion_id)
     assert row["proof_status"] == "unacceptable_evidence"
     assert row["proof_artifact_id"] is None
     assert row["latest_proof_artifact_id"] == legacy.artifact_id
@@ -570,18 +564,18 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
     proof = _record(
-            assertion_id="coordination_instructions_model_visible",
-            assertion_variant=None,
-            scenario_id="codex_coordination_awareness_create",
-            outcome=AssertionOutcome.PASS,
-            generated_at=generated_at,
-            # The schema's real acceptable_evidence for this assertion is
-            # live_token only (schemas/managed_providers.yml) -- the fixture
-            # must use a genuinely valid evidence class now that
-            # project_capabilities() checks it (review 2026-07-29), or this
-            # "proven" row silently becomes unacceptable_evidence instead.
-            evidence_class=EvidenceClass.LIVE_TOKEN,
-        )
+        assertion_id="coordination_instructions_model_visible",
+        assertion_variant=None,
+        scenario_id="codex_coordination_awareness_create",
+        outcome=AssertionOutcome.PASS,
+        generated_at=generated_at,
+        # The schema's real acceptable_evidence for this assertion is
+        # live_token only (schemas/managed_providers.yml) -- the fixture
+        # must use a genuinely valid evidence class now that
+        # project_capabilities() checks it (review 2026-07-29), or this
+        # "proven" row silently becomes unacceptable_evidence instead.
+        evidence_class=EvidenceClass.LIVE_TOKEN,
+    )
     _write_trusted(store, proof)
     client = _client(monkeypatch, tmp_path)
     try:
@@ -631,12 +625,12 @@ def test_admin_provider_capabilities_mirrors_the_agents_surface(monkeypatch, tmp
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
     proof = _record(
-            assertion_id="coordination_instructions_model_visible",
-            assertion_variant=None,
-            scenario_id="codex_coordination_awareness_create",
-            outcome=AssertionOutcome.PASS,
-            generated_at=generated_at,
-        )
+        assertion_id="coordination_instructions_model_visible",
+        assertion_variant=None,
+        scenario_id="codex_coordination_awareness_create",
+        outcome=AssertionOutcome.PASS,
+        generated_at=generated_at,
+    )
     _write_trusted(store, proof)
     api_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=1, is_admin=True)
     api_app.dependency_overrides[require_admin] = lambda: None

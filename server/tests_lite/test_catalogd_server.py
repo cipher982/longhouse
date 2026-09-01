@@ -163,10 +163,7 @@ async def test_interactive_read_lane_rejects_work_instead_of_queueing(daemon_pat
                 entered.set()
         release.wait(timeout=2)
 
-    blocked = [
-        asyncio.create_task(daemon._run_read_store(block_interactive_read_lane))
-        for _ in range(daemon._read_max_depth)
-    ]
+    blocked = [asyncio.create_task(daemon._run_read_store(block_interactive_read_lane)) for _ in range(daemon._read_max_depth)]
     try:
         assert await asyncio.to_thread(entered.wait, 1)
         with pytest.raises(CatalogReaderBusy):
@@ -199,10 +196,7 @@ async def test_background_reads_do_not_consume_interactive_lane(daemon_paths):
                 entered.set()
         release.wait(timeout=2)
 
-    blocked = [
-        asyncio.create_task(daemon._run_read_store(block_interactive_read_lane))
-        for _ in range(daemon._read_max_depth)
-    ]
+    blocked = [asyncio.create_task(daemon._run_read_store(block_interactive_read_lane)) for _ in range(daemon._read_max_depth)]
     try:
         assert await asyncio.to_thread(entered.wait, 1)
         assert (await client.call("session.input.queued.list.v2", {"limit": 10}))["session_ids"] == []

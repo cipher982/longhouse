@@ -77,10 +77,7 @@ def test_plain_user_turn_kept_as_user():
 def test_combined_injection_plus_query_emits_user_text():
     msg = {
         "role": "user",
-        "content": (
-            "<user_info>\nOS Version: darwin\n\n"
-            "<user_query>do the thing</user_query>"
-        ),
+        "content": ("<user_info>\nOS Version: darwin\n\n<user_query>do the thing</user_query>"),
     }
     events = _map(msg)
     assert len(events) == 1

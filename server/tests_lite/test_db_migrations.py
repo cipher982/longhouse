@@ -517,7 +517,9 @@ def test_startup_migration_moves_terminal_runtime_evidence_to_run(tmp_path):
     _migrate_agents_columns(engine)
     with engine.connect() as conn:
         row = conn.execute(text("SELECT ended_at, exit_status FROM session_runs WHERE id = :run_id"), {"run_id": run_id}).one()
-        session_row = conn.execute(text("SELECT ended_at, closed_at FROM sessions WHERE id = :session_id"), {"session_id": session_id}).one()
+        session_row = conn.execute(
+            text("SELECT ended_at, closed_at FROM sessions WHERE id = :session_id"), {"session_id": session_id}
+        ).one()
     assert row == ("2026-05-04 17:40:00", "process_gone")
     assert session_row == (None, None)
 
@@ -592,10 +594,7 @@ def test_session_identity_kernel_backfill_is_explicit_heavy_migration(tmp_path):
     assert "20260521_session_identity_kernel_backfill" in pending_names
 
     run_items = apply_heavy_migrations(engine)
-    assert any(
-        item.name == "20260521_session_identity_kernel_backfill" and item.status == "applied"
-        for item in run_items
-    )
+    assert any(item.name == "20260521_session_identity_kernel_backfill" and item.status == "applied" for item in run_items)
 
     with engine.connect() as conn:
         assert conn.execute(
@@ -650,13 +649,9 @@ def test_provider_interaction_semantics_backfill_classifies_legacy_claude_rows(t
                     }
                 ),
                 "command": command,
-                "command_raw": json.dumps(
-                    {"type": "user", "promptId": "prompt-effort-1", "message": {"role": "user", "content": command}}
-                ),
+                "command_raw": json.dumps({"type": "user", "promptId": "prompt-effort-1", "message": {"role": "user", "content": command}}),
                 "output": output,
-                "output_raw": json.dumps(
-                    {"type": "user", "promptId": "prompt-effort-1", "message": {"role": "user", "content": output}}
-                ),
+                "output_raw": json.dumps({"type": "user", "promptId": "prompt-effort-1", "message": {"role": "user", "content": output}}),
             },
         )
         # Simulate a partial prior backfill: the caveat has facts, but its
@@ -751,11 +746,7 @@ def test_provider_interaction_reclassification_repairs_prior_successful_backfill
         )
 
     run_items = apply_heavy_migrations(engine)
-    repair_run = next(
-        item
-        for item in run_items
-        if item.name == "20260802_provider_interaction_semantics_reclassification"
-    )
+    repair_run = next(item for item in run_items if item.name == "20260802_provider_interaction_semantics_reclassification")
     assert repair_run.status == "applied"
 
     with engine.connect() as conn:
@@ -853,15 +844,8 @@ def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
     _migrate_agents_columns(engine)
 
     first_run = apply_heavy_migrations(engine)
-    assert any(
-        item.name == "20260304_events_branch_backfill" and item.status == "applied"
-        for item in first_run
-    )
-    assert any(
-        item.name == "20260304_source_lines_branch_revision_rebuild"
-        and item.status == "applied"
-        for item in first_run
-    )
+    assert any(item.name == "20260304_events_branch_backfill" and item.status == "applied" for item in first_run)
+    assert any(item.name == "20260304_source_lines_branch_revision_rebuild" and item.status == "applied" for item in first_run)
 
     pending_after_first = [item.name for item in plan_heavy_migrations(engine) if item.pending]
     assert pending_after_first == []
@@ -870,12 +854,8 @@ def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
     assert all(item.status == "skipped" for item in second_run)
 
     with engine.connect() as conn:
-        null_branch_rows = int(
-            conn.execute(text("SELECT COUNT(*) FROM events WHERE branch_id IS NULL")).scalar() or 0
-        )
-        ledger_rows = conn.execute(
-            text("SELECT migration_name, status FROM migration_runs ORDER BY migration_name")
-        ).fetchall()
+        null_branch_rows = int(conn.execute(text("SELECT COUNT(*) FROM events WHERE branch_id IS NULL")).scalar() or 0)
+        ledger_rows = conn.execute(text("SELECT migration_name, status FROM migration_runs ORDER BY migration_name")).fetchall()
     assert null_branch_rows == 0
     assert ledger_rows == [
         ("20260304_events_branch_backfill", "succeeded"),

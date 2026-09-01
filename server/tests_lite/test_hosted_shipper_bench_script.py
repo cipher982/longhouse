@@ -21,5 +21,5 @@ def test_hosted_script_resolves_machine_id_from_storage_v2_capabilities():
     assert "X-Agents-Token:" in source
     # Do not echo secrets or the resolved machine id into the primary progress line.
     assert 'echo "Running hosted mixed live/archive shipper bench against $API_URL"' in source
-    assert "echo \"$LONGHOUSE_DEVICE_TOKEN\"" not in source
-    assert "echo \"$SHIP_MACHINE_ID\"" not in source
+    assert 'echo "$LONGHOUSE_DEVICE_TOKEN"' not in source
+    assert 'echo "$SHIP_MACHINE_ID"' not in source

@@ -132,8 +132,7 @@ def _basic_messages(tool_call_id: str = "toolu_01ABC") -> list[dict]:
             "role": "assistant",
             "id": "1",
             "content": [
-                {"type": "reasoning", "text": "thinking about it",
-                 "providerOptions": {"cursor": {"modelName": "glm-5.2"}}},
+                {"type": "reasoning", "text": "thinking about it", "providerOptions": {"cursor": {"modelName": "glm-5.2"}}},
                 {"type": "text", "text": "sure, running a tool"},
                 {
                     "type": "tool-call",
@@ -563,9 +562,7 @@ def _burst_messages(execution_ms: int) -> list[dict]:
         {
             "role": "assistant",
             "id": "1",
-            "content": [
-                {"type": "tool-call", "toolCallId": tcid, "toolName": "Shell", "args": {"command": "sleep"}}
-            ],
+            "content": [{"type": "tool-call", "toolCallId": tcid, "toolName": "Shell", "args": {"command": "sleep"}}],
         },
         _tool_result_with_duration(tcid, execution_ms),
         {"role": "assistant", "id": "2", "content": [{"type": "text", "text": "done"}]},

@@ -435,15 +435,11 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
     assert not missing_event_columns, f"events migration missing columns: {missing_event_columns}"
     assert not missing_branch_columns, f"session_branches migration missing columns: {missing_branch_columns}"
     assert not missing_source_line_columns, f"source_lines migration missing columns: {missing_source_line_columns}"
-    assert not missing_observation_columns, (
-        f"session_observations migration missing columns: {missing_observation_columns}"
-    )
+    assert not missing_observation_columns, f"session_observations migration missing columns: {missing_observation_columns}"
     assert not missing_session_turn_columns, f"session_turns migration missing columns: {missing_session_turn_columns}"
 
     with engine.connect() as conn:
-        copied_cursor = conn.execute(
-            text("SELECT baseline_observation_cursor FROM session_turns WHERE request_id='req-1'")
-        ).scalar_one()
+        copied_cursor = conn.execute(text("SELECT baseline_observation_cursor FROM session_turns WHERE request_id='req-1'")).scalar_one()
     assert copied_cursor == 42
 
 

@@ -52,7 +52,7 @@ DEMO_PRESENTATION = {
     ),
     "demo-claude-03": (
         "Recover a production host from a memory spike",
-        "Isolated an unbounded embedding backfill, restored headroom without downtime, " "and made processing stream in batches.",
+        "Isolated an unbounded embedding backfill, restored headroom without downtime, and made processing stream in batches.",
     ),
     "demo-antigravity-02": (
         "Make session recall actionable",
@@ -68,7 +68,7 @@ DEMO_PRESENTATION = {
     ),
     "demo-claude-05": (
         "Resolve concurrent OAuth refresh races",
-        "Tracing a duplicated refresh-token path so multiple browser tabs recover " "cleanly without invalidating each other.",
+        "Tracing a duplicated refresh-token path so multiple browser tabs recover cleanly without invalidating each other.",
     ),
 }
 

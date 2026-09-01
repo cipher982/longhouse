@@ -109,8 +109,6 @@ def test_v2_request_rejects_duplicate_scenarios() -> None:
 
 
 def test_golden_request_vector_matches_the_private_contract() -> None:
-    payload = json.loads(
-        (Path(__file__).parent / "fixtures" / "qualification-request-v2-golden.json").read_text(encoding="utf-8")
-    )
+    payload = json.loads((Path(__file__).parent / "fixtures" / "qualification-request-v2-golden.json").read_text(encoding="utf-8"))
 
     assert validate(payload, provider="claude", profile="claude_real_print_v1") == payload

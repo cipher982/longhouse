@@ -65,9 +65,7 @@ class SessionFixtureStore:
                 alias_value=data.provider_session_id,
             )
         branch = (
-            self.db.query(AgentSessionBranch)
-            .filter(AgentSessionBranch.session_id == session.id, AgentSessionBranch.is_head == 1)
-            .first()
+            self.db.query(AgentSessionBranch).filter(AgentSessionBranch.session_id == session.id, AgentSessionBranch.is_head == 1).first()
         )
         if branch is None:
             branch = AgentSessionBranch(session_id=session.id, branch_reason="root", is_head=1)

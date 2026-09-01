@@ -321,9 +321,7 @@ def test_current_heartbeats_with_a_stale_last_ship_are_degraded_not_healthy():
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
-    sample = transport_health_sample_from_engine_status_payload(
-        {"last_ship_result": "ok", "ship_attempts_1h": 41, "ship_successes_1h": 41}
-    )
+    sample = transport_health_sample_from_engine_status_payload({"last_ship_result": "ok", "ship_attempts_1h": 41, "ship_successes_1h": 41})
     stalled = replace(sample, last_ship_at=now - timedelta(hours=33), observed_at=now)
 
     assessment = assess_transport_health(stalled)

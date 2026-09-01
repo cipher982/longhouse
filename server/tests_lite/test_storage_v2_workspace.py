@@ -82,7 +82,7 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
                     "tool_output_text": None,
                     "tool_call_id": "call-2",
                     "branch_kind": None,
-                }
+                },
             ],
             "next_cursor": "cursor-1",
             "has_more": True,

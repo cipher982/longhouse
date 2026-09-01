@@ -93,7 +93,7 @@ def _load_from_resource() -> BuildIdentity:
         raise BuildIdentityMissing(f"package {RESOURCE_PACKAGE!r} not found") from exc
     if not ref.is_file():
         raise BuildIdentityMissing(
-            f"bundled resource {RESOURCE_PACKAGE}/{RESOURCE_NAME} is missing. " "Run scripts/build/generate_build_identity.py to stage it."
+            f"bundled resource {RESOURCE_PACKAGE}/{RESOURCE_NAME} is missing. Run scripts/build/generate_build_identity.py to stage it."
         )
     return _parse(ref.read_text(encoding="utf-8"), source=f"{RESOURCE_PACKAGE}/{RESOURCE_NAME}")
 

@@ -219,8 +219,7 @@ def _claude_effort_payload(*, tenant_id: str, machine_id: str, epoch: UUID) -> d
         position += len(data)
     payload["range_end"] = position
     payload["records"] = [
-        {"source_position": source_position, "data_b64": base64.b64encode(data).decode("ascii")}
-        for source_position, data in raw_records
+        {"source_position": source_position, "data_b64": base64.b64encode(data).decode("ascii")} for source_position, data in raw_records
     ]
     payload["render"]["records"] = [
         {
@@ -500,9 +499,10 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
                 headers={"X-Longhouse-Storage-Lane": "live"},
             )
             assert response.status_code == 200, response.text
-            with bus.subscribe(topic_session(payload["session_id"]), since_seq=0) as session_sub, bus.subscribe(
-                TOPIC_TIMELINE, since_seq=0
-            ) as timeline_sub:
+            with (
+                bus.subscribe(topic_session(payload["session_id"]), since_seq=0) as session_sub,
+                bus.subscribe(TOPIC_TIMELINE, since_seq=0) as timeline_sub,
+            ):
                 # The subscriptions intentionally replay from the beginning:
                 # the commit happened before they attached, and the replay
                 # buffer is the proof that both fan-out lanes received the
@@ -557,17 +557,13 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
             assert repair_replay.json() == receipt
             monkeypatch.delenv("LONGHOUSE_TENANT_STORED_BYTES_CEILING")
 
-            epoch_manifest = await client.get(
-                f"/agents/storage/v2/source-epochs/{payload['source_epoch']}/manifest"
-            )
+            epoch_manifest = await client.get(f"/agents/storage/v2/source-epochs/{payload['source_epoch']}/manifest")
             assert epoch_manifest.status_code == 200, epoch_manifest.text
             manifest_payload = epoch_manifest.json()
             assert manifest_payload["v"] == 2
             assert manifest_payload["source_epoch"]["machine_id"] == "cinder"
             assert manifest_payload["source_epoch"]["accepted_through"] == str(len(b"hello\n"))
-            assert [item["envelope_id"] for item in manifest_payload["objects"]] == [
-                payload["expected_envelope_id"]
-            ]
+            assert [item["envelope_id"] for item in manifest_payload["objects"]] == [payload["expected_envelope_id"]]
 
             timeline = await client.get("/agents/storage/v2/sessions")
             assert timeline.status_code == 200, timeline.text
@@ -760,11 +756,7 @@ async def test_console_provisional_preview_converges_to_one_durable_storage_even
 
             detail = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=20")
             assert detail.status_code == 200, detail.text
-            assistant = [
-                event
-                for event in detail.json()["events"]
-                if event["role"] == "assistant" and event["content_text"] == "world"
-            ]
+            assistant = [event for event in detail.json()["events"] if event["role"] == "assistant" and event["content_text"] == "world"]
             assert len(assistant) == 1
 
             replay = await client.post(
@@ -777,9 +769,7 @@ async def test_console_provisional_preview_converges_to_one_durable_storage_even
             replayed_detail = await client.get(f"/agents/storage/v2/sessions/{session_id}/events?limit=20")
             assert replayed_detail.status_code == 200, replayed_detail.text
             replayed_assistant = [
-                event
-                for event in replayed_detail.json()["events"]
-                if event["role"] == "assistant" and event["content_text"] == "world"
+                event for event in replayed_detail.json()["events"] if event["role"] == "assistant" and event["content_text"] == "world"
             ]
             assert len(replayed_assistant) == 1
     finally:

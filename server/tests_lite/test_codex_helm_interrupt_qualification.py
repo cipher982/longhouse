@@ -79,8 +79,7 @@ def _engine(
     identity.update(identity_overrides or {})
     stdout = raw_stdout if raw_stdout is not None else json.dumps(identity)
     path.write_text(
-        f"#!{sys.executable}\nimport sys\n"
-        f"print({stdout!r}) if sys.argv[1:] == ['build-identity', '--json'] else sys.exit(2)\n",
+        f"#!{sys.executable}\nimport sys\nprint({stdout!r}) if sys.argv[1:] == ['build-identity', '--json'] else sys.exit(2)\n",
         encoding="utf-8",
     )
     path.chmod(0o700)
@@ -289,9 +288,7 @@ def test_dirty_or_malformed_engine_build_identity_blocks_before_canary(
         profile.PROVIDER_TOKEN_ENV,
     ],
 )
-def test_missing_required_input_blocks_without_provider_or_canary_start(
-    tmp_path: Path, monkeypatch, missing: str
-) -> None:
+def test_missing_required_input_blocks_without_provider_or_canary_start(tmp_path: Path, monkeypatch, missing: str) -> None:
     package_root, binary, identity = _package(tmp_path)
     engine = _engine(tmp_path)
     _seed_environment(monkeypatch, package_root, engine)
@@ -340,9 +337,7 @@ def test_completed_canary_shape_failure_is_semantic_evidence(tmp_path: Path, mon
     assert result["assertions"]["managed_bridge_cleanup_completed"] == "pass"
 
 
-def test_timeout_failure_preserves_observed_active_turn_without_inventing_terminal_state(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_timeout_failure_preserves_observed_active_turn_without_inventing_terminal_state(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _package(tmp_path)
     engine = _engine(tmp_path)
     _seed_environment(monkeypatch, package_root, engine)
@@ -368,9 +363,7 @@ def test_timeout_failure_preserves_observed_active_turn_without_inventing_termin
     assert result["assertions"]["managed_bridge_cleanup_completed"] == "pass"
 
 
-def test_missing_active_turn_evidence_is_infrastructure_not_invented_semantic_failure(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_missing_active_turn_evidence_is_infrastructure_not_invented_semantic_failure(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _package(tmp_path)
     engine = _engine(tmp_path)
     _seed_environment(monkeypatch, package_root, engine)

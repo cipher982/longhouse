@@ -1279,9 +1279,7 @@ def test_empty_human_helm_enters_open_only_with_fresh_exact_attachment(tmp_path)
 
         snapshot = _snapshot(db, _params(include_test=True, include_automation=True))
         assert snapshot["total"] == 2
-        assert {
-            row["facts"]["catalog"]["session_id"] for row in snapshot["rows"]
-        } == {attached_human_id, stale_connection_id}
+        assert {row["facts"]["catalog"]["session_id"] for row in snapshot["rows"]} == {attached_human_id, stale_connection_id}
         for session_id in (attached_human_id, stale_connection_id):
             row = next(item for item in snapshot["rows"] if item["facts"]["catalog"]["session_id"] == session_id)
             head = db.query(FactHead).filter(FactHead.session_id == session_id).one()

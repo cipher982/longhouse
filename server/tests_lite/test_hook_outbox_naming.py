@@ -9,11 +9,7 @@ from zerg.services.shipper.hooks import HOOK_SCRIPT
 @pytest.mark.parametrize("script", [HOOK_SCRIPT, CODEX_HOOK_SCRIPT])
 def test_hook_atomic_rename_produces_ready_prs_file(script: str, tmp_path):
     rename_line = next(
-        (
-            line.strip()
-            for line in script.splitlines()
-            if line.strip().startswith('mv "$TMPFILE"')
-        ),
+        (line.strip() for line in script.splitlines() if line.strip().startswith('mv "$TMPFILE"')),
         None,
     )
     assert rename_line is not None

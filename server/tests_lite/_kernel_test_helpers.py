@@ -22,11 +22,7 @@ from zerg.models.agents import SessionThread
 
 
 def _ensure_primary_thread(db: Session, session: AgentSession) -> SessionThread:
-    thread = (
-        db.query(SessionThread)
-        .filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1)
-        .one_or_none()
-    )
+    thread = db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one_or_none()
     if thread is not None:
         return thread
     thread = SessionThread(

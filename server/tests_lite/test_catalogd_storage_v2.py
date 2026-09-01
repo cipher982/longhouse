@@ -1300,7 +1300,9 @@ async def test_hatch_execution_contract_hides_console_without_overwriting_proven
             sealed_at=now,
             provider="cursor",
         )
-        raw["session_facts"].update(cwd="/canaries/provider-live/cursor/workspace", origin_kind="cursor_store", hidden_from_default_timeline=False)
+        raw["session_facts"].update(
+            cwd="/canaries/provider-live/cursor/workspace", origin_kind="cursor_store", hidden_from_default_timeline=False
+        )
         manifest = _render_manifest(generation_id, source_epoch=epoch, provider="cursor")
         manifest.update(first_user_message_preview=contract, last_visible_text_preview=contract, user_messages=1)
         raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])

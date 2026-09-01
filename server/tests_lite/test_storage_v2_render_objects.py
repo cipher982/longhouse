@@ -419,10 +419,7 @@ async def test_storage_semantics_seed_from_prior_raw_envelope(tmp_path):
         b'{"type":"user","isMeta":true,"promptId":"prompt-effort-1",'
         b'"message":{"role":"user","content":"<local-command-caveat>native</local-command-caveat>"}}'
     )
-    command = (
-        b'{"type":"user","promptId":"prompt-effort-1",'
-        b'"message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
-    )
+    command = b'{"type":"user","promptId":"prompt-effort-1","message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
     prior_raw = RawObjectSpec(
         tenant_id="tenant-a",
         machine_id="cinder",
@@ -522,10 +519,7 @@ async def test_storage_semantics_allows_missing_manifest_only_for_new_ingest(tmp
         b'{"type":"user","isMeta":true,"promptId":"prompt-effort-1",'
         b'"message":{"role":"user","content":"<local-command-caveat>native</local-command-caveat>"}}'
     )
-    command = (
-        b'{"type":"user","promptId":"prompt-effort-1",'
-        b'"message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
-    )
+    command = b'{"type":"user","promptId":"prompt-effort-1","message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
     current_raw = RawObjectSpec(
         tenant_id="tenant-a",
         machine_id="cinder",
@@ -715,10 +709,7 @@ async def test_storage_semantics_replays_current_raw_in_order(tmp_path, command_
         b'{"type":"user","isMeta":true,"promptId":"prompt-effort-1",'
         b'"message":{"role":"user","content":"<local-command-caveat>native</local-command-caveat>"}}'
     )
-    command = (
-        b'{"type":"user","promptId":"prompt-effort-1",'
-        b'"message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
-    )
+    command = b'{"type":"user","promptId":"prompt-effort-1","message":{"role":"user","content":"<command-name>/effort</command-name>"}}'
     current_raw = RawObjectSpec(
         tenant_id="tenant-a",
         machine_id="cinder",

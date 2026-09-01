@@ -53,9 +53,7 @@ def _setup_app(tmp_path, monkeypatch):
         agents_media,
         "session_batch_snapshot",
         lambda session_ids, *, owner_id: {
-            "facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids]
-            if owner_id == 1
-            else []
+            "facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids] if owner_id == 1 else []
         },
     )
 
@@ -165,13 +163,7 @@ def test_media_claim_does_not_turn_hash_knowledge_into_owner_access(tmp_path, mo
 
     def _snapshot(session_ids, *, owner_id):
         allowed = owner_one_session if owner_id == 1 else owner_two_session if owner_id == 2 else None
-        return {
-            "facts": [
-                {"catalog": {"session_id": session_id}}
-                for session_id in session_ids
-                if session_id == str(allowed)
-            ]
-        }
+        return {"facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids if session_id == str(allowed)]}
 
     monkeypatch.setattr(agents_media, "session_batch_snapshot", _snapshot)
     try:
@@ -189,11 +181,14 @@ def test_media_claim_does_not_turn_hash_knowledge_into_owner_access(tmp_path, mo
             },
         )
         assert first_claim.json()["needed"] == [digest]
-        assert client.put(
-            f"/agents/media/{digest}",
-            content=payload,
-            headers={"Content-Type": "image/png", "X-Longhouse-Session-Id": str(owner_one_session)},
-        ).status_code == 200
+        assert (
+            client.put(
+                f"/agents/media/{digest}",
+                content=payload,
+                headers={"Content-Type": "image/png", "X-Longhouse-Session-Id": str(owner_one_session)},
+            ).status_code
+            == 200
+        )
 
         api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=2)
         second_claim = client.post(
@@ -398,9 +393,7 @@ def test_browser_media_read_requires_visible_device_owner(tmp_path, monkeypatch)
             agents_media,
             "session_batch_snapshot",
             lambda session_ids, *, owner_id: {
-                "facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids]
-                if owner_id == 2
-                else []
+                "facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids] if owner_id == 2 else []
             },
         )
 

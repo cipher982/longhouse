@@ -58,18 +58,11 @@ def test_repair_plan_names_every_eligibility_fact_in_its_compare_and_set():
 
 
 def test_fresh_exact_active_run_is_sufficient_without_terminal_attachment():
-    assert (
-        plan_codex_launch_visibility_repair(
-            _facts(fresh_exact_terminal_attached=False, fresh_exact_active_run=True)
-        )
-        is not None
-    )
+    assert plan_codex_launch_visibility_repair(_facts(fresh_exact_terminal_attached=False, fresh_exact_active_run=True)) is not None
 
 
 def test_visible_primary_thread_is_safe_and_bound_into_compare_and_set():
-    plan = plan_codex_launch_visibility_repair(
-        _facts(primary_thread_hidden_from_default_timeline=False)
-    )
+    plan = plan_codex_launch_visibility_repair(_facts(primary_thread_hidden_from_default_timeline=False))
 
     assert plan is not None
     assert plan.compare_and_set["primary_thread_hidden_from_default_timeline"] is False
@@ -98,9 +91,4 @@ def test_repair_refuses_every_ambiguous_or_user_hidden_row(field, value):
 
 
 def test_repair_requires_current_exact_attachment_or_active_run():
-    assert (
-        plan_codex_launch_visibility_repair(
-            _facts(fresh_exact_terminal_attached=False, fresh_exact_active_run=False)
-        )
-        is None
-    )
+    assert plan_codex_launch_visibility_repair(_facts(fresh_exact_terminal_attached=False, fresh_exact_active_run=False)) is None

@@ -96,18 +96,8 @@ def test_migration_dedupes_keeping_newest_then_creates_index(tmp_path):
         )
         assert [row.thread_id for row in survivors] == ["thread-new"]
         # Non-routing kinds and non-duplicated values are untouched.
-        assert (
-            db.query(LiveSessionThreadAlias)
-            .filter(LiveSessionThreadAlias.alias_kind == "source_path")
-            .count()
-            == 1
-        )
-        assert (
-            db.query(LiveSessionThreadAlias)
-            .filter(LiveSessionThreadAlias.alias_value == "native-solo")
-            .count()
-            == 1
-        )
+        assert db.query(LiveSessionThreadAlias).filter(LiveSessionThreadAlias.alias_kind == "source_path").count() == 1
+        assert db.query(LiveSessionThreadAlias).filter(LiveSessionThreadAlias.alias_value == "native-solo").count() == 1
         # The index now enforces the invariant going forward.
         db.add(_alias("thread-other", "native-dup", seen=now))
         with pytest.raises(IntegrityError):

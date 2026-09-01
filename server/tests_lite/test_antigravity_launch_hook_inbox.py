@@ -60,7 +60,13 @@ def _install_fake_execute(monkeypatch: pytest.MonkeyPatch, *, hook_inbox_outcome
     monkeypatch.setattr(antigravity_launch_hook_inbox.antigravity_hook_qualification, "_execute", fake_execute)
 
 
-def _run_args(tmp_path: Path, *, evidence_root: Path, provider_bin: Path, variant: str = "cell:antigravity:hook_inbox_contract_preserved:antigravity_hook_inbox"):
+def _run_args(
+    tmp_path: Path,
+    *,
+    evidence_root: Path,
+    provider_bin: Path,
+    variant: str = "cell:antigravity:hook_inbox_contract_preserved:antigravity_hook_inbox",
+):
     return antigravity_launch_hook_inbox._parser().parse_args(
         [
             "--variant",
@@ -151,9 +157,7 @@ def test_hook_inbox_launch_fails_closed_on_unexpected_assertion_set(tmp_path: Pa
     def fake_execute(binary, evidence_root):  # noqa: ANN001
         # Only one assertion instead of the declared two -- must not be
         # silently accepted.
-        assertions = (
-            SemanticAssertion("hook_inbox_contract_preserved", AssertionOutcome.PASS, EvidenceClass.LIVE_NO_TOKEN),
-        )
+        assertions = (SemanticAssertion("hook_inbox_contract_preserved", AssertionOutcome.PASS, EvidenceClass.LIVE_NO_TOKEN),)
         return {"status": "blocked", "no_token_canary": _fake_no_token_canary_artifact()}, assertions, ()
 
     monkeypatch.setattr(antigravity_launch_hook_inbox.antigravity_hook_qualification, "_execute", fake_execute)

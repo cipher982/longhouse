@@ -73,7 +73,7 @@ def test_every_configured_shell_tool_receives_the_same_summary_contract():
 
 
 def test_extracts_single_codex_exec_command_without_executing_wrapper():
-    source = 'const r = await tools.exec_command({cmd:"rg -n \'needle\' server"}); text(r.output);'
+    source = "const r = await tools.exec_command({cmd:\"rg -n 'needle' server\"}); text(r.output);"
 
     calls, complete = extract_codex_wrapper_calls(source)
 
@@ -106,8 +106,8 @@ def test_single_child_wrapper_recedes_only_with_forwarded_result():
 
 
 def test_direct_forwarded_patch_resolves_local_literal_and_recedes():
-    source = '''const patch = "*** Begin Patch\\n*** Update File: app.py\\n*** End Patch";
-text(await tools.apply_patch(patch));'''
+    source = """const patch = "*** Begin Patch\\n*** Update File: app.py\\n*** End Patch";
+text(await tools.apply_patch(patch));"""
 
     presentation = project_tool_presentation("exec", source, provider="codex")
 
@@ -115,16 +115,14 @@ text(await tools.apply_patch(patch));'''
     assert presentation["tool_name"] == "apply_patch"
     assert presentation["label"] == "Edited"
     assert presentation["wrapper_recedes"] is True
-    assert presentation["tool_input_json"] == {
-        "patch": "*** Begin Patch\n*** Update File: app.py\n*** End Patch"
-    }
+    assert presentation["tool_input_json"] == {"patch": "*** Begin Patch\n*** Update File: app.py\n*** End Patch"}
 
 
 def test_patch_literal_resolution_ignores_comment_and_string_decoys():
-    source = '''const patch = "*** Begin Patch\\n*** Update File: real.py\\n*** End Patch";
+    source = """const patch = "*** Begin Patch\\n*** Update File: real.py\\n*** End Patch";
 const example = "const patch = \\\"wrong\\\"";
 // const patch = "also wrong";
-text(await tools.apply_patch(patch));'''
+text(await tools.apply_patch(patch));"""
 
     presentation = project_tool_presentation("exec", source, provider="codex")
 
@@ -134,9 +132,9 @@ text(await tools.apply_patch(patch));'''
 
 
 def test_patch_literal_resolution_fails_open_after_dynamic_reassignment():
-    source = '''let patch = "*** Begin Patch\\n*** Update File: stale.py\\n*** End Patch";
+    source = """let patch = "*** Begin Patch\\n*** Update File: stale.py\\n*** End Patch";
 patch = patch + dynamicPart();
-text(await tools.apply_patch(patch));'''
+text(await tools.apply_patch(patch));"""
 
     presentation = project_tool_presentation("exec", source, provider="codex")
 

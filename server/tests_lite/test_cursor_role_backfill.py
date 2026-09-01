@@ -38,9 +38,7 @@ from zerg.services.cursor_role_backfill import backfill_cursor_user_roles
 _TS = datetime(2026, 7, 1, 16, 0, 0, tzinfo=timezone.utc)
 
 _INJECTION = (
-    "<user_info>\nOS Version: darwin 25.5.0\n\n"
-    "<rules>\n<always_applied_workspace_rule>x</...>\n"
-    "<agent_transcripts>past</agent_transcripts>"
+    "<user_info>\nOS Version: darwin 25.5.0\n\n<rules>\n<always_applied_workspace_rule>x</...>\n<agent_transcripts>past</agent_transcripts>"
 )
 
 

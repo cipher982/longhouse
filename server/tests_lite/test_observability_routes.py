@@ -87,12 +87,7 @@ def _patch_legacy_catalog_scope(monkeypatch, SessionLocal) -> None:
             if recent_after is not None:
                 query = query.filter(AgentHeartbeat.received_at >= datetime.fromisoformat(recent_after))
             rows = query.order_by(AgentHeartbeat.received_at.desc()).limit(limit).all()
-            return {
-                "heartbeats": [
-                    {column.name: getattr(row, column.name) for column in AgentHeartbeat.__table__.columns}
-                    for row in rows
-                ]
-            }
+            return {"heartbeats": [{column.name: getattr(row, column.name) for column in AgentHeartbeat.__table__.columns} for row in rows]}
 
     monkeypatch.setattr(observability_routes, "machine_heartbeats", legacy_heartbeats)
 
@@ -113,7 +108,7 @@ def _seed_session(
         project=project,
         device_id=device_id,
         device_name=device_name,
-                started_at=datetime(2026, 4, 23, 18, 0, 0, tzinfo=timezone.utc),
+        started_at=datetime(2026, 4, 23, 18, 0, 0, tzinfo=timezone.utc),
         user_messages=1,
         assistant_messages=1,
         tool_calls=0,
@@ -377,12 +372,7 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
 
     try:
         overview = client.get(
-            "/observability/overview"
-            "?hours_back=24"
-            "&slow_threshold_ms=30000"
-            "&stale_after_seconds=3600"
-            "&machine_limit=2"
-            "&slow_turn_limit=2"
+            "/observability/overview?hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600&machine_limit=2&slow_turn_limit=2"
         )
         assert overview.status_code == 200
         payload = overview.json()
@@ -412,40 +402,21 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
         assert payload["providers"][1]["completed_turns"] == 1
 
         overview_wide_turn_window = client.get(
-            "/observability/overview"
-            "?hours_back=168"
-            "&slow_threshold_ms=30000"
-            "&stale_after_seconds=3600"
-            "&machine_limit=4"
-            "&slow_turn_limit=2"
+            "/observability/overview?hours_back=168&slow_threshold_ms=30000&stale_after_seconds=3600&machine_limit=4&slow_turn_limit=2"
         )
         assert overview_wide_turn_window.status_code == 200
         overview_wide_turn_window_payload = overview_wide_turn_window.json()
         assert overview_wide_turn_window_payload["machine_counts"]["total"] == 2
-        assert "ancient-machine" not in {
-            machine["device_id"] for machine in overview_wide_turn_window_payload["machines"]
-        }
+        assert "ancient-machine" not in {machine["device_id"] for machine in overview_wide_turn_window_payload["machines"]}
 
-        summary = client.get(
-            "/observability/turns/summary"
-            "?provider=claude"
-            "&hours_back=24"
-            "&slow_threshold_ms=30000"
-            "&stale_after_seconds=3600"
-        )
+        summary = client.get("/observability/turns/summary?provider=claude&hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600")
         assert summary.status_code == 200
         summary_payload = summary.json()
         assert summary_payload["summary"]["completed_turns"] == 1
         assert summary_payload["summary"]["slow_turns"] == 1
         assert summary_payload["providers"][0]["provider"] == "claude"
 
-        slow = client.get(
-            "/observability/turns/slow"
-            "?provider=claude"
-            "&hours_back=24"
-            "&min_total_turn_time_ms=30000"
-            "&stale_after_seconds=3600"
-        )
+        slow = client.get("/observability/turns/slow?provider=claude&hours_back=24&min_total_turn_time_ms=30000&stale_after_seconds=3600")
         assert slow.status_code == 200
         slow_payload = slow.json()
         assert slow_payload["total"] == 1
@@ -578,12 +549,7 @@ def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(t
 
     try:
         overview = client.get(
-            "/observability/overview"
-            "?hours_back=24"
-            "&slow_threshold_ms=30000"
-            "&stale_after_seconds=3600"
-            "&machine_limit=4"
-            "&slow_turn_limit=4"
+            "/observability/overview?hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600&machine_limit=4&slow_turn_limit=4"
         )
         assert overview.status_code == 200, overview.text
         payload = overview.json()
@@ -595,18 +561,14 @@ def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(t
             "offline": 0,
             "broken": 0,
         }
-        archive_machine = next(
-            machine for machine in payload["machines"] if machine["device_id"] == "archive-only-machine"
-        )
+        archive_machine = next(machine for machine in payload["machines"] if machine["device_id"] == "archive-only-machine")
         assert archive_machine["status"] == "healthy"
         assert archive_machine["status_reason"] == "healthy"
         assert archive_machine["spool_pending"] == 6375
         assert archive_machine["archive_repair"]["state"] == "pending"
         assert archive_machine["archive_repair"]["pending_ranges"] == 6375
         assert archive_machine["archive_repair"]["source"] == "heartbeat"
-        legacy_machine = next(
-            machine for machine in payload["machines"] if machine["device_id"] == "legacy-pending-machine"
-        )
+        legacy_machine = next(machine for machine in payload["machines"] if machine["device_id"] == "legacy-pending-machine")
         assert legacy_machine["status"] == "healthy"
         assert legacy_machine["archive_repair"]["state"] == "pending"
         assert legacy_machine["archive_repair"]["pending_ranges"] == 42
@@ -894,12 +856,7 @@ def test_browser_observability_overview_materializes_managed_native_turns(tmp_pa
 
     try:
         overview = client.get(
-            "/observability/overview"
-            "?hours_back=24"
-            "&slow_threshold_ms=30000"
-            "&stale_after_seconds=3600"
-            "&machine_limit=4"
-            "&slow_turn_limit=4"
+            "/observability/overview?hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600&machine_limit=4&slow_turn_limit=4"
         )
         assert overview.status_code == 200, overview.text
 

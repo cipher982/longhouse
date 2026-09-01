@@ -284,9 +284,7 @@ async def test_corrupt_disposable_search_rebuilds_entirely_from_storage_v2_truth
         )
         assert await first_projector.run_once(now=now) == 1
         first_store_id = (await search.call("search.ping.v2"))["store_id"]
-        assert (await search.call("search.query.v2", _search_params("photon")))["results"][0]["session_id"] == str(
-            session_id
-        )
+        assert (await search.call("search.query.v2", _search_params("photon")))["results"][0]["session_id"] == str(session_id)
 
         await search.close()
         await search_daemon.close()

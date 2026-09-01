@@ -35,10 +35,10 @@ def test_claude_hook_writes_presence_to_outbox():
 
 def test_claude_hook_leaves_elicitation_questions_to_transcript_ingest():
     assert '-n "$MANAGED_SESSION_ID"' in HOOK_SCRIPT
-    assert "idle_prompt|elicitation_dialog) STATE=\"needs_user\"" in HOOK_SCRIPT
+    assert 'idle_prompt|elicitation_dialog) STATE="needs_user"' in HOOK_SCRIPT
     assert 'kind: "pause_request"' not in HOOK_SCRIPT
     assert 'tool_name: "AskUserQuestion"' not in HOOK_SCRIPT
-    assert "permission_prompt)              STATE=\"blocked\"" in HOOK_SCRIPT
+    assert 'permission_prompt)              STATE="blocked"' in HOOK_SCRIPT
 
 
 def test_claude_hook_does_not_fetch_dynamic_startup_context():

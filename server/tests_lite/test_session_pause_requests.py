@@ -380,8 +380,10 @@ def test_pause_request_can_keep_multiple_pending_when_provider_allows_it(tmp_pat
             )
         db.commit()
 
-        rows = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).order_by(
-            SessionPauseRequest.provider_request_id
+        rows = (
+            db.query(SessionPauseRequest)
+            .filter(SessionPauseRequest.runtime_key == runtime_key)
+            .order_by(SessionPauseRequest.provider_request_id)
         )
         assert [(row.provider_request_id, row.status) for row in rows] == [
             ("question-1", "pending"),

@@ -239,10 +239,7 @@ def test_live_catalog_schema_inventory_is_created(tmp_path):
     live_engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
     initialize_live_database(live_engine)
     with live_engine.connect() as connection:
-        tables = {
-            str(row[0])
-            for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        }
+        tables = {str(row[0]) for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     assert set(live_catalog_table_names()).issubset(tables)
 
 

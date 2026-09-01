@@ -3,7 +3,6 @@
 Ensures quoted DATABASE_URLs are handled correctly.
 """
 
-
 from zerg.db_utils import is_sqlite_url
 
 

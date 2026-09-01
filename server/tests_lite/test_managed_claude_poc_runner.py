@@ -246,6 +246,4 @@ def test_terminal_provider_auth_prompt_detection_is_specific():
 
     assert runner.terminal_has_provider_auth_prompt("Please run /login")
     assert runner.terminal_has_provider_auth_prompt("API Error: 401 Invalid authentication credentials")
-    assert not runner.terminal_has_provider_auth_prompt(
-        "The assistant mentioned an API in ordinary output."
-    )
+    assert not runner.terminal_has_provider_auth_prompt("The assistant mentioned an API in ordinary output.")

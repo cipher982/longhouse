@@ -199,9 +199,7 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
                 "mime_type": sealed_media.mime_type,
                 "byte_size": sealed_media.byte_size,
                 "object_path": sealed_media.object_path,
-                "session_refs": [
-                    {"session_id": str(session_id), "envelope_id": sealed_raw.envelope_id, "ref_key": "inline:0"}
-                ],
+                "session_refs": [{"session_id": str(session_id), "envelope_id": sealed_raw.envelope_id, "ref_key": "inline:0"}],
                 "observed_at": now.isoformat(),
             },
         )
@@ -218,9 +216,7 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
 
     manifest_path = restore_point / "restore-manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    assert manifest["objects"] == sorted(
-        manifest["objects"], key=lambda item: (item["path"], item["kind"], item["sha256"])
-    )
+    assert manifest["objects"] == sorted(manifest["objects"], key=lambda item: (item["path"], item["kind"], item["sha256"]))
     assert {item["kind"] for item in manifest["objects"]} == {"raw", "render", "media"}
     assert "created_at" not in manifest
     proof = verify_restore_point(manifest_path=manifest_path, data_root=data_root)
@@ -253,12 +249,15 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
         data_root=data_root,
     )
     assert remote["object_count"] == 3 and remote["artifact_count"] == 5
-    assert scrub_remote_restore_point(
-        store=remote_store,
-        tenant_id=raw_spec.tenant_id,
-        remote_manifest_key=str(remote["remote_manifest_key"]),
-        remote_manifest_sha256=str(remote["remote_manifest_sha256"]),
-    )["ok"] is True
+    assert (
+        scrub_remote_restore_point(
+            store=remote_store,
+            tenant_id=raw_spec.tenant_id,
+            remote_manifest_key=str(remote["remote_manifest_key"]),
+            remote_manifest_sha256=str(remote["remote_manifest_sha256"]),
+        )["ok"]
+        is True
+    )
     remote_restored = tmp_path / "remote-blank-root"
     remote_catalog = sqlite_file_path(resolve_live_database_url(f"sqlite:///{remote_restored / 'longhouse.db'}"))
     assert remote_catalog is not None
@@ -271,11 +270,14 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
         catalog_destination=remote_catalog,
     )
     assert remote_rehearsal["ok"] is True and remote_rehearsal["object_count"] == 3
-    assert read_render_object(
-        remote_restored,
-        sealed_render.object_path,
-        expected_object_hash=sealed_render.object_hash,
-    ).spec == render_spec
+    assert (
+        read_render_object(
+            remote_restored,
+            sealed_render.object_path,
+            expected_object_hash=sealed_render.object_hash,
+        ).spec
+        == render_spec
+    )
 
     restored_daemon = CatalogDaemon(database_path=deployed_catalog, socket_path=restored / "catalogd.sock")
     await restored_daemon.start()
@@ -302,11 +304,14 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
             {"session_id": str(session_id), "owner_id": "42", "after_source_key": None, "limit": 10},
         )
         assert raw_manifest["objects"][0]["object_hash"] == sealed_raw.object_hash
-        assert read_render_object(
-            restored,
-            sealed_render.object_path,
-            expected_object_hash=sealed_render.object_hash,
-        ).spec == render_spec
+        assert (
+            read_render_object(
+                restored,
+                sealed_render.object_path,
+                expected_object_hash=sealed_render.object_hash,
+            ).spec
+            == render_spec
+        )
     finally:
         await restored_client.close()
         await restored_daemon.close()
@@ -342,14 +347,19 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
         data_root=data_root,
     )
     deleted_destination = tmp_path / "deleted-remote-blank-root"
-    assert restore_remote_rehearsal(
-        store=remote_store,
-        tenant_id=raw_spec.tenant_id,
-        remote_manifest_key=str(deleted_remote["remote_manifest_key"]),
-        remote_manifest_sha256=str(deleted_remote["remote_manifest_sha256"]),
-        destination_root=deleted_destination,
-    )["ok"] is True
-    deleted_restored_daemon = CatalogDaemon(database_path=deleted_destination / "catalog.db", socket_path=deleted_destination / "catalogd.sock")
+    assert (
+        restore_remote_rehearsal(
+            store=remote_store,
+            tenant_id=raw_spec.tenant_id,
+            remote_manifest_key=str(deleted_remote["remote_manifest_key"]),
+            remote_manifest_sha256=str(deleted_remote["remote_manifest_sha256"]),
+            destination_root=deleted_destination,
+        )["ok"]
+        is True
+    )
+    deleted_restored_daemon = CatalogDaemon(
+        database_path=deleted_destination / "catalog.db", socket_path=deleted_destination / "catalogd.sock"
+    )
     await deleted_restored_daemon.start()
     deleted_restored_client = CatalogClient(deleted_destination / "catalogd.sock")
     try:

@@ -24,6 +24,7 @@ import zerg.config as config_mod
 def test_get_settings_unchecked_does_not_call_validate(monkeypatch):
     """get_settings_unchecked() must NOT call _validate_required — it is the
     import-time-safe raw accessor."""
+
     def _boom(_settings):
         raise AssertionError("_validate_required was called by get_settings_unchecked")
 
@@ -70,8 +71,7 @@ def test_zerg_database_uses_unchecked_accessor():
     assert "get_settings_unchecked" in src, "zerg.database must import get_settings_unchecked"
     # The validating get_settings() must NOT be imported by zerg.database.
     assert "from zerg.config import get_settings\n" not in src, (
-        "zerg.database must not import the validating get_settings() — it would "
-        "crash remote-only CLI surfaces at import time again."
+        "zerg.database must not import the validating get_settings() — it would crash remote-only CLI surfaces at import time again."
     )
     assert "_settings = get_settings_unchecked()" in src
 

@@ -111,10 +111,14 @@ def test_scan_and_repair_safe_guid_columns(tmp_path):
     assert summary.unsupported_count == 1
 
     with SessionLocal() as db:
-        row = db.execute(
-            text("SELECT id FROM sessions WHERE id = :session_id"),
-            {"session_id": "not-a-uuid"},
-        ).mappings().one()
+        row = (
+            db.execute(
+                text("SELECT id FROM sessions WHERE id = :session_id"),
+                {"session_id": "not-a-uuid"},
+            )
+            .mappings()
+            .one()
+        )
     assert row["id"] == "not-a-uuid"
 
 

@@ -221,9 +221,7 @@ def test_systemd_machine_name_no_spaces():
     assert " " not in machine_part
 
 
-def test_get_engine_executable_prefers_installed_runtime_over_repo_build(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+def test_get_engine_executable_prefers_installed_runtime_over_repo_build(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     project_root = tmp_path / "server"
     project_root.mkdir()
     engine_binary = tmp_path / "engine" / "target" / "release" / "longhouse-engine"
@@ -243,9 +241,7 @@ def test_get_engine_executable_prefers_installed_runtime_over_repo_build(
     assert get_engine_executable() == "/tmp/installed-longhouse-engine"
 
 
-def test_get_engine_executable_uses_repo_build_when_no_runtime_artifact(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+def test_get_engine_executable_uses_repo_build_when_no_runtime_artifact(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     project_root = tmp_path / "server"
     project_root.mkdir()
     engine_binary = tmp_path / "engine" / "target" / "release" / "longhouse-engine"

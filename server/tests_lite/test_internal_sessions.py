@@ -56,18 +56,11 @@ def test_provider_proof_python_and_sql_classifiers_agree_on_real_namespaces():
     with engine.begin() as connection:
         connection.execute(
             insert(sessions),
-            [
-                {"session_id": str(index), "cwd": cwd, "machine_id": machine_id}
-                for index, (cwd, machine_id) in enumerate(workspaces)
-            ],
+            [{"session_id": str(index), "cwd": cwd, "machine_id": machine_id} for index, (cwd, machine_id) in enumerate(workspaces)],
         )
-        sql_results = dict(
-            connection.execute(select(sessions.c.session_id, provider_proof_session_clause(sessions))).all()
-        )
+        sql_results = dict(connection.execute(select(sessions.c.session_id, provider_proof_session_clause(sessions))).all())
 
-    python_results = [
-        classify_provider_proof_environment(cwd=cwd, machine_id=machine_id) == "test" for cwd, machine_id in workspaces
-    ]
+    python_results = [classify_provider_proof_environment(cwd=cwd, machine_id=machine_id) == "test" for cwd, machine_id in workspaces]
 
     assert [bool(sql_results[str(index)]) for index in range(len(workspaces))] == python_results
     assert python_results == [True] * 10 + [False] * 4
@@ -103,9 +96,7 @@ def test_sql_candidate_clause_is_a_subset_of_the_python_classifier():
             insert(sessions),
             [{"session_id": "0", "cwd": divergent[0], "machine_id": divergent[1]}],
         )
-        matched = dict(
-            connection.execute(select(sessions.c.session_id, provider_proof_session_clause(sessions))).all()
-        )
+        matched = dict(connection.execute(select(sessions.c.session_id, provider_proof_session_clause(sessions))).all())
 
     assert classify_provider_proof_environment(cwd=divergent[0], machine_id=divergent[1]) == "test"
     assert not bool(matched["0"]), "SQL must stay no broader than the Python classifier"
@@ -117,17 +108,18 @@ def test_provider_factory_evidence_workspace_is_automation_classified_without_hi
     )
     assert is_provider_factory_cwd("/tmp/live-cell-run-cursor.coordination.directed.v1-abc123/evidence/cursor-workspace")
     assert is_provider_factory_machine_id("provider-factory-resume")
-    assert classify_provider_proof_environment(
-        cwd="/tmp/lhx-claude-coord-create-abc123/workspace"
-    ) == "test"
+    assert classify_provider_proof_environment(cwd="/tmp/lhx-claude-coord-create-abc123/workspace") == "test"
     assert classify_provider_proof_environment(machine_id="provider-factory-resume") == "test"
     assert not is_provider_factory_cwd("/Users/davidrose/git/control-plane/provider_factory")
     assert not is_provider_factory_cwd("/Users/davidrose/git/provider-factory-project")
     assert not is_provider_factory_cwd("/Users/davidrose/git/live-cell-run-project")
-    assert classify_provider_proof_environment(
-        cwd="/Users/davidrose/git/user-repo",
-        machine_id="provider-factory-resume",
-    ) == "test"
+    assert (
+        classify_provider_proof_environment(
+            cwd="/Users/davidrose/git/user-repo",
+            machine_id="provider-factory-resume",
+        )
+        == "test"
+    )
 
 
 def test_factory_title_assurance_requires_every_typed_identity_field():

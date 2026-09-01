@@ -179,9 +179,7 @@ def test_live_control_without_send_bit_is_not_reported_as_engine_offline():
     assert affordance.default_input_intent == "none"
     assert affordance.composer_enabled is False
     assert affordance.send_disabled_reason == "input_not_supported"
-    assert affordance.composer_disabled_reason == (
-        "This live Codex session is connected, but this control path cannot accept typed input."
-    )
+    assert affordance.composer_disabled_reason == ("This live Codex session is connected, but this control path cannot accept typed input.")
 
 
 def test_imported_session_is_read_only():

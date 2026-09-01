@@ -52,9 +52,7 @@ def test_resume_intent_command_matches_each_managed_cli_selector(provider: str, 
 
 
 def test_resume_intent_preserves_typed_unavailable_reason() -> None:
-    intent = build_session_resume_intent(
-        _session(state="unavailable", reason="provider_state_missing")
-    )
+    intent = build_session_resume_intent(_session(state="unavailable", reason="provider_state_missing"))
 
     assert intent.available is False
     assert intent.reason == "provider_state_missing"

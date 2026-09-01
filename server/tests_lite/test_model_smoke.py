@@ -66,10 +66,7 @@ def test_model_smoke_active_profile_models_respond():
         icon = {"pass": "OK", "fail": "FAIL", "skipped": "SKIP"}[r["status"]]
         print(f"  [{icon:>4}] {r['category']:>9}  {r['model']}  {r.get('detail', r.get('reason', ''))}")
 
-    assert not failures, (
-        f"{len(failures)} model(s) failed:\n"
-        + "\n".join(f"  - {r['model']}: {r['detail']}" for r in failures)
-    )
+    assert not failures, f"{len(failures)} model(s) failed:\n" + "\n".join(f"  - {r['model']}: {r['detail']}" for r in failures)
 
 
 def test_models_json_is_valid_and_remote_models_have_api_key_config():

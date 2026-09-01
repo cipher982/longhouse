@@ -108,11 +108,11 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
         git_repo="git@github.com:cipher982/longhouse.git",
         git_branch="main",
         started_at=datetime.now(timezone.utc),
-                                        user_messages=1,
+        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-                        loop_mode="assist",
-                                            )
+        loop_mode="assist",
+    )
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -456,11 +456,7 @@ def test_managed_local_events_include_expected_turn_accepts_native_claude_channe
         events=[
             SimpleNamespace(
                 role="user",
-                content_text=(
-                    "<channel source=\"longhouse-channel\" injected_by=\"longhouse\">\n"
-                    "continue\n"
-                    "</channel>"
-                ),
+                content_text=('<channel source="longhouse-channel" injected_by="longhouse">\ncontinue\n</channel>'),
                 tool_name=None,
             ),
             SimpleNamespace(role="assistant", content_text="done", tool_name=None),
@@ -555,11 +551,7 @@ def test_managed_local_draft_reply_returns_prefill(live_catalog, live_catalog_cl
         async def create(self, **kwargs):
             llm_calls.append(kwargs)
             return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(content="Please run the focused iOS tests and report the result.")
-                    )
-                ]
+                choices=[SimpleNamespace(message=SimpleNamespace(content="Please run the focused iOS tests and report the result."))]
             )
 
     class FakeClient:
@@ -772,11 +764,7 @@ def test_managed_local_active_observer_marks_canonical_turn(monkeypatch, tmp_pat
     )
 
     with session_local() as verify_db:
-        row = (
-            verify_db.query(SessionTurn)
-            .filter(SessionTurn.session_id == source_session.id, SessionTurn.request_id == "req-active")
-            .one()
-        )
+        row = verify_db.query(SessionTurn).filter(SessionTurn.session_id == source_session.id, SessionTurn.request_id == "req-active").one()
         assert row.active_phase_observed_at is not None
         assert row.state == "active"
 
@@ -825,9 +813,7 @@ def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(
 
     with session_local() as verify_db:
         canonical_row = (
-            verify_db.query(SessionTurn)
-            .filter(SessionTurn.session_id == source_session.id, SessionTurn.request_id == "req-terminal")
-            .one()
+            verify_db.query(SessionTurn).filter(SessionTurn.session_id == source_session.id, SessionTurn.request_id == "req-terminal").one()
         )
         assert canonical_row.terminal_at is not None
         assert canonical_row.terminal_phase == "idle"

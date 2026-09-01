@@ -19,14 +19,8 @@ from zerg.services import local_runtime_installer as local_runtime_installer_ser
 
 
 def test_recommended_machine_repair_command_prefers_machine_repair_when_state_is_complete():
-    assert (
-        machine_repair.recommended_machine_repair_command(can_reconcile_from_state=True)
-        == "Run: longhouse machine repair"
-    )
-    assert (
-        machine_repair.recommended_machine_repair_command(can_reconcile_from_state=False)
-        == "Run: longhouse connect --install"
-    )
+    assert machine_repair.recommended_machine_repair_command(can_reconcile_from_state=True) == "Run: longhouse machine repair"
+    assert machine_repair.recommended_machine_repair_command(can_reconcile_from_state=False) == "Run: longhouse connect --install"
 
 
 def test_can_repair_machine_from_state_requires_runtime_url_and_machine_name(tmp_path):

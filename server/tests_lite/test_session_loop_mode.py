@@ -133,7 +133,6 @@ def _seed_session(factory, *, loop_mode="assist"):
 def _client(factory):
     from zerg.main import api_app
 
-
     def override():
         db = factory()
         try:

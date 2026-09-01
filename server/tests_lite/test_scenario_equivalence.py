@@ -164,7 +164,13 @@ def _capture_tool_call_result_pair(tmp_path: Path, monkeypatch) -> tuple[dict, d
 def _capture_helm_interrupt_pair(tmp_path: Path, monkeypatch) -> tuple[dict, dict]:
     package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
     build_identity = f"sha256:{_closure_digest(package_root)}"
-    for name in ("CODEX_API_URL", "CODEX_AGENTS_TOKEN", codex_helm_interrupt.ENGINE_ENV, codex_helm_interrupt.PACKAGE_ROOT_ENV, codex_helm_interrupt.PROVIDER_TOKEN_ENV):
+    for name in (
+        "CODEX_API_URL",
+        "CODEX_AGENTS_TOKEN",
+        codex_helm_interrupt.ENGINE_ENV,
+        codex_helm_interrupt.PACKAGE_ROOT_ENV,
+        codex_helm_interrupt.PROVIDER_TOKEN_ENV,
+    ):
         monkeypatch.delenv(name, raising=False)
 
     legacy_request = _request(

@@ -251,7 +251,9 @@ def test_get_desktop_app_service_info_includes_app_bundle_details(monkeypatch, t
             component=desktop_app.RuntimeComponent.DESKTOP_APP,
             path="/Applications/Longhouse.app",
             launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
-        ) if component == desktop_app.RuntimeComponent.DESKTOP_APP else None,
+        )
+        if component == desktop_app.RuntimeComponent.DESKTOP_APP
+        else None,
     )
 
     info = desktop_app.get_desktop_app_service_info()
@@ -296,7 +298,9 @@ def test_get_desktop_app_service_info_flags_missing_health_exec_even_with_app_bu
             component=desktop_app.RuntimeComponent.DESKTOP_APP,
             path="/Applications/Longhouse.app",
             launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
-        ) if component == desktop_app.RuntimeComponent.DESKTOP_APP else None,
+        )
+        if component == desktop_app.RuntimeComponent.DESKTOP_APP
+        else None,
     )
 
     info = desktop_app.get_desktop_app_service_info()

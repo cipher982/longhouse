@@ -50,6 +50,7 @@ def _restore_api_app_dependency_overrides():
         api_app.dependency_overrides.clear()
         api_app.dependency_overrides.update(saved)
 
+
 # One machine's archive backlog, read by the archive-backlog route out of the
 # archived heartbeat and by the health route out of the catalog heartbeat.
 ARCHIVE_BACKLOG_FIXTURE = {

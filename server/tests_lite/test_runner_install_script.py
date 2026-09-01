@@ -62,22 +62,28 @@ def test_install_script_defaults_to_desktop_mode_and_is_valid_bash(tmp_path):
     assert 'RUNNER_AVAILABILITY_POLICY="on_demand"' in response.text
     assert 'RUNNER_REQUESTED_CAPABILITIES="${RUNNER_REQUESTED_CAPABILITIES:-exec.full}"' in response.text
     assert 'RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-9.9.9}"' in response.text
-    assert 'RUNNER_UPDATE_MANIFEST_URL="${RUNNER_UPDATE_MANIFEST_URL:-https://github.com/cipher982/longhouse/releases/latest/download/longhouse-runner-manifest.json}"' in response.text
+    assert (
+        'RUNNER_UPDATE_MANIFEST_URL="${RUNNER_UPDATE_MANIFEST_URL:-https://github.com/cipher982/longhouse/releases/latest/download/longhouse-runner-manifest.json}"'
+        in response.text
+    )
     assert 'RUNNER_AUTO_UPDATE_POLICY="${RUNNER_AUTO_UPDATE_POLICY:-notify}"' in response.text
-    assert 'RUNNER_COMMON_SERVICE_PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin"' in response.text
-    assert 'RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES' in response.text
-    assert 'RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE' in response.text
-    assert 'RUNNER_AVAILABILITY_POLICY=$RUNNER_AVAILABILITY_POLICY' in response.text
-    assert 'RUNNER_INSTALL_ROOT=$INSTALL_ROOT' in response.text
-    assert 'RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH' in response.text
-    assert '<string>$HOME/.local/bin:$HOME/bin:$RUNNER_COMMON_SERVICE_PATH</string>' in response.text
+    assert (
+        'RUNNER_COMMON_SERVICE_PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin"'
+        in response.text
+    )
+    assert "RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES" in response.text
+    assert "RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE" in response.text
+    assert "RUNNER_AVAILABILITY_POLICY=$RUNNER_AVAILABILITY_POLICY" in response.text
+    assert "RUNNER_INSTALL_ROOT=$INSTALL_ROOT" in response.text
+    assert "RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH" in response.text
+    assert "<string>$HOME/.local/bin:$HOME/bin:$RUNNER_COMMON_SERVICE_PATH</string>" in response.text
     assert "systemctl --user enable longhouse-runner" in response.text
     assert 'VERSION_DIR="$INSTALL_ROOT/versions/$RUNNER_BINARY_VERSION"' in response.text
     assert 'BINARY_PATH="$VERSION_DIR/longhouse-runner"' in response.text
     assert 'mv -f "$temp_launcher_path" "$launcher_path"' in response.text
     assert "For always-on servers, use RUNNER_INSTALL_MODE=server instead." in response.text
     linux_desktop_start = response.text.index('if [ "$RUNNER_INSTALL_MODE" = "desktop" ]')
-    assert response.text.index('if systemctl --user is-active --quiet longhouse-runner', linux_desktop_start) < response.text.index(
+    assert response.text.index("if systemctl --user is-active --quiet longhouse-runner", linux_desktop_start) < response.text.index(
         'write_launcher "$LAUNCHER_PATH" "$CURRENT_LINK"',
         linux_desktop_start,
     )
@@ -95,18 +101,18 @@ def test_install_script_server_mode_exposes_system_service_contract(tmp_path):
     assert 'RUNNER_AVAILABILITY_POLICY="always_on"' in response.text
     assert 'RUNNER_REQUESTED_CAPABILITIES="${RUNNER_REQUESTED_CAPABILITIES:-exec.full}"' in response.text
     assert 'RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-9.9.9}"' in response.text
-    assert 'RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES' in response.text
-    assert 'RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE' in response.text
-    assert 'RUNNER_AVAILABILITY_POLICY=$RUNNER_AVAILABILITY_POLICY' in response.text
-    assert 'RUNNER_INSTALL_ROOT=$INSTALL_ROOT' in response.text
-    assert 'RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH' in response.text
-    assert 'Environment=PATH=$INSTALL_HOME/.local/bin:$INSTALL_HOME/bin:$RUNNER_COMMON_SERVICE_PATH' in response.text
+    assert "RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES" in response.text
+    assert "RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE" in response.text
+    assert "RUNNER_AVAILABILITY_POLICY=$RUNNER_AVAILABILITY_POLICY" in response.text
+    assert "RUNNER_INSTALL_ROOT=$INSTALL_ROOT" in response.text
+    assert "RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH" in response.text
+    assert "Environment=PATH=$INSTALL_HOME/.local/bin:$INSTALL_HOME/bin:$RUNNER_COMMON_SERVICE_PATH" in response.text
     assert "EnvironmentFile=/etc/longhouse/runner.env" in response.text
-    assert 'ExecStart=$LAUNCHER_PATH' in response.text
+    assert "ExecStart=$LAUNCHER_PATH" in response.text
     assert "WantedBy=multi-user.target" in response.text
     assert ".local/share/longhouse-runner" in response.text
     assert "sudo systemctl status longhouse-runner" in response.text
-    assert response.text.index('if $SUDO systemctl is-active --quiet longhouse-runner') < response.text.index(
+    assert response.text.index("if $SUDO systemctl is-active --quiet longhouse-runner") < response.text.index(
         '$SUDO install -m 755 -o "$INSTALL_USER" -g "$INSTALL_GROUP" "$TMP_LAUNCHER" "$LAUNCHER_PATH"'
     )
 
@@ -133,12 +139,12 @@ def test_uninstall_script_cleans_up_managed_layout_paths_and_server_contract(tmp
     response = _fetch_uninstall_script()
 
     assert response.status_code == 200
-    assert 'RUNNER_INSTALL_ROOT:-$HOME/.local/share/longhouse-runner' in response.text
-    assert 'RUNNER_LAUNCHER_PATH:-$HOME/.local/bin/longhouse-runner' in response.text
+    assert "RUNNER_INSTALL_ROOT:-$HOME/.local/share/longhouse-runner" in response.text
+    assert "RUNNER_LAUNCHER_PATH:-$HOME/.local/bin/longhouse-runner" in response.text
     assert "/etc/systemd/system/${SERVICE_NAME}.service" in response.text
     assert "/etc/longhouse/runner.env" in response.text
-    assert 'Install root removed: $INSTALL_ROOT' in response.text
-    assert 'Launcher removed: $LAUNCHER_PATH' in response.text
+    assert "Install root removed: $INSTALL_ROOT" in response.text
+    assert "Launcher removed: $LAUNCHER_PATH" in response.text
 
     script_path = Path(tmp_path) / "uninstall.sh"
     script_path.write_text(response.text)
@@ -193,7 +199,6 @@ def test_create_enroll_token_uses_request_base_url_when_public_url_missing(tmp_p
     assert "http://127.0.0.1:43955/api/runners/install.sh" in payload["one_liner_install_command"]
     assert "http://127.0.0.1:43955/api/runners/register" in payload["docker_command"]
     assert '"capabilities": ["exec.full"]' in payload["docker_command"]
-
 
 
 def test_create_enroll_token_prefers_forwarded_https_when_public_url_missing(tmp_path):

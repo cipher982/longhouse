@@ -157,9 +157,7 @@ def test_run_turn_boundary_quiescent_fails_closed_without_an_observed_active_win
     assert result["observation"]["activity_became_active_during_turn"] is False
 
 
-def test_main_serializes_result_and_exit_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     engine = tmp_path / "longhouse-engine"
     provider = tmp_path / "codex"
     for executable in (engine, provider):

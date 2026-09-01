@@ -80,10 +80,7 @@ def test_codex_hook_never_emits_session_start_context(tmp_path):
         pytest.skip("jq is required to execute provider hook fixtures")
 
     hook = tmp_path / "longhouse-codex-hook.sh"
-    hook.write_text(
-        CODEX_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path / "longhouse"))
-        .replace("__ENGINE_PATH__", "/bin/true")
-    )
+    hook.write_text(CODEX_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path / "longhouse")).replace("__ENGINE_PATH__", "/bin/true"))
     hook.chmod(0o755)
     env = os.environ.copy()
     env["LONGHOUSE_MANAGED_SESSION_ID"] = "11111111-1111-1111-1111-111111111111"

@@ -46,10 +46,8 @@ def test_generated_tables_artifact_is_not_stale() -> None:
     facts = load_facts()
 
     assert render_status_table(facts) in artifact_text, (
-        "docs/generated/provider_factory_status_tables.md's status table is stale — "
-        "run scripts/generate_provider_factory_plan.py --write"
+        "docs/generated/provider_factory_status_tables.md's status table is stale — run scripts/generate_provider_factory_plan.py --write"
     )
     assert render_diagonal_status(facts) in artifact_text, (
-        "docs/generated/provider_factory_status_tables.md's diagonal table is stale — "
-        "run scripts/generate_provider_factory_plan.py --write"
+        "docs/generated/provider_factory_status_tables.md's diagonal table is stale — run scripts/generate_provider_factory_plan.py --write"
     )

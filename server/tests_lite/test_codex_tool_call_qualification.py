@@ -190,9 +190,7 @@ def test_live_profile_emits_strict_v2_bundle_and_least_privilege_command(tmp_pat
     assert {record["mode"] for record in bundle["records"]} == {None}
 
 
-def test_live_profile_pins_explicit_model_into_provider_command_and_receipt(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_live_profile_pins_explicit_model_into_provider_command_and_receipt(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CODEX_MODEL", "gpt-5-codex-mini")
     result, output, calls = _run(tmp_path, monkeypatch)
 

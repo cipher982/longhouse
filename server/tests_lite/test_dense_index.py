@@ -232,12 +232,10 @@ def test_include_test_dense_scope_never_promotes_worker_hidden_session(tmp_path)
     index, connection = _index(tmp_path, rows)
     try:
         connection.execute(
-            "UPDATE session_index SET hidden_from_default_timeline = 1, test_scope_visible = 1 "
-            "WHERE session_id = 'ordinary-test'"
+            "UPDATE session_index SET hidden_from_default_timeline = 1, test_scope_visible = 1 WHERE session_id = 'ordinary-test'"
         )
         connection.execute(
-            "UPDATE session_index SET hidden_from_default_timeline = 1, test_scope_visible = 0 "
-            "WHERE session_id = 'worker-test'"
+            "UPDATE session_index SET hidden_from_default_timeline = 1, test_scope_visible = 0 WHERE session_id = 'worker-test'"
         )
         connection.commit()
         index.load(connection)
@@ -432,8 +430,7 @@ def test_matches_the_sql_path_on_random_corpora(tmp_path):
                     since_iso=since,
                 )
                 assert [r["session_id"] for r in resident] == reference, (
-                    f"divergence for project={project} provider={provider} environment={environment} "
-                    f"excluded={excluded} since={since}"
+                    f"divergence for project={project} provider={provider} environment={environment} excluded={excluded} since={since}"
                 )
 
         assert_equivalent()

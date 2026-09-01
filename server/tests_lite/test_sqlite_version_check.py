@@ -53,8 +53,7 @@ def test_current_sqlite_version_meets_minimum():
     """Verify this environment's SQLite meets minimum requirements."""
     current_version = tuple(int(x) for x in sqlite3.sqlite_version.split("."))
     assert current_version >= SQLITE_MIN_VERSION, (
-        f"SQLite {sqlite3.sqlite_version} is below minimum {'.'.join(str(x) for x in SQLITE_MIN_VERSION)}. "
-        f"Upgrade SQLite or use Postgres."
+        f"SQLite {sqlite3.sqlite_version} is below minimum {'.'.join(str(x) for x in SQLITE_MIN_VERSION)}. Upgrade SQLite or use Postgres."
     )
 
 

@@ -193,15 +193,11 @@ def test_delta_classification_accepts_only_exact_freshness_and_historical_termin
         now=NOW,
     )
     assert expired.gate_status == "clear"
-    assert [(delta.family, delta.relation, delta.resolution) for delta in expired.deltas] == [
-        ("activity", "expired", "accept_canonical")
-    ]
+    assert [(delta.family, delta.relation, delta.resolution) for delta in expired.deltas] == [("activity", "expired", "accept_canonical")]
 
     not_yet_expired = compare_session_state_axes(
         legacy=expired_legacy.model_copy(
-            update={
-                "activity": expired_legacy.activity.model_copy(update={"valid_until": NOW + timedelta(seconds=1)})
-            }
+            update={"activity": expired_legacy.activity.model_copy(update={"valid_until": NOW + timedelta(seconds=1)})}
         ),
         shadow=no_typed_activity,
         legacy_commit_seq=12,
@@ -210,9 +206,7 @@ def test_delta_classification_accepts_only_exact_freshness_and_historical_termin
     )
     assert not_yet_expired.gate_status == "blocked"
 
-    legacy_ended = _legacy().model_copy(
-        update={"run": SessionRunFacts(id="run-1", lifecycle="ended", started_at=NOW, ended_at=None)}
-    )
+    legacy_ended = _legacy().model_copy(update={"run": SessionRunFacts(id="run-1", lifecycle="ended", started_at=NOW, ended_at=None)})
     shadow_running = shadow.model_copy(update={"run": SessionRunFacts(id="run-1", lifecycle="running", started_at=NOW)})
     terminal = compare_session_state_axes(
         legacy=legacy_ended,
@@ -237,17 +231,13 @@ def test_delta_classification_accepts_only_exact_freshness_and_historical_termin
         }
     )
     ended = compare_session_state_axes(
-        legacy=_legacy().model_copy(
-            update={"run": SessionRunFacts(id="run-1", lifecycle="running", started_at=NOW)}
-        ),
+        legacy=_legacy().model_copy(update={"run": SessionRunFacts(id="run-1", lifecycle="running", started_at=NOW)}),
         shadow=durable_ended,
         legacy_commit_seq=12,
         shadow_commit_seq=12,
     )
     assert ended.gate_status == "clear"
-    assert [(delta.family, delta.relation, delta.resolution) for delta in ended.deltas] == [
-        ("run", "historical_only", "accept_canonical")
-    ]
+    assert [(delta.family, delta.relation, delta.resolution) for delta in ended.deltas] == [("run", "historical_only", "accept_canonical")]
 
 
 def test_delta_classification_requires_targeted_proof_for_missing_control_and_blocks_rejected_evidence():
@@ -452,9 +442,7 @@ def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkey
     monkeypatch.setattr(
         diagnostics_router,
         "project_catalog_session_facts",
-        lambda _facts, observed_at, **_kwargs: SimpleNamespace(
-            session_state=_legacy().model_copy(update={"commit_seq": 12})
-        ),
+        lambda _facts, observed_at, **_kwargs: SimpleNamespace(session_state=_legacy().model_copy(update={"commit_seq": 12})),
     )
     monkeypatch.setattr(
         diagnostics_router,

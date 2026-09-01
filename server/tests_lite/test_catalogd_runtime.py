@@ -124,19 +124,23 @@ async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemo
 
     engine = create_catalog_engine(database_path)
     with engine.connect() as connection:
-        state = connection.execute(
-            LiveRuntimeState.__table__.select().where(LiveRuntimeState.runtime_key == "codex:catalog-runtime")
-        ).mappings().one()
+        state = (
+            connection.execute(LiveRuntimeState.__table__.select().where(LiveRuntimeState.runtime_key == "codex:catalog-runtime"))
+            .mappings()
+            .one()
+        )
         assert state["phase"] == "running"
         assert state["active_tool"] == "Shell"
-        catalog = connection.execute(
-            LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)
-        ).mappings().one()
+        catalog = (
+            connection.execute(LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)).mappings().one()
+        )
         assert catalog["user_state"] == "active"
         assert connection.execute(LiveArchiveOutbox.__table__.select()).first() is None
-        live_preview = connection.execute(
-            LiveSessionLivePreview.__table__.select().where(LiveSessionLivePreview.session_id == preview_session_id)
-        ).mappings().one()
+        live_preview = (
+            connection.execute(LiveSessionLivePreview.__table__.select().where(LiveSessionLivePreview.session_id == preview_session_id))
+            .mappings()
+            .one()
+        )
         assert live_preview["preview_text"] == "streaming output"
         assert read_catalog_meta(engine).commit_seq == 3
     engine.dispose()

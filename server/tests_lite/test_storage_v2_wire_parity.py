@@ -53,20 +53,17 @@ def test_storage_v2_wire_envelope_id_matches_server_contract():
         range_end=identity.range_end,
         record_hashes=identity.record_hashes,
     ) == encode_envelope_preimage(identity)
-    assert (
-        wire.expected_envelope_id(
-            tenant_id=identity.tenant_id,
-            machine_id=identity.machine_id,
-            provider=identity.provider,
-            opaque_source_id=identity.opaque_source_id,
-            source_epoch=identity.source_epoch,
-            range_kind=identity.range_kind,
-            range_start=identity.range_start,
-            range_end=identity.range_end,
-            record_hashes=identity.record_hashes,
-        )
-        == envelope_id(identity)
-    )
+    assert wire.expected_envelope_id(
+        tenant_id=identity.tenant_id,
+        machine_id=identity.machine_id,
+        provider=identity.provider,
+        opaque_source_id=identity.opaque_source_id,
+        source_epoch=identity.source_epoch,
+        range_kind=identity.range_kind,
+        range_start=identity.range_start,
+        range_end=identity.range_end,
+        record_hashes=identity.record_hashes,
+    ) == envelope_id(identity)
 
 
 def test_canary_bootstrap_envelope_is_deterministic_and_idempotent():

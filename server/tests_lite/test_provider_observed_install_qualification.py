@@ -73,11 +73,7 @@ def _gate0_artifact(tmp_path: Path, *, identity: str) -> Path:
                         "status": "passed",
                         "provider_conversation_id": "cursor-session-1",
                         **(
-                            {
-                                "prompt_sha256": hashlib.sha256(
-                                    "LONGHOUSE UNIVERSAL HARNESS".encode("utf-8")
-                                ).hexdigest()
-                            }
+                            {"prompt_sha256": hashlib.sha256("LONGHOUSE UNIVERSAL HARNESS".encode("utf-8")).hexdigest()}
                             if name == "create_chat_resume"
                             else {}
                         ),
@@ -155,7 +151,5 @@ def test_cursor_observed_install_rejects_gate_for_different_executable(tmp_path:
 
     assert result["status"] == "fail"
     assert result["full_column_gate"]["status"] == "fail"
-    failure_codes = {
-        item["actual_failure_code"] for item in result["full_column_gate"]["unexpected_results"]
-    }
+    failure_codes = {item["actual_failure_code"] for item in result["full_column_gate"]["unexpected_results"]}
     assert "cursor_gate0_identity_mismatch" in failure_codes

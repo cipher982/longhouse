@@ -85,11 +85,7 @@ def test_redacted_native_capture_refreshes_result_and_model_source_digests(tmp_p
 
 
 def test_native_source_digest_refresh_fails_closed_for_missing_artifact(tmp_path: Path) -> None:
-    observation = {
-        "live_model_evidence": {
-            "source_artifacts": [{"path": "missing.jsonl", "kind": "provider_jsonl_stream"}]
-        }
-    }
+    observation = {"live_model_evidence": {"source_artifacts": [{"path": "missing.jsonl", "kind": "provider_jsonl_stream"}]}}
 
     with pytest.raises(identity.RequestError, match="native source artifact"):
         semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001

@@ -603,7 +603,7 @@ def _opencode_cli_model(model: str | None) -> str | None:
     bare_value = value.removeprefix("openrouter/")
     vendor, separator, model_name = bare_value.partition("/")
     if vendor not in _OPENCODE_BARE_MODEL_VENDORS or not separator or not model_name:
-        raise ValueError("OpenCode qualification model must use openrouter/ or a supported " f"bare OpenRouter vendor; got {value!r}")
+        raise ValueError(f"OpenCode qualification model must use openrouter/ or a supported bare OpenRouter vendor; got {value!r}")
     return f"openrouter/{bare_value}"
 
 

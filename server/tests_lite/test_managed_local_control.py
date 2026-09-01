@@ -110,10 +110,10 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude", owner_id: int
         device_id=runner.name,
         cwd="/Users/example/git/zerg",
         started_at=datetime.now(timezone.utc),
-                                        user_messages=0,
+        user_messages=0,
         assistant_messages=0,
         tool_calls=0,
-                                loop_mode="assist",
+        loop_mode="assist",
     )
     db.add(session)
     db.flush()
@@ -1055,9 +1055,7 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
         assert result.verified_turn_started is True
 
 
-def test_send_text_to_managed_local_session_reports_codex_verification_failure_without_runtime_signal(
-    monkeypatch, tmp_path, live_catalog
-):
+def test_send_text_to_managed_local_session_reports_codex_verification_failure_without_runtime_signal(monkeypatch, tmp_path, live_catalog):
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
 
@@ -1358,9 +1356,7 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
     )
     monkeypatch.setattr(
         "zerg.services.managed_local_control.await_managed_local_hook_phase_update",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("hook phase verification should not run for native Claude")
-        ),
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("hook phase verification should not run for native Claude")),
     )
 
     with SessionLocal() as db:

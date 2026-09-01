@@ -39,7 +39,7 @@ def _make_session(db, *, provider="codex", provider_session_id=None, project="ze
         project=project,
         device_id="dev",
         started_at=datetime(2026, 5, 21, tzinfo=timezone.utc),
-            )
+    )
     db.add(s)
     db.flush()
     return s
@@ -68,11 +68,7 @@ def test_backfill_creates_one_thread_per_session(tmp_path):
         # session row.
         for s in (s1, s2, s3):
             db.refresh(s)
-            t = (
-                db.query(SessionThread)
-                .filter(SessionThread.session_id == s.id, SessionThread.is_primary == 1)
-                .one()
-            )
+            t = db.query(SessionThread).filter(SessionThread.session_id == s.id, SessionThread.is_primary == 1).one()
             assert s.primary_thread_id == t.id
             assert t.provider == s.provider
             assert t.branch_kind == "root"
@@ -145,9 +141,7 @@ def test_backfill_reuses_preexisting_primary_thread(tmp_path):
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as db:
         s = _make_session(db, provider_session_id="codex-1")
-        existing = SessionThread(
-            session_id=s.id, provider="codex", branch_kind="root", is_primary=1
-        )
+        existing = SessionThread(session_id=s.id, provider="codex", branch_kind="root", is_primary=1)
         db.add(existing)
         db.flush()
         existing_id = existing.id
@@ -171,9 +165,7 @@ def test_backfill_leaves_existing_primary_pointer_untouched(tmp_path):
     SessionLocal = sessionmaker(bind=engine)
     with SessionLocal() as db:
         s = _make_session(db, provider_session_id="codex-1")
-        thread = SessionThread(
-            session_id=s.id, provider="codex", branch_kind="root", is_primary=1
-        )
+        thread = SessionThread(session_id=s.id, provider="codex", branch_kind="root", is_primary=1)
         db.add(thread)
         db.flush()
         s.primary_thread_id = thread.id

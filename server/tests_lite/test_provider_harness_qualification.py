@@ -851,9 +851,7 @@ def test_claude_full_column_regression_remains_coverage_evidence(
     assert outcomes["claude_cli_channel_contract_preserved"] == "pass"
     assert outcomes["real_print_marker_returned"] == "pass"
     assert bundle["execution_metadata"]["semantic_status"] == "pass"
-    observation = json.loads(
-        (tmp_path / "output" / "semantic-evidence" / "semantic-observation.json").read_text(encoding="utf-8")
-    )
+    observation = json.loads((tmp_path / "output" / "semantic-evidence" / "semantic-observation.json").read_text(encoding="utf-8"))
     assert observation["full_column_gate"]["status"] == "fail"
 
 
@@ -932,9 +930,7 @@ def test_opencode_release_gate_regression_remains_coverage_evidence(
     assert outcomes["serve_session_contract_preserved"] == "pass"
     assert outcomes["process_restart_reattach_preserved"] == "pass"
     assert bundle["execution_metadata"]["semantic_status"] == "pass"
-    observation = json.loads(
-        (tmp_path / "output" / "semantic-evidence" / "semantic-observation.json").read_text(encoding="utf-8")
-    )
+    observation = json.loads((tmp_path / "output" / "semantic-evidence" / "semantic-observation.json").read_text(encoding="utf-8"))
     expected_failure_key = "full_column" if regressed_scenario == "timeline_projection" else regressed_scenario
     assert observation["full_column_failures"][expected_failure_key] == "fail"
 

@@ -41,7 +41,10 @@ repos:
   # Only targets main source code, not alembic migrations or test scripts
   # =========================================================================
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.4
+    # Must match the ruff in server/pyproject.toml's dev group. When these
+    # drifted (hook 0.8.4, project 0.9.9) the hook and a plain `ruff format`
+    # disagreed about the same file, so formatting could never converge.
+    rev: v0.9.9
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix, --config=server/pyproject.toml]

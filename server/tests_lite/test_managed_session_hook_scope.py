@@ -61,7 +61,7 @@ def _seed_session(
         git_repo=None,
         git_branch="main",
         started_at=datetime.now(timezone.utc),
-                        user_messages=1,
+        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
     )
@@ -210,9 +210,7 @@ def test_agents_sessions_rejects_broader_filters_for_managed_session_hook_token(
                     )
 
                     assert response.status_code == 403, response.text
-                    assert response.json()["detail"] == (
-                        "Managed-session hook scope only supports bounded recent project lookup"
-                    )
+                    assert response.json()["detail"] == ("Managed-session hook scope only supports bounded recent project lookup")
         finally:
             api_app.dependency_overrides.clear()
 

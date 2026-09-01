@@ -157,9 +157,7 @@ def test_default_workflows_use_release_artifact_evidence():
 def test_human_output_prints_hints(capsys):
     mod = _load_module()
 
-    mod.print_human(
-        [mod.Check("workflow:Launch Gate", "missing", "no exact-SHA run found", hint="dispatch it")]
-    )
+    mod.print_human([mod.Check("workflow:Launch Gate", "missing", "no exact-SHA run found", hint="dispatch it")])
 
     captured = capsys.readouterr()
     assert "FAIL workflow:Launch Gate: no exact-SHA run found" in captured.out
@@ -298,9 +296,7 @@ def test_wait_mode_suppresses_unchanged_pending_output(monkeypatch, capsys):
     monkeypatch.setattr(
         mod,
         "run_checks",
-        lambda args, target, required, **kwargs: [
-            mod.Check("workflow:CI", "pending", "run 12 in_progress/-")
-        ],
+        lambda args, target, required, **kwargs: [mod.Check("workflow:CI", "pending", "run 12 in_progress/-")],
     )
     monkeypatch.setattr(mod.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(mod.time, "sleep", clock.sleep)

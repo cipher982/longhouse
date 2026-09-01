@@ -124,15 +124,11 @@ def test_events_fts_rebuild_stays_in_startup_or_explicit_repair_lane():
     rebuild_sql = "INSERT INTO events_fts(events_fts) VALUES('rebuild')"
 
     rebuild_owners = sorted(
-        path.relative_to(server_root).as_posix()
-        for path in source_root.rglob("*.py")
-        if rebuild_sql in path.read_text()
+        path.relative_to(server_root).as_posix() for path in source_root.rglob("*.py") if rebuild_sql in path.read_text()
     )
     assert rebuild_owners == ["zerg/database.py"]
 
     explicit_rebuild_callers = sorted(
-        path.relative_to(server_root).as_posix()
-        for path in source_root.rglob("*.py")
-        if ".rebuild_fts(" in path.read_text()
+        path.relative_to(server_root).as_posix() for path in source_root.rglob("*.py") if ".rebuild_fts(" in path.read_text()
     )
     assert explicit_rebuild_callers == []

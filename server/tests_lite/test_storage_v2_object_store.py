@@ -21,7 +21,12 @@ def real_b2_store_or_skip() -> B2BackupMirrorObjectStore:
 
     if os.environ.get("LONGHOUSE_B2_REAL_PROOF") != "1":
         pytest.skip("set LONGHOUSE_B2_REAL_PROOF=1 to run the disposable B2 proof")
-    required = ("B2_LONGHOUSE_PHASE3_KEY_ID", "B2_LONGHOUSE_PHASE3_APP_KEY", "B2_LONGHOUSE_PHASE3_BUCKET", "B2_LONGHOUSE_PHASE3_S3_ENDPOINT")
+    required = (
+        "B2_LONGHOUSE_PHASE3_KEY_ID",
+        "B2_LONGHOUSE_PHASE3_APP_KEY",
+        "B2_LONGHOUSE_PHASE3_BUCKET",
+        "B2_LONGHOUSE_PHASE3_S3_ENDPOINT",
+    )
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         pytest.fail(f"B2 proof credentials are incomplete: {', '.join(missing)}")

@@ -447,9 +447,7 @@ def test_canonical_control_prepare_rejects_antigravity_without_a_live_session(da
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
 
-    prepared = CatalogStore(engine).prepare_control_command(
-        **_prepare_params(uuid4(), provider="antigravity")
-    )
+    prepared = CatalogStore(engine).prepare_control_command(**_prepare_params(uuid4(), provider="antigravity"))
 
     assert prepared["allowed"] is False
     # Antigravity is a canonical control provider now, so it is refused for the

@@ -228,7 +228,7 @@ def get_engine_executable() -> str:
     if path_fallback:
         return path_fallback.launch_path
 
-    raise RuntimeError("longhouse-engine not found. " "Install it from https://longhouse.ai/install or run `make install-engine`.")
+    raise RuntimeError("longhouse-engine not found. Install it from https://longhouse.ai/install or run `make install-engine`.")
 
 
 def get_zerg_executable() -> str:

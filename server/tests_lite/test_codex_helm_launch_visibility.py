@@ -213,9 +213,7 @@ def test_infrastructure_failure_retains_cause_without_claiming_a_product_verdict
     monkeypatch.setattr(
         launch,
         "_human_launch_sequence",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError('Runtime Host HTTP 503: {"detail":{"code":"resource_exhausted"}}')
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('Runtime Host HTTP 503: {"detail":{"code":"resource_exhausted"}}')),
     )
 
     result = launch.run_scenario(

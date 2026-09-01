@@ -218,7 +218,6 @@ def test_machine_session_detail_uses_token_owner_and_marks_canonical_serve(monke
     ],
 )
 def test_machine_session_detail_maps_fail_closed_catalog_errors(monkeypatch, code, expected_status):
-
     def fail(*_args, **_kwargs):
         raise CatalogReadError(code, "canonical detail unavailable")
 

@@ -207,9 +207,7 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
     assert "live guard healthy" in result.stdout
     assert "live 1h: 3/3 ok, 0 connect errors, latency p50/p95 40ms/80ms" in result.stdout
     assert "live stages p95: observed->send 100ms, observed->ack 140ms, enqueue->job 20ms, http 40ms" in result.stdout
-    assert (
-        "last live: observed 2026-05-17T06:40:00Z, send 2026-05-17T06:40:00.100000Z, ack 2026-05-17T06:40:00.140000Z"
-    ) in result.stdout
+    assert ("last live: observed 2026-05-17T06:40:00Z, send 2026-05-17T06:40:00.100000Z, ack 2026-05-17T06:40:00.140000Z") in result.stdout
 
     speed_result = runner.invoke(app, ["archive", "speed", "--state-root", str(tmp_path)])
 
@@ -217,9 +215,7 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
     assert "Archive speed" in speed_result.stdout
     assert "archive: 7.5 events/s, 512 B/s, 6/8 ok, 2 backpressure" in speed_result.stdout
     assert "remaining: 4.0 KB, eta 8s at current EWMA" in speed_result.stdout
-    assert (
-        "live guardrail: p95 80ms, observed->ack p95 140ms, state healthy, limiter p95 80ms, enqueue->job 20ms"
-    ) in speed_result.stdout
+    assert ("live guardrail: p95 80ms, observed->ack p95 140ms, state healthy, limiter p95 80ms, enqueue->job 20ms") in speed_result.stdout
     assert "scheduler: ready 5 (4.0 KB), active 1 (2.0 KB), cap 2" in speed_result.stdout
 
     speed_json_result = runner.invoke(app, ["archive", "speed", "--state-root", str(tmp_path), "--json"])

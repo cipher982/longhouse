@@ -113,10 +113,16 @@ class TestResolveEmailConfig:
     def test_empty_result_when_nothing_configured(self):
         """Returns empty dict when no DB and no env vars."""
         # Clear all email-related env vars
-        clean_env = {k: "" for k in [
-            "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
-            "AWS_SES_REGION", "FROM_EMAIL", "NOTIFY_EMAIL",
-        ]}
+        clean_env = {
+            k: ""
+            for k in [
+                "AWS_SES_ACCESS_KEY_ID",
+                "AWS_SES_SECRET_ACCESS_KEY",
+                "AWS_SES_REGION",
+                "FROM_EMAIL",
+                "NOTIFY_EMAIL",
+            ]
+        }
         with patch.dict(os.environ, clean_env, clear=False):
             with patch(
                 "zerg.database.get_session_factory",
@@ -174,10 +180,16 @@ class TestNonDefaultOwnerID:
             _seed_email_secret(db, "AWS_SES_SECRET_ACCESS_KEY", "secret_user2", owner_id=2)
             _seed_email_secret(db, "FROM_EMAIL", "from@user2.com", owner_id=2)
 
-        clean_env = {k: "" for k in [
-            "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
-            "FROM_EMAIL", "AWS_SES_REGION", "NOTIFY_EMAIL",
-        ]}
+        clean_env = {
+            k: ""
+            for k in [
+                "AWS_SES_ACCESS_KEY_ID",
+                "AWS_SES_SECRET_ACCESS_KEY",
+                "FROM_EMAIL",
+                "AWS_SES_REGION",
+                "NOTIFY_EMAIL",
+            ]
+        }
         with patch.dict(os.environ, clean_env, clear=False):
             with patch(
                 "zerg.database.get_session_factory",
@@ -190,6 +202,7 @@ class TestNonDefaultOwnerID:
         assert result["AWS_SES_ACCESS_KEY_ID"] == "AKIA_USER2"
         assert result["AWS_SES_SECRET_ACCESS_KEY"] == "secret_user2"
         assert result["FROM_EMAIL"] == "from@user2.com"
+
 
 # ---------------------------------------------------------------------------
 # Tests: mixed env + DB source resolution

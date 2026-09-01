@@ -296,9 +296,7 @@ def test_storage_v2_gate_stub_advertises_the_real_ship_contract() -> None:
 def test_storage_v2_gate_stub_returns_a_durable_receipt() -> None:
     envelope_id = "a" * 64
 
-    receipt = _storage_v2_receipt_payload(
-        json.dumps({"expected_envelope_id": envelope_id, "render": {"records": 1}}).encode()
-    )
+    receipt = _storage_v2_receipt_payload(json.dumps({"expected_envelope_id": envelope_id, "render": {"records": 1}}).encode())
 
     assert receipt["v"] == 2
     assert receipt["envelope_id"] == envelope_id
@@ -320,9 +318,7 @@ def test_storage_v2_gate_receipt_is_explicitly_local_and_synthetic() -> None:
 def test_cursor_source_ship_result_labels_local_receipt_and_enforces_progress(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "zerg.qa.cursor_helm_gate0.subprocess.run",
-        lambda *_args, **_kwargs: CompletedProcess(
-            [], 0, json.dumps({"status": "ok", "protocol": "storage-v2", "events_shipped": 2}), ""
-        ),
+        lambda *_args, **_kwargs: CompletedProcess([], 0, json.dumps({"status": "ok", "protocol": "storage-v2", "events_shipped": 2}), ""),
     )
 
     result = _ship_cursor_store(
@@ -344,9 +340,7 @@ def test_cursor_source_ship_result_labels_local_receipt_and_enforces_progress(mo
 def test_cursor_source_ship_rejects_zero_shipped_events(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "zerg.qa.cursor_helm_gate0.subprocess.run",
-        lambda *_args, **_kwargs: CompletedProcess(
-            [], 0, json.dumps({"status": "ok", "protocol": "storage-v2", "events_shipped": 0}), ""
-        ),
+        lambda *_args, **_kwargs: CompletedProcess([], 0, json.dumps({"status": "ok", "protocol": "storage-v2", "events_shipped": 0}), ""),
     )
 
     with pytest.raises(RuntimeError, match="no shipped events"):

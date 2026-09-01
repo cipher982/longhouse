@@ -54,29 +54,67 @@ def test_conditional_rebuild_keeps_uncovered_raw(tmp_path):
         db.flush()
         # source_lines: one covered, one not
         for off, raw in ((0, covered_raw), (100, uncovered_raw)):
-            db.add(AgentSourceLine(
-                session_id=sid, source_path="/t/s.jsonl", source_offset=off, branch_id=1, revision=1,
-                is_branch_copy=0, raw_json="", raw_json_z=compress_raw_json(raw), raw_json_codec=CODEC_ZSTD,
-                line_hash=hashlib.sha256(raw.encode()).hexdigest(),
-            ))
+            db.add(
+                AgentSourceLine(
+                    session_id=sid,
+                    source_path="/t/s.jsonl",
+                    source_offset=off,
+                    branch_id=1,
+                    revision=1,
+                    is_branch_copy=0,
+                    raw_json="",
+                    raw_json_z=compress_raw_json(raw),
+                    raw_json_codec=CODEC_ZSTD,
+                    line_hash=hashlib.sha256(raw.encode()).hexdigest(),
+                )
+            )
         # events: one covered, one not
         for off, raw in ((0, ev_covered), (200, ev_uncovered)):
-            db.add(AgentEvent(
-                session_id=sid, role="assistant", content_text="x", timestamp=datetime.now(timezone.utc),
-                source_path="/t/s.jsonl", source_offset=off, raw_json=None, raw_json_z=compress_raw_json(raw),
-                raw_json_codec=CODEC_ZSTD, event_hash=hashlib.sha256(raw.encode()).hexdigest(),
-            ))
+            db.add(
+                AgentEvent(
+                    session_id=sid,
+                    role="assistant",
+                    content_text="x",
+                    timestamp=datetime.now(timezone.utc),
+                    source_path="/t/s.jsonl",
+                    source_offset=off,
+                    raw_json=None,
+                    raw_json_z=compress_raw_json(raw),
+                    raw_json_codec=CODEC_ZSTD,
+                    event_hash=hashlib.sha256(raw.encode()).hexdigest(),
+                )
+            )
         db.flush()
         # Archive ONLY the covered rows.
         store = FilesystemArchiveStore(archive)
-        sl_chunks = store.write_record_chunks([
-            ArchiveRecord(tenant_id="default", session_id=sid, stream="source_lines", source_seq=1,
-                          raw_bytes=covered_raw.encode(), source_path="/t/s.jsonl", source_offset=0)
-        ], target_uncompressed_bytes=1 << 20)
-        ev_chunks = store.write_record_chunks([
-            ArchiveRecord(tenant_id="default", session_id=sid, stream="events", source_seq=1,
-                          raw_bytes=ev_covered.encode(), source_path="/t/s.jsonl", source_offset=0)
-        ], target_uncompressed_bytes=1 << 20)
+        sl_chunks = store.write_record_chunks(
+            [
+                ArchiveRecord(
+                    tenant_id="default",
+                    session_id=sid,
+                    stream="source_lines",
+                    source_seq=1,
+                    raw_bytes=covered_raw.encode(),
+                    source_path="/t/s.jsonl",
+                    source_offset=0,
+                )
+            ],
+            target_uncompressed_bytes=1 << 20,
+        )
+        ev_chunks = store.write_record_chunks(
+            [
+                ArchiveRecord(
+                    tenant_id="default",
+                    session_id=sid,
+                    stream="events",
+                    source_seq=1,
+                    raw_bytes=ev_covered.encode(),
+                    source_path="/t/s.jsonl",
+                    source_offset=0,
+                )
+            ],
+            target_uncompressed_bytes=1 << 20,
+        )
         insert_archive_chunk_manifests(db, sl_chunks + ev_chunks)
         db.commit()
     engine.dispose()
@@ -130,16 +168,37 @@ def test_owner_aware_does_not_sentinel_on_foreign_session_match(tmp_path):
             db.add(AgentSession(id=s, provider="claude", environment="production", started_at=datetime.now(timezone.utc)))
             db.flush()
         # The row belongs to `sid`...
-        db.add(AgentSourceLine(session_id=sid, source_path="/t/s.jsonl", source_offset=0, branch_id=1, revision=1,
-                               is_branch_copy=0, raw_json="", raw_json_z=compress_raw_json(raw), raw_json_codec=CODEC_ZSTD,
-                               line_hash=lh))
+        db.add(
+            AgentSourceLine(
+                session_id=sid,
+                source_path="/t/s.jsonl",
+                source_offset=0,
+                branch_id=1,
+                revision=1,
+                is_branch_copy=0,
+                raw_json="",
+                raw_json_z=compress_raw_json(raw),
+                raw_json_codec=CODEC_ZSTD,
+                line_hash=lh,
+            )
+        )
         db.flush()
         # ...but the only archive chunk with these bytes is owned by `foreign`.
         store = FilesystemArchiveStore(archive)
-        chunks = store.write_record_chunks([
-            ArchiveRecord(tenant_id="default", session_id=foreign, stream="source_lines", source_seq=1,
-                          raw_bytes=raw.encode(), source_path="/t/s.jsonl", source_offset=0)
-        ], target_uncompressed_bytes=1 << 20)
+        chunks = store.write_record_chunks(
+            [
+                ArchiveRecord(
+                    tenant_id="default",
+                    session_id=foreign,
+                    stream="source_lines",
+                    source_seq=1,
+                    raw_bytes=raw.encode(),
+                    source_path="/t/s.jsonl",
+                    source_offset=0,
+                )
+            ],
+            target_uncompressed_bytes=1 << 20,
+        )
         insert_archive_chunk_manifests(db, chunks)
         db.commit()
     engine.dispose()

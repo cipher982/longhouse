@@ -25,6 +25,7 @@ from zerg.services.managed_local_event_polling import latest_durable_head_event_
 
 _SERVER_ZERG = Path(__file__).resolve().parents[1] / "zerg"
 
+
 def _files_naming_agents_store() -> set[str]:
     found: set[str] = set()
     for path in _SERVER_ZERG.rglob("*.py"):

@@ -134,9 +134,7 @@ def test_verifier_flags_uncovered_rows(tmp_path, monkeypatch):
                 provider="claude",
                 environment="production",
                 started_at="2026-01-01T00:00:00Z",
-                source_lines=[
-                    SourceLineIngest(source_path="/tmp/s.jsonl", source_offset=0, raw_json='{"type":"user"}')
-                ],
+                source_lines=[SourceLineIngest(source_path="/tmp/s.jsonl", source_offset=0, raw_json='{"type":"user"}')],
             ),
             result=IngestResult(
                 session_id=session_id,

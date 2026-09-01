@@ -221,12 +221,26 @@ async def test_search_branch_projects_instead_of_relying_on_response_model(monke
             "presentation": {},
         },
         runtime_display={
-            "truth_tier": "none", "signal_tier": "none", "state": None, "tone": "inactive",
-            "headline": "Inactive", "detail": None, "phase_label": "Inactive", "compact_tool_label": None,
-            "is_live": False, "is_executing": False, "needs_attention": False, "is_idle": False,
-            "is_stalled": False, "is_managed_local_truth": False, "has_signal": False,
-            "control_path": "unmanaged", "activity_recency": "none", "lifecycle": "open",
-            "host_state": "online", "terminal_reason": None,
+            "truth_tier": "none",
+            "signal_tier": "none",
+            "state": None,
+            "tone": "inactive",
+            "headline": "Inactive",
+            "detail": None,
+            "phase_label": "Inactive",
+            "compact_tool_label": None,
+            "is_live": False,
+            "is_executing": False,
+            "needs_attention": False,
+            "is_idle": False,
+            "is_stalled": False,
+            "is_managed_local_truth": False,
+            "has_signal": False,
+            "control_path": "unmanaged",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": None,
         },
         timeline_card={
             "ownership": {"label": "Unmanaged", "tone": "neutral"},
@@ -235,18 +249,29 @@ async def test_search_branch_projects_instead_of_relying_on_response_model(monke
         },
     )
 
-
     async def fake_search(**_kwargs):
         return [session]
 
     monkeypatch.setattr(agents_sessions, "search_storage_v2_sessions", fake_search)
 
     result = await agents_sessions.list_sessions(
-        project="zerg", provider=None, environment=None, include_test=False,
-        hide_autonomous=True, include_automation=False, device_id=None, days_back=7,
-        query="group c", limit=20, offset=0, sort=None, mode=None,
-        context_mode="forensic", db=None,
-        _auth=SimpleNamespace(owner_id=42), _single=None,
+        project="zerg",
+        provider=None,
+        environment=None,
+        include_test=False,
+        hide_autonomous=True,
+        include_automation=False,
+        device_id=None,
+        days_back=7,
+        query="group c",
+        limit=20,
+        offset=0,
+        sort=None,
+        mode=None,
+        context_mode="forensic",
+        db=None,
+        _auth=SimpleNamespace(owner_id=42),
+        _single=None,
     )
 
     served = result.sessions[0]

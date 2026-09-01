@@ -210,9 +210,7 @@ def test_archive_manifest_excludes_test_sessions_by_default(live_catalog, live_c
 
 def test_archive_manifest_route_requires_agents_token_dependency():
     route = next(
-        candidate
-        for candidate in api_app.routes
-        if str(getattr(candidate, "path", "") or "").endswith("/agents/sessions/archive-manifest")
+        candidate for candidate in api_app.routes if str(getattr(candidate, "path", "") or "").endswith("/agents/sessions/archive-manifest")
     )
     dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
     assert verify_agents_caller in dependency_calls

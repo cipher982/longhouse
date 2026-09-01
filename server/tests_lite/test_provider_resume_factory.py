@@ -53,11 +53,7 @@ def test_source_only_resume_contracts_are_bound_to_ordinary_ci() -> None:
         "unsupported_resume_is_typed_and_side_effect_free",
     }
 
-    assertions = [
-        assertion
-        for assertion in load_capability_assertions()
-        if assertion.assertion_id in source_only
-    ]
+    assertions = [assertion for assertion in load_capability_assertions() if assertion.assertion_id in source_only]
 
     assert len(assertions) == 34
     assert {assertion.assertion_id for assertion in assertions} == source_only

@@ -47,5 +47,3 @@ def _effective_stream_sort(query: str | None, sort: str | None) -> str:
 def _stream_supports_preflight(*, query: str | None, sort: str | None, mode: str | None) -> bool:
     effective_sort = _effective_stream_sort(query, sort)
     return query is None and mode in (None, "lexical") and effective_sort == "recency"
-
-

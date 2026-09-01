@@ -57,9 +57,7 @@ def test_catalog_draft_reply_uses_storage_v2_render_tail(monkeypatch):
     class FakeCompletions:
         async def create(self, **kwargs):
             prompts.append(kwargs)
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="Ship the green cutover."))]
-            )
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Ship the green cutover."))])
 
     class FakeClient:
         chat = SimpleNamespace(completions=FakeCompletions())

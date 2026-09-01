@@ -106,9 +106,7 @@ def test_visibility_facts_cannot_carry_prompt_text():
     text into a visibility decision. Re-adding one breaks this test first.
     """
     assert "first_user_message" not in SessionVisibilityFacts.__dataclass_fields__
-    assert not [
-        name for name in SessionVisibilityFacts.__dataclass_fields__ if "message" in name or "prompt" in name
-    ]
+    assert not [name for name in SessionVisibilityFacts.__dataclass_fields__ if "message" in name or "prompt" in name]
 
     ordinary = SessionVisibilityFacts(
         provider="claude",
@@ -326,13 +324,9 @@ def test_declared_harness_launch_surface_is_test_scope_evidence():
                 },
             ],
         )
-        default_scope = dict(
-            connection.execute(select(sessions.c.session_id, effective_system_hidden_clause(sessions))).all()
-        )
+        default_scope = dict(connection.execute(select(sessions.c.session_id, effective_system_hidden_clause(sessions))).all())
         test_scope = dict(
-            connection.execute(
-                select(sessions.c.session_id, effective_system_hidden_clause(sessions, include_test=True))
-            ).all()
+            connection.execute(select(sessions.c.session_id, effective_system_hidden_clause(sessions, include_test=True))).all()
         )
 
     assert bool(default_scope["harness"]) is True

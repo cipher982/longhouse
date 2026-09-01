@@ -34,9 +34,7 @@ def test_schedule_rejects_a_scheduled_live_token_executor_that_is_not_private_fa
 
 
 def test_weekly_workflow_uses_the_declared_cron_and_independent_cells() -> None:
-    workflow = (DEFAULT_SCHEDULE_PATH.parents[1] / ".github/workflows/provider-release-weekly.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (DEFAULT_SCHEDULE_PATH.parents[1] / ".github/workflows/provider-release-weekly.yml").read_text(encoding="utf-8")
     schedule = load_provider_release_schedule()
 
     assert f"cron: '{schedule.weekly_cron}'" in workflow

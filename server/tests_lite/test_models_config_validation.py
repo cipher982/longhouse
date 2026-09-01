@@ -131,9 +131,7 @@ def test_openrouter_client_enforces_provider_data_collection_deny(tmp_path, monk
     client, _model, provider = mc.get_llm_client_for_use_case("summarization")
     try:
         assert provider == mc.ModelProvider.OPENROUTER
-        assert mc.llm_request_policy_kwargs(client) == {
-            "extra_body": {"provider": {"data_collection": "deny"}}
-        }
+        assert mc.llm_request_policy_kwargs(client) == {"extra_body": {"provider": {"data_collection": "deny"}}}
         first = mc.llm_request_policy_kwargs(client)
         first["extra_body"]["provider"]["data_collection"] = "allow"
         assert mc.llm_request_policy_kwargs(client)["extra_body"]["provider"]["data_collection"] == "deny"

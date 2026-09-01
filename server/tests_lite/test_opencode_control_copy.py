@@ -44,7 +44,7 @@ FORBIDDEN_COPY = {
     ],
     "web/src/lib/providers.ts": [
         "Archive, launch, and managed live send",
-        "statusLabel: \"Live send\"",
+        'statusLabel: "Live send"',
     ],
     "web/src/components/landing/IntegrationsSection.tsx": [
         "OpenCode supports managed live",

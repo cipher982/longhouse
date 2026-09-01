@@ -255,9 +255,7 @@ async def test_large_session_workspace_tail_is_bounded_and_independent_of_catalo
         assert response.status_code == 200, response.text
         payload = response.json()
         events = [item["event"] for item in payload["projection"]["items"]]
-        assert [event["id"] for event in events] == [
-            f"event-{index}" for index in range(_EVENT_COUNT - _PAGE_SIZE, _EVENT_COUNT)
-        ]
+        assert [event["id"] for event in events] == [f"event-{index}" for index in range(_EVENT_COUNT - _PAGE_SIZE, _EVENT_COUNT)]
         assert payload["projection"]["has_more"] is True
         assert render_pool.read_count <= _PAGE_SIZE + 2
         assert not blocked.done()

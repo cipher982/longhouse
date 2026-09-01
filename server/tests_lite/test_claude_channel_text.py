@@ -11,6 +11,4 @@ def test_strip_claude_channel_wrapper_preserves_partial_or_inline_markup():
     assert strip_claude_channel_wrapper('prefix <channel source="longhouse">hello</channel>') == (
         'prefix <channel source="longhouse">hello</channel>'
     )
-    assert strip_claude_channel_wrapper('<channel source="longhouse">unterminated') == (
-        '<channel source="longhouse">unterminated'
-    )
+    assert strip_claude_channel_wrapper('<channel source="longhouse">unterminated') == ('<channel source="longhouse">unterminated')

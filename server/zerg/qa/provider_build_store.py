@@ -317,8 +317,7 @@ def materialize_staged_provider_build(
         actual_digest = closure_digest(build_root, granularity=closure_granularity)
         if actual_digest != expected_digest:
             raise ProviderBuildStoreError(
-                f"provider build store is tampered for {provider}/{version}/{platform_key}: "
-                f"expected {expected_digest}, got {actual_digest}"
+                f"provider build store is tampered for {provider}/{version}/{platform_key}: expected {expected_digest}, got {actual_digest}"
             )
     else:
         build_root.parent.mkdir(parents=True, exist_ok=True)

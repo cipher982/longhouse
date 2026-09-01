@@ -46,9 +46,7 @@ def test_opencode_native_model_evidence_reads_the_selected_native_message(tmp_pa
         "modelID": "deepseek/deepseek-v4-flash",
     }
     with sqlite3.connect(database) as connection:
-        connection.execute(
-            "CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)"
-        )
+        connection.execute("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)")
         connection.execute(
             "INSERT INTO message VALUES (?, ?, ?, ?)",
             ("message-1", "session-1", 1, json.dumps(record)),

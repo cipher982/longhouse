@@ -73,8 +73,7 @@ def assert_equivalent(tmp_path, *, name, seed_batches, batch):
             name=f"{name}-candidate-{index}",
         )
         assert candidate == reference, (
-            f"{getattr(candidate_reduce, '__name__', candidate_reduce)} diverged: "
-            f"{reference.difference(candidate)}"
+            f"{getattr(candidate_reduce, '__name__', candidate_reduce)} diverged: {reference.difference(candidate)}"
         )
     return reference
 
@@ -157,10 +156,7 @@ def test_unsequenced_facts_order_by_observed_at(tmp_path):
         tmp_path,
         name="unsequenced",
         seed_batches=[],
-        batch=[
-            make_fact(seq=None, observed_offset_s=offset, payload=f"v{offset}")
-            for offset in (0, 5, 2)
-        ],
+        batch=[make_fact(seq=None, observed_offset_s=offset, payload=f"v{offset}") for offset in (0, 5, 2)],
     )
 
 
@@ -293,12 +289,8 @@ def test_oracle_detects_a_planted_divergence(tmp_path):
         return reference_reduce(connection, list(facts)[:-1], **kwargs)
 
     batch = [make_fact(seq=n, payload=f"v{n}") for n in (1, 2, 3)]
-    reference = run_scenario(
-        reference_reduce, seed_batches=[], batch=batch, tmp_path=tmp_path, name="planted-reference"
-    )
-    candidate = run_scenario(
-        wrong_reduce, seed_batches=[], batch=batch, tmp_path=tmp_path, name="planted-candidate"
-    )
+    reference = run_scenario(reference_reduce, seed_batches=[], batch=batch, tmp_path=tmp_path, name="planted-reference")
+    candidate = run_scenario(wrong_reduce, seed_batches=[], batch=batch, tmp_path=tmp_path, name="planted-candidate")
     assert candidate != reference
     assert reference.difference(candidate) != "identical"
 
@@ -455,10 +447,7 @@ def test_family_eviction_still_happens_and_leaves_no_orphans(tmp_path):
     batches = []
     for start in range(0, over, 200):
         batches.append(
-            [
-                make_fact(family="activity", subject=f"s{n}", seq=1, payload=f"v{n}")
-                for n in range(start, min(start + 200, over))
-            ]
+            [make_fact(family="activity", subject=f"s{n}", seq=1, payload=f"v{n}") for n in range(start, min(start + 200, over))]
         )
 
     snapshot = assert_equivalent(
@@ -468,9 +457,7 @@ def test_family_eviction_still_happens_and_leaves_no_orphans(tmp_path):
         batch=batches[-1],
     )
 
-    assert len(snapshot.heads) <= MAX_HEADS_PER_FAMILY, (
-        f"family eviction did not run: {len(snapshot.heads)} heads retained"
-    )
+    assert len(snapshot.heads) <= MAX_HEADS_PER_FAMILY, f"family eviction did not run: {len(snapshot.heads)} heads retained"
     surviving = {row[0:4] for row in snapshot.heads}
     for row in snapshot.receipts:
         assert row[1:5] in surviving, f"receipt outlived its head: {row[1:5]}"

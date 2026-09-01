@@ -26,9 +26,7 @@ def test_probe_fails_closed_when_cursor_generated_agent_id_differs(monkeypatch, 
     store = tmp_path / "store.db"
     _store(store, "cursor-generated")
     for phase in ("before_launch", "after_prompt", "after_tool_turn", "at_exit"):
-        result = cursor_binding_probe.record_probe_observation(
-            "launch-token", phase, None if phase == "before_launch" else store
-        )
+        result = cursor_binding_probe.record_probe_observation("launch-token", phase, None if phase == "before_launch" else store)
     assert result["status"] == "failed"
     assert "deterministic" in result["failure_reason"]
 
@@ -39,9 +37,7 @@ def test_probe_emits_expiring_claim_only_for_exact_provider_native_evidence(monk
     _store(store, "launch-token")
     _live_helm_state(tmp_path)
     for phase in ("before_launch", "after_prompt", "after_tool_turn", "at_exit"):
-        result = cursor_binding_probe.record_probe_observation(
-            "launch-token", phase, None if phase == "before_launch" else store
-        )
+        result = cursor_binding_probe.record_probe_observation("launch-token", phase, None if phase == "before_launch" else store)
     assert result["status"] == "passed"
     assert result["conversation_uuid"] == "launch-token"
     assert result["expires_at"]

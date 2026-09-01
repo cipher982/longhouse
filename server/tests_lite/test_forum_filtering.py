@@ -186,6 +186,7 @@ def test_presence_auto_resumes_snoozed_on_thinking(tmp_path, live_catalog):
         assert _get_live_user_state(sid) == "active"
     finally:
         from zerg.main import api_app
+
         api_app.dependency_overrides.clear()
 
 
@@ -228,6 +229,7 @@ def test_stale_presence_does_not_auto_resume_snoozed_session(tmp_path):
         assert _get_presence_row(factory, sid) == ("blocked", "Bash")
     finally:
         from zerg.main import api_app
+
         api_app.dependency_overrides.clear()
 
 
@@ -248,6 +250,7 @@ def test_presence_auto_resumes_snoozed_on_running(tmp_path, live_catalog):
         assert _get_live_user_state(sid) == "active"
     finally:
         from zerg.main import api_app
+
         api_app.dependency_overrides.clear()
 
 
@@ -267,6 +270,7 @@ def test_presence_idle_does_not_resume_snoozed(tmp_path):
         assert _get_user_state(factory, sid) == "snoozed"  # unchanged
     finally:
         from zerg.main import api_app
+
         api_app.dependency_overrides.clear()
 
 
@@ -287,6 +291,7 @@ def test_presence_invalid_state_is_noop(tmp_path):
         assert _get_presence_row(factory, sid) == (None, None)
     finally:
         from zerg.main import api_app
+
         api_app.dependency_overrides.clear()
 
 
@@ -314,4 +319,5 @@ def test_presence_non_running_state_clears_tool_name(tmp_path):
         assert _get_presence_row(factory, sid) == ("thinking", None)
     finally:
         from zerg.main import api_app
+
         api_app.dependency_overrides.clear()
