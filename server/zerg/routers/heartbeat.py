@@ -118,7 +118,7 @@ _heartbeat_db_dependency = (
 class UnmanagedSessionBindingIn(UTCBaseModel):
     """One row of Rust engine's unmanaged-session pid/cwd scan.
 
-    Phase 5 of docs/specs/session-liveness-honesty.md. All fields except
+    All fields except
     machine_id, provider, provider_session_id, and observed_at are
     tolerant of absence so the engine can ship partial observations
     (e.g. file-only, no process yet) without breaking heartbeat ingest.

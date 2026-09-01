@@ -135,10 +135,11 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user):
 
 @router.get("/provider-capabilities")
 def get_provider_capabilities() -> dict[str, object]:
-    """Cookie-authenticated mirror of GET /agents/provider-capabilities
-    (docs/specs/provider-factory-coherence.md, Phase 5 UI). Same projection,
-    same code path -- the device-token machine surface and this admin page
-    read identical data, they just authenticate differently."""
+    """Cookie-authenticated mirror of GET /agents/provider-capabilities.
+
+    Same projection, same code path -- the device-token machine surface and
+    this admin page read identical data, they just authenticate differently.
+    """
     from zerg.routers.provider_capability_proofs import build_capability_projection_payload
 
     return build_capability_projection_payload()

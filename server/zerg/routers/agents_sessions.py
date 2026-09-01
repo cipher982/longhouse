@@ -1038,8 +1038,8 @@ async def mark_session_read(
     """Acknowledge a session's Console results up to the observed read_through.
 
     Max-write: last_read_at only moves forward, and only as far as the client
-    actually saw (docs/specs/console-unread-acknowledgement.md). Idempotent —
-    acknowledging an already-read session is a no-op, not an error.
+    actually saw. Idempotent — acknowledging an already-read session is a
+    no-op, not an error.
     """
     from zerg.services.session_pubsub import publish_session_read_update
 

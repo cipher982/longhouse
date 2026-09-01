@@ -23,6 +23,16 @@ SCAN_ROOTS = (
     Path(".agents/skills"),
 )
 
+# Specs live in the private control-plane repo, so a bare docs/specs/<name>.md
+# is a dangling reference for every public reader. A control-plane/-prefixed
+# path is the correct way to cite one, and is allowed.
+PRIVATE_SPEC_RE = re.compile(r"(?<!control-plane/)\bdocs/specs/[\w.-]+\.md\b")
+
+# Route docstrings flow into the served OpenAPI schema, which is how a private
+# spec path once reached longhouse.ai/openapi.json. The generated types are the
+# tracked mirror of that schema.
+SERVED_SCHEMA_FILES = (Path("web/src/generated/openapi-types.ts"),)
+
 TEXT_SUFFIXES = {".md", ".txt", ".example"}
 IGNORE_TOKEN = "PUBLIC_SURFACE_SCAN_ALLOW"
 
@@ -57,6 +67,7 @@ RULES = (
         "internal Codex review process",
         re.compile(r"\bCodex reviewed\b|codex-confirmed", re.IGNORECASE),
     ),
+    Rule("private spec reference", PRIVATE_SPEC_RE),
 )
 
 
@@ -96,6 +107,14 @@ def scan(root: Path) -> list[str]:
                     if len(snippet) > 140:
                         snippet = snippet[:137] + "..."
                     failures.append(f"{relative}:{line_number}: {rule.name}: {snippet}")
+
+    for relative in SERVED_SCHEMA_FILES:
+        path = root / relative
+        if not path.exists():
+            continue
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if PRIVATE_SPEC_RE.search(line):
+                failures.append(f"{relative}:{line_number}: private spec reference in served schema: {line.strip()[:140]}")
     return failures
 
 
@@ -163,6 +182,25 @@ def run_self_tests() -> None:
             f"<!-- {IGNORE_TOKEN}: intentional quoted example -->\nOwner: david010@gmail.com\n",
         )
         assert scan(root) == [], "allow annotation fixture should pass"
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write(root / "docs/README.md", "See docs/specs/session-identity-kernel.md for detail.\n")
+        failures = scan(root)
+        assert len(failures) == 1, f"private spec fixture: {failures}"
+        assert "private spec reference" in failures[0], f"private spec fixture: {failures}"
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write(root / "web/src/generated/openapi-types.ts", "/** See docs/specs/truth.md */\n")
+        failures = scan(root)
+        assert len(failures) == 1, f"served schema fixture: {failures}"
+        assert "private spec reference in served schema" in failures[0], f"served schema fixture: {failures}"
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write(root / "docs/README.md", "Read control-plane/docs/specs/session-identity-kernel.md.\n")
+        assert scan(root) == [], "control-plane-prefixed spec path should pass"
 
 
 def main() -> int:

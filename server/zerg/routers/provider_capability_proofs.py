@@ -321,7 +321,7 @@ def build_capability_projection_payload(
     expected_epoch_digest: str | None = None,
 ) -> dict[str, Any]:
     """Capability projection from the contract, proof status attached
-    separately (docs/specs/provider-factory-coherence.md, Phase 5). Every
+    separately. Every
     declared capability assertion for every managed provider gets exactly
     one row, whether or not it has ever been proven -- the schema is the
     source of truth for what should exist.
@@ -413,7 +413,7 @@ def list_provider_capabilities(
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
     """Capability projection from the contract, proof status attached
-    separately (docs/specs/provider-factory-coherence.md, Phase 5). Every
+    separately. Every
     declared capability assertion for every managed provider gets exactly
     one row, whether or not it has ever been proven -- the schema is the
     source of truth for what should exist."""

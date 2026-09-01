@@ -76,10 +76,10 @@ export interface paths {
         };
         /**
          * Get Provider Capabilities
-         * @description Cookie-authenticated mirror of GET /agents/provider-capabilities
-         *     (docs/specs/provider-factory-coherence.md, Phase 5 UI). Same projection,
-         *     same code path -- the device-token machine surface and this admin page
-         *     read identical data, they just authenticate differently.
+         * @description Cookie-authenticated mirror of GET /agents/provider-capabilities.
+         *
+         *     Same projection, same code path -- the device-token machine surface and
+         *     this admin page read identical data, they just authenticate differently.
          */
         get: operations["get_provider_capabilities_admin_provider_capabilities_get"];
         put?: never;
@@ -1331,7 +1331,7 @@ export interface paths {
         /**
          * List Provider Capabilities
          * @description Capability projection from the contract, proof status attached
-         *     separately (docs/specs/provider-factory-coherence.md, Phase 5). Every
+         *     separately. Every
          *     declared capability assertion for every managed provider gets exactly
          *     one row, whether or not it has ever been proven -- the schema is the
          *     source of truth for what should exist.
@@ -3000,8 +3000,8 @@ export interface paths {
          * @description Acknowledge a session's Console results up to the observed read_through.
          *
          *     Max-write: last_read_at only moves forward, and only as far as the client
-         *     actually saw (docs/specs/console-unread-acknowledgement.md). Idempotent —
-         *     acknowledging an already-read session is a no-op, not an error.
+         *     actually saw. Idempotent — acknowledging an already-read session is a
+         *     no-op, not an error.
          */
         post: operations["mark_session_read_agents_sessions__session_id__read_post"];
         delete?: never;
@@ -11180,7 +11180,7 @@ export interface components {
          * UnmanagedSessionBindingIn
          * @description One row of Rust engine's unmanaged-session pid/cwd scan.
          *
-         *     Phase 5 of docs/specs/session-liveness-honesty.md. All fields except
+         *     All fields except
          *     machine_id, provider, provider_session_id, and observed_at are
          *     tolerant of absence so the engine can ship partial observations
          *     (e.g. file-only, no process yet) without breaking heartbeat ingest.
