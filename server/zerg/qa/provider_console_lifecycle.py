@@ -76,10 +76,10 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=11,
+    producer_revision=12,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=(
         (ASSERTION_ID, SUPPORTED_VARIANT),
         (ASSERTION_ID, UNSUPPORTED_VARIANT),
@@ -321,6 +321,41 @@ def _start_turn(*, api_url: str, token: str, session_id: str, message: str, requ
         # releases. Replaying the same idempotency key observes that same turn
         # after ownership transfers; it must not manufacture another turn.
         time.sleep(0.25)
+
+
+def _wait_turn_terminal(
+    *,
+    api_url: str,
+    token: str,
+    session_id: str,
+    message: str,
+    request_id: str,
+    turn_id: str,
+    run_id: str,
+    timeout: float = 30,
+) -> dict[str, Any]:
+    """Wait until the Runtime Host, not only the local adapter, sees terminal."""
+
+    deadline = time.monotonic() + timeout
+    last_result: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        result = _request(
+            api_url,
+            token,
+            "POST",
+            f"/api/agents/sessions/{session_id}/turns",
+            {"message": message, "client_request_id": request_id},
+        )
+        last_result = result
+        if str(result.get("turn_id") or "") != turn_id or str(result.get("run_id") or "") != run_id:
+            raise RuntimeError(f"Console terminal replay changed turn identity: {result}")
+        state = str(result.get("state") or "")
+        if state in {"completed", "failed", "cancelled"}:
+            return result
+        if state not in {"starting", "active"}:
+            raise RuntimeError(f"Console turn lost its execution owner before terminal: {result}")
+        time.sleep(0.25)
+    raise RuntimeError(f"Runtime Host never observed Console turn terminal: {last_result}")
 
 
 def _claim_path(longhouse_home: Path, run_id: str) -> Path:
@@ -818,6 +853,15 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             raise RuntimeError("Console adapter did not launch the exact staged provider binary")
         if not _claim_uses_selected_model(first_claim, provider=provider, model=args.model):
             raise RuntimeError("Console adapter did not bind the selected qualification model")
+        _wait_turn_terminal(
+            api_url=api_url,
+            token=token,
+            session_id=session_id,
+            message=message,
+            request_id=request_id,
+            turn_id=str(first["turn_id"]),
+            run_id=run_id,
+        )
         provider_response_evidence = _claim_output_evidence(provider, first_claim, marker)
         dispatch = {
             "status": "pass",
@@ -893,18 +937,29 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
 
         if provider in CAN_RESUME:
             resume_marker = f"LH_{provider.upper()}_RESUME_{uuid4().hex}"
+            resume_message = f"Reply with exactly {resume_marker} and nothing else."
+            resume_request_id = f"console-resume-{uuid4()}"
             resume = _start_turn(
                 api_url=api_url,
                 token=token,
                 session_id=session_id,
-                message=f"Reply with exactly {resume_marker} and nothing else.",
-                request_id=f"console-resume-{uuid4()}",
+                message=resume_message,
+                request_id=resume_request_id,
             )
             resume_claim = _wait_claim(
                 _claim_path(longhouse_home, str(resume["run_id"])),
                 states=frozenset({"terminal", "failed"}),
             )
             claims.append(resume_claim)
+            _wait_turn_terminal(
+                api_url=api_url,
+                token=token,
+                session_id=session_id,
+                message=resume_message,
+                request_id=resume_request_id,
+                turn_id=str(resume["turn_id"]),
+                run_id=str(resume["run_id"]),
+            )
             _wait_exact_assistant_marker(api_url, token, session_id, resume_marker)
             if first_claim.get("provider_thread_id") is None or resume_claim.get("provider_thread_id") != first_claim.get(
                 "provider_thread_id"
@@ -915,12 +970,14 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             _write_json(root / "adapter-dispatch-receipt.json", dispatch)
 
         interrupt_marker = f"LH_{provider.upper()}_INTERRUPT_{uuid4().hex}"
+        interrupt_message = f"Use the shell tool to run `sleep 8`, then reply with exactly {interrupt_marker} and nothing else."
+        interrupt_request_id = f"console-interrupt-{uuid4()}"
         interrupt_turn = _start_turn(
             api_url=api_url,
             token=token,
             session_id=session_id,
-            message=(f"Use the shell tool to run `sleep 8`, then reply with exactly {interrupt_marker} and nothing else."),
-            request_id=f"console-interrupt-{uuid4()}",
+            message=interrupt_message,
+            request_id=interrupt_request_id,
         )
         interrupt_claim_path = _claim_path(longhouse_home, str(interrupt_turn["run_id"]))
         active_claim = _wait_claim(
@@ -941,21 +998,41 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             )
             terminal = _wait_claim(interrupt_claim_path, states=frozenset({"terminal", "failed"}), timeout=30)
             claims[-1] = terminal
+            _wait_turn_terminal(
+                api_url=api_url,
+                token=token,
+                session_id=session_id,
+                message=interrupt_message,
+                request_id=interrupt_request_id,
+                turn_id=str(interrupt_turn["turn_id"]),
+                run_id=str(interrupt_turn["run_id"]),
+            )
             cancelled = (terminal.get("result") or {}).get("terminal_state") == "run_cancelled"
             process_dead = _wait_owned_processes_dead([terminal])
             post_marker = f"LH_{provider.upper()}_POST_INTERRUPT_{uuid4().hex}"
+            post_message = f"Reply with exactly {post_marker} and nothing else."
+            post_request_id = f"console-post-interrupt-{uuid4()}"
             post = _start_turn(
                 api_url=api_url,
                 token=token,
                 session_id=session_id,
-                message=f"Reply with exactly {post_marker} and nothing else.",
-                request_id=f"console-post-interrupt-{uuid4()}",
+                message=post_message,
+                request_id=post_request_id,
             )
             post_claim = _wait_claim(
                 _claim_path(longhouse_home, str(post["run_id"])),
                 states=frozenset({"terminal", "failed"}),
             )
             claims.append(post_claim)
+            _wait_turn_terminal(
+                api_url=api_url,
+                token=token,
+                session_id=session_id,
+                message=post_message,
+                request_id=post_request_id,
+                turn_id=str(post["turn_id"]),
+                run_id=str(post["run_id"]),
+            )
             _wait_exact_assistant_marker(api_url, token, session_id, post_marker)
             interrupt_receipt = {
                 "status": "pass" if interrupted.get("interrupt_dispatched") is True and cancelled and process_dead else "fail",
@@ -978,20 +1055,40 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 refused = "adapter_unavailable" in str(exc) or "not supported" in str(exc) or "unsupported" in str(exc)
             terminal = _wait_claim(interrupt_claim_path, states=frozenset({"terminal", "failed"}), timeout=60)
             claims[-1] = terminal
+            _wait_turn_terminal(
+                api_url=api_url,
+                token=token,
+                session_id=session_id,
+                message=interrupt_message,
+                request_id=interrupt_request_id,
+                turn_id=str(interrupt_turn["turn_id"]),
+                run_id=str(interrupt_turn["run_id"]),
+            )
             _wait_exact_assistant_marker(api_url, token, session_id, interrupt_marker, timeout=60)
             post_marker = f"LH_{provider.upper()}_AFTER_UNSUPPORTED_{uuid4().hex}"
+            post_message = f"Reply with exactly {post_marker} and nothing else."
+            post_request_id = f"console-after-unsupported-{uuid4()}"
             post = _start_turn(
                 api_url=api_url,
                 token=token,
                 session_id=session_id,
-                message=f"Reply with exactly {post_marker} and nothing else.",
-                request_id=f"console-after-unsupported-{uuid4()}",
+                message=post_message,
+                request_id=post_request_id,
             )
             post_claim = _wait_claim(
                 _claim_path(longhouse_home, str(post["run_id"])),
                 states=frozenset({"terminal", "failed"}),
             )
             claims.append(post_claim)
+            _wait_turn_terminal(
+                api_url=api_url,
+                token=token,
+                session_id=session_id,
+                message=post_message,
+                request_id=post_request_id,
+                turn_id=str(post["turn_id"]),
+                run_id=str(post["run_id"]),
+            )
             _wait_exact_assistant_marker(api_url, token, session_id, post_marker)
             normal_completed = (terminal.get("result") or {}).get("terminal_state") == "run_completed" and (
                 post_claim.get("result") or {}

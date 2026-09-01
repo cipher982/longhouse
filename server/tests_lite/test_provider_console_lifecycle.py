@@ -62,7 +62,7 @@ def test_registration_covers_each_launch_provider_with_least_authority_credentia
     assert registration["providers"] == list(lifecycle.PROVIDERS)
     assert registration["subject_kind"] == "provider_release"
     assert registration["provider_artifact_required"] is True
-    assert registration["producer_revision"] == 11
+    assert registration["producer_revision"] == 12
     assert registration["credential_binding_ids"] == []
     for provider in lifecycle.PROVIDERS:
         assert registration["credential_binding_ids_by_provider"][provider] == [
@@ -350,6 +350,42 @@ def test_start_turn_retries_transient_admission_with_stable_request(monkeypatch)
 
     assert result["run_id"] == "run-1"
     assert len(calls) == 4
+    assert all(
+        call[0][-1]
+        == {
+            "message": "hello",
+            "client_request_id": "stable-request",
+        }
+        for call in calls
+    )
+
+
+def test_wait_turn_terminal_requires_runtime_host_terminal_before_next_turn(monkeypatch):
+    calls = []
+    responses = [
+        {"state": "active", "turn_id": "turn-1", "run_id": "run-1"},
+        {"state": "completed", "turn_id": "turn-1", "run_id": "run-1"},
+    ]
+
+    def request(*args, **kwargs):
+        calls.append((args, kwargs))
+        return responses.pop(0)
+
+    monkeypatch.setattr(lifecycle, "_request", request)
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda _seconds: None)
+
+    result = lifecycle._wait_turn_terminal(
+        api_url="https://runtime.example",
+        token="token",
+        session_id="session-1",
+        message="hello",
+        request_id="stable-request",
+        turn_id="turn-1",
+        run_id="run-1",
+    )
+
+    assert result["state"] == "completed"
+    assert len(calls) == 2
     assert all(
         call[0][-1]
         == {
