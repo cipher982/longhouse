@@ -80,6 +80,7 @@ from zerg.storage_v2.render_objects import validate_render_object_spec
 from zerg.utils.server_timing import ServerTimingRecorder
 
 _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
+_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS = 10.0
 _SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS = 4.25
 
 router = APIRouter(prefix="/agents/storage/v2", tags=["agents"])
@@ -814,7 +815,7 @@ async def put_storage_v2_media(
                 "session_refs": [],
                 "observed_at": datetime.now(UTC).isoformat(),
             },
-            timeout_seconds=2.0,
+            timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
     except CatalogRemoteError as exc:
         _raise_catalog_error(exc)
@@ -1150,7 +1151,7 @@ async def _commit_admitted_envelope(
                 "conversation_resets": _conversation_resets(render_spec),
                 "sealed_at": datetime.now(UTC).isoformat(),
             },
-            timeout_seconds=2.0,
+            timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
         if (
             committed.get("title_generation_required") is True
