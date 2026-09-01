@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 from sqlalchemy import and_
 from sqlalchemy import func
 from sqlalchemy import or_
@@ -22,33 +20,7 @@ FACTORY_TITLE_ASSURANCE_SURFACE = "factory_assurance"
 PROVIDER_COORDINATION_PROBE_CWD_PREFIXES = ("/tmp/lhx-claude-coord-", "/private/tmp/lhx-claude-coord-")
 PROVIDER_EVIDENCE_CWD_PREFIXES = ("/tmp/", "/private/tmp/")
 PROVIDER_EVIDENCE_CWD_SEGMENT = "/evidence/raw/"
-PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
-PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
-PROVIDER_PRODUCT_CANARY_MARKER_RE = re.compile(r"^Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_[0-9a-f]+$")
-# ``LH_`` / ``lh-`` exact-response tokens are reserved for Longhouse QA. The
-# full-prompt anchor keeps ordinary sessions that merely mention a token visible.
-PROVIDER_REPLY_EXACT_MARKER_RE = re.compile(
-    r"^Reply (?:with )?exactly "
-    r"(?:LONGHOUSE_(?:CODEX|OPENCODE|CURSOR|CLAUDE|AGY)_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_[0-9a-f]{6,}"
-    r"|LH_[A-Za-z0-9_-]{6,}|lh-[a-z0-9-]{6,}"
-    r"|FRESH_AFTER_CANCEL_OK|CLEAN_EXIT_ORIGINAL_COMPLETE|WARM_IDLE_OK)"
-    r"(?:\."
-    r"| on the first line and nothing else\."
-    r"| and nothing else\.(?: Do not use (?:any )?tools\.)?)?$"
-)
-PROVIDER_COORDINATION_AWARENESS_MARKER_RE = re.compile(
-    r"^(?:print|reply)(?: with)? exactly LONGHOUSE_CURSOR_COORD_AWARENESS_[0-9a-f]{6,}\.?$",
-    re.IGNORECASE,
-)
-SQL_LIKE_ESCAPE = "\\"
-SQL_WHITESPACE = " \t\r\n"
 SYNTHETIC_BENCH_PROJECTS = frozenset({"longhouse-bench"})
-
-
-def _normalize_internal_prompt(text: str | None) -> str:
-    """Match the explicit whitespace normalization used by SQLite clauses."""
-
-    return str(text or "").strip(SQL_WHITESPACE)
 
 
 def is_internal_canary_provider_filter(provider: str | None) -> bool:
@@ -135,31 +107,10 @@ def factory_title_assurance_session_clause(model):
     )
 
 
-def is_provider_coordination_awareness_marker(text: str | None) -> bool:
-    return bool(PROVIDER_COORDINATION_AWARENESS_MARKER_RE.fullmatch(_normalize_internal_prompt(text)))
-
-
-def is_provider_noreply_marker(text: str | None) -> bool:
-    return bool(PROVIDER_NOREPLY_MARKER_RE.match(_normalize_internal_prompt(text)))
-
-
-def is_provider_product_canary_marker(text: str | None) -> bool:
-    """Recognize the bounded Cursor product canary prompt."""
-
-    return bool(PROVIDER_PRODUCT_CANARY_MARKER_RE.fullmatch(_normalize_internal_prompt(text)))
-
-
-def is_provider_reply_exact_marker(text: str | None) -> bool:
-    """Recognize Longhouse's exact-response provider proof markers."""
-
-    return bool(PROVIDER_REPLY_EXACT_MARKER_RE.fullmatch(_normalize_internal_prompt(text)))
-
-
 def classify_provider_proof_environment(
     *,
     cwd: str | None = None,
     machine_id: str | None = None,
-    first_user_text: str | None = None,
 ) -> str | None:
     """Return the normalized environment for provider proof/canary sessions based on path/machine namespace."""
     if (

@@ -4383,11 +4383,6 @@ class CatalogStore:
                         launch_surface=catalog.launch_surface,
                         cwd=storage_session.cwd if storage_session is not None else catalog.cwd,
                         machine_id=storage_session.machine_id if storage_session is not None else catalog.device_id,
-                        first_user_message=(
-                            storage_session.first_user_message_preview
-                            if storage_session is not None
-                            else catalog.first_user_message_preview
-                        ),
                         primary_thread_is_worker_only=bool(primary_thread and primary_thread.branch_kind == "subagent"),
                         is_subagent=bool(storage_session is not None and storage_session.is_subagent),
                     )
@@ -6111,7 +6106,6 @@ class CatalogStore:
                         launch_surface=provenance.get("launch_surface"),
                         cwd=content.get("cwd"),
                         machine_id=content.get("machine_id") or provenance.get("device_id"),
-                        first_user_message=content.get("first_user_message_preview"),
                         primary_thread_is_worker_only=thread_row.get("branch_kind") == "subagent",
                         # Storage-v2 sessions have no live thread row, so the
                         # sweep must read the same worker evidence ingest stored.
@@ -6610,7 +6604,6 @@ class CatalogStore:
                         catalog.c.git_branch,
                         catalog.c.last_activity_at,
                         catalog.c.started_at,
-                        catalog.c.first_user_message_preview,
                         catalog.c.origin_kind,
                         catalog.c.hidden_from_default_timeline,
                         catalog.c.user_hidden_from_timeline,
@@ -6648,7 +6641,6 @@ class CatalogStore:
                             git_branch=row.git_branch,
                             last_activity_at=_as_aware_utc(row.last_activity_at),
                             started_at=_as_aware_utc(row.started_at),
-                            first_user_message_preview=row.first_user_message_preview,
                             origin_kind=row.origin_kind,
                             hidden_from_default_timeline=bool(row.hidden_from_default_timeline),
                             user_hidden_from_timeline=bool(row.user_hidden_from_timeline),
@@ -7417,9 +7409,6 @@ class CatalogStore:
             proof_environment = classify_provider_proof_environment(
                 cwd=session_facts["cwd"],
                 machine_id=machine_id,
-                first_user_text=(
-                    session_facts.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
-                ),
             )
             provider_automation = (
                 proof_environment == "test"
@@ -7614,9 +7603,6 @@ class CatalogStore:
                     launch_surface=session_values.get("launch_surface"),
                     cwd=session_values.get("cwd"),
                     machine_id=machine_id,
-                    first_user_message=(
-                        session_values.get("first_user_message_preview") or (render_manifest or {}).get("first_user_message_preview")
-                    ),
                     primary_thread_is_worker_only=primary_branch_kind == "subagent",
                     is_subagent=bool(session_values.get("is_subagent")),
                 )

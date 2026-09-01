@@ -42,7 +42,6 @@ class SessionVisibilityFacts:
     launch_surface: str | None = None
     cwd: str | None = None
     machine_id: str | None = None
-    first_user_message: str | None = None
     primary_thread_is_worker_only: bool = False
     # Same product fact, second evidence source. The legacy graph proves a
     # worker through its thread's branch_kind; storage-v2 sessions have no live
@@ -239,7 +238,6 @@ def facts_from_row(row, *, primary_thread_is_worker_only: bool = False) -> Sessi
         launch_surface=_value(row, "launch_surface"),
         cwd=_value(row, "cwd"),
         machine_id=_value(row, "machine_id") or _value(row, "device_id"),
-        first_user_message=_value(row, "first_user_message_preview"),
         primary_thread_is_worker_only=primary_thread_is_worker_only,
     )
 

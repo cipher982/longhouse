@@ -122,7 +122,6 @@ def hide_and_verify_canary_isolation(
                 project=project,
                 cwd=cwd,
                 machine_id=device_id,
-                first_user_message=first_user_message,
             )
         ).title_origin_eligible
         if not title_origin_eligible:

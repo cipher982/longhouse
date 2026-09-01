@@ -69,7 +69,6 @@ class WorkspaceSessionFacts:
     git_branch: str | None
     last_activity_at: datetime | None
     started_at: datetime | None
-    first_user_message_preview: str | None
     origin_kind: str | None
     hidden_from_default_timeline: bool
     user_hidden_from_timeline: bool
@@ -131,7 +130,6 @@ def _admissible_workspace_facts(
         classify_provider_proof_environment(
             cwd=path,
             machine_id=facts.device_id,
-            first_user_text=facts.first_user_message_preview,
         )
         == "test"
     ):

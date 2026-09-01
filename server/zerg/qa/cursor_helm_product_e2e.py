@@ -673,10 +673,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     #
     # The old default (`/tmp/longhouse-cursor-product-e2e`) matched none of the
     # proof signals, so every run shipped to the real instance as ordinary user
-    # work — fourteen rows at the top of a dogfood timeline. The prompts cannot
-    # carry the marker instead: the `_NOREPLY_` pattern is anchored at the start
-    # of the first user message, and these prompts open with "Reply with
-    # exactly …".
+    # work — fourteen rows at the top of a dogfood timeline. A marker in the
+    # prompt is not an alternative: classification reads path and machine
+    # namespace only, never transcript text.
     parser.add_argument(
         "--workspace",
         type=Path,

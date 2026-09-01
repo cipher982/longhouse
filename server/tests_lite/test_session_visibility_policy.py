@@ -35,23 +35,14 @@ CASES = (
         launch_actor="user",
         launch_surface="test",
         machine_id="provider-factory-resume",
-        first_user_message="Reply with exactly LH_CODEX_CONSOLE_deadbeef and nothing else.",
     ),
+    # An ordinary human session on an ordinary machine. It stays visible no
+    # matter what its transcript says -- prompt text is content, not evidence.
     SessionVisibilityFacts(
         provider="claude",
         project="longhouse",
         environment="local",
         machine_id="cinder",
-        first_user_message=(
-            "Hatch execution contract:\nThis is a single bounded, non-interactive run. A human is waiting for a useful answer."
-        ),
-    ),
-    SessionVisibilityFacts(
-        provider="claude",
-        project="longhouse",
-        environment="local",
-        machine_id="cinder",
-        first_user_message="Please investigate LH_CODEX_CONSOLE_deadbeef and our Hatch execution contract",
     ),
     SessionVisibilityFacts(provider="canary", project="canary", environment="local", machine_id="cinder"),
     SessionVisibilityFacts(
@@ -94,7 +85,6 @@ def test_python_and_sql_visibility_evidence_have_scalar_parity():
                     "launch_surface": facts.launch_surface,
                     "cwd": facts.cwd,
                     "machine_id": facts.machine_id,
-                    "first_user_message_preview": facts.first_user_message,
                     "hidden_from_default_timeline": 0,
                 }
                 for index, facts in enumerate(scalar_cases)
@@ -107,22 +97,29 @@ def test_python_and_sql_visibility_evidence_have_scalar_parity():
     ]
 
 
-def test_prompt_text_alone_does_not_hide_session():
-    """Prompt content (such as a Hatch contract or canary token) is not intent.
+def test_visibility_facts_cannot_carry_prompt_text():
+    """Prompt content is not intent, and the type makes that unarguable.
 
-    A session on a normal development machine without explicit test environment,
-    automation actor, or scratch cwd must remain visible on the timeline.
+    This used to be a behavioral test: hand the policy a Hatch contract or a
+    canary token and check it stayed visible anyway. The field is gone now, so
+    the guarantee is structural -- there is no longer a way to route transcript
+    text into a visibility decision. Re-adding one breaks this test first.
     """
-    facts = SessionVisibilityFacts(
+    assert "first_user_message" not in SessionVisibilityFacts.__dataclass_fields__
+    assert not [
+        name for name in SessionVisibilityFacts.__dataclass_fields__ if "message" in name or "prompt" in name
+    ]
+
+    ordinary = SessionVisibilityFacts(
         provider="claude",
         project="longhouse",
         environment="local",
         machine_id="cinder",
-        first_user_message="Hatch execution contract:\nThis is a single bounded, non-interactive run.",
     )
-    decision = evaluate_origin_visibility(facts)
+    decision = evaluate_origin_visibility(ordinary)
     assert decision.system_hidden is False
     assert decision.title_origin_eligible is True
+
 
 def test_persisted_projection_is_read_defense_but_not_title_authority():
     metadata = MetaData()

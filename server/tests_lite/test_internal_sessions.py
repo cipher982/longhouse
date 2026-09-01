@@ -10,68 +10,38 @@ from sqlalchemy import select
 
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import is_factory_title_assurance_session
-from zerg.services.internal_sessions import is_provider_coordination_awareness_marker
 from zerg.services.internal_sessions import is_provider_evidence_cwd
 from zerg.services.internal_sessions import is_provider_factory_cwd
 from zerg.services.internal_sessions import is_provider_factory_machine_id
-from zerg.services.internal_sessions import is_provider_product_canary_marker
-from zerg.services.internal_sessions import is_provider_reply_exact_marker
 from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
 
 
-def test_cursor_product_canary_marker_is_exact_and_bounded():
-    marker = "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_91b38069e7"
+def test_provider_proof_python_and_sql_classifiers_agree_on_real_namespaces():
+    """The SQL twin and the Python classifier agree on the namespaces we ship.
 
-    assert is_provider_product_canary_marker(marker)
-    assert not is_provider_product_canary_marker("Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_not-hex")
+    Classification reads path and machine namespace only, so this is checked
+    over workspaces and machine ids -- never over prompt text. The two are not
+    equal in general; see the divergence test below for the shapes where they
+    part and why that direction is the safe one.
+    """
 
-def test_provider_reply_exact_marker_is_bounded_to_longhouse_canary_shapes():
-    marker = "Reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_94afb881e8684faca669fefd44ec40 and nothing else."
-
-    assert is_provider_reply_exact_marker(marker)
-    assert is_provider_reply_exact_marker("Reply with exactly LONGHOUSE_CLAUDE_TURN_BOUNDARY_27eeb18bb0b349b0b1778e83a51c7b6e and nothing else.")
-    assert classify_provider_proof_environment(cwd="/canaries/provider-live/codex/workspace") == "test"
-    assert is_provider_reply_exact_marker("Reply exactly LONGHOUSE_CODEX_COLD_RESUME_SEED_8ee711c900c448f18c7762b3fa0c649c")
-    assert is_provider_reply_exact_marker("Reply exactly FRESH_AFTER_CANCEL_OK.")
-    assert is_provider_reply_exact_marker(
-        "Reply with exactly LH_CODEX_CONSOLE_5bc00d062a0444ea8450f0a3ff822a45 and nothing else."
-    )
-    assert is_provider_reply_exact_marker(
-        "Reply with exactly LH_CURSOR_CONSOLE_CANARY_e2fe0989b70f433ab3724ef10ba84690 and nothing else. Do not use tools."
-    )
-    assert is_provider_reply_exact_marker(
-        "Reply with exactly LH_PROBE_CODEX_MANAGED_latency-b2c-dbclean-4x-20260803T031500Z-i01 and nothing else."
-    )
-    assert is_provider_reply_exact_marker("Reply with exactly lh-hosted-claude-stress-01-deadbeef")
-    assert is_provider_reply_exact_marker(
-        "Reply with exactly LH_TMUX_TURN_1_31455 on the first line and nothing else."
-    )
-    assert is_provider_reply_exact_marker(
-        "Reply with exactly lh-claude-stress-01-582a5e64 and nothing else. Do not use any tools."
-    )
-    assert not is_provider_reply_exact_marker("Reply exactly OK")
-    assert not is_provider_reply_exact_marker("Please reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_abc123")
-    assert not is_provider_reply_exact_marker("Please investigate LH_PROBE_CODEX_MANAGED_deadbeef")
-
-
-def test_provider_reply_exact_python_and_sql_classifiers_have_parity():
-    prompts = (
-        "Reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_94afb881e8684faca669fefd44ec40 and nothing else.",
-        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_74694349fb694c97af560ac98572f989 and nothing else.\n",
-        "\tReply with exactly LONGHOUSE_CODEX_COLD_RESUME_SEED_8ee711c900c448f18c7762b3fa0c649c\r\n",
-        "Reply exactly FRESH_AFTER_CANCEL_OK.",
-        "Reply exactly OK",
-        "Please reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_abc123",
-        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_not-hex and nothing else.\n",
-        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_abcdefZabcdef",
-        "reply with exactly LONGHOUSE_CLAUDE_PRINT_abcdef",
-        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_abcdef\v",
-        "Reply with exactly LONGHOUSE_CLAUDE_PRINT_abcdef\f",
-        "Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_91b38069e7",
-        "LONGHOUSE_CLAUDE_NOREPLY_74694349fb694c97af560ac98572f989",
-        "Reply with exactly LH_CLAUDE_CONSOLE_57384914d8ed4467b545f0e0cf9b0bd3 and nothing else.",
+    workspaces = (
+        ("/canaries/provider-live/codex/workspace", "laptop"),
+        ("/Users/david/.longhouse/canaries/provider-live/opencode/proof/workspace", "laptop"),
+        ("/Users/david/git/_wt/longhouse-provider-live-proof-owner", "laptop"),
+        ("/var/lib/provider-factory/artifacts/_assurance/executions/run-1/cursor/evidence/workspace", "laptop"),
+        ("/tmp/provider-factory-abc123/workspace", "laptop"),
+        ("/private/tmp/provider-factory-abc123/workspace", "laptop"),
+        ("/tmp/live-cell-run-cursor.coordination.directed.v1-abc123/evidence/cursor-workspace", "laptop"),
+        ("/tmp/lhx-claude-coord-create-abc123/workspace", "laptop"),
+        ("/private/tmp/longhouse-claude-real-print-abc/evidence/raw/claude/workspace", "laptop"),
+        ("/Users/david/git/user-repo", "provider-factory-resume"),
+        ("/Users/david/git/user-repo", "laptop"),
+        ("/Users/david/git/provider-factory-project", "laptop"),
+        ("/Users/david/git/live-cell-run-project", "laptop"),
+        ("/Users/david/git/evidence/raw/my-project", "laptop"),
     )
     metadata = MetaData()
     sessions = Table(
@@ -80,7 +50,6 @@ def test_provider_reply_exact_python_and_sql_classifiers_have_parity():
         Column("session_id", String, primary_key=True),
         Column("cwd", String),
         Column("machine_id", String),
-        Column("first_user_message_preview", String),
     )
     engine = create_engine("sqlite://")
     metadata.create_all(engine)
@@ -88,22 +57,58 @@ def test_provider_reply_exact_python_and_sql_classifiers_have_parity():
         connection.execute(
             insert(sessions),
             [
-                {
-                    "session_id": str(index),
-                    "cwd": "/Users/test/repo",
-                    "machine_id": "laptop",
-                    "first_user_message_preview": prompt,
-                }
-                for index, prompt in enumerate(prompts)
+                {"session_id": str(index), "cwd": cwd, "machine_id": machine_id}
+                for index, (cwd, machine_id) in enumerate(workspaces)
             ],
         )
         sql_results = dict(
             connection.execute(select(sessions.c.session_id, provider_proof_session_clause(sessions))).all()
         )
 
-    assert [bool(sql_results[str(index)]) for index in range(len(prompts))] == [
-        classify_provider_proof_environment(first_user_text=prompt) == "test" for prompt in prompts
+    python_results = [
+        classify_provider_proof_environment(cwd=cwd, machine_id=machine_id) == "test" for cwd, machine_id in workspaces
     ]
+
+    assert [bool(sql_results[str(index)]) for index in range(len(workspaces))] == python_results
+    assert python_results == [True] * 10 + [False] * 4
+
+
+def test_sql_candidate_clause_is_a_subset_of_the_python_classifier():
+    """SQL narrows, Python decides -- and it must stay that way round.
+
+    The SQL clause is a LIKE approximation of the Python predicates, so shapes
+    exist where Python says "test" and SQL does not: SQL's
+    ``/tmp/%/evidence/raw/%`` requires an intermediate segment that Python's
+    ``startswith`` does not. That costs the repair tool recall -- rows it will
+    not offer to fix -- which is safe.
+
+    The opposite direction would not be. If SQL ever selected a row the
+    classifier rejects, the repair tool would present a real user session as
+    proof traffic. Nothing else pins that direction, so this does.
+    """
+
+    divergent = ("/tmp/evidence/raw/claude/workspace", "laptop")
+    metadata = MetaData()
+    sessions = Table(
+        "sessions",
+        metadata,
+        Column("session_id", String, primary_key=True),
+        Column("cwd", String),
+        Column("machine_id", String),
+    )
+    engine = create_engine("sqlite://")
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(sessions),
+            [{"session_id": "0", "cwd": divergent[0], "machine_id": divergent[1]}],
+        )
+        matched = dict(
+            connection.execute(select(sessions.c.session_id, provider_proof_session_clause(sessions))).all()
+        )
+
+    assert classify_provider_proof_environment(cwd=divergent[0], machine_id=divergent[1]) == "test"
+    assert not bool(matched["0"]), "SQL must stay no broader than the Python classifier"
 
 
 def test_provider_factory_evidence_workspace_is_automation_classified_without_hiding_user_repos():
@@ -112,10 +117,6 @@ def test_provider_factory_evidence_workspace_is_automation_classified_without_hi
     )
     assert is_provider_factory_cwd("/tmp/live-cell-run-cursor.coordination.directed.v1-abc123/evidence/cursor-workspace")
     assert is_provider_factory_machine_id("provider-factory-resume")
-    assert is_provider_coordination_awareness_marker("print exactly LONGHOUSE_CURSOR_COORD_AWARENESS_f70043f7b0")
-    assert not is_provider_coordination_awareness_marker(
-        "Investigate why LONGHOUSE_CURSOR_COORD_AWARENESS_f70043f7b0 appeared in my logs"
-    )
     assert classify_provider_proof_environment(
         cwd="/tmp/lhx-claude-coord-create-abc123/workspace"
     ) == "test"
@@ -126,7 +127,6 @@ def test_provider_factory_evidence_workspace_is_automation_classified_without_hi
     assert classify_provider_proof_environment(
         cwd="/Users/davidrose/git/user-repo",
         machine_id="provider-factory-resume",
-        first_user_text="Review the deployment plan",
     ) == "test"
 
 
@@ -163,7 +163,7 @@ def test_temporary_raw_provider_evidence_workspace_is_automation_classified():
     cwd = "/private/tmp/longhouse-claude-real-print-abc/evidence/raw/claude/workspace"
 
     assert is_provider_evidence_cwd(cwd)
-    assert classify_provider_proof_environment(cwd=cwd, first_user_text="Review the deployment plan") == "test"
+    assert classify_provider_proof_environment(cwd=cwd) == "test"
     assert not is_provider_evidence_cwd("/Users/davidrose/git/evidence/raw/my-project")
 
 

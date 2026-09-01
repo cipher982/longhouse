@@ -379,7 +379,6 @@ def create_live_launch_catalog_shell(
                 launch_surface=launch_surface,
                 cwd=cwd,
                 machine_id=device_id,
-                first_user_message=initial_prompt,
             )
         ).system_hidden
     )

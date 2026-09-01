@@ -187,19 +187,6 @@ def _seed_ingest_interaction_sequence_context(
     return sequence_context
 
 
-def _first_user_text_from_ingest(data: SessionIngest, interactions: list[dict[str, Any]]) -> str | None:
-    for event, interaction in zip(data.events, interactions, strict=True):
-        if not interaction["title_eligible"]:
-            continue
-        preview = _bounded_session_preview(
-            event.content_text,
-            max_len=_SESSION_FIRST_USER_PREVIEW_CHARS,
-        )
-        if preview:
-            return preview
-    return None
-
-
 def _normalize_origin_kind(value: str | None) -> str | None:
     normalized = str(value or "").strip().lower().replace("-", "_")
     if normalized in HIDDEN_FROM_DEFAULT_ORIGIN_KINDS:
@@ -872,8 +859,6 @@ class AgentsStore:
         self,
         session: AgentSession,
         data: SessionIngest,
-        *,
-        first_user_text: str | None = None,
     ) -> None:
         """Backfill richer session metadata when the same session is ingested again."""
         incoming_execution_home = _infer_execution_home_from_ingest(data)
@@ -884,7 +869,6 @@ class AgentsStore:
             else classify_provider_proof_environment(
                 cwd=data.cwd or session.cwd,
                 machine_id=data.device_id or session.device_id,
-                first_user_text=session.first_user_message_preview or first_user_text,
             )
         )
         if (
@@ -972,7 +956,6 @@ class AgentsStore:
             else classify_provider_proof_environment(
                 cwd=data.cwd or session.cwd,
                 machine_id=data.device_id or session.device_id,
-                first_user_text=session.first_user_message_preview or first_user_text,
             )
         )
         if provider_proof_environment:
@@ -3034,7 +3017,6 @@ class AgentsStore:
                 else classify_provider_proof_environment(
                     cwd=session_obj.cwd,
                     machine_id=session_obj.device_id,
-                    first_user_text=first_user_preview_delta[2] if first_user_preview_delta else session_obj.first_user_message_preview,
                 )
             )
             if provider_proof_environment and session_obj.environment not in {"test", "e2e"}:
