@@ -44,7 +44,7 @@ def test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha() -> 
     readiness = SOURCE.index('echo "Waiting for pre-release exact-SHA gates')
     dispatch = SOURCE[push:readiness]
 
-    assert "for workflow in deploy-and-verify.yml launch-gate.yml" in dispatch
+    assert "for workflow in runtime-image.yml deploy-and-verify.yml launch-gate.yml" in dispatch
     assert "test-install.yml" not in dispatch
     assert '--commit "$BUMP_SHA"' in dispatch
     assert 'if [[ "$run_count" == "0" ]]' in dispatch
@@ -52,6 +52,8 @@ def test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha() -> 
 
 
 def test_deploy_waits_for_exact_sha_hosted_live_qa() -> None:
+    assert DEPLOY_WORKFLOW.count("if: ${{ needs.changes.outputs.runtime_image == 'true' }}") == 2
+    assert DEPLOY_WORKFLOW.count("event: ${{ github.event_name }}") == 2
     assert "uses: ./.github/workflows/hosted-live-qa.yml" in DEPLOY_WORKFLOW
     assert "source_sha: ${{ needs.gate.outputs.head_sha }}" in DEPLOY_WORKFLOW
     assert "hosted-live-qa.yml/dispatches" not in DEPLOY_WORKFLOW

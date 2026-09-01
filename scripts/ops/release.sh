@@ -151,7 +151,7 @@ fi
 # only changes another product surface. Give push-triggered runs a moment to
 # register, then dispatch only the exact-SHA gates GitHub did not create.
 sleep 10
-for workflow in deploy-and-verify.yml launch-gate.yml; do
+for workflow in runtime-image.yml deploy-and-verify.yml launch-gate.yml; do
   run_count="$(gh run list \
     --repo cipher982/longhouse \
     --workflow "$workflow" \

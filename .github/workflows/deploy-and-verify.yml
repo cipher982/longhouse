@@ -182,14 +182,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Wait for runtime image publish
-        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' }}
+        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ needs.gate.outputs.head_sha }}
           head_branch: ${{ needs.gate.outputs.head_branch }}
           github_token: ${{ github.token }}
           workflow_id: runtime-image.yml
-          event: push
+          event: ${{ github.event_name }}
           timeout_seconds: "1200"
 
       - name: Verify runtime image exists
@@ -238,14 +238,14 @@ jobs:
           show-progress: false
 
       - name: Wait for runtime image publish
-        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' }}
+        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ needs.gate.outputs.head_sha }}
           head_branch: ${{ needs.gate.outputs.head_branch }}
           github_token: ${{ github.token }}
           workflow_id: runtime-image.yml
-          event: push
+          event: ${{ github.event_name }}
           timeout_seconds: "1200"
 
       - name: Wait for control plane
