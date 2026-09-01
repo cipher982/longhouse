@@ -9,6 +9,16 @@ import Testing
 /// stream restart rather than a silent reconnect loop.
 @MainActor
 struct SessionStreamResumeTests {
+    /// An empty cache rooted in a throwaway directory. Passing `nil` here falls
+    /// back to the process-wide `.shared` store, which lets one test hydrate the
+    /// next one's session and makes this file order-dependent.
+    static func isolatedSnapshotStore() -> TranscriptSnapshotStore {
+        TranscriptSnapshotStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("lh-isolated-cache-\(UUID().uuidString)", isDirectory: true)
+        )
+    }
+
     private let serverURL = "https://example.longhouse.ai"
 
     @Test
@@ -19,17 +29,19 @@ struct SessionStreamResumeTests {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("lh-stream-tests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = TranscriptSnapshotStore(directory: dir)
+        let store = TranscriptSnapshotStore(directory: dir, memoryMaxBytes: 0)
         store.save(
             serverURL: serverURL,
             sessionId: "session-1",
-            detail: workspace.session,
-            events: workspace.events,
-            loadedProjectionItemCount: workspace.events.count,
-            totalProjectionItemCount: workspace.projection.total,
-            tailSnapshotEventId: "30",
-            lastPubsubSeq: 777,
-            workspaceRevisionFingerprint: "sha256:cached"
+            snapshot: TranscriptSnapshot(
+                detail: workspace.session,
+                events: workspace.events,
+                loadedProjectionItemCount: workspace.events.count,
+                totalProjectionItemCount: workspace.projection.total,
+                tailSnapshotEventId: "30",
+                lastPubsubSeq: 777,
+                workspaceRevisionFingerprint: "sha256:cached"
+            )
         )
         store.waitForPendingWrites()
 
@@ -42,7 +54,6 @@ struct SessionStreamResumeTests {
                 recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
             },
             enableRealtime: true,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: store
         )
 
@@ -68,8 +79,7 @@ struct SessionStreamResumeTests {
                 recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
             },
             enableRealtime: true,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
-            snapshotStore: nil
+            snapshotStore: Self.isolatedSnapshotStore()
         )
 
         await model.start(sessionId: "session-1", appState: appState)
@@ -111,8 +121,7 @@ struct SessionStreamResumeTests {
                 recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
             },
             enableRealtime: true,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
-            snapshotStore: nil
+            snapshotStore: Self.isolatedSnapshotStore()
         )
 
         await model.start(sessionId: "session-1", appState: appState)
@@ -143,17 +152,19 @@ struct SessionStreamResumeTests {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("lh-stream-gap-tests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = TranscriptSnapshotStore(directory: dir)
+        let store = TranscriptSnapshotStore(directory: dir, memoryMaxBytes: 0)
         store.save(
             serverURL: serverURL,
             sessionId: "session-1",
-            detail: workspace.session,
-            events: workspace.events,
-            loadedProjectionItemCount: workspace.events.count,
-            totalProjectionItemCount: workspace.projection.total,
-            tailSnapshotEventId: "30",
-            lastPubsubSeq: 777,
-            workspaceRevisionFingerprint: "sha256:cached-gap"
+            snapshot: TranscriptSnapshot(
+                detail: workspace.session,
+                events: workspace.events,
+                loadedProjectionItemCount: workspace.events.count,
+                totalProjectionItemCount: workspace.projection.total,
+                tailSnapshotEventId: "30",
+                lastPubsubSeq: 777,
+                workspaceRevisionFingerprint: "sha256:cached-gap"
+            )
         )
         store.waitForPendingWrites()
 
@@ -166,7 +177,6 @@ struct SessionStreamResumeTests {
                 recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
             },
             enableRealtime: true,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: store
         )
 
@@ -202,8 +212,7 @@ struct SessionStreamResumeTests {
                 recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
             },
             enableRealtime: true,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
-            snapshotStore: nil,
+            snapshotStore: Self.isolatedSnapshotStore(),
             realtimeRefreshRetryDelaysNanoseconds: [20_000_000]
         )
 
@@ -235,8 +244,7 @@ struct SessionStreamResumeTests {
                 recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
             },
             enableRealtime: true,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
-            snapshotStore: nil
+            snapshotStore: Self.isolatedSnapshotStore()
         )
 
         await model.start(sessionId: "session-1", appState: appState)
@@ -270,8 +278,7 @@ struct SessionStreamResumeTests {
                 recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
             },
             enableRealtime: true,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
-            snapshotStore: nil
+            snapshotStore: Self.isolatedSnapshotStore()
         )
 
         await model.start(sessionId: "session-1", appState: appState)
@@ -402,9 +409,13 @@ private final class StreamFactoryRecorder: Sendable {
         var lastSinceSeq: Int?
         var lastKnownWorkspaceFingerprint: String?
         var startCount = 0
-        var nextStreamId = 0
-        var activeStreamId: Int?
-        var continuations: [Int: AsyncStream<SessionWorkspaceStream.Event>.Continuation] = [:]
+        var nextToken = 0
+        /// Which source owns `continuation` right now. `startStream` stops the
+        /// stream it is replacing on a detached task, so a stale `stop()` can
+        /// land after its successor has already registered; without this it
+        /// tears down the live continuation and every later `emit` goes nowhere.
+        var activeToken = 0
+        var continuation: AsyncStream<SessionWorkspaceStream.Event>.Continuation?
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
 
@@ -413,11 +424,11 @@ private final class StreamFactoryRecorder: Sendable {
     var startCount: Int { state.withLock { $0.startCount } }
 
     func make(sinceSeq: Int?, knownWorkspaceFingerprint: String?) -> SessionWorkspaceStreamSource {
-        let streamId = state.withLock {
-            $0.lastSinceSeq = sinceSeq
-            $0.lastKnownWorkspaceFingerprint = knownWorkspaceFingerprint
-            $0.nextStreamId += 1
-            return $0.nextStreamId
+        let token = state.withLock { state -> Int in
+            state.lastSinceSeq = sinceSeq
+            state.lastKnownWorkspaceFingerprint = knownWorkspaceFingerprint
+            state.nextToken += 1
+            return state.nextToken
         }
         return SessionWorkspaceStreamSource(
             start: { [state] in
@@ -427,37 +438,35 @@ private final class StreamFactoryRecorder: Sendable {
                 AsyncStream { continuation in
                     state.withLock {
                         $0.startCount += 1
-                        $0.activeStreamId = streamId
-                        $0.continuations[streamId] = continuation
+                        $0.activeToken = token
+                        $0.continuation = continuation
                     }
                 }
             },
             stop: { [state] in
-                let continuation = state.withLock {
-                    let continuation = $0.continuations.removeValue(forKey: streamId)
-                    if $0.activeStreamId == streamId {
-                        $0.activeStreamId = nil
-                    }
-                    return continuation
+                state.withLock {
+                    guard $0.activeToken == token else { return }
+                    $0.continuation?.finish()
+                    $0.continuation = nil
+                    $0.activeToken = 0
                 }
-                continuation?.finish()
             },
             clockSkewMs: { 0 }
         )
     }
 
     func emitConnected() {
-        let c = activeContinuation()
+        let c = state.withLock { $0.continuation }
         c?.yield(.connected(SessionWorkspaceStream.Connected(session_id: "session-1", server_now_ms: nil)))
     }
 
     func emitUnauthorized() {
-        let c = activeContinuation()
+        let c = state.withLock { $0.continuation }
         c?.yield(.unauthorized)
     }
 
     func emitReplayGap(latestSeq: Int) {
-        let c = activeContinuation()
+        let c = state.withLock { $0.continuation }
         c?.yield(.replayGap(SessionWorkspaceStream.ReplayGap(
             session_id: "session-1",
             requested_seq: 777,
@@ -468,7 +477,7 @@ private final class StreamFactoryRecorder: Sendable {
     }
 
     func emitChanged(latestEventId: Int, pubsubSeq: Int?) {
-        let c = activeContinuation()
+        let c = state.withLock { $0.continuation }
         c?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
             session_id: "session-1",
             latest_event_id: latestEventId,
@@ -482,7 +491,7 @@ private final class StreamFactoryRecorder: Sendable {
     }
 
     func emitPreview(text: String, pubsubSeq: Int, provisional: Bool = true) {
-        let c = activeContinuation()
+        let c = state.withLock { $0.continuation }
         c?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
             session_id: "session-1",
             latest_event_id: pubsubSeq,
@@ -509,13 +518,6 @@ private final class StreamFactoryRecorder: Sendable {
                 stale_reason: nil
             )
         )))
-    }
-
-    private func activeContinuation() -> AsyncStream<SessionWorkspaceStream.Event>.Continuation? {
-        state.withLock {
-            guard let activeStreamId = $0.activeStreamId else { return nil }
-            return $0.continuations[activeStreamId]
-        }
     }
 }
 
