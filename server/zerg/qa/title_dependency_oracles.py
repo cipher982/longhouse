@@ -30,8 +30,8 @@ from uuid import uuid4
 
 import httpx
 
-from zerg.qa.provider_release_identity import now
-from zerg.qa.provider_release_identity import sha256_file
+from zerg.qa.provider_artifacts import now
+from zerg.qa.provider_artifacts import sha256_file
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_ENVIRONMENT
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT

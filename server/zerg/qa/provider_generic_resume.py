@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from zerg.qa.provider_release_identity import artifact_manifest
-from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_artifacts import artifact_manifest
+from zerg.qa.provider_artifacts import now
 from zerg.qa.provider_resume_oracles import ASSERTIONS_BY_SCENARIO
 from zerg.qa.resume_assurance import ProducerRegistration
 

@@ -10,14 +10,15 @@ import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from typing import Callable
 from typing import Pattern
 
 from zerg.qa import qualification_request
+from zerg.qa.provider_artifacts import artifact_manifest as artifact_manifest
+from zerg.qa.provider_artifacts import now
+from zerg.qa.provider_artifacts import sha256_file
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_capability_proof import LEGACY_PROOF_SCHEMA_VERSION
 from zerg.services.provider_capability_proof import AssertionOutcome
@@ -88,37 +89,8 @@ def redact_text(value: str) -> str:
     return value
 
 
-def now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def sha256(data: bytes) -> str:
     return f"sha256:{hashlib.sha256(data).hexdigest()}"
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    """Digest every evidence file under `root`, excluding the result envelope.
-
-    `result.json` is excluded because it is the file this manifest is embedded
-    in: hashing it would require knowing its own digest.
-    """
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": sha256_file(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def atomic_json(path: Path, payload: Any, *, canonical: bool = False) -> None:
