@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.auth import catalog_gateway
 from zerg.auth.principal import AuthenticatedUser

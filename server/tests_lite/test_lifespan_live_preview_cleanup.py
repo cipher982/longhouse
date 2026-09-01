@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import inspect
+import os
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.lifespan as lifespan_module
 

@@ -16,10 +16,14 @@ These tests pin:
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from datetime import timezone
 
 from sqlalchemy.orm import sessionmaker
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base
 from zerg.database import make_engine

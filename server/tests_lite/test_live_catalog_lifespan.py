@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 
 import pytest
 from fastapi import FastAPI
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.database as database_module
 import zerg.lifespan as lifespan_module

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import inspect
+import os
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
 from starlette.responses import Response
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.routers import timeline as timeline_router
 from zerg.routers.timeline import get_timeline_session_events

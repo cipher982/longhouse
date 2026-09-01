@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -7,6 +8,9 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.schema import create_catalog_engine

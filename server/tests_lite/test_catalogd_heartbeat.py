@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -13,6 +14,9 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import SQLAlchemyError
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.catalogd.store as catalog_store
 from zerg.catalogd import server as catalog_server

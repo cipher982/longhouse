@@ -1,10 +1,14 @@
 import inspect
+import os
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from fastapi import Response
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.routers import agents_sessions
 from zerg.services.catalog_read_gateway import CatalogReadError

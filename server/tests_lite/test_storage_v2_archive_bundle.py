@@ -3,12 +3,16 @@ from __future__ import annotations
 import base64
 import gzip
 import hashlib
+import os
 from datetime import UTC
 from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.services.session_archive import build_storage_v2_archive_bundle
 from zerg.services.session_archive import build_storage_v2_archive_manifest

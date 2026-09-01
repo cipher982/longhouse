@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -8,6 +9,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.dependencies.agents_auth as agents_auth_deps
 import zerg.dependencies.auth as auth_deps

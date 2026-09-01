@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.routers.telemetry import canary_router

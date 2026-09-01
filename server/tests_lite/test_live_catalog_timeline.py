@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from copy import deepcopy
 from datetime import datetime
 from datetime import timedelta
@@ -10,6 +11,9 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.routers.timeline as timeline_router
 import zerg.services.live_catalog_timeline as live_catalog_timeline

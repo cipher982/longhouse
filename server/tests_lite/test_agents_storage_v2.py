@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import UTC
 from datetime import datetime
@@ -16,6 +17,9 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.routers.agents_storage_v2 as storage_router
 from zerg.catalogd.client import CatalogClient

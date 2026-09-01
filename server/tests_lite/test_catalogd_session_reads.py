@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -10,6 +11,9 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import event
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError

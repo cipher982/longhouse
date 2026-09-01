@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -7,6 +8,9 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.routers.agents_state_diagnostics as diagnostics_router
 from zerg.dependencies.agents_auth import require_single_tenant

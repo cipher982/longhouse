@@ -8,10 +8,14 @@ unavailable/timeout state must remain distinguishable from an honest miss.
 from __future__ import annotations
 
 import asyncio
+import os
 from uuid import uuid4
 
 import numpy as np
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.routers import agents_search
 from zerg.services.session_views import RecallMatch

@@ -6,6 +6,7 @@ project-scoped cross-provider recap suitable for hook injection.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -13,6 +14,9 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.database import get_db
 from zerg.database import make_engine

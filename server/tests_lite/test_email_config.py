@@ -6,6 +6,9 @@ Uses in-memory SQLite with inline setup (no shared conftest).
 import os
 from unittest.mock import patch
 
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker

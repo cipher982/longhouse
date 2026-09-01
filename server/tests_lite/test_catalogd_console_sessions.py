@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -7,6 +8,9 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.catalogd.fact_reducer import read_session_fact_heads
 from zerg.catalogd.schema import create_catalog_engine

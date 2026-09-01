@@ -8,6 +8,9 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from starlette.responses import Response
 
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import Runner

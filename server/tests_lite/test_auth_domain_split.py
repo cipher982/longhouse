@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from inspect import signature
 from types import SimpleNamespace
@@ -7,6 +8,9 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.routers import auth as auth_router

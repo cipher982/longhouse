@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 from uuid import UUID
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.routers.agents_storage_v2 import _parse_envelope
 from zerg.storage_v2.contracts import EnvelopeIdentity

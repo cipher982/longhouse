@@ -1,5 +1,6 @@
 """Telemetry client-render beacon smoke tests."""
 
+import os
 import time
 from datetime import datetime
 from datetime import timezone
@@ -8,6 +9,9 @@ from uuid import UUID
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base
 from zerg.database import get_db

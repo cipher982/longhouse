@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base
 from zerg.database import make_engine

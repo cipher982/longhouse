@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -10,6 +11,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 from typer.testing import CliRunner
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.cli.main import app as cli_app
 from zerg.database import Base

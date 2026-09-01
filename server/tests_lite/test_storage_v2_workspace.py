@@ -1,9 +1,13 @@
+import os
 from types import SimpleNamespace
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.services.storage_v2_workspace as workspace_module
 import zerg.routers.session_chat as session_chat_module

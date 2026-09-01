@@ -1,7 +1,11 @@
 import logging
+import os
 
 import pytest
 from fastapi import WebSocketDisconnect
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base
 from zerg.database import make_engine

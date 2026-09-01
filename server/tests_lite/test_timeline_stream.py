@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+
 import zerg.dependencies.auth as _auth_deps  # noqa: F401
 import zerg.routers.timeline as timeline_router
 from fastapi import HTTPException

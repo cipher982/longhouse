@@ -1,9 +1,13 @@
 """Window semantics tests for retired /ops automation metrics."""
 
+import os
 from datetime import date
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base
 from zerg.database import get_db

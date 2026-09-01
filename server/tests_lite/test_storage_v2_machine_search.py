@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi import Response
 from starlette.requests import Request
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.database as zerg_database
 from zerg.routers import agents_search

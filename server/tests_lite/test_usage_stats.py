@@ -1,4 +1,5 @@
 """Unit tests for usage-stats endpoint (live query against sessions table)."""
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -8,6 +9,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base
 from zerg.database import get_db

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import replace
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.routers.agents_storage_v2 import _parse_render_spec
 from zerg.services.render_object_workers import RenderObjectWorkerPool

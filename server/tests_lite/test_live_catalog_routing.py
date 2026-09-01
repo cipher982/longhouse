@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
@@ -9,6 +10,9 @@ from uuid import UUID
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 import zerg.database as database_module
 from zerg.auth.managed_session_tokens import ManagedSessionToken

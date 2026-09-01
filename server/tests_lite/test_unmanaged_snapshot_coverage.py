@@ -19,6 +19,11 @@ refuse to let a provider fall through unclassified.
 
 from __future__ import annotations
 
+import os
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+
 from zerg.routers.heartbeat import MANAGED_SESSION_LEASE_PROVIDERS
 from zerg.routers.heartbeat import MISSING_UNBOUND_UNMANAGED_PROVIDERS
 from zerg.routers.heartbeat import UNMANAGED_PROCESS_SNAPSHOT_UNCOVERED_PROVIDERS

@@ -1,6 +1,10 @@
+import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
 
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.machine_evidence import validate_machine_evidence_identities
