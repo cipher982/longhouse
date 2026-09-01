@@ -2644,7 +2644,7 @@ class CatalogDaemon:
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.lookup_storage_canary_session,
             observed_at=observed_at,
             max_age_seconds=max_age_seconds,

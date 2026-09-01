@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -271,5 +273,37 @@ async def test_catalog_rpc_canary_lookup_validates_params_and_returns_session(da
         assert result["commit_seq"] == "0"
         assert result["max_age_seconds"] == 300
     finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_catalog_rpc_canary_lookup_does_not_queue_behind_writer(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    engine.dispose()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def block_write_lane() -> None:
+        entered.set()
+        release.wait(timeout=2)
+
+    blocked = asyncio.create_task(daemon._run_store(block_write_lane))
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        result = await client.call(
+            "storage.session.canary.lookup.v2",
+            {"observed_at": datetime.now(UTC).isoformat(), "max_age_seconds": 300},
+            timeout_seconds=0.25,
+        )
+        assert result["session_id"] is None
+    finally:
+        release.set()
+        await blocked
         await client.close()
         await daemon.close()
