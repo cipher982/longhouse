@@ -230,6 +230,10 @@ class TestMain:
     def test_main_writes_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _init_repo(tmp_path)
         pyproject = _write_pyproject(repo, "9.9.9")
+        # The test owns a fake local repository, so it must not inherit the
+        # outer GitHub Actions checkout identity (especially on tag builds).
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+        monkeypatch.delenv("GITHUB_REF", raising=False)
         # Point the module's REPO_ROOT/PYPROJECT at our fake repo.
         monkeypatch.setattr(gbi, "REPO_ROOT", repo)
         monkeypatch.setattr(gbi, "PYPROJECT_PATH", pyproject)
