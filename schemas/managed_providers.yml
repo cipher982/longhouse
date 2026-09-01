@@ -154,6 +154,7 @@ providers:
       required_assertions:
       - id: branch_fork_produces_a_new_thread
         scenario_id: console_thread_fork
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
@@ -169,6 +170,7 @@ providers:
       required_assertions: &helm_resume_assertions
       - id: cold_resume_registers_continuous_thread
         scenario_id: helm_cold_resume
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
@@ -189,42 +191,49 @@ providers:
         max_age_seconds: 604800
       - id: live_reattach_does_not_spawn_owner
         scenario_id: helm_live_reattach
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
       - id: console_continuation_is_distinct
         scenario_id: console_thread_continue
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
       - id: session_thread_and_machine_identity_continue
         scenario_id: resume_identity_continuity
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic, live_token]
         max_age_seconds: 604800
       - id: resume_attempt_is_idempotent
         scenario_id: resume_attempt_idempotency
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic]
         max_age_seconds: 604800
       - id: one_local_provider_owner_wins
         scenario_id: resume_single_owner
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic]
         max_age_seconds: 604800
       - id: stale_input_is_not_replayed
         scenario_id: resume_input_safety
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic]
         max_age_seconds: 604800
       - id: failed_resume_closes_attempt_and_restores_contract
         scenario_id: resume_failure_cleanup
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic]
@@ -1096,6 +1105,7 @@ providers:
       - id: unsupported_resume_is_typed_and_side_effect_free
         variant: policy_disabled
         scenario_id: resume_unsupported
+        assurance_priority: ordinary_ci
         oracle_source: server/zerg/qa/provider_resume_oracles.py
         minimum_scenario_revision: 1
         acceptable_evidence: [hermetic]

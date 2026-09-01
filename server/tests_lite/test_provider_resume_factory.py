@@ -6,6 +6,7 @@ from zerg.qa.provider_generic_resume import REGISTRATION
 from zerg.qa.provider_generic_resume import run_generic_resume
 from zerg.qa.provider_resume_factory import SCENARIOS
 from zerg.qa.provider_resume_factory import run_provider_resume_scenario
+from zerg.services.provider_capability_schema import load_capability_assertions
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude", "cursor", "opencode"])
@@ -36,6 +37,31 @@ def test_maintenance_provider_resume_is_typed_and_side_effect_free() -> None:
         "registration_count": 0,
         "provider_spawn_count": 0,
     }
+
+
+def test_source_only_resume_contracts_are_bound_to_ordinary_ci() -> None:
+    source_only = {
+        "branch_fork_produces_a_new_thread",
+        "cold_resume_registers_continuous_thread",
+        "live_reattach_does_not_spawn_owner",
+        "console_continuation_is_distinct",
+        "session_thread_and_machine_identity_continue",
+        "resume_attempt_is_idempotent",
+        "one_local_provider_owner_wins",
+        "stale_input_is_not_replayed",
+        "failed_resume_closes_attempt_and_restores_contract",
+        "unsupported_resume_is_typed_and_side_effect_free",
+    }
+
+    assertions = [
+        assertion
+        for assertion in load_capability_assertions()
+        if assertion.assertion_id in source_only
+    ]
+
+    assert len(assertions) == 34
+    assert {assertion.assertion_id for assertion in assertions} == source_only
+    assert {assertion.assurance_priority for assertion in assertions} == {"ordinary_ci"}
 
 
 def test_generic_producer_retains_hermetic_observation_and_cleanup(tmp_path) -> None:

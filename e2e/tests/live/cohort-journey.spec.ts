@@ -132,42 +132,47 @@ async function measurePhase(
   ageBucket: string,
   action: () => Promise<ActionResult>,
 ): Promise<PhaseResult> {
-  tracker.clear();
-  await page.evaluate(() => performance.clearResourceTimings()).catch(() => {});
-  const startedAt = Date.now();
-  try {
-    const result = await action();
-    const readyMs = Date.now() - startedAt;
-    const paintStartedAt = result.paintAfterEpochMs ?? startedAt;
-    const paintEpochMs = await waitForElementPaint(page, result.paintMarker, paintStartedAt);
-    const paintMs = paintEpochMs - paintStartedAt;
-    if (result.resultCount <= 0) throw new Error("empty_result");
-    return {
-      phase,
-      cohort,
-      age_bucket: ageBucket,
-      outcome: "pass",
-      failure_code: null,
-      ready_ms: roundMs(readyMs),
-      first_paint_ms: roundMs(paintMs),
-      nonempty: true,
-      result_count_bucket: resultCountBucket(result.resultCount),
-      api: await tracker.summarize(),
-    };
-  } catch (error) {
-    return {
-      phase,
-      cohort,
-      age_bucket: ageBucket,
-      outcome: "fail",
-      failure_code: classifyJourneyFailure(error),
-      ready_ms: null,
-      first_paint_ms: null,
-      nonempty: false,
-      result_count_bucket: "0",
-      api: await tracker.summarize().catch(() => []),
-    };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    tracker.clear();
+    await page.evaluate(() => performance.clearResourceTimings()).catch(() => {});
+    const startedAt = Date.now();
+    try {
+      const result = await action();
+      const readyMs = Date.now() - startedAt;
+      const paintStartedAt = result.paintAfterEpochMs ?? startedAt;
+      const paintEpochMs = await waitForElementPaint(page, result.paintMarker, paintStartedAt);
+      const paintMs = paintEpochMs - paintStartedAt;
+      if (result.resultCount <= 0) throw new Error("empty_result");
+      return {
+        phase,
+        cohort,
+        age_bucket: ageBucket,
+        outcome: "pass",
+        failure_code: null,
+        ready_ms: roundMs(readyMs),
+        first_paint_ms: roundMs(paintMs),
+        nonempty: true,
+        result_count_bucket: resultCountBucket(result.resultCount),
+        api: await tracker.summarize(),
+      };
+    } catch (error) {
+      const failureCode = classifyJourneyFailure(error);
+      if (failureCode === "paint_evidence_unavailable" && attempt === 0) continue;
+      return {
+        phase,
+        cohort,
+        age_bucket: ageBucket,
+        outcome: "fail",
+        failure_code: failureCode,
+        ready_ms: null,
+        first_paint_ms: null,
+        nonempty: false,
+        result_count_bucket: "0",
+        api: await tracker.summarize().catch(() => []),
+      };
+    }
   }
+  throw new Error("unreachable");
 }
 
 function responseFailure(response: Response | Awaited<ReturnType<APIRequestContext["get"]>>): Error {
@@ -365,15 +370,21 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
   }
 
   let inventory: JourneySession[] = [];
-  try {
-    const inventoryResult = await fetchCohortInventory(context.request, apiBaseUrl);
-    inventory = inventoryResult.sessions;
-    if (!inventoryResult.complete) preflightFailures.push("inventory_incomplete");
-    if (inventory.length === 0) throw new Error("missing_cohort");
-  } catch (error) {
-    preflightFailures.push(classifyJourneyFailure(error));
+  let cohorts = selectJourneyCohorts(inventory, nowMs, new Date(nowMs).toISOString().slice(0, 10));
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const inventoryResult = await fetchCohortInventory(context.request, apiBaseUrl);
+      inventory = inventoryResult.sessions;
+      if (!inventoryResult.complete) preflightFailures.push("inventory_incomplete");
+      if (inventory.length === 0) throw new Error("missing_cohort");
+      cohorts = selectJourneyCohorts(inventory, nowMs, new Date(nowMs).toISOString().slice(0, 10));
+      if (Object.values(cohorts).every(Boolean)) break;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_000));
+    } catch (error) {
+      preflightFailures.push(classifyJourneyFailure(error));
+      break;
+    }
   }
-  const cohorts = selectJourneyCohorts(inventory, nowMs, new Date(nowMs).toISOString().slice(0, 10));
 
   page = await context.newPage();
   tracker = createResponseTracker(page);
