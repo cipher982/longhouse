@@ -451,9 +451,10 @@ def _build_draft_reply_messages(*, source_session, events: list[AgentEvent | Dra
         "clarification or status update. Never claim that the user approved, tested, or performed "
         "work unless that is explicit in the transcript."
     )
-    user = f"Draft one next user message of at most {max_chars} characters.\n\n" "Session metadata:\n" + "\n".join(
-        metadata_lines
-    ) + "\n\nRecent transcript tail:\n" + (transcript or "(no transcript events)")
+    user = (
+        f"Draft one next user message of at most {max_chars} characters.\n\n"
+        "Session metadata:\n" + "\n".join(metadata_lines) + "\n\nRecent transcript tail:\n" + (transcript or "(no transcript events)")
+    )
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
