@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 from typing import Callable
 
+from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.resume_assurance import ProducerRegistration
 
 SCENARIO_ID = "ios_workspace_selection_source_contract"
@@ -360,18 +361,6 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
 
 
-def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}",
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
-
-
 def run_ios_workspace_selection_source_oracle(*, evidence_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     evidence_root.mkdir(parents=True, exist_ok=False)
     root = (repo_root or _repo_root_from_cwd()).resolve()
@@ -441,7 +430,7 @@ def run(evidence_root: Path, *, repo_root: Path | None = None) -> dict[str, Any]
             "assertions": {ASSERTION_ID: False},
         }
     result["generated_at"] = datetime.now(UTC).isoformat()
-    result["artifact_manifest"] = _artifact_manifest(evidence_root)
+    result["artifact_manifest"] = artifact_manifest(evidence_root)
     _write_json(evidence_root / "result.json", result)
     return result
 

@@ -10,6 +10,7 @@ from fastapi import Response
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from zerg.dependencies.request_db import no_request_db
 from zerg.routers import agents_sessions
 from zerg.services.catalog_read_gateway import CatalogReadError
 
@@ -261,7 +262,7 @@ async def test_machine_session_reads_use_storage_v2_without_legacy_db(monkeypatc
     # so whichever value TESTING held when this module first loaded decided the
     # archive lane for the whole process. The module no longer holds the seam.
     assert "get_settings" not in vars(agents_sessions)
-    assert list(agents_sessions._session_detail_db()) == [None]
+    assert list(no_request_db()) == [None]
     auth = SimpleNamespace(owner_id=42)
 
     thread = await agents_sessions.get_session_thread(

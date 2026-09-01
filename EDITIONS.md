@@ -5,7 +5,7 @@ Longhouse is open-core.
 This public repository contains the Apache-2.0 core product:
 
 - Python CLI and package layer
-- Runtime Host (`longhouse serve`): FastAPI API, bundled web UI, SQLite state
+- Runtime Host (`longhouse-server serve`): FastAPI API, bundled web UI, SQLite state
 - Rust Machine Agent (`longhouse-engine`)
 - macOS local status/setup surface
 - iOS read/steer client

@@ -16,6 +16,7 @@ from typing import Callable
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
 from zerg.qa import codex_release_identity as identity_bridge
+from zerg.qa import provider_release_identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa import qualification_request
 from zerg.qa.codex_auth import CodexAuthError
@@ -82,7 +83,7 @@ def _file_identity(path: Path, *, label: str, executable: bool = False) -> str:
     if executable and not os.access(path, os.X_OK):
         raise identity_bridge.RequestError(f"{label} must be executable")
     try:
-        return identity_bridge._sha256_file(path)  # noqa: SLF001
+        return provider_release_identity.sha256_file(path)
     except OSError as exc:
         raise identity_bridge.RequestError(f"{label} cannot be read: {exc}") from exc
 
@@ -113,14 +114,14 @@ def _package_identity(raw_root: str, provider_bin: Path) -> tuple[Path, str, dic
     if package_binary != provider_bin.resolve(strict=True):
         raise identity_bridge.RequestError("provider_bin must be the managed package bin/codex")
     encoded = json.dumps(identities, separators=(",", ":"), sort_keys=True).encode()
-    return root, identity_bridge._sha256(encoded), identities  # noqa: SLF001
+    return root, provider_release_identity.sha256(encoded), identities
 
 
 def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
     for index, secret in enumerate(secrets, start=1):
         if secret:
             value = value.replace(secret, f"[QUALIFICATION_SECRET_{index}]")
-    return identity_bridge._redact_text(value)  # noqa: SLF001
+    return provider_release_identity.redact_text(value)
 
 
 def _redact_value(value: Any, secrets: tuple[str, ...]) -> Any:
@@ -251,7 +252,7 @@ def _prepare_inert_mcp_bootstrap(
         "ambient_codex_config_used": False,
         "command": str(_INERT_MCP_COMMAND),
         "command_identity": command_identity,
-        "config_digest": identity_bridge._sha256(encoded),  # noqa: SLF001
+        "config_digest": provider_release_identity.sha256(encoded),
         "retained_config": str(retained_config),
     }
 
@@ -469,8 +470,8 @@ def emit_proof_bundle(
     if contract is None:
         raise identity_bridge.RequestError("Codex managed-provider contract is missing")
     raw_bytes = (json.dumps(observation, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
-    raw_digest = identity_bridge._sha256(raw_bytes)  # noqa: SLF001
-    generated_at = identity_bridge._now()  # noqa: SLF001
+    raw_digest = provider_release_identity.sha256(raw_bytes)
+    generated_at = provider_release_identity.now()
     execution = {
         **execution,
         "invocation_id": request["invocation_id"],
@@ -481,18 +482,18 @@ def emit_proof_bundle(
         "engine_executable_identity": engine_identity,
     }
     output_root.mkdir(parents=True, exist_ok=True)
-    identity_bridge._atomic_json(output_root / "request.json", request)  # noqa: SLF001
-    identity_bridge._atomic_json(output_root / "raw-evidence.json", observation)  # noqa: SLF001
+    provider_release_identity.atomic_json(output_root / "request.json", request)
+    provider_release_identity.atomic_json(output_root / "raw-evidence.json", observation)
     semantic_observation = semantic._refresh_native_source_digests(  # noqa: SLF001
         observation,
         artifact_root=output_root.parent,
     )
     semantic_path = output_root / "semantic-evidence" / "semantic-observation.json"
     semantic_path.parent.mkdir(parents=True, exist_ok=True)
-    identity_bridge._atomic_json(semantic_path, semantic_observation)  # noqa: SLF001
-    execution["semantic_evidence_digest"] = identity_bridge._sha256_file(semantic_path)  # noqa: SLF001
-    identity_bridge._atomic_json(output_root / "execution-summary.json", execution)  # noqa: SLF001
-    oracle_digest = identity_bridge._sha256(Path(__file__).read_bytes())  # noqa: SLF001
+    provider_release_identity.atomic_json(semantic_path, semantic_observation)
+    execution["semantic_evidence_digest"] = provider_release_identity.sha256_file(semantic_path)
+    provider_release_identity.atomic_json(output_root / "execution-summary.json", execution)
+    oracle_digest = provider_release_identity.sha256(Path(__file__).read_bytes())
     store = ProviderCapabilityProofStore(output_root / "proof-store")
     records = []
     for assertion_id in ASSERTIONS:
@@ -522,7 +523,7 @@ def emit_proof_bundle(
         "outcomes": serialized,
         "complete": set(outcomes) == set(ASSERTIONS),
     }
-    identity_bridge._atomic_json(output_root / "coverage-manifest.json", coverage)  # noqa: SLF001
+    provider_release_identity.atomic_json(output_root / "coverage-manifest.json", coverage)
     bundle = {
         "artifact_kind": "provider_capability_proof_bundle",
         "schema_version": 2,
@@ -538,7 +539,7 @@ def emit_proof_bundle(
                 "qualification_request_metadata": qualification_request.metadata_payload(request),
             }
         )
-    identity_bridge._atomic_json(output_root / "proof-bundle.json", bundle)  # noqa: SLF001
+    provider_release_identity.atomic_json(output_root / "proof-bundle.json", bundle)
     return {
         "valid": True,
         "output_root": str(output_root),
@@ -799,9 +800,9 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     failure_code = str(canary_result.get("failure_code") or "")
 
     try:
-        post_engine_identity = identity_bridge._sha256_file(engine)  # noqa: SLF001
+        post_engine_identity = provider_release_identity.sha256_file(engine)
         _, post_package_identity, _ = _package_identity(str(package_root), provider_bin)
-        post_provider_identity = identity_bridge._sha256_file(provider_bin)  # noqa: SLF001
+        post_provider_identity = provider_release_identity.sha256_file(provider_bin)
     except (OSError, identity_bridge.RequestError):
         post_engine_identity = None
         post_package_identity = None

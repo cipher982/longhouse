@@ -37,6 +37,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_caller
 from zerg.dependencies.browser_auth import get_current_browser_caller_short_lived
 from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
+from zerg.dependencies.request_db import no_request_db
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.schemas.machines import MachineDirectoryEntry
@@ -78,8 +79,6 @@ from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionTimelineVisibilityRequest
 from zerg.services.session_views import SessionTimelineVisibilityResponse
-from zerg.services.session_views import SessionTurnEnvelopeResponse
-from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 from zerg.services.storage_v2_export import build_storage_v2_raw_export
 from zerg.services.storage_v2_workspace import build_storage_v2_workspace
@@ -615,7 +614,7 @@ async def get_timeline_filters(
 async def set_timeline_session_action(
     session_id: UUID,
     body: SessionActionRequest,
-    db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.set_session_action(
@@ -631,7 +630,7 @@ async def set_timeline_session_action(
 async def mark_timeline_session_read(
     session_id: UUID,
     body: SessionReadRequest,
-    db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.mark_session_read(
@@ -647,7 +646,7 @@ async def mark_timeline_session_read(
 async def set_timeline_session_loop_mode(
     session_id: UUID,
     body: SessionLoopModeRequest,
-    db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.set_session_loop_mode(
@@ -663,7 +662,7 @@ async def set_timeline_session_loop_mode(
 async def set_timeline_session_notification_watch(
     session_id: UUID,
     body: SessionNotificationWatchRequest,
-    db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.set_session_notification_watch(
@@ -679,7 +678,7 @@ async def set_timeline_session_notification_watch(
 async def set_timeline_session_visibility(
     session_id: UUID,
     body: SessionTimelineVisibilityRequest,
-    db: Session | None = Depends(_sessions_router.session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.set_session_timeline_visibility(
@@ -748,36 +747,6 @@ async def get_timeline_session_thread(
     )
 
 
-@router.get("/sessions/{session_id}/turns", response_model=SessionTurnsListResponse)
-async def get_timeline_session_turns(
-    session_id: UUID,
-    response: Response,
-    limit: int = Query(50, ge=1, description="Max turns to return (server clamps to 100)"),
-    offset: int = Query(0, ge=0, description="Offset within the stable per-session turn order"),
-    order: str = Query("asc", description="Turn order: asc|desc"),
-):
-    normalized_order = str(order or "asc").strip().lower()
-    if normalized_order not in {"asc", "desc"}:
-        raise HTTPException(status_code=400, detail="order must be one of: asc, desc")
-
-    response.headers["X-Limit-Cap"] = "100"
-    return SessionTurnsListResponse(turns=[], total=0)
-
-
-@router.get("/sessions/{session_id}/workflows")
-def get_timeline_session_workflow_runs(
-    session_id: UUID,
-    current_user=Depends(get_current_browser_caller),
-) -> dict:
-    """List dynamic-workflow runs whose subagent threads live under this session.
-
-    Browser-cookie-authenticated mirror of the machine-facing
-    ``/agents/sessions/{id}/workflows``. Each entry is one collapsible workflow
-    run node for the session detail UI.
-    """
-    return {"session_id": str(session_id), "workflow_runs": []}
-
-
 @router.get("/sessions/{session_id}/subagents")
 async def get_timeline_session_subagents(
     session_id: UUID,
@@ -803,32 +772,6 @@ async def get_timeline_session_subagents(
     except (CatalogRemoteError, CatalogUnavailable):
         # A missing child list must not break the transcript it hangs off.
         return {"session_id": str(session_id), "children": []}
-
-
-@router.get("/sessions/{session_id}/graph")
-def get_timeline_session_graph(
-    session_id: UUID,
-    current_user=Depends(get_current_browser_caller),
-) -> dict:
-    return {"session_id": str(session_id), "nodes": [], "edges": []}
-
-
-@router.get("/workflows/{workflow_run_id}")
-def get_timeline_workflow_run(
-    workflow_run_id: str,
-    current_user=Depends(get_current_browser_caller),
-) -> dict:
-    """Return one dynamic-workflow run's subagent threads (browser-auth mirror of
-    ``/agents/workflows/{run_id}``)."""
-    raise HTTPException(status_code=404, detail=f"Unknown workflow run: {workflow_run_id}")
-
-
-@router.get("/sessions/{session_id}/turns/{turn_id}", response_model=SessionTurnEnvelopeResponse)
-def get_timeline_session_turn(
-    session_id: UUID,
-    turn_id: int,
-):
-    raise HTTPException(status_code=404, detail=f"Unknown turn: {turn_id}")
 
 
 @router.get("/sessions/{session_id}/events")
@@ -936,10 +879,9 @@ async def get_timeline_session_workspace(
     current_user=Depends(get_current_browser_caller),
 ):
     # ``shared_by``/``share_token`` are accepted and currently unused: sharer
-    # attribution only ever resolved inside the deleted archive branch, and the
-    # routes that mint a share token are shelved in ``routers/session_shares.py``.
-    # They stay on the signature because the web client still sends them; making
-    # the pill work again is a storage-v2 change, not a query-parameter change.
+    # attribution only ever resolved inside the deleted archive branch, and
+    # session sharing itself is gone -- nothing mints a share token any more.
+    # They stay on the signature because the web client still sends them.
     timing = ServerTimingRecorder(surface="session_detail")
     response.headers["Cache-Control"] = "no-store"
     storage_workspace = await build_storage_v2_workspace(

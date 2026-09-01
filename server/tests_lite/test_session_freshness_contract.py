@@ -6,11 +6,8 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.provisional_events import EVENT_ORIGIN_LIVE_PROVISIONAL
 from zerg.services.provisional_events import TranscriptPreview
-from zerg.services.session_runtime import SessionRuntimeView
-from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.services.session_views import PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS
 from zerg.services.session_views import PROVISIONAL_TRANSCRIPT_PARTIAL_FRESHNESS
 from zerg.services.session_views import build_session_transcript_preview_response
@@ -31,51 +28,6 @@ def _preview(
         timestamp=timestamp,  # type: ignore[arg-type]
         provisional_cursor="bridge:session:thread:turn:7",
         provisional_complete=complete,
-    )
-
-
-def _managed_capabilities() -> KernelSessionCapabilities:
-    return KernelSessionCapabilities(
-        session_id="00000000-0000-0000-0000-000000000000",
-        thread_id=None,
-        run_id=None,
-        connection_id=None,
-        control_plane="claude_channel_bridge",
-        connection_state="attached",
-        control_label="live",
-        live_control_available=True,
-        host_reattach_available=True,
-        observe_only=False,
-        search_only=False,
-        can_send_input=True,
-        can_interrupt=True,
-        can_terminate=True,
-        can_tail_output=True,
-        can_resume=True,
-        staleness_reason=None,
-    )
-
-
-def _runtime_view(*, signal_at: datetime) -> SessionRuntimeView:
-    return SessionRuntimeView(
-        signal_tier="phase_signal",
-        runtime_phase="idle",
-        phase_started_at=signal_at,
-        last_progress_at=signal_at,
-        runtime_source="managed_local_transport",
-        terminal_state=None,
-        terminal_reason=None,
-        terminal_source=None,
-        runtime_version=1,
-        status="idle",
-        presence_state="idle",
-        presence_tool=None,
-        presence_updated_at=signal_at,
-        last_live_at=signal_at,
-        display_phase="Idle",
-        active_tool=None,
-        confidence="live",
-        timeline_anchor_at=signal_at,
     )
 
 
@@ -138,50 +90,3 @@ def test_transcript_preview_freshness_contract_prefers_durable_activity_over_age
     assert missing_timestamp is not None
     assert missing_timestamp.is_stale is True
     assert missing_timestamp.stale_reason == "missing_preview_timestamp"
-
-
-def test_transcript_lag_never_changes_provider_activity():
-    signal_at = PINNED_NOW
-    display = build_session_runtime_display(
-        runtime_view=_runtime_view(signal_at=signal_at),
-        capabilities=_managed_capabilities(),
-        ended_at=None,
-        last_activity_at=signal_at - timedelta(microseconds=1),
-        user_messages=2,
-        assistant_messages=1,
-        has_visible_transcript_preview=False,
-        now=PINNED_NOW,
-    )
-
-    assert display.state == "idle"
-    assert display.headline == "Idle"
-    assert display.phase_label == "Idle"
-
-
-def test_runtime_transcript_sync_freshness_contract_suppresses_when_evidence_catches_up():
-    signal_at = PINNED_NOW
-    visible_preview = build_session_runtime_display(
-        runtime_view=_runtime_view(signal_at=signal_at),
-        capabilities=_managed_capabilities(),
-        ended_at=None,
-        last_activity_at=signal_at - timedelta(microseconds=1),
-        user_messages=2,
-        assistant_messages=1,
-        has_visible_transcript_preview=True,
-        now=PINNED_NOW,
-    )
-    durable_newer_than_signal = build_session_runtime_display(
-        runtime_view=_runtime_view(signal_at=signal_at),
-        capabilities=_managed_capabilities(),
-        ended_at=None,
-        last_activity_at=signal_at + timedelta(microseconds=1),
-        user_messages=2,
-        assistant_messages=1,
-        has_visible_transcript_preview=False,
-        now=PINNED_NOW,
-    )
-
-    assert visible_preview.state == "idle"
-    assert visible_preview.headline == "Idle"
-    assert durable_newer_than_signal.state == "idle"
-    assert durable_newer_than_signal.headline == "Idle"

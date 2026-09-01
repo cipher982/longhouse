@@ -98,16 +98,6 @@ repos:
         pass_filenames: false
 
       # -----------------------------------------------------------------------
-      # SSE contract drift guard
-      # -----------------------------------------------------------------------
-      - id: sse-contract-drift
-        name: SSE contract drift check
-        entry: make validate-sse
-        language: system
-        files: ^(schemas/sse-events\.asyncapi\.yml|server/zerg/generated/sse_events\.py|web/src/generated/sse-events\.ts)$
-        pass_filenames: false
-
-      # -----------------------------------------------------------------------
       # iOS OpenAPI DTO drift guard
       # -----------------------------------------------------------------------
       - id: ios-api-contract-drift
@@ -182,7 +172,7 @@ repos:
       # -----------------------------------------------------------------------
       - id: python-vulture
         name: Vulture - detect dead code
-        entry: bash -c 'cd server && uv run --extra dev vulture zerg/ vulture-whitelist.py --min-confidence 80 --exclude "**/tests/**,**/test_*.py,**/events/emitter_protocol.py,**/events/null_emitter.py"'
+        entry: bash -c 'cd server && uv run --extra dev vulture zerg/ vulture-whitelist.py --min-confidence 80 --exclude "**/tests/**,**/test_*.py,**/generated/**,**/events/emitter_protocol.py,**/events/null_emitter.py"'
         language: system
         files: ^server/zerg/
         exclude: ^server/zerg/generated/

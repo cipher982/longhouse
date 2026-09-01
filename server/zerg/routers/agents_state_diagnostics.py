@@ -13,11 +13,11 @@ from fastapi import status
 from pydantic import ConfigDict
 from pydantic import Field
 
+from zerg.dependencies.agents_auth import owner_id_from_caller
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_read_gateway import CatalogReadError
-from zerg.services.catalog_read_gateway import active_owner_id
 from zerg.services.catalog_read_gateway import shadow_session_state_health
 from zerg.services.catalog_read_gateway import shadow_session_state_snapshot
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
@@ -146,18 +146,6 @@ class SessionStateReducerHealthResponse(UTCBaseModel):
     recent_batches: SessionStateReducerBatchResponse
 
 
-def _owner_id(auth: object | None) -> int:
-    value = getattr(auth, "owner_id", None)
-    if value is None:
-        value = active_owner_id()
-    if value is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="An owner-scoped token is required",
-        )
-    return int(value)
-
-
 def _supported_operations(provider: str | None) -> set[str]:
     contract = contract_for_provider(provider)
     if contract is None:
@@ -178,7 +166,7 @@ def get_session_state_reducer_health(
     """Expose bounded reducer health without claiming cutover readiness."""
 
     try:
-        snapshot = shadow_session_state_health(owner_id=_owner_id(auth))
+        snapshot = shadow_session_state_health(owner_id=owner_id_from_caller(auth))
     except CatalogReadError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -229,7 +217,7 @@ def get_session_state_diagnostics(
     """Compare canonical reducer axes without changing served or authorized state."""
 
     try:
-        snapshot = shadow_session_state_snapshot(str(session_id), owner_id=_owner_id(auth))
+        snapshot = shadow_session_state_snapshot(str(session_id), owner_id=owner_id_from_caller(auth))
     except CatalogReadError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -511,6 +511,58 @@ def test_this_device_launch_materializes_live_catalog_without_archive_db(
     assert facts["provider_alias"] is None
 
 
+def test_pi_launch_births_a_connection_with_no_live_control_capability(monkeypatch, live, owner_id):
+    """`longhouse pi` must not hand a client a composer it cannot serve.
+
+    Pi is a Console one-shot: the CLI registers the session and enqueues
+    `session.turn.start`, and the engine has no pi branch for
+    `session.send_text`, `session.interrupt` or `session.terminate`. It is also
+    outside canonical authorization, so every one of those commands is refused
+    with `unsupported` before a fact is read.
+
+    The contract used to declare pi.send/pi.interrupt/pi.terminate anyway, and
+    the launcher wrote all three onto the born connection -- so a user saw a
+    live composer with Interrupt and Terminate, and every press failed. This
+    pins the born row, which is the exact value the session-state projection
+    reads to decide what to offer.
+    """
+
+    from zerg.routers import session_chat
+    from zerg.services.live_control_catalog import live_control_session_capability_available
+
+    monkeypatch.setattr(
+        write_serializer,
+        "get_live_write_serializer",
+        lambda: (_ for _ in ()).throw(AssertionError("catalog launch must not use the API live serializer")),
+    )
+
+    _result, response = asyncio.run(
+        session_chat._launch_managed_local_session_serialized(
+            None,
+            _launch_params(owner_id, provider="pi"),
+        )
+    )
+
+    assert response.provider == "pi"
+    assert response.managed_transport.value == "pi_print"
+    # A one-shot has nothing to attach to.
+    assert response.attach_command == ""
+
+    facts = _launch_facts(response.session_id, owner=owner_id)
+    (connection,) = facts["connections"]
+    assert connection["can_send_input"] == 0
+    assert connection["can_interrupt"] == 0
+    assert connection["can_terminate"] == 0
+    # Console output is still readable, and there is no host reattach.
+    assert connection["can_tail_output"] == 1
+    assert connection["can_resume"] == 0
+
+    session = load_live_control_session_snapshot(str(response.session_id), owner_id=owner_id)
+    assert session is not None
+    for capability in ("send", "interrupt", "terminate"):
+        assert live_control_session_capability_available(session, capability=capability) is False
+
+
 def test_this_device_launch_surfaces_catalog_rejection_without_retry_theater(monkeypatch, live, owner_id):
     from zerg.catalogd.client import CatalogRemoteError
     from zerg.catalogd.protocol import CatalogRpcError

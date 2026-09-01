@@ -643,30 +643,3 @@ struct APISessionTurnTimingResponse: Codable, Hashable, Sendable {
     let terminalToDurableMs: Int?
     let totalTurnTimeMs: Int?
 }
-
-struct APISessionTurnResponse: Codable, Hashable, Sendable {
-    let id: Int
-    let sessionId: String
-    let requestId: String?
-    let sessionInputId: Int?
-    let state: String
-    let terminalPhase: String?
-    let errorCode: String?
-    let userEventId: Int?
-    let durableAssistantEventId: Int?
-    let baselineEventId: Int?
-    let baselineObservationCursor: Int?
-    let userSubmittedAt: String
-    let sendAcceptedAt: String?
-    let activePhaseObservedAt: String?
-    let terminalAt: String?
-    let durableAt: String?
-    let createdAt: String?
-    let updatedAt: String?
-    let timing: APISessionTurnTimingResponse
-}
-
-struct APISessionTurnsListResponse: Codable, Hashable, Sendable {
-    let turns: [APISessionTurnResponse]
-    let total: Int
-}

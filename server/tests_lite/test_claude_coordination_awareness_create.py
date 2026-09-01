@@ -91,7 +91,7 @@ def _install_session_fakes(monkeypatch: pytest.MonkeyPatch, *, tool_invocation: 
     fake_shipper = _FakeShipper()
     fake_session = _FakeSession()
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
     monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
     monkeypatch.setattr(m, "read_coordination_token", lambda *_a, **_k: "coordination-token")
     monkeypatch.setattr(m, "await_assistant_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))

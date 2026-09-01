@@ -20,6 +20,7 @@ os.environ.setdefault("FERNET_SECRET", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
 import zerg.routers.observability as observability_routes
 import zerg.services.agent_heartbeat_health as heartbeat_health
 import zerg.services.catalog_read_gateway as catalog_read_gateway
+import zerg.routers.observability as observability_router
 import zerg.services.product_health as product_health
 from zerg.database import Base
 from zerg.database import get_db
@@ -434,6 +435,16 @@ def test_product_health_check_routes_expose_summary_and_detail(tmp_path, monkeyp
     with SessionLocal() as db:
         session = _seed_session(db, provider="codex")
         _record_render(db, session_id=session.id, latency_ms=100, event_id="a")
+
+    # The route authorizes legacy telemetry through catalogd before it joins.
+    # There is no catalog in a tests_lite process, so stand in for it and say
+    # the seeded session belongs to the caller -- otherwise this exercises the
+    # empty-owned-set path instead of the check arithmetic it is here to cover.
+    monkeypatch.setattr(
+        observability_router,
+        "owned_session_ids",
+        lambda session_ids, *, owner_id: frozenset(str(v) for v in session_ids),
+    )
 
     client = _make_client(SessionLocal)
     try:

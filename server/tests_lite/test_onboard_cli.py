@@ -64,6 +64,7 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(onboard_cli, "_runtime_host_command", lambda: ["longhouse-server"])
 
     result = runner.invoke(app, ["onboard"])
 
@@ -89,7 +90,7 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
     assert len(saved_configs) == 1
     assert saved_configs[0].server.host == "127.0.0.1"
     assert saved_configs[0].server.port == 8080
-    assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
+    assert ["longhouse-server", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
 
 
 def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
@@ -121,6 +122,7 @@ def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(onboard_cli, "_runtime_host_command", lambda: ["longhouse-server"])
 
     result = runner.invoke(app, ["onboard"])
 
@@ -130,8 +132,8 @@ def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
     assert "[OK] Machine agent installed for automatic imports" in result.output
     assert "No supported CLI found yet, so Longhouse skipped the initial import." in result.output
     assert "Seeding demo sessions" not in result.output
-    assert "longhouse serve --demo" in result.output
-    assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] not in subprocess_calls
+    assert "longhouse-server serve --demo" in result.output
+    assert ["longhouse-server", "ship", "--url", "http://127.0.0.1:8080"] not in subprocess_calls
     assert install_calls == [
         {
             "url": "http://127.0.0.1:8080",
@@ -212,13 +214,14 @@ def test_onboard_in_ci_skips_service_manager_install(monkeypatch, tmp_path):
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(onboard_cli, "_runtime_host_command", lambda: ["longhouse-server"])
 
     result = runner.invoke(app, ["onboard"])
 
     assert result.exit_code == 0, result.output
     assert "[--] Background machine-agent install is not available in this environment" in result.output
-    assert "Use: longhouse connect" in result.output
-    assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
+    assert "Use: longhouse machine repair --repair-service" in result.output
+    assert ["longhouse-server", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
     assert install_calls == []
 
 
@@ -301,6 +304,7 @@ def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch,
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(onboard_cli, "_runtime_host_command", lambda: ["longhouse-server"])
 
     result = runner.invoke(app, ["onboard"])
 
@@ -379,3 +383,55 @@ def test_onboard_suggests_cursor_and_opencode_managed_launch(monkeypatch, tmp_pa
     assert "[OK] OpenCode found" in result.output
     assert "longhouse cursor" in result.output
     assert "longhouse opencode" in result.output
+
+
+def test_onboard_never_advertises_a_verb_the_native_facade_dropped(monkeypatch, tmp_path):
+    """Onboard's closing guidance must name commands that still exist.
+
+    The Python device CLI was retired in favour of the native `longhouse`
+    facade, which has no `doctor`, no `connect`, no `serve` and no `ship`.
+    Onboard kept printing all four, so every repair hint it gave sent the user
+    to an unrecognized subcommand.
+    """
+    runner = CliRunner()
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
+    monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
+    monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)
+    monkeypatch.setattr(onboard_cli, "_is_server_running", lambda: (False, None))
+    monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
+    monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
+    monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
+    monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
+    monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
+    monkeypatch.setattr(onboard_cli, "install_local_runtime", lambda **kwargs: _install_result())
+    monkeypatch.setattr(
+        onboard_cli.subprocess,
+        "run",
+        lambda args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+
+    result = runner.invoke(app, ["onboard"])
+
+    assert result.exit_code == 0, result.output
+    for retired in ("longhouse doctor", "longhouse connect", "longhouse ship", "longhouse serve", "longhouse status"):
+        assert retired not in result.output, retired
+    assert "longhouse machine repair" in result.output
+    assert "longhouse-server ship" in result.output
+
+
+def test_runtime_host_command_prefers_the_installed_console_script(monkeypatch):
+    """`serve` and `ship` live on `longhouse-server`, never on the facade."""
+    monkeypatch.setattr(onboard_cli.shutil, "which", lambda name: "/opt/bin/longhouse-server" if name == "longhouse-server" else None)
+
+    assert onboard_cli._runtime_host_command() == ["/opt/bin/longhouse-server"]
+
+
+def test_runtime_host_command_falls_back_to_the_running_interpreter(monkeypatch):
+    monkeypatch.setattr(onboard_cli.shutil, "which", lambda name: None)
+
+    assert onboard_cli._runtime_host_command() == [onboard_cli.sys.executable, "-m", "zerg.cli.main"]

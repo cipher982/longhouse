@@ -48,6 +48,11 @@ struct WebTranscriptView: UIViewRepresentable {
     let subagents: [SessionSubagent]
     let submittedInputs: [SubmittedInput]
     let errorMessage: String?
+    /// Changes exactly when the payload inputs above change. `updateUIView` runs
+    /// on every invalidation of the session screen, and preparing the payload
+    /// encodes and base64s the whole transcript, so the encode is gated on this
+    /// rather than on the encoded bytes.
+    let contentRevision: UInt64
     let sourceRevision: Int?
     let sourceOperation: String?
     let onNearTop: (() -> Void)?
@@ -62,6 +67,7 @@ struct WebTranscriptView: UIViewRepresentable {
         subagents: [SessionSubagent] = [],
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
+        contentRevision: UInt64,
         sourceRevision: Int? = nil,
         sourceOperation: String? = nil,
         onNearTop: (() -> Void)? = nil,
@@ -75,6 +81,7 @@ struct WebTranscriptView: UIViewRepresentable {
         self.onOpenSubagent = onOpenSubagent
         self.submittedInputs = submittedInputs
         self.errorMessage = errorMessage
+        self.contentRevision = contentRevision
         self.sourceRevision = sourceRevision
         self.sourceOperation = sourceOperation
         self.onNearTop = onNearTop
@@ -147,7 +154,8 @@ struct WebTranscriptView: UIViewRepresentable {
         context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
         context.coordinator.ensureDocumentServerURL(serverURL, on: webView)
         context.coordinator.send(
-            preparedPayload(),
+            contentIdentity: ContentIdentity(serverURL: serverURL, revision: contentRevision),
+            preparingPayload: preparedPayload,
             to: webView,
             diagnosticsEnabled: WebTranscriptDiagnosticsFeature.isEnabled,
             onNearTop: onNearTop,
@@ -156,7 +164,30 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
+    /// What a prepared payload was built from. Two updates carrying the same
+    /// identity would encode to the same bytes, so the second one skips the work.
+    struct ContentIdentity: Equatable {
+        let serverURL: String
+        let revision: UInt64
+    }
+
     static let bridgeName = "longhouse"
+
+    /// The document renders untrusted transcript text, so it only ever gets a
+    /// web origin. The base URL exists so authenticated media resolves against
+    /// the Runtime Host; a `file:` one would instead hand the document the app
+    /// container, and any other scheme would give it an origin nothing here
+    /// reasons about. Both fall back to `about:blank`, which can read nothing —
+    /// media stops resolving, which is visible.
+    nonisolated static func documentBaseURL(_ serverURL: String?) -> URL? {
+        guard
+            let serverURL,
+            let url = URL(string: serverURL),
+            let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https"
+        else { return nil }
+        return url
+    }
 
     static func dismantleUIView(_ webView: TranscriptWebView, coordinator: Coordinator) {
         // The content controller retains its handler strongly; leaving it
@@ -806,6 +837,8 @@ struct WebTranscriptView: UIViewRepresentable {
         /// across WebView reuse.
         private var viewportReconcileGeneration = 0
         private var dragStartOffsetY: CGFloat?
+        /// Identity of the transcript the most recent payload was prepared from.
+        private var preparedIdentity: ContentIdentity?
         private var pendingPayload: WebTranscriptPreparedPayload?
         private var inFlightPayload: WebTranscriptPreparedPayload?
         private var lastRenderedPayload: WebTranscriptPreparedPayload?
@@ -888,6 +921,11 @@ struct WebTranscriptView: UIViewRepresentable {
             inFlightPayload = nil
             lastPayload = nil
             lastDuplicatePayload = nil
+            // The crash may have taken the only copy of the payload with it, and
+            // the transcript can sit unchanged for minutes. Re-prepare on the
+            // next update rather than trust a memo of a render that is gone; if
+            // the payload did survive above, `send` discards the duplicate.
+            preparedIdentity = nil
             loadDocument(serverURL: documentServerURL, on: webView)
         }
 
@@ -897,7 +935,7 @@ struct WebTranscriptView: UIViewRepresentable {
             awaitingDocumentNavigation = true
             webView.loadHTMLString(
                 WebTranscriptView.documentHTML,
-                baseURL: serverURL.flatMap { URL(string: $0) }
+                baseURL: WebTranscriptView.documentBaseURL(serverURL)
             )
         }
 
@@ -1037,6 +1075,7 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func prepareForReuse() {
+            preparedIdentity = nil
             // Strands any deferred viewport write before the WebView is recycled.
             viewportReconcileGeneration &+= 1
             (webView as? TranscriptWebView)?.prepareForTranscriptReuse()
@@ -1054,6 +1093,35 @@ struct WebTranscriptView: UIViewRepresentable {
             userScrollInProgress = false
             dragStartOffsetY = nil
             shouldStickToBottom = true
+        }
+
+        /// The callbacks close over the current SwiftUI state, so they are
+        /// rebound on every update; the payload is only prepared when the
+        /// transcript behind it actually changed.
+        func send(
+            contentIdentity: ContentIdentity,
+            preparingPayload: () -> WebTranscriptPreparedPayload,
+            to webView: WKWebView,
+            diagnosticsEnabled: Bool,
+            onNearTop: (() -> Void)?,
+            onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?,
+            onLifecycle: ((String) -> Void)?
+        ) {
+            self.webView = webView
+            self.diagnosticsEnabled = diagnosticsEnabled
+            self.onNearTop = onNearTop
+            self.onDiagnostics = onDiagnostics
+            self.onLifecycle = onLifecycle
+            guard contentIdentity != preparedIdentity else { return }
+            preparedIdentity = contentIdentity
+            send(
+                preparingPayload(),
+                to: webView,
+                diagnosticsEnabled: diagnosticsEnabled,
+                onNearTop: onNearTop,
+                onDiagnostics: onDiagnostics,
+                onLifecycle: onLifecycle
+            )
         }
 
         func send(
@@ -1138,6 +1206,10 @@ struct WebTranscriptView: UIViewRepresentable {
                     self.lastRenderedPayload = payload
                 } else {
                     self.jsFailureCount += 1
+                    // The payload is gone: it was never stored as rendered and
+                    // is no longer in flight. Forget the memo so the next update
+                    // prepares it again instead of treating it as delivered.
+                    self.preparedIdentity = nil
                 }
                 if stick, self.shouldStickToBottom, !self.userScrollInProgress {
                     self.suppressNearTopUntil = Date().addingTimeInterval(0.75)
@@ -1364,7 +1436,11 @@ enum WebTranscriptWebViewPool {
     private static func configuredWebView() -> TranscriptWebView {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
-        return TranscriptWebView(frame: .zero, configuration: configuration)
+        let webView = TranscriptWebView(frame: .zero, configuration: configuration)
+        // A long press on a URL in transcript text otherwise fetches and
+        // previews it — a load the navigation policy above never sees.
+        webView.allowsLinkPreview = false
+        return webView
     }
 }
 

@@ -9,12 +9,20 @@ struct TranscriptSnapshotStoreTests {
             .appendingPathComponent("lh-snapshot-tests-\(UUID().uuidString)", isDirectory: true)
     }
 
+    /// Disk-focused by default: with the in-process tier off, every `load`
+    /// below has to come off the filesystem.
     private func makeStore(
         directory: URL,
         ttl: TimeInterval = 14 * 24 * 60 * 60,
-        maxFiles: Int = 40
+        maxFiles: Int = 40,
+        memoryMaxBytes: Int = 0
     ) -> TranscriptSnapshotStore {
-        TranscriptSnapshotStore(directory: directory, ttl: ttl, maxFiles: maxFiles)
+        TranscriptSnapshotStore(
+            directory: directory,
+            ttl: ttl,
+            maxFiles: maxFiles,
+            memoryMaxBytes: memoryMaxBytes
+        )
     }
 
     private func makeDetail(id: String = "session-1") -> SessionDetail {
@@ -122,25 +130,27 @@ struct TranscriptSnapshotStoreTests {
         store.save(
             serverURL: "https://example.longhouse.ai",
             sessionId: "session-1",
-            detail: makeDetail(),
-            events: events,
-            projectionItems: projectionItems,
-            loadedProjectionItemCount: 3,
-            totalProjectionItemCount: 3,
-            tailSnapshotEventId: "11",
-            lastPubsubSeq: 42,
-            workspaceRevisionFingerprint: "sha256:cached"
+            snapshot: TranscriptSnapshot(
+                detail: makeDetail(),
+                events: events,
+                projectionItems: projectionItems,
+                loadedProjectionItemCount: 3,
+                totalProjectionItemCount: 3,
+                tailSnapshotEventId: "11",
+                lastPubsubSeq: 42,
+                workspaceRevisionFingerprint: "sha256:cached"
+            )
         )
         store.waitForPendingWrites()
 
         let loaded = store.load(serverURL: "https://example.longhouse.ai", sessionId: "session-1")
-        #expect(loaded != nil)
-        #expect(loaded?.events.map(\.id) == ["10", "11"])
-        #expect(loaded?.projectionItems?.map(\.id) == ["action:interrupt-1", "event:10", "event:11"])
-        #expect(loaded?.detail.id == "session-1")
-        #expect(loaded?.tailSnapshotEventId == "11")
-        #expect(loaded?.lastPubsubSeq == 42)
-        #expect(loaded?.workspaceRevisionFingerprint == "sha256:cached")
+        #expect(loaded?.tier == .disk)
+        #expect(loaded?.snapshot.events.map(\.id) == ["10", "11"])
+        #expect(loaded?.snapshot.projectionItems?.map(\.id) == ["action:interrupt-1", "event:10", "event:11"])
+        #expect(loaded?.snapshot.detail.id == "session-1")
+        #expect(loaded?.snapshot.tailSnapshotEventId == "11")
+        #expect(loaded?.snapshot.lastPubsubSeq == 42)
+        #expect(loaded?.snapshot.workspaceRevisionFingerprint == "sha256:cached")
     }
 
     @Test
@@ -152,12 +162,13 @@ struct TranscriptSnapshotStoreTests {
         store.save(
             serverURL: "https://Example.Longhouse.ai/",
             sessionId: "session-1",
-            detail: makeDetail(),
-            events: [makeEvent(id: 1, content: "hi")],
-            loadedProjectionItemCount: 1,
-            totalProjectionItemCount: 1,
-            tailSnapshotEventId: "1",
-            lastPubsubSeq: nil
+            snapshot: TranscriptSnapshot(
+                detail: makeDetail(),
+                events: [makeEvent(id: 1, content: "hi")],
+                loadedProjectionItemCount: 1,
+                totalProjectionItemCount: 1,
+                tailSnapshotEventId: "1"
+            )
         )
         store.waitForPendingWrites()
 
@@ -174,13 +185,14 @@ struct TranscriptSnapshotStoreTests {
         store.save(
             serverURL: "https://example.longhouse.ai",
             sessionId: "session-1",
-            detail: makeDetail(),
-            events: [makeEvent(id: 1, content: "hi")],
-            loadedProjectionItemCount: 1,
-            totalProjectionItemCount: 1,
-            tailSnapshotEventId: "1",
-            lastPubsubSeq: nil,
-            savedAt: Date(timeIntervalSince1970: 1_000_000)
+            snapshot: TranscriptSnapshot(
+                detail: makeDetail(),
+                events: [makeEvent(id: 1, content: "hi")],
+                loadedProjectionItemCount: 1,
+                totalProjectionItemCount: 1,
+                tailSnapshotEventId: "1",
+                savedAt: Date(timeIntervalSince1970: 1_000_000)
+            )
         )
         store.waitForPendingWrites()
 
@@ -202,22 +214,24 @@ struct TranscriptSnapshotStoreTests {
         store.save(
             serverURL: "https://a.longhouse.ai",
             sessionId: "session-1",
-            detail: makeDetail(),
-            events: [makeEvent(id: 1, content: "a")],
-            loadedProjectionItemCount: 1,
-            totalProjectionItemCount: 1,
-            tailSnapshotEventId: "1",
-            lastPubsubSeq: nil
+            snapshot: TranscriptSnapshot(
+                detail: makeDetail(),
+                events: [makeEvent(id: 1, content: "a")],
+                loadedProjectionItemCount: 1,
+                totalProjectionItemCount: 1,
+                tailSnapshotEventId: "1"
+            )
         )
         store.save(
             serverURL: "https://b.longhouse.ai",
             sessionId: "session-1",
-            detail: makeDetail(),
-            events: [makeEvent(id: 2, content: "b")],
-            loadedProjectionItemCount: 1,
-            totalProjectionItemCount: 1,
-            tailSnapshotEventId: "2",
-            lastPubsubSeq: nil
+            snapshot: TranscriptSnapshot(
+                detail: makeDetail(),
+                events: [makeEvent(id: 2, content: "b")],
+                loadedProjectionItemCount: 1,
+                totalProjectionItemCount: 1,
+                tailSnapshotEventId: "2"
+            )
         )
         store.waitForPendingWrites()
 
@@ -237,12 +251,13 @@ struct TranscriptSnapshotStoreTests {
         store.save(
             serverURL: "https://example.longhouse.ai",
             sessionId: "session-1",
-            detail: makeDetail(),
-            events: [makeEvent(id: 1, content: "hi")],
-            loadedProjectionItemCount: 1,
-            totalProjectionItemCount: 1,
-            tailSnapshotEventId: "1",
-            lastPubsubSeq: nil
+            snapshot: TranscriptSnapshot(
+                detail: makeDetail(),
+                events: [makeEvent(id: 1, content: "hi")],
+                loadedProjectionItemCount: 1,
+                totalProjectionItemCount: 1,
+                tailSnapshotEventId: "1"
+            )
         )
         store.waitForPendingWrites()
 
@@ -257,6 +272,36 @@ struct TranscriptSnapshotStoreTests {
     }
 
     @Test
+    func warmReopenIsServedFromMemoryEvenAfterTheFileIsGone() throws {
+        let dir = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = makeStore(directory: dir, memoryMaxBytes: 4 * 1024 * 1024)
+
+        store.save(
+            serverURL: "https://example.longhouse.ai",
+            sessionId: "session-1",
+            snapshot: TranscriptSnapshot(
+                detail: makeDetail(),
+                events: [makeEvent(id: 1, content: "warm")],
+                loadedProjectionItemCount: 1,
+                totalProjectionItemCount: 1,
+                tailSnapshotEventId: "1"
+            )
+        )
+        store.waitForPendingWrites()
+
+        // Delete the file behind the store's back: anything still returned came
+        // out of the in-process tier.
+        for file in try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            try FileManager.default.removeItem(at: file)
+        }
+
+        let loaded = store.load(serverURL: "https://example.longhouse.ai", sessionId: "session-1")
+        #expect(loaded?.tier == .memory)
+        #expect(loaded?.snapshot.events.map(\.id) == ["1"])
+    }
+
+    @Test
     func evictsOldestBeyondFileCap() throws {
         let dir = tempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -266,12 +311,13 @@ struct TranscriptSnapshotStoreTests {
             store.save(
                 serverURL: "https://example.longhouse.ai",
                 sessionId: "session-\(index)",
-                detail: makeDetail(id: "session-\(index)"),
-                events: [makeEvent(id: index, content: "msg-\(index)")],
-                loadedProjectionItemCount: 1,
-                totalProjectionItemCount: 1,
-                tailSnapshotEventId: String(index),
-                lastPubsubSeq: nil
+                snapshot: TranscriptSnapshot(
+                    detail: makeDetail(id: "session-\(index)"),
+                    events: [makeEvent(id: index, content: "msg-\(index)")],
+                    loadedProjectionItemCount: 1,
+                    totalProjectionItemCount: 1,
+                    tailSnapshotEventId: String(index)
+                )
             )
             store.waitForPendingWrites()
         }

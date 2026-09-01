@@ -201,11 +201,7 @@ try:
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401
     from zerg.models.device_token import DeviceToken  # noqa: F401
     from zerg.models.machine_presence import MachinePresence  # noqa: F401
-    from zerg.models.models import MemoryEmbedding  # noqa: F401
-    from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import User  # noqa: F401
-    from zerg.models.models import UserSkill  # noqa: F401
-    from zerg.models.models import UserTask  # noqa: F401
     from zerg.models.notification_client_presence import NotificationClientPresence  # noqa: F401
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
     from zerg.models.refresh_session import RefreshSession  # noqa: F401
@@ -874,10 +870,7 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401
     from zerg.models.device_token import DeviceToken  # noqa: F401
     from zerg.models.machine_presence import MachinePresence  # noqa: F401
-    from zerg.models.models import MemoryEmbedding  # noqa: F401
-    from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import User  # noqa: F401
-    from zerg.models.models import UserTask  # noqa: F401
     from zerg.models.notification_client_presence import NotificationClientPresence  # noqa: F401
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
     from zerg.models.refresh_session import RefreshSession  # noqa: F401

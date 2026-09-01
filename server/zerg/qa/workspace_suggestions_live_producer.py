@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -16,6 +15,7 @@ from urllib.parse import quote
 
 import httpx
 
+from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.resume_assurance import ProducerRegistration
 
 ASSERTION_ID = "responsive_human_only_projection"
@@ -70,18 +70,6 @@ REGISTRATION = ProducerRegistration(
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-
-
-def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}",
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -259,7 +247,7 @@ def run(evidence_root: Path) -> dict[str, Any]:
             "assertions": {},
         }
     result["generated_at"] = datetime.now(UTC).isoformat()
-    result["artifact_manifest"] = _artifact_manifest(evidence_root)
+    result["artifact_manifest"] = artifact_manifest(evidence_root)
     _write_json(evidence_root / "result.json", result)
     return result
 

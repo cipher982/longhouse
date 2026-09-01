@@ -40,10 +40,10 @@ from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_for_served_quiescent
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import prepare_claude_profile
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import _prepare_claude_profile
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -136,7 +136,7 @@ def run_turn_boundary_scenario(args: argparse.Namespace) -> dict[str, Any]:
         # claude_coordination_awareness_create.py's identical fix for the
         # full rationale.
         home, longhouse_home = isolation_paths(isolation_root)
-        onboarding = _prepare_claude_profile(
+        onboarding = prepare_claude_profile(
             binary=args.provider_bin,
             home=home,
             workspace=workspace,

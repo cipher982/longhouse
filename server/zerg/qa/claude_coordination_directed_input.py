@@ -49,11 +49,11 @@ from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_until
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import prepare_claude_profile
 from zerg.qa.provider_coordination_oracles import directed_input_assertions
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import _prepare_claude_profile
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -143,7 +143,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         # full rationale. Sender and receiver share this isolation_root's one
         # CLAUDE_CONFIG_DIR, so priming it once covers both launches below.
         onboarding_home, _longhouse_home_for_onboarding = isolation_paths(isolation_root)
-        onboarding = _prepare_claude_profile(
+        onboarding = prepare_claude_profile(
             binary=args.provider_bin,
             home=onboarding_home,
             workspace=isolation_root,

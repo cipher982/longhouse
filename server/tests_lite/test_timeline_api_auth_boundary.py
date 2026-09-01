@@ -37,7 +37,6 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.catalogd_supervisor import catalogd_paths
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
@@ -517,60 +516,6 @@ def test_timeline_sessions_summary_clamps_oversized_limit(live_catalog, live_cat
     assert payload["total"] > 100
     assert len(payload["sessions"]) <= 100
     assert response.headers.get("X-Limit-Cap") == "100"
-
-
-def test_timeline_session_turns_clamps_oversized_limit(tmp_path):
-    from zerg.dependencies.browser_auth import get_current_browser_user
-
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        user = _seed_user(db)
-        session_id = uuid4()
-        session = AgentSession(
-            id=session_id,
-            provider="codex",
-            environment="development",
-            project="timeline-auth",
-            device_id="cinder",
-            cwd="/tmp/timeline-auth",
-            git_repo=None,
-            git_branch="main",
-            started_at=datetime(2026, 3, 22, 22, 0, tzinfo=timezone.utc),
-            ended_at=None,
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-        )
-        db.add(session)
-        for idx in range(120):
-            db.add(
-                SessionTurn(
-                    session_id=session_id,
-                    request_id=f"req-{idx}",
-                    state="active",
-                    user_submitted_at=datetime(2026, 3, 22, 22, 3, idx % 60, tzinfo=timezone.utc),
-                )
-            )
-        db.commit()
-        user_id = user.id
-
-    client = _make_client(session_local)
-    api_app.dependency_overrides[get_current_browser_user] = lambda: type(
-        "U", (), {"id": user_id, "email": "owner@example.com", "role": "ADMIN"}
-    )()
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}/turns?limit=500")
-
-        assert response.status_code == 200, response.text
-        payload = response.json()
-        assert len(payload["turns"]) <= 100
-        assert response.headers.get("X-Limit-Cap") == "100"
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
 
 
 def test_timeline_sessions_stream_clamps_oversized_limit(tmp_path, monkeypatch):

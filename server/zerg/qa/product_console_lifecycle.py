@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import tempfile
@@ -14,6 +13,8 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 
 SCENARIO_ID = "product_console_lifecycle"
@@ -63,10 +64,6 @@ class _ConsoleRegistry:
         return owner_id == 1 and device_id == "factory-machine" and capability == "codex.turn_start"
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -74,16 +71,12 @@ def _write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
-def _sha256(path: Path) -> str:
-    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-
-
 def _manifest(root: Path) -> list[dict[str, object]]:
     return [
         {
             "path": path.relative_to(root).as_posix(),
             "size": path.stat().st_size,
-            "sha256": _sha256(path),
+            "sha256": sha256_file(path),
         }
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name != "result.json"
@@ -343,7 +336,7 @@ def _run_product_console_lifecycle(root: Path, *, runtime_root: Path) -> dict[st
             "scenario_id": SCENARIO_ID,
             "scenario_revision": 1,
             "evidence_class": "hermetic",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "pass" if assertions[ASSERTION_ID] else "fail",
             "observation": observed,
             "assertions": assertions,
@@ -398,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
             "scenario_id": SCENARIO_ID,
             "scenario_revision": 1,
             "evidence_class": "hermetic",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "failure_code": "product_console_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",

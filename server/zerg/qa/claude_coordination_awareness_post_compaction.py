@@ -51,12 +51,12 @@ from zerg.qa.claude_live_session_support import start_machine_and_shipper
 from zerg.qa.claude_live_session_support import wait_until
 from zerg.qa.claude_live_session_support import write_claude_cleanup_aggregate
 from zerg.qa.claude_live_session_support import write_json
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import prepare_claude_profile
 from zerg.qa.managed_claude_live import transcript_line_counts
 from zerg.qa.provider_coordination_oracles import awareness_post_compaction_assertions
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import _prepare_claude_profile
 from zerg.qa.pty_session import wait_for_terminal_quiescence
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
@@ -153,7 +153,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
         # claude_coordination_awareness_create.py's identical fix for the
         # full rationale.
         onboarding_home, _longhouse_home_for_onboarding = isolation_paths(isolation_root)
-        onboarding = _prepare_claude_profile(
+        onboarding = prepare_claude_profile(
             binary=args.provider_bin,
             home=onboarding_home,
             workspace=workspace,

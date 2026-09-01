@@ -4,8 +4,7 @@ Opt-in Prometheus + Grafana that scrapes the runtime's `/metrics` and renders a
 unified dashboard across the instance and every device.
 
 The runtime already emits the metrics; this stack just collects and retains
-them. It is kept separate from `docker/docker-compose.dev.yml` so `make dev`
-stays lean.
+them. It is opt-in and separate from `make dev`, which stays lean.
 
 ## What it shows
 

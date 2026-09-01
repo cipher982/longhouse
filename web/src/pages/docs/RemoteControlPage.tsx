@@ -1,6 +1,12 @@
 import { Link } from "react-router-dom";
 import { usePageMeta } from "../../hooks/usePageMeta";
+import { getLaunchProviderSupportList } from "../../lib/providers";
 import { CodeBlock } from "./CodeBlock";
+
+const PROVIDERS = getLaunchProviderSupportList();
+const STEERABLE = PROVIDERS.filter((p) => p.steerMidTurn);
+const INTERRUPTIBLE = PROVIDERS.filter((p) => p.interrupt && !p.steerMidTurn);
+const SEND_ONLY = PROVIDERS.filter((p) => p.launchAndSend && !p.interrupt);
 
 export default function RemoteControlPage() {
   usePageMeta({
@@ -12,7 +18,7 @@ export default function RemoteControlPage() {
     <>
       <h1>Control After Launch</h1>
       <p className="docs-subtitle">
-        Managed sessions stay reachable after the terminal closes. Message
+        Managed sessions stay reachable after the terminal closes. Send to
         them, tail them, or continue them later from the browser, CLI, or API.
       </p>
       <div className="docs-callout">
@@ -27,9 +33,13 @@ export default function RemoteControlPage() {
       </div>
       <div className="docs-callout">
         <p>
-          <strong>Provider truth matters.</strong> Claude is the strongest
-          control-after-launch path today. Codex is supported and useful here
-          too. Antigravity is the Google CLI path Longhouse supports for launch and archive.
+          <strong>Provider truth matters.</strong> Only{" "}
+          {STEERABLE.map((p) => p.marketingName).join(" and ")} can be steered
+          mid-turn. {INTERRUPTIBLE.map((p) => p.marketingName).join(", ")} take
+          send and interrupt but not mid-turn steer, and{" "}
+          {SEND_ONLY.map((p) => p.marketingName).join(", ")} takes send alone.
+          The timeline offers each session only the controls its provider can
+          actually perform.
         </p>
       </div>
 
@@ -54,32 +64,37 @@ longhouse codex     # starts Codex CLI with control channel`}
       <h2>What you can do with a control channel</h2>
 
       <h3>See what is running</h3>
+      <p>
+        The timeline is the primary view. The same data is one query on the
+        Machine API, which is what scripts should use — there is no{" "}
+        <code>wall</code> subcommand on either binary.
+      </p>
       <CodeBlock title="terminal">
-        {`longhouse wall              # list active and recent sessions
-longhouse wall --json       # machine-readable output`}
+        {`curl "http://localhost:8080/api/agents/sessions/wall?days=7"`}
       </CodeBlock>
 
-      <h3>Watch live events</h3>
+      <h3>Watch recent events</h3>
       <CodeBlock title="terminal">
-        {`longhouse tail SESSION_ID   # stream events as they happen`}
+        {`longhouse-server tail SESSION_ID --roles user,assistant`}
       </CodeBlock>
 
       <h3>Send a message</h3>
       <CodeBlock title="terminal">
-        {`longhouse message SESSION_ID "Check the failing test in auth.py"`}
+        {`longhouse-server send SESSION_ID "Check the failing test in auth.py"`}
       </CodeBlock>
       <p>
-        The message appears in the session's directed inbox. If the session is
-        still running, it can pick up the message and act on it.
+        The message lands in the session&apos;s directed inbox and is persisted
+        before any delivery attempt. A running session picks it up and acts on
+        it; a stopped one still has it waiting.
       </p>
 
       <h3>Continue later</h3>
       <p>
-        When you come back to a session that has stopped, you can continue
-        from the recovered context:
+        When you come back to a session that has stopped, continue it with the
+        follow-up you want it to pick up:
       </p>
       <CodeBlock title="terminal">
-        {`longhouse continue SESSION_ID`}
+        {`longhouse-server continue SESSION_ID "Now run the integration tests"`}
       </CodeBlock>
       <p>
         This works from the browser too — open the session detail page and use
@@ -88,10 +103,11 @@ longhouse wall --json       # machine-readable output`}
 
       <h2>Browser and CLI stay in sync</h2>
       <p>
-        The timeline, session detail, wall, tail, and message commands all point
-        at the same session surface. Actions you take in the browser are visible
-        from the CLI and vice versa. There is no separate "browser session" or
-        "CLI session" — there is one session with multiple ways to reach it.
+        The timeline, session detail, wall query, tail, and send all point at
+        the same session surface. Actions you take in the browser are visible
+        from the CLI and vice versa. There is no separate &quot;browser
+        session&quot; or &quot;CLI session&quot; — there is one session with
+        multiple ways to reach it.
       </p>
 
       <h2>Which command should you start with?</h2>
@@ -117,7 +133,7 @@ longhouse wall --json       # machine-readable output`}
           </tr>
           <tr>
             <td>Coordinating multiple sessions on the same project</td>
-            <td><code>longhouse claude</code> + <code>longhouse wall</code></td>
+            <td><code>longhouse claude</code> + <code>longhouse-server peers</code></td>
           </tr>
         </tbody>
       </table>
@@ -126,7 +142,7 @@ longhouse wall --json       # machine-readable output`}
           <strong>Bare provider CLIs still import.</strong> That compatibility
           path exists so Longhouse is useful on day one, not because it is the
           recommended steady state. Managed sessions launched through Longhouse
-          keep the control channel open so you can message them, tail them, or
+          keep the control channel open so you can send to them, tail them, or
           continue them from any surface.
         </p>
       </div>

@@ -14,15 +14,22 @@ import {
   Spinner
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
-import { parseUTC } from "../lib/dateUtils";
 import {
-  formatCompactDuration,
   formatRunnerVersionValue,
   normalizeRunnerMetadata,
   runnerStatusVariant,
   updatePolicyLabel,
   versionStatusLabel,
 } from "../lib/runnerPresentation";
+import {
+  formatHeartbeatAge,
+  formatHeartbeatThreshold,
+  formatVersionHint,
+  getVersionVariant,
+  installLayoutHint,
+  installLayoutLabel,
+  updatePolicyHint,
+} from "../lib/runnerUtils";
 import "../styles/runners.css";
 
 function platformLabel(meta: Runner["runner_metadata"]): string {
@@ -39,33 +46,6 @@ function hostname(meta: Runner["runner_metadata"]): string | null {
   return normalizeRunnerMetadata(meta)?.hostname ?? null;
 }
 
-function formatLastSeen(timestamp: string | null | undefined) {
-  if (!timestamp) return "Never";
-  const date = parseUTC(timestamp);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return `${Math.floor(diffHours / 24)}d ago`;
-}
-
-function formatHeartbeatAge(runner: Runner): string {
-  if (typeof runner.last_seen_age_seconds === "number") {
-    return `${formatCompactDuration(runner.last_seen_age_seconds)} ago`;
-  }
-  return formatLastSeen(runner.last_seen_at);
-}
-
-function formatStaleThreshold(staleAfterSeconds: number | null | undefined): string | null {
-  if (typeof staleAfterSeconds !== "number") {
-    return null;
-  }
-  return `Stale after ${formatCompactDuration(staleAfterSeconds)}`;
-}
-
 function fallbackStatusSummary(status: string): string {
   switch (status) {
     case "online":
@@ -75,61 +55,6 @@ function fallbackStatusSummary(status: string): string {
     default:
       return "Offline. No live runner connection is active.";
   }
-}
-
-function versionBadgeVariant(status: string | null | undefined): "success" | "warning" | "neutral" {
-  switch (status) {
-    case "current":
-      return "success";
-    case "outdated":
-      return "warning";
-    default:
-      return "neutral";
-  }
-}
-
-function formatVersionHint(runner: Runner): string | null {
-  switch (runner.version_status) {
-    case "current":
-      return "Matches the latest published runner build.";
-    case "outdated":
-      return runner.latest_runner_version
-        ? `Latest expected version is v${runner.latest_runner_version}.`
-        : "This runner is behind the expected version.";
-    case "ahead":
-      return runner.latest_runner_version
-        ? `Runner is newer than configured latest v${runner.latest_runner_version}.`
-        : "Runner version is ahead of the configured latest build.";
-    default:
-      return null;
-  }
-}
-
-function updatePolicyHint(policy: string | null | undefined): string {
-  switch (policy) {
-    case "apply":
-      return "Signed updates apply automatically when the runner is idle.";
-    case "off":
-      return "Runner will not check or apply background updates.";
-    case "notify":
-      return "Runner reports update availability and waits for a manual apply.";
-    default:
-      return "Runner has not reported its auto-update policy yet.";
-  }
-}
-
-function installLayoutLabel(runner: Runner): string {
-  if (runner.managed_install_ready) {
-    return runner.install_layout_version ? `Managed v${runner.install_layout_version}` : "Managed";
-  }
-  return "Legacy layout";
-}
-
-function installLayoutHint(runner: Runner): string {
-  if (runner.managed_install_ready) {
-    return "Ready for signed update apply and background auto-update.";
-  }
-  return "Re-run the installer once to migrate onto the versioned layout.";
 }
 
 export default function RunnersPage() {
@@ -226,7 +151,7 @@ export default function RunnersPage() {
                         </span>
                       )}
                       {versionStatusLabel(runner.version_status) && (
-                        <span className={`runner-inline-pill runner-inline-pill--${versionBadgeVariant(runner.version_status)}`}>
+                        <span className={`runner-inline-pill runner-inline-pill--${getVersionVariant(runner.version_status)}`}>
                           {versionStatusLabel(runner.version_status)}
                         </span>
                       )}
@@ -257,9 +182,9 @@ export default function RunnersPage() {
                         <span className="runner-detail-value">
                           {formatHeartbeatAge(runner)}
                         </span>
-                        {formatStaleThreshold(runner.stale_after_seconds) && (
+                        {typeof runner.stale_after_seconds === "number" && (
                           <span className="runner-detail-subvalue">
-                            {formatStaleThreshold(runner.stale_after_seconds)}
+                            {formatHeartbeatThreshold(runner.stale_after_seconds)}
                           </span>
                         )}
                       </div>

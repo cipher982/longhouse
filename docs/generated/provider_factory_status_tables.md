@@ -7,19 +7,19 @@
 | codex | release_poll | staged_release | runs — 2 qualification scenarios + 32 harness scenarios |
 | codex | push | generated_fake | runs — 1 scenario |
 | codex | weekly_cron | generated_fake | runs — 32 scenarios |
-| codex | manual | observed_install | never runs — remaining capability-proof assertions for codex have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'branch_fork_produces_a_new_thread', 'console_adapter_release_contract_preserved:interrupt_unsupported', 'coordination_instructions_model_visible_after_compaction', 'helm_launch_visibility_preserved', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss'] |
+| codex | manual | observed_install | never runs — every capability-proof assertion declared for codex is already satisfiable by an automated trigger |
 | claude | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | claude | push | generated_fake | runs — 4 scenarios |
 | claude | weekly_cron | generated_fake | runs — 32 scenarios |
-| claude | manual | observed_install | never runs — remaining capability-proof assertions for claude have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'console_adapter_release_contract_preserved:interrupt_supported', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss'] |
+| claude | manual | observed_install | never runs — every capability-proof assertion declared for claude is already satisfiable by an automated trigger |
 | opencode | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | opencode | push | generated_fake | runs — 4 scenarios |
 | opencode | weekly_cron | generated_fake | runs — 32 scenarios |
-| opencode | manual | observed_install | never runs — remaining capability-proof assertions for opencode have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'console_adapter_release_contract_preserved:interrupt_supported', 'native_provider_resume_proven:clean_exit', 'native_provider_resume_proven:process_loss'] |
+| opencode | manual | observed_install | never runs — every capability-proof assertion declared for opencode is already satisfiable by an automated trigger |
 | antigravity | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | antigravity | push | generated_fake | runs — 4 scenarios |
 | antigravity | weekly_cron | generated_fake | runs — 32 scenarios |
-| antigravity | manual | observed_install | never runs — remaining capability-proof assertions for antigravity have no registered evidence producer: ['activity_returns_to_quiescent_at_turn_boundary', 'real_print_injection_observed'] |
+| antigravity | manual | observed_install | never runs — remaining capability-proof assertions for antigravity have no registered evidence producer: ['real_print_injection_observed'] |
 | cursor | release_poll | observed_install | runs — 2 qualification scenarios + 32 harness scenarios |
 | cursor | push | generated_fake | runs — 4 scenarios |
 | cursor | weekly_cron | generated_fake | runs — 32 scenarios |

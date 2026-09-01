@@ -8,8 +8,6 @@ private extension SessionDetail {
         headline: String = "Idle",
         runtimeDetail: String? = "Waiting for next prompt",
         tone: String = "idle",
-        capabilityLabel: String = "Live on cinder",
-        composerDisabledReason: String? = nil,
         live: Bool = true,
         canSteer: Bool = false,
         canQueue: Bool = false,
@@ -29,14 +27,8 @@ private extension SessionDetail {
           "presenceState": "\(executing ? "running" : "idle")",
           "userState": "active",
           "capabilities": {
-            "liveControlAvailable": \(live),
-            "hostReattachAvailable": false,
-            "replyToLiveSessionAvailable": \(live),
             "canQueueNextInput": \(canQueue),
-            "canSteerActiveTurn": \(canSteer),
-            "displayLabel": "\(capabilityLabel)",
-            "displayTone": "\(live ? "success" : "warning")",
-            "composerDisabledReason": \(composerDisabledReason.map { "\"\($0)\"" } ?? "null")
+            "canSteerActiveTurn": \(canSteer)
           },
           "runtimeDisplay": {
             "truthTier": "managed-local",
@@ -200,8 +192,6 @@ private struct ComposerPreviewChrome: View {
         headline: "Launch dispatch",
         runtimeDetail: "Waiting for the host",
         tone: "running",
-        capabilityLabel: "Launching",
-        composerDisabledReason: "Setting up Codex.",
         live: false,
         canSteer: false,
         canQueue: false,

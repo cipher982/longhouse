@@ -104,6 +104,23 @@ def sha256_file(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def artifact_manifest(root: Path) -> list[dict[str, Any]]:
+    """Digest every evidence file under `root`, excluding the result envelope.
+
+    `result.json` is excluded because it is the file this manifest is embedded
+    in: hashing it would require knowing its own digest.
+    """
+    return [
+        {
+            "path": path.relative_to(root).as_posix(),
+            "size": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path.name != "result.json"
+    ]
+
+
 def atomic_json(path: Path, payload: Any, *, canonical: bool = False) -> None:
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
@@ -118,6 +135,37 @@ def atomic_json(path: Path, payload: Any, *, canonical: bool = False) -> None:
         os.replace(name, path)
     finally:
         Path(name).unlink(missing_ok=True)
+
+
+def semver_version_line(version_suffix: str = "") -> Pattern[str]:
+    r"""A `<semver>` version line, optionally followed by a fixed regex suffix.
+
+    `version_suffix` is raw regex, not an escaped literal, so a caller wanting
+    Claude's parenthesised product name passes ``r" \(Claude Code\)"``.
+    """
+    return re.compile(rf"^(?P<version>{SEMVER}){version_suffix}$")
+
+
+def identity_runner(profile: IdentityProfile) -> Callable[[Path, Path], dict[str, Any]]:
+    """The `run(request_path, output_root)` entrypoint an identity profile exposes.
+
+    Every semver identity module had its own byte-identical copy of this body.
+    """
+
+    def run(request_path: Path, output_root: Path) -> dict[str, Any]:
+        return run_identity_profile(
+            request_path,
+            output_root,
+            profile=profile,
+            repo_root=Path(__file__).resolve().parents[3],
+            git_sha_fn=git_sha,
+            git_dirty_fn=git_dirty,
+        )
+
+    # The factory plan reads this off the callable before falling back to the
+    # defining module, which a shared closure would otherwise misdirect.
+    run.SCENARIO_ID = profile.scenario_id  # type: ignore[attr-defined]
+    return run
 
 
 def load_request(

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -249,11 +249,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
     # no errors to report. Only counted when the agent is demonstrably present —
     # an offline machine is already described by being offline.
     stalled_age = sample.seconds_since_last_ship
-    ship_stalled = (
-        not sample.is_offline
-        and stalled_age is not None
-        and stalled_age >= SHIP_STALLED_DEGRADED_MIN_SECONDS
-    )
+    ship_stalled = not sample.is_offline and stalled_age is not None and stalled_age >= SHIP_STALLED_DEGRADED_MIN_SECONDS
     connect_error_burst = is_transport_error_burst(
         error_count=sample.ship_connect_errors_active,
         ship_attempts=sample.ship_attempts_active,
@@ -329,9 +325,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
     elif ship_stalled:
         status = "degraded"
         status_reason = "ship_stalled"
-        status_summary = (
-            f"Heartbeats are current but nothing has shipped for {_humanize_age(stalled_age)}."
-        )
+        status_summary = f"Heartbeats are current but nothing has shipped for {_humanize_age(stalled_age)}."
     elif connect_error_burst:
         status = "degraded"
         status_reason = "connect_errors"

@@ -11,6 +11,7 @@ import pytest
 from zerg.qa import codex_helm_interrupt as profile
 from zerg.qa import codex_release_identity
 from zerg.qa import provider_qualification
+from zerg.qa import provider_release_identity
 
 TEST_SHA = "1234567890abcdef1234567890abcdef12345678"
 TEST_SHA_SHORT = TEST_SHA[:8]
@@ -18,8 +19,8 @@ TEST_SHA_SHORT = TEST_SHA[:8]
 
 @pytest.fixture(autouse=True)
 def _stable_runner_checkout(monkeypatch) -> None:
-    monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: TEST_SHA)
-    monkeypatch.setattr(codex_release_identity, "_git_dirty", lambda _root: False)
+    monkeypatch.setattr(provider_release_identity, "git_sha", lambda _root: TEST_SHA)
+    monkeypatch.setattr(provider_release_identity, "git_dirty", lambda _root: False)
     for name in (
         profile.ENGINE_ENV,
         profile.PACKAGE_ROOT_ENV,

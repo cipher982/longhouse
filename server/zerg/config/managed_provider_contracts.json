@@ -167,7 +167,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "648f46b47bdf04dc694f4aef433c6b54cb09579c6df529c3a1948b32eb46eac6"
+              "oracle_digest": "495e2fa86572782e1fd5c4d89dc257246e950f8388759af96f3ccb3cccacd9a6"
             }
           ]
         },
@@ -592,7 +592,7 @@
         "codex.resume_run_once",
         "codex.turn_start"
       ],
-      "adapter_digest": "f542cb3b05d8ba94f08a372e321a7af60c76ad721872067ec918ac0fa086da15"
+      "adapter_digest": "3bcbf247a0b0a5f833e1a9a3f42268504017bfb53e8a1654321c79623609e0b1"
     },
     {
       "provider": "claude",
@@ -978,7 +978,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "648f46b47bdf04dc694f4aef433c6b54cb09579c6df529c3a1948b32eb46eac6"
+              "oracle_digest": "495e2fa86572782e1fd5c4d89dc257246e950f8388759af96f3ccb3cccacd9a6"
             },
             {
               "id": "real_print_marker_returned",
@@ -1216,7 +1216,7 @@
         "claude.turn_start",
         "claude.turn_interrupt"
       ],
-      "adapter_digest": "2d373fcc6fa20e25f1daddc0578f9892f48f84c47cddf740dd78914d95f8f154"
+      "adapter_digest": "80a218f35c77747eef1b044241a1f97485f3d49621be07bfed039ff23e5a848a"
     },
     {
       "provider": "opencode",
@@ -1396,7 +1396,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "648f46b47bdf04dc694f4aef433c6b54cb09579c6df529c3a1948b32eb46eac6"
+              "oracle_digest": "495e2fa86572782e1fd5c4d89dc257246e950f8388759af96f3ccb3cccacd9a6"
             }
           ]
         },
@@ -1691,7 +1691,7 @@
         "opencode.turn_start",
         "opencode.turn_interrupt"
       ],
-      "adapter_digest": "24e8e65b93875f8960f7c136a962c275f8a709e61053298d91a00087386297be"
+      "adapter_digest": "a4f4f75425ff637c435954140565b9173bb9bfbf7660e2313da1ec4b6737bc52"
     },
     {
       "provider": "antigravity",
@@ -2004,7 +2004,7 @@
         "antigravity.send",
         "antigravity.turn_start"
       ],
-      "adapter_digest": "df2da5bef01bf2a30a62390253160c399d84ab08055cc5dff1cf5ad9b380249d"
+      "adapter_digest": "f52e657b7a0260553154f309db8e54194db2cf03c13feff2080c12ae136375a3"
     },
     {
       "provider": "cursor",
@@ -2128,7 +2128,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "496f544f155a23ff96931c20daf0674e368b10c3dfaa81a2b1c91ccfc9fb9310"
+              "oracle_digest": "7317864507547e49e5d853b3046bc821b98e112cf72c8f4498d737b3a2bca8f1"
             }
           ]
         },
@@ -2156,7 +2156,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "648f46b47bdf04dc694f4aef433c6b54cb09579c6df529c3a1948b32eb46eac6"
+              "oracle_digest": "495e2fa86572782e1fd5c4d89dc257246e950f8388759af96f3ccb3cccacd9a6"
             }
           ]
         },
@@ -2470,7 +2470,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "90d38578f6a0854dd974cf79b3ae6b9b538526caaf19b0ca3311ce7fda3bc6de"
+      "adapter_digest": "4d3fbf905a6d195c83589a4af02d6840a01ca3ddcc22626599fd8d6d02a55fda"
     },
     {
       "provider": "pi",
@@ -2558,11 +2558,11 @@
       "launch_local": true,
       "run_once": false,
       "reattach": false,
-      "send_input": true,
+      "send_input": false,
       "interrupt": true,
       "steer_active_turn": false,
       "answer_pause": false,
-      "terminate": true,
+      "terminate": false,
       "tail_output": true,
       "runtime_phase": false,
       "transcript_binding": true,
@@ -2601,13 +2601,16 @@
           "blocker": "budget"
         },
         "send_input": {
-          "level": "live_token",
-          "source": "The pi factory adapter sends a real prompt (`pi -p`) and binds the response transcript to the session jsonl.",
-          "disposition": "implemented"
+          "level": "none",
+          "source": "the pi factory adapter's `pi -p` prompt is a one-shot turn, not input into a live session; the engine has no pi send_text branch",
+          "disposition": "not_implemented",
+          "reason": "Pi's only wired surface is the Console one-shot; there is no live session to send into.",
+          "owner_action": "wire a pi managed bridge over pi's rpc/server socket and prove session.send_text against a running pi session",
+          "blocker": "budget"
         },
         "interrupt": {
           "level": "hermetic",
-          "source": "pi -p has no pause channel; a factory adapter interrupt canary SIGINTs the child and confirms clean exit plus a parseable session file.",
+          "source": "Turn-scoped only: an interrupt canary SIGINTs the one-shot `pi -p` child and confirms clean exit plus a parseable session file, which is what pi.turn_interrupt advertises. Live-session interrupt has no pi branch in control_channel.rs.",
           "disposition": "implemented"
         },
         "steer_active_turn": {
@@ -2627,9 +2630,12 @@
           "blocker": "upstream"
         },
         "terminate": {
-          "level": "hermetic",
-          "source": "The pi factory adapter terminates the child process and confirms cleanup of the managed session.",
-          "disposition": "implemented"
+          "level": "none",
+          "source": "killing the factory adapter's one-shot child is not remote session terminate; control_channel.rs answers pi session.terminate with unsupported_command",
+          "disposition": "not_implemented",
+          "reason": "Longhouse has no pi control plane to terminate; the Console turn owns its own child process lifetime.",
+          "owner_action": "wire a pi managed bridge with a terminate path and prove session.terminate against a running pi session",
+          "blocker": "budget"
         },
         "tail_output": {
           "level": "hermetic",
@@ -2655,9 +2661,6 @@
         }
       },
       "machine_control_supports": [
-        "pi.send",
-        "pi.interrupt",
-        "pi.terminate",
         "pi.turn_start",
         "pi.turn_interrupt"
       ],

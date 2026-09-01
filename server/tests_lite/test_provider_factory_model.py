@@ -1,10 +1,15 @@
+import ast
+import importlib
+import pathlib
+
 import pytest
 
+import zerg.qa
 from zerg.qa.provider_factory_model import ALL_PROVIDERS
 from zerg.qa.provider_factory_model import DEPLOYED_RELEASE_LANE_PROFILE
 from zerg.qa.provider_factory_model import DEPLOYED_RELEASE_LANE_PROFILES
-from zerg.qa.provider_factory_model import KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION
-from zerg.qa.provider_factory_model import ORPHANED_CAPABILITY_SCENARIO_IDS
+from zerg.qa.provider_factory_model import NON_REGISTERED_PRODUCIBLE_EVIDENCE
+from zerg.qa.provider_factory_model import PRODUCER_MODULES
 from zerg.qa.provider_factory_model import PUSH_CODEX_COORDINATION_SCENARIO_ID
 from zerg.qa.provider_factory_model import load_capability_assertions
 from zerg.qa.provider_factory_model import load_facts
@@ -50,10 +55,74 @@ def test_capability_assertions_match_schema_scenario_count(facts) -> None:
 
 def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> None:
     scenario_ids = {a.scenario_id for a in facts.capability_assertions}
-    assert ORPHANED_CAPABILITY_SCENARIO_IDS <= scenario_ids
+    assert facts.orphaned_scenario_ids <= scenario_ids
     # codex_coordination_awareness_post_compaction has a CI producer; it must
     # not be classified as orphaned even though it isn't release-lane automated.
-    assert PUSH_CODEX_COORDINATION_SCENARIO_ID not in ORPHANED_CAPABILITY_SCENARIO_IDS
+    assert PUSH_CODEX_COORDINATION_SCENARIO_ID not in facts.orphaned_scenario_ids
+
+
+def test_orphaned_scenario_ids_are_derived_not_hand_maintained(facts) -> None:
+    """Only a scenario_id no registered producer covers may read as orphaned.
+
+    The hand-maintained set this replaced listed seven coordination
+    scenario_ids that had all since acquired producers, and the generated plan
+    artifact published that staleness as coverage gaps.
+    """
+    covered = set()
+    for module_name in PRODUCER_MODULES:
+        registration = importlib.import_module(module_name).REGISTRATION
+        covered.add(registration.scenario_id)
+        covered.update(registration.scenario_ids)
+
+    assert facts.orphaned_scenario_ids.isdisjoint(covered)
+    # antigravity is the only turn-boundary column with no producer at all.
+    assert facts.orphaned_scenario_ids == frozenset({"antigravity_turn_boundary_quiescent"})
+
+
+def test_every_registered_producer_makes_its_assertions_producible(facts) -> None:
+    """A shipped producer must never read as "no registered evidence producer"."""
+    for module_name in PRODUCER_MODULES:
+        registration = importlib.import_module(module_name).REGISTRATION
+        for assertion_id, _variant in registration.assertion_cells:
+            if assertion_id not in {a.assertion_id for a in facts.capability_assertions}:
+                continue  # Longhouse-product producer, not a provider capability cell
+            producible = facts.producible_evidence_by_assertion[assertion_id]
+            assert set(registration.evidence_classes) <= set(producible), assertion_id
+
+
+def test_producer_modules_covers_every_registration_in_the_directory() -> None:
+    """PRODUCER_MODULES must equal the directory, checked without importing it.
+
+    The private factory's own PRODUCER_MODULES desynced silently once; this is
+    the guard the public half was missing.
+    """
+    qa_dir = pathlib.Path(zerg.qa.__file__).parent
+    found = set()
+    for path in qa_dir.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            # Either a literal ProducerRegistration(...) or the shared
+            # registration_for(<provider>) factory the four native-resume
+            # producers use.
+            if any(isinstance(t, ast.Name) and t.id == "REGISTRATION" for t in node.targets):
+                found.add(f"zerg.qa.{path.stem}")
+
+    assert found == set(PRODUCER_MODULES)
+
+
+def test_non_registered_producible_evidence_stays_minimal(facts) -> None:
+    """The residual hand table may only hold what a registration cannot express.
+
+    Today that is one entry: the hermetic bundle `make
+    provider-capability-coordination-proof` emits from contract-first-ci.yml,
+    which is a Makefile lane rather than a registered producer.
+    """
+    assert NON_REGISTERED_PRODUCIBLE_EVIDENCE == {"no_duplicate_visible_bootstrap": ("hermetic",)}
+    declared = {a.assertion_id for a in facts.capability_assertions}
+    assert set(NON_REGISTERED_PRODUCIBLE_EVIDENCE) <= declared
+    assert "hermetic" in facts.producible_evidence_by_assertion["no_duplicate_visible_bootstrap"]
 
 
 def test_default_harness_scenarios_has_32_entries(facts) -> None:
@@ -204,15 +273,22 @@ def test_push_runs_the_codex_coordination_proof_scenario_only_for_codex(facts) -
         assert cell.scenario_ids == ()
 
 
-def test_push_codex_coordination_proof_cannot_satisfy_its_live_token_assertion(facts) -> None:
+def test_push_codex_coordination_proof_hermetic_lane_cannot_satisfy_the_live_token_assertion(facts) -> None:
     # provider_coordination_scenarios.py hardcodes
     # coordination_instructions_model_visible_after_compaction to False and
-    # produces hermetic evidence; that assertion's schema entry only accepts
-    # live_token, so CI can never satisfy it even though it always runs.
+    # produces hermetic evidence, which that assertion's schema entry does not
+    # accept -- the push-CI lane alone can never satisfy it. It is satisfiable
+    # overall because codex_coordination_native.py ships a live_token producer;
+    # the hand table this model replaced still called that a permanent gap.
     cell = plan_run(facts, "codex", "generated_fake", "push")
     statuses = {s.assertion_id: s for s in cell.assertion_status}
     assert statuses["no_duplicate_visible_bootstrap"].satisfiable is True
-    assert statuses["coordination_instructions_model_visible_after_compaction"].satisfiable is False
+    assert "hermetic" in statuses["no_duplicate_visible_bootstrap"].acceptable_evidence
+
+    compaction = statuses["coordination_instructions_model_visible_after_compaction"]
+    assert "hermetic" not in compaction.acceptable_evidence
+    assert compaction.producible_evidence == ("live_token",)
+    assert compaction.satisfiable is True
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor"])
@@ -241,7 +317,11 @@ def test_weekly_cron_runs_the_full_default_scenario_set_for_scheduled_providers(
     assert len(native) == 2
     assert {status.variant for status in native} == {"clean_exit", "process_loss"}
     assert all(status.minimum_scenario_revision == 2 for status in native)
-    assert all(not status.satisfiable for status in native)
+    # Each provider ships a native-resume producer emitting live_token, which
+    # is what this assertion accepts. It read as unsatisfiable for as long as
+    # the hand-maintained evidence table omitted it.
+    assert all(status.producible_evidence == ("live_token",) for status in native)
+    assert all(status.satisfiable for status in native)
     assert all(status.satisfiable for status in resume_statuses if status.assertion_id != "native_provider_resume_proven")
 
 
@@ -265,13 +345,14 @@ def test_manual_trigger_runs_full_column_for_cursor_observed_install(facts) -> N
     assert "Gate 0" in cell.reason
 
 
-def test_manual_trigger_never_runs_for_codex_without_an_evidence_producer(facts) -> None:
-    # coordination_instructions_model_visible_after_compaction needs a real
-    # manual run even though the scenario_id also has an automated CI producer.
+def test_manual_trigger_has_nothing_left_to_run_for_codex(facts) -> None:
+    # Every codex capability assertion now has a registered producer, so the
+    # manual lane has no residue. While the evidence table was hand-maintained
+    # this cell published seven assertions as having no producer, all of which
+    # in fact had one.
     cell = plan_run(facts, "codex", "observed_install", "manual")
     assert cell.status == "never_run"
-    assert "no registered evidence producer" in cell.reason
-    assert "helm_cold_resume" in cell.scenario_ids
+    assert cell.reason == "every capability-proof assertion declared for codex is already satisfiable by an automated trigger"
 
 
 @pytest.mark.parametrize("provider", ("codex", "claude", "opencode", "cursor"))
@@ -285,7 +366,10 @@ def test_native_resume_has_no_legacy_eligible_evidence_producer(facts, provider:
     assert {assertion.variant for assertion in native} == {"clean_exit", "process_loss"}
     assert all(assertion.acceptable_evidence == ("live_token",) for assertion in native)
     assert all(assertion.minimum_scenario_revision == 2 for assertion in native)
-    assert "native_provider_resume_proven" not in KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION
+    # Its evidence is derived from the four native-resume producers, so the
+    # assertion no longer reads as an unproduced gap the way it did while the
+    # hand table deliberately omitted it.
+    assert facts.producible_evidence_by_assertion["native_provider_resume_proven"] == ("live_token",)
 
 
 def test_codex_direct_resume_registration_is_authored_beside_executable() -> None:

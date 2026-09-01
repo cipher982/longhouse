@@ -21,6 +21,7 @@ from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_runtime import RuntimeEventBatchIngest
@@ -33,17 +34,11 @@ _catalog_db_dependency = catalog_db_dependency()
 _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
 
 
-def _no_runtime_db():
-    """The hosted Runtime Host delegates runtime-state storage to catalogd."""
-
-    yield None
-
-
 _settings = get_settings()
 _runtime_db_dependency = (
     _catalog_db_dependency
     if _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"} or not live_store_configured()
-    else _no_runtime_db
+    else no_request_db
 )
 
 

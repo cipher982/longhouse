@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { usePageMeta } from "../../hooks/usePageMeta";
 import { CodeBlock } from "./CodeBlock";
 
@@ -55,8 +56,8 @@ longhouse machine repair --repair-service`}
       <h2>3. Find one prior session</h2>
       <p>
         Use the timeline or search to find one real past session. If you have
-        used Claude Code, Codex, Antigravity, or OpenCode on this machine, Longhouse will
-        import your sessions during setup.
+        used Claude Code, Codex, Cursor Agent, OpenCode, or Antigravity on this
+        machine, Longhouse will import your sessions during setup.
       </p>
       <div className="docs-callout">
         <p>
@@ -81,28 +82,34 @@ longhouse machine repair --repair-service`}
         reachable later:
       </p>
       <CodeBlock title="terminal">
-        {`longhouse claude       # Claude Code with control channel
-longhouse codex        # Codex CLI with control channel
-longhouse opencode     # OpenCode, managed live control
-longhouse cursor       # Cursor Agent, managed live control`}
+        {`longhouse claude       # Claude Code, steerable mid-turn
+longhouse codex        # Codex CLI, steerable mid-turn
+longhouse cursor       # Cursor Agent, send and interrupt
+longhouse opencode     # OpenCode, send and interrupt
+longhouse pi --prompt "..."   # Pi Agent, one-shot turn
+longhouse antigravity  # Antigravity CLI, send only`}
       </CodeBlock>
       <p>
         When Longhouse launches the session, it owns the session record and
-        local observation path. Claude is the strongest managed path today, and{" "}
-        <code>longhouse codex</code> also keeps a Codex session steerable.
-        OpenCode Helm supports managed send, interrupt, terminate, and
-        pause-answer but not active-turn steer. Cursor Helm supports managed
-        send, interrupt, terminate, and reattach but not active-turn steer or
-        pause-answer. Antigravity remains Shadow-only.
+        local observation path. All six providers ship today; what they can do
+        after launch differs. Claude and Codex can be steered mid-turn. Cursor
+        Agent takes send and interrupt but not mid-turn steer. OpenCode Helm
+        supports managed send, interrupt, terminate, and pause-answer but not
+        active-turn steer. Pi runs one-shot Console turns: you can start a turn
+        and interrupt it, but there is no live session to send into. Antigravity
+        takes send alone, and refuses to start if its Longhouse hook is not
+        installed. The{" "}
+        <Link to="/docs/integrations">Integrations</Link> page carries the full
+        matrix, generated from the provider contract.
       </p>
       <div className="docs-callout">
         <p>
           <strong>Managed vs unmanaged.</strong> Both show up in the timeline,
           but managed sessions keep Longhouse ownership of the launch and
           observation path. Use <code>longhouse claude</code> or{" "}
-          <code>longhouse codex</code> for steerable sessions,{" "}
-          <code>longhouse opencode</code> or <code>longhouse cursor</code> for
-          their managed control paths.
+          <code>longhouse codex</code> when you want to redirect a turn that is
+          already running; the rest still land as managed sessions the browser
+          and the API can reach.
         </p>
       </div>
 

@@ -29,8 +29,10 @@ from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
+from zerg.dependencies.agents_auth import owner_id_from_caller
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.request_db import no_request_db
 from zerg.models.device_token import DeviceToken
 from zerg.routers.agents_search import read_search_coverage
 from zerg.routers.agents_search import search_storage_v2_semantic_sessions
@@ -111,19 +113,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
 
 
-def _no_coordination_db():
-    yield None
-
-
-coordination_db_dependency = _no_coordination_db
-
-
-def _no_session_preferences_db():
-    yield None
-
-
-session_preferences_db_dependency = _no_session_preferences_db
-
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
 _DIRECTED_INPUT_MAX_CHARS = 4000
@@ -162,7 +151,7 @@ def _no_viewer_owner_id() -> int | None:
 
 
 def _session_preferences_owner_id(
-    db: Session | None = Depends(session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     auth: object = Depends(verify_agents_caller),
 ) -> int:
     """Owner every preference write is scoped to.
@@ -176,17 +165,7 @@ def _session_preferences_owner_id(
     return _resolve_agents_owner_id(db, auth)
 
 
-def _console_write_db():
-    yield None
-
-
-def _session_detail_db():
-    """The catalog read path owns session detail; no archive session is opened."""
-
-    yield None
-
-
-session_detail_db_dependency = get_db if _catalog_db_dependency is get_db else _session_detail_db
+session_detail_db_dependency = get_db if _catalog_db_dependency is get_db else no_request_db
 
 
 @router.get("/sessions/stream")
@@ -246,15 +225,7 @@ async def export_worklog_day(
     """Return one day of session messages for machine worklog consumers."""
     timing = ServerTimingRecorder(surface="worklog")
     try:
-        owner_id = getattr(_auth, "owner_id", None)
-        if owner_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "owner_required",
-                    "message": "Worklog export requires an owner-bound device token.",
-                },
-            )
+        owner_id = owner_id_from_caller(_auth)
         catalog = get_catalogd_client()
         search = get_searchd_client()
         if catalog is None or search is None:
@@ -671,7 +642,7 @@ async def wall_query(
     days: int = Query(7, ge=1, le=90, description="Days to look back"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     include_automation: bool = Query(False, description="Include Hatch automation sessions in wall results"),
-    db: Session | None = Depends(coordination_db_dependency),
+    db: Session | None = Depends(no_request_db),
     _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> WallResponse:
@@ -857,12 +828,7 @@ async def session_tail(
     """
     requested_roles = _parse_tail_roles(roles)
     content_budget = _parse_tail_content_budget(max_content_chars)
-    owner_id = getattr(_auth, "owner_id", None)
-    if owner_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Storage-v2 reads require an owner-scoped token",
-        )
+    owner_id = owner_id_from_caller(_auth)
     # The workspace builder has no role predicate, so a narrowed request scans a
     # bounded larger window and trims after filtering. Without this, roles= would
     # return a handful of turns out of `limit` mostly-tool events.
@@ -919,7 +885,7 @@ async def session_tail(
 @router.post("/sessions", response_model=ConsoleSessionCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_console_session(
     body: ConsoleSessionCreate,
-    db: Session | None = Depends(_console_write_db),
+    db: Session | None = Depends(no_request_db),
     auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ConsoleSessionCreateResponse:
@@ -966,7 +932,7 @@ async def create_console_session(
 async def create_console_turn(
     session_id: UUID,
     body: ConsoleTurnCreate,
-    db: Session | None = Depends(_console_write_db),
+    db: Session | None = Depends(no_request_db),
     auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ConsoleTurnCreateResponse:
@@ -1004,7 +970,7 @@ async def create_console_turn(
 async def set_session_action(
     session_id: UUID,
     body: SessionActionRequest,
-    db: Session | None = Depends(session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionActionResponse:
@@ -1029,7 +995,7 @@ async def set_session_action(
 async def mark_session_read(
     session_id: UUID,
     body: SessionReadRequest,
-    db: Session | None = Depends(session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionReadResponse:
@@ -1063,7 +1029,7 @@ async def mark_session_read(
 async def set_session_loop_mode(
     session_id: UUID,
     body: SessionLoopModeRequest,
-    db: Session | None = Depends(session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionLoopModeResponse:
@@ -1080,7 +1046,7 @@ async def set_session_loop_mode(
 async def set_session_notification_watch(
     session_id: UUID,
     body: SessionNotificationWatchRequest,
-    db: Session | None = Depends(session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionNotificationWatchResponse:
@@ -1104,7 +1070,7 @@ async def set_session_notification_watch(
 async def set_session_timeline_visibility(
     session_id: UUID,
     body: SessionTimelineVisibilityRequest,
-    db: Session | None = Depends(session_preferences_db_dependency),
+    db: Session | None = Depends(no_request_db),
     owner_id: int = Depends(_session_preferences_owner_id),
     _single: None = Depends(require_single_tenant),
 ) -> SessionTimelineVisibilityResponse:
@@ -1241,10 +1207,7 @@ def session_detail_payload(
     """
     effective_owner_id = owner_id
     if effective_owner_id is None:
-        raw_owner_id = getattr(_auth, "owner_id", None)
-        effective_owner_id = int(raw_owner_id) if raw_owner_id is not None else None
-    if effective_owner_id is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Storage-v2 reads require an owner-scoped identity")
+        effective_owner_id = owner_id_from_caller(_auth)
 
     def _read_live(sid: UUID):
         try:
@@ -1286,12 +1249,7 @@ async def get_session_thread(
     owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> SessionThreadResponse:
     """Get all concrete continuations in a logical thread."""
-    effective_owner_id = owner_id if owner_id is not None else getattr(_auth, "owner_id", None)
-    if effective_owner_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Storage-v2 reads require an owner-scoped token",
-        )
+    effective_owner_id = owner_id if owner_id is not None else owner_id_from_caller(_auth)
     workspace = await build_storage_v2_workspace(
         session_id=session_id,
         owner_id=int(effective_owner_id),
@@ -1328,12 +1286,7 @@ async def get_session_events(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Storage-v2 event pagination uses cursor instead of offset",
         )
-    owner_id = getattr(_auth, "owner_id", None)
-    if owner_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Storage-v2 reads require an owner-scoped token",
-        )
+    owner_id = owner_id_from_caller(_auth)
     role_filter = {value.strip() for value in roles.split(",") if value.strip()} if roles else None
     # The workspace builder has no filter predicate, so filtering a page-sized
     # window drops matches that were never fetched. `max_events=3,
@@ -1405,12 +1358,7 @@ async def get_session_projection(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Storage-v2 projection pagination uses cursor instead of offset",
         )
-    owner_id = getattr(_auth, "owner_id", None)
-    if owner_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Storage-v2 reads require an owner-scoped token",
-        )
+    owner_id = owner_id_from_caller(_auth)
     workspace = await build_storage_v2_workspace(
         session_id=session_id,
         owner_id=int(owner_id),
@@ -1437,12 +1385,7 @@ async def get_session_workspace(
     """Get the focused session, its thread, and the first projection page in one round trip."""
     timing = ServerTimingRecorder(surface="session_detail")
     response.headers["Cache-Control"] = "no-store"
-    owner_value = getattr(_auth, "owner_id", None)
-    if owner_value is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Storage-v2 reads require an owner-scoped token",
-        )
+    owner_value = owner_id_from_caller(_auth)
     storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
         owner_id=int(owner_value),
@@ -1466,9 +1409,7 @@ async def export_session(
     _single: None = Depends(require_single_tenant),
 ) -> Response:
     """Export session as JSONL for Claude Code --resume."""
-    owner_id = getattr(_auth, "owner_id", None)
-    if owner_id is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner identity is required")
+    owner_id = owner_id_from_caller(_auth)
     try:
         return await build_storage_v2_raw_export(
             session_id=session_id,
@@ -1504,9 +1445,7 @@ async def export_session_archive_bundle(
         )
 
     try:
-        owner_id = getattr(_auth, "owner_id", None)
-        if owner_id is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Archive bundle requires an owner-bound token")
+        owner_id = owner_id_from_caller(_auth)
         result = await build_storage_v2_archive_bundle(
             session_id=session_id,
             owner_id=int(owner_id),
@@ -1569,7 +1508,7 @@ async def record_managed_local_launch_outcome(
     device_id = str(getattr(_auth, "device_id", "") or "").strip()
     if not device_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device token is missing device identity")
-    owner_id = _directed_input_owner_id(_auth)
+    owner_id = owner_id_from_caller(_auth)
     catalogd = get_catalogd_client()
     if catalogd is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Launch outcomes require catalogd")
@@ -1630,7 +1569,7 @@ async def issue_session_coordination_token(
     from zerg.auth.managed_session_tokens import issue_managed_session_token
     from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
-    owner_id = _directed_input_owner_id(_auth)
+    owner_id = owner_id_from_caller(_auth)
     try:
         session = load_live_control_session_snapshot(session_id, owner_id=owner_id)
     except CatalogReadError as exc:
@@ -1683,17 +1622,6 @@ def _session_is_managed_for_coordination(session: object) -> bool:
         return False
     connections = facts.get("connections")
     return isinstance(connections, list) and bool(connections)
-
-
-def _directed_input_owner_id(auth: object) -> int:
-    owner_id = getattr(auth, "owner_id", None)
-    if owner_id is None:
-        from zerg.services.catalog_read_gateway import active_owner_id
-
-        owner_id = active_owner_id()
-    if owner_id is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Session owner is unavailable")
-    return int(owner_id)
 
 
 _DIRECTED_INPUT_MUTATIONS = frozenset({"directed_input.create.v2", "directed_input.link_receipt.v2"})
@@ -1861,7 +1789,7 @@ async def _create_directed_input_for_actor(
 async def create_directed_input(
     request: Request,
     payload: DirectedInputCreate,
-    db: Session | None = Depends(coordination_db_dependency),
+    db: Session | None = Depends(no_request_db),
     _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
@@ -1873,7 +1801,7 @@ async def create_directed_input(
         token=_auth,
     )
     return await _create_directed_input_for_actor(
-        owner_id=_directed_input_owner_id(_auth),
+        owner_id=owner_id_from_caller(_auth),
         source_session=source_session,
         target_session_id=payload.target_session_id,
         text=payload.text,
@@ -1888,7 +1816,7 @@ async def list_directed_inputs(
     direction: str = Query("inbound", description="Direction: inbound|outbound|all"),
     after_id: int = Query(0, ge=0, description="Return inputs after this stable id cursor"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
-    db: Session | None = Depends(coordination_db_dependency),
+    db: Session | None = Depends(no_request_db),
     _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
@@ -1900,7 +1828,7 @@ async def list_directed_inputs(
     result = await _directed_input_call(
         "directed_input.list.v2",
         {
-            "owner_id": _directed_input_owner_id(_auth),
+            "owner_id": owner_id_from_caller(_auth),
             "session_id": str(actor_session.id),
             "direction": direction,
             "after_id": after_id,
@@ -1921,14 +1849,14 @@ async def reply_to_directed_input(
     directed_input_id: int,
     request: Request,
     payload: DirectedInputReply,
-    db: Session | None = Depends(coordination_db_dependency),
+    db: Session | None = Depends(no_request_db),
     _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, Any]:
     """Reply to an inbound directed input without copying a session id."""
 
     source_session = _resolve_directed_input_actor(db=db, request=request, token=_auth)
-    owner_id = _directed_input_owner_id(_auth)
+    owner_id = owner_id_from_caller(_auth)
     parent_result = await _directed_input_call(
         "directed_input.read.v2",
         {"owner_id": owner_id, "directed_input_id": directed_input_id},

@@ -195,31 +195,6 @@ describe("SessionChat", () => {
     URL.revokeObjectURL = vi.fn();
   });
 
-  it("renders a divider seam for the inline continuation dock", () => {
-    const { container } = renderSessionChat({
-      dockHeaderStyle: "divider",
-      introEyebrow: "Cloud branch",
-      introTitle: "Cloud branch began here",
-      introDescription: "Earlier turns were synced from Local.",
-      submitLabel: "Reply",
-    });
-
-    expect(screen.getByTestId("session-chat-divider")).toBeInTheDocument();
-    expect(screen.getByText("Cloud branch began here")).toBeInTheDocument();
-    expect(screen.getByText("Earlier turns were synced from Local.")).toBeInTheDocument();
-    expect(container.querySelector(".session-chat-callout")).toBeNull();
-    expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
-  });
-
-  it("can hide the dock header when the boundary already lives in the timeline", () => {
-    const { container } = renderSessionChat({
-      dockHeaderStyle: "hidden",
-    });
-
-    expect(screen.queryByTestId("session-chat-divider")).not.toBeInTheDocument();
-    expect(container.querySelector(".session-chat-callout")).toBeNull();
-  });
-
   it("shows a manual interrupt affordance for stalled managed sessions", async () => {
     const user = userEvent.setup();
     let interruptCalls = 0;
@@ -361,7 +336,6 @@ describe("SessionChat", () => {
     expect(screen.getByTestId("session-chat-disabled-reason")).not.toHaveTextContent(
       "Control offline",
     );
-    expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
 
   it("replaces disabled full-panel composer controls with status copy", () => {
@@ -486,7 +460,6 @@ describe("SessionChat", () => {
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toBeEnabled();
       expect(screen.getByRole("button", { name: /waiting/i })).toBeDisabled();
-      expect(screen.getByText("Working")).toBeInTheDocument();
     });
     expect(screen.queryByText(/req-1234/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/remaining/i)).not.toBeInTheDocument();

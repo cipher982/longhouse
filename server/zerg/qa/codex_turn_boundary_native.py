@@ -26,7 +26,6 @@ expose ``activity`` (see ``services/session_views.py::MachineSessionResponse``).
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -34,16 +33,18 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import _qualification_secrets
-from zerg.qa.provider_native_resume import _redact_state_for_evidence
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import qualification_secrets
+from zerg.qa.live_session_toolkit import redact_state_for_evidence
+from zerg.qa.live_session_toolkit import write_json
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -107,36 +108,6 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _write_json(path: Path, payload: object) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
-
-
 def _is_active_turn(state: dict[str, Any]) -> bool:
     if state.get("active_turn_id"):
         return True
@@ -186,10 +157,10 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=False)
     provider_receipt = {
         "path": str(args.codex_bin),
-        "sha256": _sha256(args.codex_bin),
+        "sha256": sha256_file(args.codex_bin),
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
     }
-    _write_json(root / "provider-binary-receipt.json", provider_receipt)
+    write_json(root / "provider-binary-receipt.json", provider_receipt)
 
     isolation_root: Path | None = None
     session_id = ""
@@ -213,7 +184,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("turn-boundary bridge did not start a resumable provider thread")
 
         pre_turn_state = bridge_canary._read_json(state_file)
-        _write_json(root / "pre-turn-bridge-state.json", _redact_state_for_evidence(pre_turn_state))
+        write_json(root / "pre-turn-bridge-state.json", redact_state_for_evidence(pre_turn_state))
         quiescent_before_turn = _is_quiescent(pre_turn_state)
 
         marker = f"LONGHOUSE_CODEX_TURN_BOUNDARY_{uuid.uuid4().hex}"
@@ -244,7 +215,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
                 active_turn_state = bridge_canary._read_json(state_file)
             except (OSError, json.JSONDecodeError):
                 active_turn_state = {}
-        _write_json(root / "active-turn-bridge-state.json", _redact_state_for_evidence(active_turn_state))
+        write_json(root / "active-turn-bridge-state.json", redact_state_for_evidence(active_turn_state))
 
         send_thread.join(timeout=args.live_send_timeout_secs + 25)
         if "error" in send_result_box:
@@ -259,7 +230,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
         while not bridge_canary._terminal_turn_state(post_turn_state) and time.monotonic() < post_turn_deadline:
             time.sleep(0.1)
             post_turn_state = bridge_canary._read_json(state_file)
-        _write_json(root / "post-turn-bridge-state.json", _redact_state_for_evidence(post_turn_state))
+        write_json(root / "post-turn-bridge-state.json", redact_state_for_evidence(post_turn_state))
 
         turn_completed = post_turn_state.get("last_turn_status") == "completed"
         quiescent_after_turn_boundary = bridge_canary._terminal_turn_state(post_turn_state) and _is_quiescent(post_turn_state)
@@ -268,7 +239,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
 
         final_cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
         verification = final_cleanup.get("verification") or {}
-        _write_json(root / "cleanup-receipt.json", final_cleanup)
+        write_json(root / "cleanup-receipt.json", final_cleanup)
 
         observation = {
             "quiescent_before_turn": quiescent_before_turn,
@@ -298,7 +269,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": _SCENARIO_ID,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "pass" if assertions[_ASSERTION_ID] else "fail",
             "observation": observation,
             "assertions": assertions,
@@ -306,9 +277,9 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "provider_thread_id": thread_id,
             "provider_binary": provider_receipt,
             "marker": marker,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", result)
+        write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         failure = {
@@ -320,21 +291,21 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": _SCENARIO_ID,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "failure_code": "codex_turn_boundary_quiescent_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "assertions": {_ASSERTION_ID: False},
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", failure)
+        write_json(root / "result.json", failure)
         return failure
     finally:
         if session_id and isolation_root and not (final_cleanup.get("verification") or {}).get("verified"):
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (root / "cleanup-receipt.json").exists():
-                _write_json(root / "cleanup-receipt.json", cleanup)
-        _qualification_secrets(os.environ, getattr(args, "agents_token", "") or "")
+                write_json(root / "cleanup-receipt.json", cleanup)
+        qualification_secrets(os.environ, getattr(args, "agents_token", "") or "")
 
 
 def _parser() -> argparse.ArgumentParser:

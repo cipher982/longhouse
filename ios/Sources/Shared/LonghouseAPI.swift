@@ -441,18 +441,6 @@ struct LonghouseAPI: Sendable {
         return decoded
     }
 
-    func sessionTurns(id: String) async throws -> [SessionTurn] {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/turns"))
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
-
-        let (data, httpResponse) = try await data(for: request)
-        guard httpResponse.statusCode == 200 else {
-            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
-        }
-        let decoded = try JSONDecoder.snakeCase.decode(APISessionTurnsListResponse.self, from: data)
-        return decoded.sessionTurnsResponse.turns
-    }
-
     func sendLive(id: String, text: String) async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/send-live"))
         request.httpMethod = "POST"

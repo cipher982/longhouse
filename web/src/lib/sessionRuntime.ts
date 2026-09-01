@@ -12,7 +12,6 @@ export type KnownPresenceState =
   | "needs_user"
   | "blocked"
   | "stalled";
-export type RuntimeTruthTier = "none" | "stale" | "fresh" | "managed-local";
 export type RuntimeTone = "inactive" | "quiet" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
 
 type TimelineRuntimeOverlay = {
@@ -98,7 +97,6 @@ export interface SessionRuntimeState {
   lastLiveAt: string | null;
   runtimeSource: string | null;
   confidence: string | null;
-  truthTier: RuntimeTruthTier;
   displayPhase: string;
   isLive: boolean;
   isExecuting: boolean;
@@ -147,7 +145,6 @@ export function resolveSessionRuntimeState(
   const lastLiveAt = session.last_live_at ?? session.presence_updated_at ?? null;
   const runtimeSource = session.runtime_source ?? null;
   const confidence = session.confidence ?? null;
-  const truthTier = facts.activity.state === "unknown" ? "none" : "fresh";
   const tone = normalizeRuntimeTone(facts.presentation.primary?.tone) ?? "inactive";
   const displayPhase = facts.presentation.primary?.label ?? "";
   const isExecuting = facts.activity.state === "thinking" || facts.activity.state === "executing";
@@ -163,7 +160,6 @@ export function resolveSessionRuntimeState(
     lastLiveAt,
     confidence,
     runtimeSource,
-    truthTier,
     displayPhase,
     isLive,
     isExecuting,
@@ -175,18 +171,6 @@ export function resolveSessionRuntimeState(
     tone,
     stateFacts: facts,
   };
-}
-
-function normalizeRuntimeTruthTier(value: string | null | undefined): RuntimeTruthTier | null {
-  if (
-    value === "none" ||
-    value === "stale" ||
-    value === "fresh" ||
-    value === "managed-local"
-  ) {
-    return value;
-  }
-  return null;
 }
 
 function normalizeRuntimeTone(value: string | null | undefined): RuntimeTone | null {

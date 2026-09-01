@@ -7,11 +7,8 @@ import type { AgentSessionProjectionResponse } from "../../services/api";
 
 const apiMocks = vi.hoisted(() => ({
   fetchAgentSessions: vi.fn(),
-  fetchAgentSession: vi.fn(),
-  fetchAgentSessionThread: vi.fn(),
   fetchAgentSessionProjection: vi.fn(),
   fetchAgentSessionWorkspace: vi.fn(),
-  fetchAgentSessionEvents: vi.fn(),
   fetchAgentSessionSummaries: vi.fn(),
   fetchAgentSessionPreview: vi.fn(),
   fetchAgentFilters: vi.fn(),

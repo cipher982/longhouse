@@ -29,7 +29,7 @@ describe("getNavItems", () => {
     expect(getNavItems("ADMIN").map((item) => item.href)).toEqual([
       "/timeline",
       "/runners",
-      "/admin",
+      "/admin/provider-capabilities",
     ]);
   });
 
@@ -40,7 +40,7 @@ describe("getNavItems", () => {
       "/timeline",
       "/runners",
       "/health",
-      "/admin",
+      "/admin/provider-capabilities",
     ]);
   });
 

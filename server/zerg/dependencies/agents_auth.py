@@ -74,7 +74,6 @@ def _enforce_rate_limit(rate_key: str) -> None:
 _MANAGED_LOCAL_HOOK_ALLOWED_ROUTES = {
     ("GET", "/agents/sessions"),
     ("GET", "/agents/sessions/startup-context"),
-    ("POST", "/agents/ingest"),
     ("POST", "/agents/presence"),
     ("POST", "/agents/permission-requests"),
     ("GET", "/agents/permission-decision"),
@@ -249,6 +248,26 @@ def verify_agents_caller(principal=Depends(verify_agents_token)) -> Caller:
     return Caller(owner_id=int(owner_id), principal=principal)
 
 
+def owner_id_from_caller(caller: object) -> int:
+    """Return the caller's tenant owner id, or fail with the one canonical shape.
+
+    ``verify_agents_caller`` already binds every machine caller to an owner, so
+    this only fires when a handler is invoked directly with a raw principal.
+    Routes used to re-derive this inline and each hand-rolled its own failure.
+    """
+
+    owner_id = getattr(caller, "owner_id", None)
+    if owner_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "owner_required",
+                "message": "This route requires an owner-bound machine caller.",
+            },
+        )
+    return int(owner_id)
+
+
 def require_single_tenant() -> None:
     """Enforce single-tenant mode for agents endpoints."""
     settings = get_settings()
@@ -264,6 +283,7 @@ def require_single_tenant() -> None:
 
 
 __all__ = [
+    "owner_id_from_caller",
     "require_single_tenant",
     "verify_agents_caller",
     "verify_agents_token",

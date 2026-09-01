@@ -172,9 +172,6 @@ private func mockSession(
         timelineAnchorAt: iso(anchorSecondsAgo),
         userMessages: turns,
         toolCalls: tools,
-        liveControlAvailable: isManaged,
-        hostReattachAvailable: false,
-        replyToLiveSessionAvailable: isManaged,
         runtimeDisplay: display,
         timelineCard: card,
         stateFacts: stateFacts

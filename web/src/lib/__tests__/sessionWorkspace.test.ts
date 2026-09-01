@@ -362,14 +362,9 @@ describe("getSessionInteractionCapabilities", () => {
     });
 
     expect(capabilities.mode).toBe("managed_local");
-    expect(capabilities.canChatFromBrowser).toBe(true);
-    expect(capabilities.managementLabel).toBe("Managed");
-    expect(capabilities.managementDescription).toMatch(/owns the control path/i);
     expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Live control");
     expect(capabilities.composerDisabledReason).toBeNull();
-    expect(capabilities.sendDisabledReason).toBeNull();
-    expect(capabilities.primaryActionLabel).toBe("Open live dock");
     expect(capabilities.submitLabel).toBe("Send");
   });
 
@@ -391,7 +386,6 @@ describe("getSessionInteractionCapabilities", () => {
       }),
     });
     expect(enabled.mode).toBe("managed_local");
-    expect(enabled.canChatFromBrowser).toBe(true);
 
     const legacyOnly = getSessionInteractionCapabilities({
       session: makeSession({
@@ -405,7 +399,6 @@ describe("getSessionInteractionCapabilities", () => {
       }),
     });
     expect(legacyOnly.mode).toBe("managed_local_unavailable");
-    expect(legacyOnly.canChatFromBrowser).toBe(false);
   });
 
   it("uses canonical control ownership instead of runtime display aliases", () => {
@@ -438,7 +431,6 @@ describe("getSessionInteractionCapabilities", () => {
     });
 
     expect(capabilities.mode).toBe("unsupported");
-    expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.managedLaunchSuggestion).not.toBeNull();
     expect(capabilities.capabilityLabel).toBe("Read only");
     expect(capabilities.composerDisabledReason).toMatch(/managed Codex session is read-only/i);
@@ -484,12 +476,9 @@ describe("getSessionInteractionCapabilities", () => {
     });
 
     expect(capabilities.mode).toBe("unsupported");
-    expect(capabilities.canChatFromBrowser).toBe(false);
-    expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Live control");
     expect(capabilities.composerDisabledReason).toMatch(/managed Antigravity session is read-only/i);
-    expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 
   it("prefers server read-only input mode over host reattach fallback", () => {
@@ -509,8 +498,6 @@ describe("getSessionInteractionCapabilities", () => {
     });
 
     expect(capabilities.mode).toBe("unsupported");
-    expect(capabilities.managementLabel).toBe("Managed");
-    expect(capabilities.sendDisabledReason).toBe("not_granted");
     expect(capabilities.composerDisabledReason).toMatch(/managed Codex session is read-only/i);
     expect(capabilities.composerDisabledReason).not.toMatch(/engine reconnects/i);
   });
@@ -531,8 +518,6 @@ describe("getSessionInteractionCapabilities", () => {
     });
 
     expect(capabilities.mode).toBe("managed_local_unavailable");
-    expect(capabilities.canChatFromBrowser).toBe(false);
-    expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Reattach");
     // Reattach-available is not an outage: say what it is and what fixes it,
@@ -540,7 +525,6 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.composerDisabledReason).toMatch(/isn't attached/i);
     expect(capabilities.composerDisabledReason).toMatch(/Reattach/i);
     expect(capabilities.composerDisabledReason).not.toMatch(/engine reconnects/i);
-    expect(capabilities.primaryActionLabel).toBe("Unavailable");
     expect(capabilities.notice?.title).toBe("Reattach");
   });
 
@@ -574,7 +558,6 @@ describe("getSessionInteractionCapabilities", () => {
     });
 
     expect(capabilities.capabilityLabel).toBe("Ended");
-    expect(capabilities.capabilityVariant).toBe("neutral");
     expect(capabilities.notice?.title).toBe("Run ended");
     expect(capabilities.composerDisabledReason).toMatch(/run has ended/i);
     expect(capabilities.composerDisabledReason).toMatch(/Resume/i);
@@ -595,27 +578,9 @@ describe("getSessionInteractionCapabilities", () => {
     });
 
     expect(capabilities.capabilityLabel).toBe("Launching");
-    expect(capabilities.capabilityVariant).toBe("neutral");
     expect(capabilities.notice?.title).toBe("Starting");
     expect(capabilities.composerDisabledReason).toMatch(/starting this Codex session/i);
     expect(capabilities.composerDisabledReason).not.toMatch(/confirm the control link/i);
-  });
-
-  it("calls a session Longhouse is starting managed before a control path claims it", () => {
-    // A `launch` fact exists only for a launch Longhouse itself initiated, so
-    // it proves ownership in the window before the control axis reports it.
-    // Ranked below ownership, a starting session read as somebody else's.
-    const capabilities = getSessionInteractionCapabilities({
-      session: makeSession({
-        provider: "codex",
-        session_state: makeSessionStateFacts({ access: null, mode: "helm", launchState: "pending" }),
-        capabilities: makeCapabilities(),
-      }),
-    });
-
-    expect(capabilities.managementLabel).toBe("Managed");
-    expect(capabilities.managementDescription).toMatch(/starting it now/i);
-    expect(capabilities.description).not.toMatch(/unmanaged/i);
   });
 
   it("names the launch error instead of inventing a lease diagnostic", () => {
@@ -638,7 +603,6 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.composerDisabledReason).toMatch(/did not report back/i);
     expect(capabilities.composerDisabledReason).not.toMatch(/confirm the control link/i);
     // A launch that actually failed is a fault; only the in-flight state is not.
-    expect(capabilities.capabilityVariant).toBe("warning");
   });
 
   it("lets Closed outrank a launch that never landed", () => {
@@ -756,7 +720,6 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("managed_local");
     expect(capabilities.placeholder).toBe("Server placeholder");
     expect(capabilities.composerDisabledReason).toBeNull();
-    expect(capabilities.sendDisabledReason).toBeNull();
   });
 
   it("shows reattach when a managed-local Claude session loses its live control channel", () => {
@@ -772,12 +735,9 @@ describe("getSessionInteractionCapabilities", () => {
           host_reattach_available: true,
         }),
       }),
-      isViewingHead: true,
     });
 
     expect(capabilities.mode).toBe("managed_local_unavailable");
-    expect(capabilities.canChatFromBrowser).toBe(false);
-    expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Reattach");
   });
@@ -785,18 +745,11 @@ describe("getSessionInteractionCapabilities", () => {
   it("treats a synced Claude transcript as search-only", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession(),
-      isViewingHead: true,
     });
 
     expect(capabilities.mode).toBe("unsupported");
-    expect(capabilities.canChatFromBrowser).toBe(false);
-    expect(capabilities.managementLabel).toBe("Unmanaged");
-    expect(capabilities.capabilityDescription).toMatch(/cannot steer it/i);
-    expect(capabilities.capabilityDescription).not.toMatch(/longhouse claude/i);
     expect(capabilities.capabilityLabel).toBe("Search only");
-    expect(capabilities.primaryActionLabel).toBe("Unavailable");
     expect(capabilities.notice?.title).toBe("Claude session — unmanaged");
-    expect(capabilities.managementDescription).toBe("Longhouse imported this Claude session.");
     expect(capabilities.composerDisabledReason).toBe(
       "This unmanaged Claude session is read-only in Longhouse.",
     );
@@ -812,13 +765,10 @@ describe("getSessionInteractionCapabilities", () => {
     });
 
     expect(capabilities.mode).toBe("unsupported");
-    expect(capabilities.canChatFromBrowser).toBe(false);
-    expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.composerDisabledReason).toBe(
       "This unmanaged Antigravity session is read-only in Longhouse.",
     );
     expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse antigravity");
-    expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 });

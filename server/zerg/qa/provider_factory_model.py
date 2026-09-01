@@ -15,24 +15,27 @@ hand-verified constant tables below. Call `load_facts()` once per process and
 reuse it; `plan_run` does not cache or re-read anything.
 
 Read docs/specs/provider-factory-coherence.md's "Phase 1 model" section
-before changing this file. Several tables below (ORPHANED_CAPABILITY_SCENARIO_IDS,
-DEPLOYED_RELEASE_LANE_PROFILE, KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION,
-CREDENTIAL_REQUIREMENT_BY_PROFILE) are facts about the codebase and clifford's
-current deployment verified by hand — they are not derived from the schema
-because the schema cannot express "nothing calls this," "this is what a
-private repo's .env currently overrides to," or "this code path hardcodes a
-False regardless of what it observes." That is precisely the
-duplication-of-authority problem this epic exists to fix; Phase 2+ narrows it
-further. Do not grow these tables without re-verifying by hand and updating
-the spec — a first draft of this file collapsed push-CI and weekly-cron into
-one trigger and mis-stated a CI-automated scenario as manual-only; both were
-caught by review, not by inspection of this file alone.
+before changing this file. Two tables below (DEPLOYED_RELEASE_LANE_PROFILE,
+CREDENTIAL_REQUIREMENT_BY_PROFILE) are facts about clifford's current
+deployment verified by hand — they are not derived because the schema cannot
+express "this is what a private repo's .env currently overrides to." Do not
+grow them without re-verifying by hand and updating the spec — a first draft
+of this file collapsed push-CI and weekly-cron into one trigger and mis-stated
+a CI-automated scenario as manual-only; both were caught by review, not by
+inspection of this file alone.
+
+"Which assertions have a producer" and "which scenario_ids are orphaned" used
+to be hand-maintained here too, and both went stale: the generated plan
+artifact published false coverage gaps for assertions whose producers had
+already shipped. They are now derived from the ProducerRegistration each
+producer exports beside its own executable — see PRODUCER_MODULES.
 """
 
 from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -153,26 +156,48 @@ DEPLOYED_RELEASE_LANE_PROFILE: dict[str, str] = {provider: profiles[0] for provi
 # production. An assertion nothing can produce is not a gap in coverage, it is
 # a claim with no possible evidence.
 #
-# Schema scenario_ids with zero producer of any kind, verified by hand:
-# - no non-test importer of the corresponding oracle function
-#   (awareness_create_assertions, directed_input_assertions,
-#   unsupported_steer_assertions)
-# - no dynamic dispatcher anywhere reads a schema oracle_source string and
-#   invokes it; every reference is a hardcoded string used for manifest
-#   generation or digest-hashing only
-# codex_coordination_awareness_post_compaction is deliberately absent from
-# this set: it has an automated CI producer (see PUSH_CODEX_COORDINATION_SCENARIO_ID
-# below) — it is not orphaned, it just doesn't run on the release lane.
-ORPHANED_CAPABILITY_SCENARIO_IDS: frozenset[str] = frozenset(
-    {
-        "codex_coordination_awareness_create",
-        "codex_coordination_directed_input",
-        "claude_coordination_awareness_create",
-        "claude_coordination_awareness_post_compaction",
-        "claude_coordination_directed_input",
-        "cursor_coordination_awareness_create",
-        "cursor_coordination_directed_input",
-    }
+# Both of these facts used to be hand-maintained tables here. They are now
+# derived from the ProducerRegistration each executable producer exports
+# beside itself (see PRODUCER_MODULES below), because the hand-maintained
+# versions went stale and the generated plan artifact published the staleness
+# as false coverage gaps: every one of the seven scenario_ids the old
+# ORPHANED_CAPABILITY_SCENARIO_IDS listed had acquired a registered producer,
+# and the old evidence table still reported "no registered evidence producer"
+# for assertions whose producers had shipped.
+
+# The executable producers that export a ProducerRegistration. Kept as an
+# explicit tuple rather than a package scan so importing this module stays
+# cheap and one test (test_producer_modules_covers_every_registration) can
+# hold it to the directory by AST scan — the private factory's own
+# PRODUCER_MODULES desynced silently once for exactly this reason.
+PRODUCER_MODULES: tuple[str, ...] = (
+    "zerg.qa.antigravity_launch_hook_inbox",
+    "zerg.qa.antigravity_resume_policy",
+    "zerg.qa.claude_coordination_awareness_create",
+    "zerg.qa.claude_coordination_awareness_post_compaction",
+    "zerg.qa.claude_coordination_directed_input",
+    "zerg.qa.claude_launch_helm_real_print",
+    "zerg.qa.claude_native_resume",
+    "zerg.qa.claude_turn_boundary_quiescent",
+    "zerg.qa.claude_turn_start_real_print",
+    "zerg.qa.codex_coordination_native",
+    "zerg.qa.codex_helm_launch_visibility",
+    "zerg.qa.codex_native_resume",
+    "zerg.qa.codex_turn_boundary_native",
+    "zerg.qa.console_served_state",
+    "zerg.qa.cursor_coordination_producer",
+    "zerg.qa.cursor_native_resume",
+    "zerg.qa.cursor_turn_boundary_producer",
+    "zerg.qa.ios_workspace_selection_source_producer",
+    "zerg.qa.opencode_native_resume",
+    "zerg.qa.opencode_server_contract_producer",
+    "zerg.qa.opencode_turn_boundary_quiescent",
+    "zerg.qa.product_console_lifecycle",
+    "zerg.qa.provider_console_lifecycle",
+    "zerg.qa.provider_generic_resume",
+    "zerg.qa.title_dependency_live_producer",
+    "zerg.qa.title_dependency_recovery_producer",
+    "zerg.qa.workspace_suggestions_live_producer",
 )
 
 # contract-first-ci.yml runs `make provider-capability-coordination-proof` on
@@ -183,55 +208,67 @@ ORPHANED_CAPABILITY_SCENARIO_IDS: frozenset[str] = frozenset(
 # manual run: the first draft of this model mis-stated it as manual-only.
 PUSH_CODEX_COORDINATION_SCENARIO_ID = "codex_coordination_awareness_post_compaction"
 
-# What evidence class each known producer can actually generate, per
-# assertion_id — hand-verified against the oracle modules (see the spec's
-# Phase 1 model and its provider-by-provider notes). An empty tuple means no
-# producer that exists today can ever satisfy this assertion, which is a
-# stronger and more specific statement than "no producer" (see antigravity's
-# real_print_injection_observed: the module refuses to run a real `agy
-# --print` at all, permanently, because Antigravity has no isolated
-# profile/data-root — see antigravity_hook_qualification.py's comment).
-# codex_coordination_awareness_post_compaction's own two assertions split:
-# the CI-automated hermetic run hardcodes
-# coordination_instructions_model_visible_after_compaction to False
-# (provider_coordination_scenarios.py:63) and that assertion's schema entry
-# only accepts live_token anyway, so CI can never satisfy it; the sibling
-# assertion no_duplicate_visible_bootstrap accepts hermetic and CI's run does
-# satisfy it.
-KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION: dict[str, tuple[str, ...]] = {
-    # provider-complete managed Helm Resume (weekly/release full column)
-    "cold_resume_registers_continuous_thread": ("hermetic",),
-    # native_provider_resume_proven is intentionally absent: its evidence is
-    # selected by the accepted-epoch compiler, not this descriptive legacy map.
-    "live_reattach_does_not_spawn_owner": ("hermetic",),
-    "console_continuation_is_distinct": ("hermetic",),
-    "session_thread_and_machine_identity_continue": ("hermetic",),
-    "resume_attempt_is_idempotent": ("hermetic",),
-    "one_local_provider_owner_wins": ("hermetic",),
-    "stale_input_is_not_replayed": ("hermetic",),
-    "failed_resume_closes_attempt_and_restores_contract": ("hermetic",),
-    "unsupported_resume_is_typed_and_side_effect_free": ("hermetic",),
-    # claude_real_print_v1 (release lane)
-    "claude_cli_channel_contract_preserved": ("live_no_token",),
-    "real_print_marker_returned": ("live_no_token", "live_token"),  # live_token only with explicit credentials
-    # opencode_server_contract_v1 (release lane)
-    "serve_session_contract_preserved": ("live_no_token",),
-    "process_restart_reattach_preserved": ("live_no_token",),
-    # antigravity_hook_inbox_v1 (release lane)
-    "hook_inbox_contract_preserved": ("live_no_token",),
-    "real_print_injection_observed": (),  # permanently blocked, see comment above
-    # codex_tool_call_result_v1 (release lane)
-    "exact_executable_identity_observed": ("live_no_token", "live_token"),
-    "reported_version_matches_expected": ("live_no_token", "live_token"),
-    "command_execution_completed_with_exact_output": ("live_token",),  # requires CODEX_API_KEY
-    "tool_result_linked_to_final_agent_message": ("live_token",),  # requires CODEX_API_KEY
-    # codex coordination proof (push trigger, CI, hermetic, codex-only)
+# The one evidence fact no ProducerRegistration can express: the CI make
+# target above is a Makefile lane, not a registered producer, and the hermetic
+# bundle it emits satisfies no_duplicate_visible_bootstrap (whose schema entry
+# accepts hermetic). Its sibling assertion
+# coordination_instructions_model_visible_after_compaction is deliberately not
+# listed: that CI run hardcodes it to False
+# (provider_coordination_scenarios.py:63), and the registered live_token
+# producers are what actually satisfy it.
+# Union'd into the derived map; every key is checked against the schema at
+# load_facts() time so it cannot rot the way the table it replaced did.
+NON_REGISTERED_PRODUCIBLE_EVIDENCE: dict[str, tuple[str, ...]] = {
     "no_duplicate_visible_bootstrap": ("hermetic",),
-    "coordination_instructions_model_visible_after_compaction": (),  # hardcoded False by the hermetic producer; needs live_token
 }
 
-# Credentials each release-lane profile's v2 bridge requires in the deployed
-# factory. Optional provider-specific overrides are deliberately omitted.
+
+def _producer_registrations() -> tuple[ProducerRegistration, ...]:
+    """Import each producer module and collect the registration it exports."""
+    from importlib import import_module
+
+    out = []
+    for module_name in PRODUCER_MODULES:
+        registration = getattr(import_module(module_name), "REGISTRATION", None)
+        if registration is None:
+            raise SystemExit(f"{module_name} is listed in PRODUCER_MODULES but exports no REGISTRATION")
+        out.append(registration)
+    return tuple(out)
+
+
+def _derive_producible_evidence(
+    registrations: tuple[ProducerRegistration, ...],
+    assertion_ids: frozenset[str],
+) -> dict[str, tuple[str, ...]]:
+    """assertion_id -> every evidence class some registered producer emits."""
+    derived: dict[str, set[str]] = {}
+    for registration in registrations:
+        for assertion_id, _variant in registration.assertion_cells:
+            derived.setdefault(assertion_id, set()).update(registration.evidence_classes)
+    unknown = sorted(set(NON_REGISTERED_PRODUCIBLE_EVIDENCE) - assertion_ids)
+    if unknown:
+        raise SystemExit(f"NON_REGISTERED_PRODUCIBLE_EVIDENCE names assertions the schema does not declare: {unknown}")
+    for assertion_id, evidence in NON_REGISTERED_PRODUCIBLE_EVIDENCE.items():
+        derived.setdefault(assertion_id, set()).update(evidence)
+    return {assertion_id: tuple(sorted(evidence)) for assertion_id, evidence in derived.items()}
+
+
+def _derive_orphaned_scenario_ids(
+    registrations: tuple[ProducerRegistration, ...],
+    assertions: tuple[CapabilityAssertion, ...],
+) -> frozenset[str]:
+    """Schema scenario_ids no registered producer covers.
+
+    A producer covers its own `scenario_id` plus, for the provider-neutral
+    ones, every id in `scenario_ids`.
+    """
+    produced: set[str] = set()
+    for registration in registrations:
+        produced.add(registration.scenario_id)
+        produced.update(registration.scenario_ids)
+    return frozenset({assertion.scenario_id for assertion in assertions} - produced)
+
+
 CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
     "codex_tool_call_result_v1": ("CODEX_API_KEY",),
     "codex_release_identity_v1": ("CODEX_API_KEY",),
@@ -276,6 +313,11 @@ class ProviderFactoryFacts:
     default_harness_scenarios: tuple[str, ...]
     push_harness_scenarios: tuple[str, ...]
     weekly_cron_providers: tuple[str, ...]
+    # Derived from the producer registrations, not hand-maintained. Carried on
+    # the snapshot so `plan_run` keeps its no-I/O contract: importing the
+    # producer modules is I/O, and it happens once, in `load_facts`.
+    producible_evidence_by_assertion: Mapping[str, tuple[str, ...]]
+    orphaned_scenario_ids: frozenset[str]
 
 
 def _load_default_harness_scenarios() -> tuple[str, ...]:
@@ -316,11 +358,18 @@ def _load_weekly_cron_providers() -> tuple[str, ...]:
 
 def load_facts() -> ProviderFactoryFacts:
     """Perform all I/O once. Pass the result to `plan_run`."""
+    capability_assertions = _load_capability_assertions()
+    registrations = _producer_registrations()
     return ProviderFactoryFacts(
-        capability_assertions=_load_capability_assertions(),
+        capability_assertions=capability_assertions,
         default_harness_scenarios=_load_default_harness_scenarios(),
         push_harness_scenarios=_load_push_harness_scenarios(),
         weekly_cron_providers=_load_weekly_cron_providers(),
+        producible_evidence_by_assertion=_derive_producible_evidence(
+            registrations,
+            frozenset(assertion.assertion_id for assertion in capability_assertions),
+        ),
+        orphaned_scenario_ids=_derive_orphaned_scenario_ids(registrations, capability_assertions),
     )
 
 
@@ -344,10 +393,10 @@ def _release_lane_scenario_id(provider: str, profile: str) -> str:
     return module.SCENARIO_ID
 
 
-def _assertion_statuses(assertions: tuple[CapabilityAssertion, ...]) -> tuple[AssertionStatus, ...]:
+def _assertion_statuses(facts: ProviderFactoryFacts, assertions: tuple[CapabilityAssertion, ...]) -> tuple[AssertionStatus, ...]:
     out = []
     for assertion in assertions:
-        producible = KNOWN_PRODUCIBLE_EVIDENCE_BY_ASSERTION.get(assertion.assertion_id, ())
+        producible = facts.producible_evidence_by_assertion.get(assertion.assertion_id, ())
         satisfiable = bool(set(assertion.acceptable_evidence) & set(producible))
         out.append(
             AssertionStatus(
@@ -418,7 +467,7 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             scenario_ids=scenario_ids,
             harness_scenarios=(facts.default_harness_scenarios if runs_full_column else ()),
             credential_requirement=credential_requirement,
-            assertion_status=_assertion_statuses(relevant_assertions),
+            assertion_status=_assertion_statuses(facts, relevant_assertions),
         )
 
     if trigger == Trigger.PUSH:
@@ -440,7 +489,7 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             reason="push-CI harness smoke (validate-provider-cli-canaries), plus the codex coordination proof job if applicable",
             harness_scenarios=facts.push_harness_scenarios,
             scenario_ids=scenario_ids,
-            assertion_status=_assertion_statuses(relevant_assertions),
+            assertion_status=_assertion_statuses(facts, relevant_assertions),
         )
 
     if trigger == Trigger.WEEKLY_CRON:
@@ -468,11 +517,12 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             reason="weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
             harness_scenarios=facts.default_harness_scenarios,
             assertion_status=_assertion_statuses(
+                facts,
                 tuple(
                     assertion
                     for assertion in facts.capability_assertions
                     if assertion.provider == provider and assertion.scenario_id in facts.default_harness_scenarios
-                )
+                ),
             ),
         )
 
@@ -496,11 +546,12 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             reason="exact observed-install snapshot with matching live Cursor Gate 0 evidence",
             harness_scenarios=facts.default_harness_scenarios,
             assertion_status=_assertion_statuses(
+                facts,
                 tuple(
                     assertion
                     for assertion in facts.capability_assertions
                     if assertion.provider == provider and assertion.scenario_id in facts.default_harness_scenarios
-                )
+                ),
             ),
         )
 
@@ -519,11 +570,11 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
         a
         for a in facts.capability_assertions
         if a.provider == provider
-        and a.scenario_id not in ORPHANED_CAPABILITY_SCENARIO_IDS
-        and not any(status.satisfiable for status in _assertion_statuses((a,)) if status.assertion_id == a.assertion_id)
+        and a.scenario_id not in facts.orphaned_scenario_ids
+        and not any(status.satisfiable for status in _assertion_statuses(facts, (a,)) if status.assertion_id == a.assertion_id)
     )
     orphaned_for_provider = tuple(
-        a.scenario_id for a in facts.capability_assertions if a.provider == provider and a.scenario_id in ORPHANED_CAPABILITY_SCENARIO_IDS
+        a.scenario_id for a in facts.capability_assertions if a.provider == provider and a.scenario_id in facts.orphaned_scenario_ids
     )
     if not manual_assertions and not orphaned_for_provider:
         return PlanCell(
@@ -544,7 +595,7 @@ def plan_run(facts: ProviderFactoryFacts, provider: str, build_provenance: str, 
             status="never_run",
             reason=f"remaining capability-proof scenario_ids for {provider} are orphaned: {sorted(set(orphaned_for_provider))}",
         )
-    manual_statuses = _assertion_statuses(manual_assertions)
+    manual_statuses = _assertion_statuses(facts, manual_assertions)
     if not any(status.satisfiable for status in manual_statuses):
         return PlanCell(
             provider=provider,

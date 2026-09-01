@@ -48,6 +48,7 @@ from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.request_db import no_request_db
 from zerg.models.agents import AgentSession
 from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
 from zerg.services.apns_sender import clear_live_activity_push_stamp
@@ -91,17 +92,11 @@ _HOT_PRESENCE_QUEUE_TIMEOUT_SECONDS = 2.0
 _AUTO_RESUME_STATES = {"thinking", "running"}
 
 
-def _no_presence_db():
-    """Hosted presence is a runtime RPC and must not open SQLite in the API."""
-
-    yield None
-
-
 _settings = get_settings()
 _presence_db_dependency = (
     _catalog_db_dependency
     if _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"} or not live_store_configured()
-    else _no_presence_db
+    else no_request_db
 )
 
 

@@ -114,26 +114,13 @@ export type SessionInteractionCapabilities = {
   mode: SessionInteractionMode;
   providerLabel: string;
   sourceOriginLabel: string;
-  headOriginLabel: string | null;
   isManagedLocalSession: boolean;
-  isManagedLocalCodex: boolean;
-  liveControlAvailable: boolean;
   hostReattachAvailable: boolean;
-  canChatFromBrowser: boolean;
-  managementLabel: string;
-  managementDescription: string;
   managedLaunchSuggestion: ManagedLaunchSuggestion | null;
   capabilityLabel: string;
-  capabilityVariant: "neutral" | "success" | "warning";
-  capabilityDescription: string | null;
   composerDisabledReason: string | null;
-  sendDisabledReason: string | null;
-  primaryActionLabel: string;
   submitLabel: string;
-  title: string;
-  description: string;
   placeholder: string;
-  keyboardHint?: string;
   notice: {
     title: string;
     body: string;

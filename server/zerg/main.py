@@ -104,7 +104,6 @@ from zerg.openapi_schema import export_openapi_schema
 from zerg.routers.admin import router as admin_router
 from zerg.routers.agents_backfill import router as agents_backfill_router
 from zerg.routers.agents_control import router as agents_control_router
-from zerg.routers.agents_ingest import router as agents_ingest_router
 from zerg.routers.agents_machine_presence import router as agents_machine_presence_router
 from zerg.routers.agents_machines import router as agents_machines_router
 from zerg.routers.agents_media import browser_router as media_router
@@ -112,14 +111,12 @@ from zerg.routers.agents_media import router as agents_media_router
 from zerg.routers.agents_providers import router as agents_providers_router
 from zerg.routers.agents_search import router as agents_search_router
 from zerg.routers.agents_sessions import router as agents_sessions_router
-from zerg.routers.agents_source_lines import router as agents_source_lines_router
 from zerg.routers.agents_state_diagnostics import health_router as agents_state_diagnostics_health_router
 from zerg.routers.agents_state_diagnostics import router as agents_state_diagnostics_router
 from zerg.routers.agents_storage_v2 import router as agents_storage_v2_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.health import router as health_router
-from zerg.routers.health import set_health_app_ref
 from zerg.routers.heartbeat import router as heartbeat_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
@@ -136,8 +133,6 @@ from zerg.routers.session_chat import agents_router as agents_session_chat_route
 from zerg.routers.session_chat import router as session_chat_router
 from zerg.routers.session_inputs_attachments import agents_router as agents_session_inputs_attachments_router
 from zerg.routers.session_inputs_attachments import router as session_inputs_attachments_router
-from zerg.routers.session_shares import public_router as session_shares_public_router
-from zerg.routers.session_shares import router as session_shares_router
 from zerg.routers.system import router as system_router
 from zerg.routers.telemetry import admin_router as telemetry_admin_router
 from zerg.routers.telemetry import beacon_router as telemetry_beacon_router
@@ -162,8 +157,9 @@ from zerg.services.public_downloads import download_macos_desktop_app_response
 # public no-auth deployment is supported (LONGHOUSE_ALLOW_PUBLIC_NO_AUTH, see
 # docker/runtime.dockerfile) and DEMO_MODE implies auth_disabled too, so
 # including it published the whole inventory in exactly the configuration that
-# has nothing else in front of it. DEV_ADMIN=1 ships in .env.example and
-# scripts/dev-docker.sh, so local dev keeps /docs.
+# has nothing else in front of it. scripts/dev-demo.sh exports DEV_ADMIN=1, so
+# local dev keeps /docs; .env.example ships it commented out, because that file
+# gets copied to real deployments.
 _docs_enabled = _settings.testing or _settings.dev_admin
 
 app = FastAPI(
@@ -179,10 +175,6 @@ api_app = FastAPI(
     redoc_url="/redoc" if _docs_enabled else None,
     openapi_url="/openapi.json" if _docs_enabled else None,
 )
-
-
-# Set health app reference for readyz/health endpoints that need app.state
-set_health_app_ref(app)
 
 
 # OpenAPI schema export
@@ -286,27 +278,23 @@ api_app.include_router(telemetry_admin_router)
 api_app.include_router(telemetry_canary_router)
 api_app.include_router(observability_router)
 api_app.include_router(agents_observability_router)
+api_app.include_router(agents_media_router)
+api_app.include_router(media_router)
 api_app.include_router(provider_capability_proofs_router)
 api_app.include_router(session_chat_router)
 api_app.include_router(agents_session_chat_router)
-api_app.include_router(session_shares_router)
-api_app.include_router(session_shares_public_router)
 api_app.include_router(session_inputs_attachments_router)
 api_app.include_router(agents_session_inputs_attachments_router)
 api_app.include_router(timeline_stream_router)
 api_app.include_router(timeline_router)
 api_app.include_router(agents_control_router)
-api_app.include_router(agents_ingest_router)
 api_app.include_router(agents_machine_presence_router)
 api_app.include_router(agents_machines_router)
-api_app.include_router(agents_media_router)
-api_app.include_router(media_router)
 api_app.include_router(agents_providers_router)
 api_app.include_router(agents_search_router)
 api_app.include_router(agents_sessions_router)
 api_app.include_router(agents_state_diagnostics_health_router)
 api_app.include_router(agents_state_diagnostics_router)
-api_app.include_router(agents_source_lines_router)
 api_app.include_router(agents_storage_v2_router)
 api_app.include_router(agents_backfill_router)
 api_app.include_router(heartbeat_router)

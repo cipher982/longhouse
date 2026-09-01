@@ -10,6 +10,12 @@ import OSLog
 /// and call `stop()` on disappear. Automatically sends Last-Event-ID on
 /// reconnect so the server can replay buffered events from the pubsub.
 ///
+/// A stale-stream watchdog forces a reconnect if no event of any kind
+/// (heartbeat included) arrives within `staleTimeoutSeconds`. The server
+/// heartbeats this stream every 30s (`WORKSPACE_STREAM_HEARTBEAT_SECONDS`),
+/// so 45s is a safe floor. Without it a dead-but-open TCP connection leaves
+/// the session frozen until `timeoutIntervalForRequest` gives up an hour later.
+///
 /// iOS background rules: caller must stop() when scenePhase != .active.
 /// Background URLSession is not used; SSE over URLSession.shared is
 /// foreground-only by Apple's contract.
@@ -97,6 +103,8 @@ actor SessionWorkspaceStream {
     private let sessionId: String
     private let skipInitial: Bool
     private let knownWorkspaceFingerprint: String?
+    private let staleTimeoutSeconds: TimeInterval
+    private var lastEventAt: Date = Date()
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "SessionStream")
     private var task: Task<Void, Never>?
     /// Reconnect cursor. The server sets the SSE `id:` field to the per-topic
@@ -113,12 +121,14 @@ actor SessionWorkspaceStream {
         sessionId: String,
         skipInitial: Bool = true,
         sinceSeq: Int? = nil,
-        knownWorkspaceFingerprint: String? = nil
+        knownWorkspaceFingerprint: String? = nil,
+        staleTimeoutSeconds: TimeInterval = 45
     ) {
         self.baseURL = baseURL
         self.sessionId = sessionId
         self.skipInitial = skipInitial
         self.knownWorkspaceFingerprint = knownWorkspaceFingerprint
+        self.staleTimeoutSeconds = staleTimeoutSeconds
         if let sinceSeq, sinceSeq > 0 {
             self.lastEventId = sinceSeq
         }
@@ -195,7 +205,12 @@ actor SessionWorkspaceStream {
     }
 
     private func emit(_ event: Event) {
+        lastEventAt = Date()
         continuation?.yield(event)
+    }
+
+    private func staleSinceLastEvent() -> Bool {
+        Date().timeIntervalSince(lastEventAt) >= staleTimeoutSeconds
     }
 
     private func setLastEventId(_ id: Int) {
@@ -255,6 +270,23 @@ actor SessionWorkspaceStream {
         }
         logger.debug("workspace stream response connected session=\(self.sessionId, privacy: .public)")
 
+        lastEventAt = Date()
+        let watchdog = Task { [weak self, staleTimeoutSeconds] in
+            // Force-close the URLSession if no event arrives for the stale
+            // timeout. Catches dead-but-open TCP connections, which otherwise
+            // read as a healthy stream and freeze the session.
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(staleTimeoutSeconds * 1_000_000_000))
+                guard let self else { break }
+                if await self.staleSinceLastEvent() {
+                    await self.logStaleStreamStop()
+                    session.invalidateAndCancel()
+                    break
+                }
+            }
+        }
+        defer { watchdog.cancel() }
+
         var eventName = ""
         var eventId: String? = nil
         var dataBuffer = ""
@@ -289,6 +321,12 @@ actor SessionWorkspaceStream {
         if !Task.isCancelled {
             emit(.disconnected(nil))
         }
+    }
+
+    private func logStaleStreamStop() {
+        logger.info(
+            "workspace stream stale, forcing reconnect session=\(self.sessionId, privacy: .public) stale_after_s=\(self.staleTimeoutSeconds, privacy: .public)"
+        )
     }
 
     private func dispatch(eventName: String, eventId: String?, payload: String) async {

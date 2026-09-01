@@ -153,7 +153,6 @@ export interface SessionTranscriptPreview {
     | null;
 }
 
-export type RuntimeTruthTier = components["schemas"]["TruthTier"];
 export type RuntimeSignalTier = components["schemas"]["SignalTier"];
 export type RuntimeTone = components["schemas"]["Tone"];
 export type RuntimeControlPath = components["schemas"]["ControlPath"];
@@ -275,12 +274,6 @@ export interface SessionResumeIntent {
   argv: string[];
   command: string | null;
   handoff: "terminal_command";
-}
-
-export interface AgentSessionsListResponse {
-  sessions: AgentSession[];
-  total: number;
-  has_real_sessions: boolean;
 }
 
 export interface TimelineSessionCard {
@@ -406,39 +399,6 @@ export interface AgentSessionWorkspaceResponse {
   workspace_revision: AgentSessionWorkspaceRevision;
   /** The provider has live managed control but does not expose transcript data yet. */
   control_only?: boolean;
-}
-
-export type AgentSessionTurnState =
-  | "created"
-  | "send_accepted"
-  | "active"
-  | "terminal"
-  | "durable"
-  | "failed";
-
-export interface AgentSessionTurn {
-  id: number;
-  session_id: string;
-  request_id: string | null;
-  state: AgentSessionTurnState | (string & {});
-  terminal_phase: string | null;
-  error_code: string | null;
-  user_event_id: number | null;
-  durable_assistant_event_id: number | null;
-  baseline_event_id: number | null;
-  baseline_observation_cursor: number | null;
-  user_submitted_at: string;
-  send_accepted_at: string | null;
-  active_phase_observed_at: string | null;
-  terminal_at: string | null;
-  durable_at: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface AgentSessionTurnsListResponse {
-  turns: AgentSessionTurn[];
-  total: number;
 }
 
 export interface AgentSessionSummary {
@@ -579,13 +539,6 @@ export interface AgentEvent {
   media_refs?: AgentEventMediaRef[];
 }
 
-export interface AgentEventsListResponse {
-  events: AgentEvent[];
-  total: number;
-  branch_mode?: "head" | "all";
-  abandoned_events?: number;
-}
-
 export interface AgentSessionFilters {
   project?: string;
   provider?: string;
@@ -675,98 +628,6 @@ export function getTimelineCardAnchor(
   return card.timeline_anchor_at || getTimelineSessionAnchor(card.head);
 }
 
-function buildGroupedQueryTimelineCards(
-  sessions: AgentSession[],
-): TimelineSessionCard[] {
-  const cardsByThread = new Map<string, TimelineSessionCard>();
-  const orderedThreadIds: string[] = [];
-
-  for (const session of sessions) {
-    const threadId = session.thread_root_session_id || session.id;
-    const existing = cardsByThread.get(threadId);
-    if (!existing) {
-      orderedThreadIds.push(threadId);
-      cardsByThread.set(threadId, {
-        thread_id: threadId,
-        timeline_anchor_at: getTimelineSessionAnchor(session),
-        head: session,
-        detail: session,
-        root: session,
-        continuation_count: session.thread_continuation_count || 1,
-        started_origin_label: session.origin_label || session.environment,
-        head_origin_label: session.origin_label || session.environment,
-      });
-      continue;
-    }
-
-    const sessionHasExplicitMatch =
-      session.match_event_id != null ||
-      !!session.match_snippet ||
-      session.match_score != null;
-    const currentDetailHasExplicitMatch =
-      existing.detail.match_event_id != null ||
-      !!existing.detail.match_snippet ||
-      existing.detail.match_score != null;
-    const nextDetail =
-      sessionHasExplicitMatch && !currentDetailHasExplicitMatch
-        ? session
-        : existing.detail;
-    const nextHead =
-      session.id === existing.detail.thread_head_session_id ||
-      session.is_writable_head
-        ? session
-        : existing.head;
-    const nextRoot =
-      session.id === existing.detail.thread_root_session_id
-        ? session
-        : existing.root;
-
-    cardsByThread.set(threadId, {
-      ...existing,
-      head: nextHead,
-      detail: nextDetail,
-      root: nextRoot,
-      continuation_count: Math.max(
-        existing.continuation_count,
-        session.thread_continuation_count || 1,
-      ),
-      started_origin_label:
-        session.id === existing.detail.thread_root_session_id
-          ? session.origin_label || session.environment
-          : existing.started_origin_label,
-      head_origin_label:
-        session.id === existing.detail.thread_head_session_id ||
-        session.is_writable_head
-          ? session.origin_label || session.environment
-          : existing.head_origin_label,
-    });
-  }
-
-  return orderedThreadIds
-    .map((threadId) => cardsByThread.get(threadId))
-    .filter((card): card is TimelineSessionCard => card != null);
-}
-
-function isTimelineSessionCard(
-  value: AgentSession | TimelineSessionCard,
-): value is TimelineSessionCard {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "thread_id" in value &&
-    typeof value.thread_id === "string" &&
-    "head" in value &&
-    typeof value.head === "object" &&
-    value.head !== null &&
-    "detail" in value &&
-    typeof value.detail === "object" &&
-    value.detail !== null &&
-    "root" in value &&
-    typeof value.root === "object" &&
-    value.root !== null
-  );
-}
-
 /**
  * List agent sessions with optional filters.
  */
@@ -794,25 +655,15 @@ export async function fetchAgentSessions(
   const groupedQueryMode =
     !!filters.query || (filters.mode != null && filters.mode !== "lexical");
   if (groupedQueryMode) {
-    // Storage-v2 returns canonical thread cards while the legacy/self-hosted
-    // compatibility path still returns raw session hits. Normalize either wire
-    // contract exactly once; re-grouping an already-threaded card nests the card
-    // inside `head` and strips the AgentSession runtime contract from the UI.
-    const rawResponse = await request<
-      AgentSessionsListResponse | TimelineSessionsListResponse
-    >(path, { method: "GET" });
-    const sourceSessions = rawResponse.sessions;
-    const sessions = sourceSessions.every(isTimelineSessionCard)
-      ? sourceSessions
-      : buildGroupedQueryTimelineCards(sourceSessions as AgentSession[]);
+    const response = await request<TimelineSessionsListResponse>(path, {
+      method: "GET",
+    });
     return {
-      sessions,
-      total: rawResponse.total,
-      has_real_sessions: rawResponse.has_real_sessions,
+      ...response,
       query_grouping_mode: "grouped_results",
       query_grouping_has_more:
-        (filters.offset || 0) + sourceSessions.length < rawResponse.total,
-      query_grouping_source_count: sourceSessions.length,
+        (filters.offset || 0) + response.sessions.length < response.total,
+      query_grouping_source_count: response.sessions.length,
     };
   }
 
@@ -1071,17 +922,6 @@ export async function fetchAgentSessionPreview(
   return request<AgentSessionPreview>(path, { method: "GET" });
 }
 
-/**
- * Get a single session by ID.
- */
-export async function fetchAgentSession(
-  sessionId: string,
-): Promise<AgentSession> {
-  return request<AgentSession>(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}`, {
-    method: "GET",
-  });
-}
-
 /** Re-check ended Helm Resume eligibility and return its terminal handoff. */
 export async function createSessionResumeIntent(
   sessionId: string,
@@ -1089,15 +929,6 @@ export async function createSessionResumeIntent(
   return request<SessionResumeIntent>(
     `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/resume-intent`,
     { method: "POST" },
-  );
-}
-
-export async function fetchAgentSessionThread(
-  sessionId: string,
-): Promise<AgentSessionThreadResponse> {
-  return request<AgentSessionThreadResponse>(
-    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/thread`,
-    { method: "GET" },
   );
 }
 
@@ -1274,51 +1105,6 @@ export async function respondToPauseRequest(
       body: JSON.stringify(body),
     },
   );
-}
-
-export async function fetchAgentSessionTurns(
-  sessionId: string,
-  options: {
-    limit?: number;
-    offset?: number;
-    order?: "asc" | "desc";
-  } = {},
-): Promise<AgentSessionTurnsListResponse> {
-  const params = new URLSearchParams();
-
-  if (options.limit != null) params.set("limit", String(options.limit));
-  if (options.offset != null) params.set("offset", String(options.offset));
-  if (options.order) params.set("order", options.order);
-
-  const queryString = params.toString();
-  const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/turns${queryString ? `?${queryString}` : ""}`;
-
-  return request<AgentSessionTurnsListResponse>(path, { method: "GET" });
-}
-
-/**
- * Get events for a session.
- */
-export async function fetchAgentSessionEvents(
-  sessionId: string,
-  options: {
-    roles?: string;
-    limit?: number;
-    offset?: number;
-    branch_mode?: "head" | "all";
-  } = {},
-): Promise<AgentEventsListResponse> {
-  const params = new URLSearchParams();
-
-  if (options.roles) params.set("roles", options.roles);
-  if (options.limit) params.set("limit", String(options.limit));
-  if (options.offset) params.set("offset", String(options.offset));
-  if (options.branch_mode) params.set("branch_mode", options.branch_mode);
-
-  const queryString = params.toString();
-  const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/events${queryString ? `?${queryString}` : ""}`;
-
-  return request<AgentEventsListResponse>(path, { method: "GET" });
 }
 
 /**

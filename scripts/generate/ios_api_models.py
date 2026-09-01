@@ -26,8 +26,6 @@ ROOT_SCHEMAS = [
     "QueuedInputSummary",
     "SessionDraftReplyResponse",
     "SessionLoopModeResponse",
-    "SessionTurnsListResponse",
-    "SessionTurnResponse",
     "SessionTurnTimingResponse",
 ]
 

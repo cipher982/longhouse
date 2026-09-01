@@ -348,9 +348,15 @@ def _validate_spec(spec: RawObjectSpec) -> None:
         if position != spec.range_end:
             raise RawObjectValidationError("byte-offset records do not cover the declared range")
     elif spec.range_kind == "record_ordinal":
-        expected = list(range(spec.range_start, spec.range_end))
-        if [record.source_position for record in spec.records] != expected:
+        # Never materialize the declared span: `range_end` is only bounded by
+        # u64, so `list(range(...))` on a hostile envelope allocates until the
+        # host dies. The records themselves are capped at MAX_RECORDS, so
+        # comparing the span against the record count first bounds the walk.
+        if spec.range_end - spec.range_start != len(spec.records):
             raise RawObjectValidationError("record-ordinal records must cover the declared range")
+        for offset, record in enumerate(spec.records):
+            if record.source_position != spec.range_start + offset:
+                raise RawObjectValidationError("record-ordinal records must cover the declared range")
     else:
         raise RawObjectValidationError("unsupported range_kind")
     # Frozen identity encoding performs NFC/provider/hash validation.

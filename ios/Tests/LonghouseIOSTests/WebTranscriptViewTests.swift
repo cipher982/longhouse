@@ -5,6 +5,23 @@ import XCTest
 @testable import Longhouse
 
 final class WebTranscriptViewTests: XCTestCase {
+    func testDocumentBaseURLOnlyAcceptsWebOrigins() {
+        XCTAssertEqual(
+            WebTranscriptView.documentBaseURL("https://example.longhouse.ai"),
+            URL(string: "https://example.longhouse.ai")
+        )
+        XCTAssertEqual(
+            WebTranscriptView.documentBaseURL("http://127.0.0.1:8000"),
+            URL(string: "http://127.0.0.1:8000")
+        )
+        // Anything else leaves the transcript on about:blank rather than
+        // granting it an origin — the app container most of all.
+        XCTAssertNil(WebTranscriptView.documentBaseURL("file:///var/mobile/Containers"))
+        XCTAssertNil(WebTranscriptView.documentBaseURL("longhouse://session/1"))
+        XCTAssertNil(WebTranscriptView.documentBaseURL("not a url at all"))
+        XCTAssertNil(WebTranscriptView.documentBaseURL(nil))
+    }
+
     func testPreparedPayloadReportsDiagnosticsFacts() {
         let payload = WebTranscriptView.preparedPayload(
             timelineItems: [

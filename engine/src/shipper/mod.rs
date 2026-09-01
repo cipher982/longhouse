@@ -2170,19 +2170,6 @@ async fn attempt_ship(
                     "server-side ingest timing"
                 );
             }
-            if let Some(limiter) = limiter {
-                match server_timing.queue_wait_ms {
-                    Some(qw) => limiter.observe_ingest_timing(
-                        qw,
-                        server_timing.exec_ms,
-                        server_timing.commit_count,
-                        server_timing.commit_ms,
-                        server_timing.chunk_size,
-                        server_timing.store_stage_ms.clone(),
-                    ),
-                    None => limiter.note_missing_signal(),
-                }
-            }
             tracing::debug!(
                 "Shipped {} ({} events, {} bytes)",
                 item.path_str,
@@ -7813,10 +7800,8 @@ mod tests {
             "rejected": [],
         })
         .to_string();
-        let (url, captured, handle) = spawn_http_sequence_server(&[
-            ("200 OK", &media_claim_body),
-            ("200 OK", "{}"),
-        ]);
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", &media_claim_body), ("200 OK", "{}")]);
         let client = make_test_client(&url);
 
         let replay = rt
@@ -7878,10 +7863,8 @@ mod tests {
             "rejected": [],
         })
         .to_string();
-        let (url, captured, handle) = spawn_http_sequence_server(&[
-            ("200 OK", &media_claim_body),
-            ("200 OK", "{}"),
-        ]);
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", &media_claim_body), ("200 OK", "{}")]);
         let client = make_test_client(&url);
 
         let outcome = rt

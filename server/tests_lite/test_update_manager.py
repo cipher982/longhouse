@@ -533,3 +533,32 @@ def test_maybe_notify_update_skips_json_and_update_commands(monkeypatch):
     update_manager.maybe_notify_update(["version", "--check"])
 
     assert spawns == []
+
+
+def test_resolve_longhouse_entrypoint_rejects_the_runtime_host_console_script(monkeypatch, tmp_path):
+    """`machine repair` is a native-facade verb, so argv[0] must be exactly `longhouse`.
+
+    `upgrade` runs under `longhouse-server`, whose argv[0] also starts with
+    "longhouse". A prefix match handed back the Runtime Host binary and every
+    post-upgrade runtime refresh died on "No such command 'machine'".
+    """
+    server_script = tmp_path / "longhouse-server"
+    server_script.write_text("#!/bin/sh\n", encoding="utf-8")
+    facade = tmp_path / "facade" / "longhouse"
+    facade.parent.mkdir()
+    facade.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    monkeypatch.setattr(update_manager.sys, "argv", [str(server_script), "upgrade"])
+    monkeypatch.setattr("shutil.which", lambda name: str(facade) if name == "longhouse" else None)
+
+    assert update_manager._resolve_longhouse_entrypoint() == str(facade)
+
+
+def test_resolve_longhouse_entrypoint_accepts_the_native_facade_argv(monkeypatch, tmp_path):
+    facade = tmp_path / "longhouse"
+    facade.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    monkeypatch.setattr(update_manager.sys, "argv", [str(facade), "upgrade"])
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    assert update_manager._resolve_longhouse_entrypoint() == str(facade.resolve())

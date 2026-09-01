@@ -374,11 +374,11 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
             [
                 "provider-release-proof",
                 "PROVIDER=codex",
-                "PROVIDER_VERSION=codex-test-0",
                 "CODEX_API_URL=http://longhouse.test",
                 "CODEX_AGENTS_TOKEN=secret-token",
                 f"ARTIFACT={proof}",
                 f"EVIDENCE_ROOT={evidence}",
+                "ARGS=--provider-version codex-test-0",
             ]
         )
 
@@ -455,12 +455,11 @@ def test_provider_release_proof_make_passes_scenario_id_override() -> None:
             [
                 "provider-release-proof",
                 "PROVIDER=codex",
-                "PROVIDER_VERSION=codex-test-0",
                 "SOURCE_REVIEW_STATUS=pass",
-                "SCENARIO_ID=codex-custom-proof-v1",
-                "PREFLIGHT_ONLY=1",
                 f"ARTIFACT={proof}",
                 f"EVIDENCE_ROOT={evidence}",
+                "ARGS=--provider-version codex-test-0"
+                " --scenario-id codex-custom-proof-v1 --preflight-only",
             ]
         )
 
@@ -480,11 +479,10 @@ def test_provider_release_proof_make_runs_preflight_only() -> None:
             [
                 "provider-release-proof",
                 "PROVIDER=codex",
-                "PROVIDER_VERSION=codex-test-0",
-                "CODEX_RUN_MANAGED_LIVE_SEND=1",
-                "PREFLIGHT_ONLY=1",
                 f"ARTIFACT={proof}",
                 f"EVIDENCE_ROOT={evidence}",
+                "ARGS=--provider-version codex-test-0"
+                " --codex-run-managed-live-send --preflight-only",
             ]
         )
 
@@ -511,12 +509,11 @@ def test_provider_release_proof_make_forwards_codex_live_interrupt_profile() -> 
             [
                 "provider-release-proof",
                 "PROVIDER=codex",
-                "PROVIDER_VERSION=codex-test-0",
-                "CODEX_RUN_MANAGED_LIVE_INTERRUPT=1",
-                "CODEX_LIVE_INTERRUPT_TIMEOUT_SECS=7",
-                "PREFLIGHT_ONLY=1",
                 f"ARTIFACT={proof}",
                 f"EVIDENCE_ROOT={evidence}",
+                "ARGS=--provider-version codex-test-0"
+                " --codex-run-managed-live-interrupt"
+                " --codex-live-interrupt-timeout-secs 7 --preflight-only",
             ]
         )
 
@@ -549,12 +546,11 @@ def test_provider_release_proof_make_forwards_claude_real_print_profile() -> Non
                 "provider-release-proof",
                 "PROVIDER=claude",
                 f"PROVIDER_BIN={fake_provider}",
-                "PROVIDER_VERSION=Claude Code 2.1.test",
-                "CLAUDE_RUN_REAL_PRINT=1",
-                "CLAUDE_PRINT_TIMEOUT_SECS=5",
-                "PREFLIGHT_ONLY=1",
                 f"ARTIFACT={proof}",
                 f"EVIDENCE_ROOT={evidence}",
+                "ARGS=--provider-version 'Claude Code 2.1.test'"
+                " --claude-run-real-print --claude-print-timeout-secs 5"
+                " --preflight-only",
             ]
         )
 

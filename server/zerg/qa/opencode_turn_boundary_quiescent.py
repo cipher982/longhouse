@@ -11,9 +11,9 @@ quiescence once the turn genuinely completes.
 
 Launch/teardown machinery is deliberately reused from
 ``zerg.qa.provider_native_resume`` (``SPECS``, ``PtyProcess``,
-``_isolated_provider_home``, ``_launch_command``, ``_wait_state``,
-``_wait_opencode_tui_ready``, ``_wait_assistant_response_after_marker``,
-``_stop``, ...) rather than re-implemented, because that module is the same,
+``isolated_provider_home``, ``launch_command``, ``wait_state``,
+``wait_opencode_tui_ready``, ``wait_assistant_response_after_marker``,
+``stop_session``, ...) rather than re-implemented, because that module is the same,
 already-tested code path backing OpenCode's registered
 ``opencode.native_resume.v1`` producer. Only the turn-boundary-specific
 observation (quiescence of the owned terminal around one real turn) is new.
@@ -59,36 +59,37 @@ new machine-surface field is the intended (bigger) fix.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
 import sys
 import time
 import uuid
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import PtyProcess
+from zerg.qa.live_session_toolkit import TranscriptShipper
+from zerg.qa.live_session_toolkit import assistant_event_digests
+from zerg.qa.live_session_toolkit import isolated_provider_home
+from zerg.qa.live_session_toolkit import launch_command
+from zerg.qa.live_session_toolkit import provider_process_pid
+from zerg.qa.live_session_toolkit import qualification_secrets
+from zerg.qa.live_session_toolkit import redact_state_for_evidence
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.live_session_toolkit import stop_session
+from zerg.qa.live_session_toolkit import wait_assistant_response_after_marker
+from zerg.qa.live_session_toolkit import wait_opencode_tui_ready
+from zerg.qa.live_session_toolkit import wait_session_tail
+from zerg.qa.live_session_toolkit import wait_state
+from zerg.qa.live_session_toolkit import write_json
 from zerg.qa.opencode_qualification_profile import prepare_opencode_qualification_profile
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
 from zerg.qa.provider_native_resume import SPECS
-from zerg.qa.provider_native_resume import PtyProcess
-from zerg.qa.provider_native_resume import TranscriptShipper
-from zerg.qa.provider_native_resume import _assistant_event_digests
-from zerg.qa.provider_native_resume import _isolated_provider_home
-from zerg.qa.provider_native_resume import _launch_command
-from zerg.qa.provider_native_resume import _provider_process_pid
-from zerg.qa.provider_native_resume import _qualification_secrets
-from zerg.qa.provider_native_resume import _redact_state_for_evidence
-from zerg.qa.provider_native_resume import _start_transcript_shipper
-from zerg.qa.provider_native_resume import _stop
-from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
-from zerg.qa.provider_native_resume import _wait_opencode_tui_ready
-from zerg.qa.provider_native_resume import _wait_session_tail
-from zerg.qa.provider_native_resume import _wait_state
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 
 _ASSERTION_ID = "activity_returns_to_quiescent_at_turn_boundary"
@@ -163,36 +164,6 @@ def turn_boundary_quiescent_assertions(observation: dict[str, Any]) -> dict[str,
         and observation.get("activity_remained_quiescent_post_turn") is True
     )
     return {_ASSERTION_ID: passed}
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _write_json(path: Path, payload: object) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def _redact_retained_secrets(root: Path, secrets: list[str]) -> list[str]:
@@ -281,12 +252,12 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=False)
     provider_receipt = {
         "path": str(args.provider_bin),
-        "sha256": _sha256(args.provider_bin),
+        "sha256": sha256_file(args.provider_bin),
         "version": subprocess.run(
             [str(args.provider_bin), "--version"], capture_output=True, text=True, timeout=30, check=False
         ).stdout.strip(),
     }
-    _write_json(root / "provider-binary-receipt.json", provider_receipt)
+    write_json(root / "provider-binary-receipt.json", provider_receipt)
 
     environment = os.environ.copy()
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
@@ -304,33 +275,33 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
     initial_state: dict[str, Any] | None = None
     stop_result: dict[str, Any] = {"dead": False, "clean": False}
     try:
-        home = _isolated_provider_home()
+        home = isolated_provider_home()
         environment["HOME"] = str(home)
         model_profile = prepare_opencode_qualification_profile(home, environment)
-        _write_json(root / "opencode-model-profile-receipt.json", model_profile)
-        shipper = _start_transcript_shipper("opencode", args, home=home, environment=environment, evidence_root=root)
-        _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
+        write_json(root / "opencode-model-profile-receipt.json", model_profile)
+        shipper = start_transcript_shipper("opencode", args, home=home, environment=environment, evidence_root=root)
+        write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
 
         provider_cwd = args.repo_root
         initial = PtyProcess(
-            _launch_command(spec, args, None, use_credential_files=True, cwd=provider_cwd),
+            launch_command(spec, args, None, use_credential_files=True, cwd=provider_cwd),
             cwd=provider_cwd,
             env=environment,
             recording=root / "initial.tty",
         )
-        initial_state = _wait_state(spec, home, process=initial)
-        _wait_opencode_tui_ready(initial, root / "initial.tty")
-        _write_json(root / "launch-state-receipt.json", _redact_state_for_evidence(initial_state))
+        initial_state = wait_state(spec, home, process=initial)
+        wait_opencode_tui_ready(initial, root / "initial.tty")
+        write_json(root / "launch-state-receipt.json", redact_state_for_evidence(initial_state))
         session_id = str(initial_state["session_id"])
 
-        prior_tail = _wait_session_tail(
+        prior_tail = wait_session_tail(
             args.api_url,
             args.agents_token,
             session_id,
             timeout=45,
             allow_unprojected=True,
         )
-        prior_assistant_event_digests = _assistant_event_digests(prior_tail)
+        prior_assistant_event_digests = assistant_event_digests(prior_tail)
 
         marker = f"LONGHOUSE_OPENCODE_TURN_BOUNDARY_{uuid.uuid4().hex}"
         prompt = f"Reply exactly {marker} and nothing else."
@@ -347,7 +318,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.live_send_timeout_secs,
         )
         activity_left_quiescent_during_turn = left_quiescence_at is not None
-        _write_json(
+        write_json(
             root / "turn-activity-receipt.json",
             {
                 "marker": marker,
@@ -357,7 +328,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             },
         )
 
-        _tail, correlation = _wait_assistant_response_after_marker(
+        _tail, correlation = wait_assistant_response_after_marker(
             args.api_url,
             args.agents_token,
             session_id,
@@ -369,7 +340,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
         turn_completion_correlated_in_served_transcript = bool(
             correlation.get("timed_out") is False and correlation.get("marker_observed_in_assistant") is True
         )
-        _write_json(root / "turn-correlation-receipt.json", correlation)
+        write_json(root / "turn-correlation-receipt.json", correlation)
 
         settled_at = _wait_terminal_quiescence(
             initial,
@@ -385,23 +356,23 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
         initial.drain()
         activity_remained_quiescent_post_turn = _terminal_size(root / "initial.tty") == remained_quiescent_size
 
-        stop_result = _stop(spec, args, initial_state, initial, force=False, environment=environment, stop_phase="initial")
+        stop_result = stop_session(spec, args, initial_state, initial, force=False, environment=environment, stop_phase="initial")
         managed_opencode_process_exited = bool(stop_result.get("clean") is True)
         no_orphan_provider_processes = bool(stop_result.get("dead") is True and stop_result.get("provider_process_dead") is True)
-        _write_json(root / "cleanup-receipt.json", stop_result)
+        write_json(root / "cleanup-receipt.json", stop_result)
 
         if shipper is not None:
-            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
 
         redacted_secret_files = _redact_retained_secrets(
             root,
-            list(_qualification_secrets(os.environ, args.agents_token)),
+            list(qualification_secrets(os.environ, args.agents_token)),
         )
 
         observation = {
             "provider": "opencode",
             "session_id": session_id,
-            "provider_pid": _provider_process_pid(spec, initial_state),
+            "provider_pid": provider_process_pid(spec, initial_state),
             "marker": marker,
             "activity_left_quiescent_during_turn": activity_left_quiescent_during_turn,
             "turn_completion_correlated_in_served_transcript": turn_completion_correlated_in_served_transcript,
@@ -428,7 +399,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": REGISTRATION.scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "pass" if assertions[_ASSERTION_ID] else "fail",
             "observation": observation,
             "assertions": assertions,
@@ -437,21 +408,21 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "provider_binary": provider_receipt,
             "artifact_manifest": [],
         }
-        result["artifact_manifest"] = _artifact_manifest(root)
-        _write_json(root / "result.json", result)
+        result["artifact_manifest"] = artifact_manifest(root)
+        write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         if shipper is not None:
-            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         if initial is not None and initial_state is not None and not stop_result.get("dead"):
             try:
-                stop_result = _stop(spec, args, initial_state, initial, force=True, environment=environment, stop_phase="initial")
-                _write_json(root / "cleanup-receipt.json", stop_result)
+                stop_result = stop_session(spec, args, initial_state, initial, force=True, environment=environment, stop_phase="initial")
+                write_json(root / "cleanup-receipt.json", stop_result)
             except Exception:  # noqa: BLE001 - best-effort teardown during failure handling
                 pass
         redacted_secret_files = _redact_retained_secrets(
             root,
-            list(_qualification_secrets(os.environ, getattr(args, "agents_token", ""))),
+            list(qualification_secrets(os.environ, getattr(args, "agents_token", ""))),
         )
         failure = {
             "schema_version": 1,
@@ -462,14 +433,14 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": REGISTRATION.scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "failure_code": "direct_turn_boundary_quiescent_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", failure)
+        write_json(root / "result.json", failure)
         return failure
     finally:
         if initial is not None:

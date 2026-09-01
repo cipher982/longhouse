@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from zerg.auth.caller import caller_principal
 from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.request_db import no_request_db
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CURSOR_POLL
 from zerg.services.session_pause_requests import make_pause_request_key
@@ -42,12 +43,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
-
-def _no_permission_db():
-    yield None
-
-
-_permission_db_dependency = _no_permission_db
 
 # Distinct source so answerable permission-gate requests are NOT hidden by the
 # legacy claude_hook placeholder filter in session_pause_requests.
@@ -135,7 +130,7 @@ def _coerce_session_uuid(session_id: str) -> UUID:
 @router.post("/permission-requests", response_model=PermissionRequestAck)
 async def register_permission_request(
     payload: PermissionRequestIn,
-    db: Session = Depends(_permission_db_dependency),
+    db: Session = Depends(no_request_db),
     _token: object = Depends(verify_agents_caller),
 ) -> PermissionRequestAck:
     """Register a held Claude permission request from a PreToolUse hook."""
@@ -216,7 +211,7 @@ async def get_permission_decision(
     tool_use_id: str,
     pause_request_id: Optional[str] = None,
     provider: str = "claude",
-    db: Session = Depends(_permission_db_dependency),
+    db: Session = Depends(no_request_db),
     _token: object = Depends(verify_agents_caller),
 ) -> PermissionDecisionOut:
     """Return the resolved permission decision, or pending if not yet answered.
@@ -274,7 +269,7 @@ async def get_permission_decision(
 async def expire_permission_request(
     pause_request_id: str,
     payload: PermissionExpireIn,
-    db: Session = Depends(_permission_db_dependency),
+    db: Session = Depends(no_request_db),
     _token: object = Depends(verify_agents_caller),
 ) -> PermissionDecisionOut:
     """Expire the exact held prompt when its provider-side wait deadline ends."""

@@ -18,6 +18,7 @@ from zerg.auth.caller import caller_principal
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.request_db import no_request_db
 from zerg.models.device_token import DeviceToken
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.utils.time import UTCBaseModel
@@ -26,11 +27,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
 
 
-def _machine_presence_db():
-    yield None
-
-
-_machine_presence_db_dependency = get_db if _catalog_db_dependency is get_db else _machine_presence_db
+_machine_presence_db_dependency = get_db if _catalog_db_dependency is get_db else no_request_db
 
 MachinePresenceState = Literal["active", "idle_5m", "idle_10m", "locked", "unknown"]
 

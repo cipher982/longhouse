@@ -28,6 +28,7 @@ from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.catalogd.store import storage_projectors_for_provider
 from zerg.config import get_settings
+from zerg.dependencies.agents_auth import owner_id_from_caller
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
@@ -495,7 +496,14 @@ def _parse_render_spec(
         source_envelope_id=source_envelope_id,
         records=tuple(records),
     )
-    validate_render_object_spec(spec)
+    # Report a contract violation the way every other parse failure here does,
+    # so it reaches the caller as 422 `invalid_envelope`. The engine quarantines
+    # a rejected envelope into health where `longhouse shipping discard` can
+    # clear it; a 503 would make it retry the same invalid bytes forever.
+    try:
+        validate_render_object_spec(spec)
+    except RenderObjectValidationError as exc:
+        raise ValueError(str(exc)) from exc
     return spec
 
 
@@ -1095,13 +1103,14 @@ async def _commit_admitted_envelope(
                 raise RawObjectWorkerError("sealed raw object identity changed after admission")
             sealed_render = None
             if render_task is not None:
-                try:
-                    sealed_render = await render_task
-                except (RenderObjectWorkerBusy, RenderObjectWorkerError, RenderObjectValidationError) as exc:
-                    logger.warning(
-                        "Render object deferred after raw seal",
-                        extra={"envelope_id": sealed.envelope_id, "lane": lane, "error": str(exc)},
-                    )
+                # A failed render seal must fail the whole commit. Committing
+                # the raw object alone would hand the engine a durable receipt
+                # for events that reach no timeline, detail, search or
+                # embedding read — renders are per-batch deltas, no later
+                # envelope backfills them, and a re-send short-circuits on
+                # dedup. Failing here keeps the raw bytes uncommitted so the
+                # engine retries the same envelope.
+                sealed_render = await render_task
         render_manifest = None
         if sealed_render is not None and render_spec is not None:
             render_manifest = {
@@ -1186,9 +1195,14 @@ async def _commit_admitted_envelope(
                     "canonical_title_eligible": True,
                 }
             )
-        if render_manifest is not None and any(
-            int(render_manifest[field] or 0) > 0 for field in ("user_messages", "assistant_messages", "tool_calls")
-        ):
+        # Wake clients whenever the commit changed what the read paths serve,
+        # not when a message counter moved. An envelope of only system rows or
+        # only excluded local-control rows still advances the session, and a
+        # raw-only envelope still moves its session facts; gating on
+        # user/assistant/tool counts left those changes invisible until some
+        # unrelated commit happened to wake the page. An exact replay changes
+        # nothing, so it stays silent.
+        if committed.get("created") is True:
             from zerg.services.session_pubsub import TOPIC_TIMELINE
             from zerg.services.session_pubsub import get_pubsub
             from zerg.services.session_pubsub import topic_session
@@ -1196,7 +1210,7 @@ async def _commit_admitted_envelope(
             payload = {
                 "session_id": str(spec.session_id),
                 "kind": "ingest",
-                "events_inserted": int(render_manifest["event_count"] or 0),
+                "events_inserted": int(render_manifest["event_count"] or 0) if render_manifest is not None else 0,
                 "provider": spec.provider,
                 "source": "storage_v2",
                 "server_fanout_at_ms": int(datetime.now(UTC).timestamp() * 1000),
@@ -1228,6 +1242,17 @@ async def _commit_admitted_envelope(
                 "Retry-After": "5",
             },
         ) from exc
+    except RenderObjectWorkerBusy as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "storage_lane_busy",
+            "Storage-v2 render lane is full; retry the same envelope.",
+            headers={
+                "X-Longhouse-Storage-Backpressure": "storage_lane_busy",
+                "X-Longhouse-Storage-Lane": lane,
+                "Retry-After": "5",
+            },
+        ) from exc
     except RawObjectValidationError as exc:
         raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_envelope", str(exc)) from exc
     except StorageV2SemanticRecoveryPermanentError as exc:
@@ -1248,6 +1273,27 @@ async def _commit_admitted_envelope(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "storage_worker_unavailable",
             "Storage-v2 worker failed; retry the same envelope.",
+        ) from exc
+    except RenderObjectValidationError as exc:
+        # The envelope itself is unacceptable -- the 4 MiB render bound is
+        # reachable in normal operation, because the engine ships 4 MiB raw
+        # batches and the render re-serialization is larger. Retrying identical
+        # bytes can never succeed, so answer 422 like the raw-side bound above:
+        # the engine quarantines a 422 visibly and `longhouse shipping discard`
+        # clears it, where a 503 would spin forever.
+        raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_envelope", str(exc)) from exc
+    except RenderObjectWorkerError as exc:
+        # The worker failed, not the envelope. Retrying the same bytes is the
+        # right move -- but never commit an envelope whose events nothing will
+        # ever serve.
+        logger.warning(
+            "Storage-v2 render seal failed; envelope rejected",
+            extra={"lane": lane, "error": str(exc)},
+        )
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "storage_worker_unavailable",
+            "Storage-v2 render worker failed; retry the same envelope.",
         ) from exc
     except PermissionError as exc:
         raise _http_error(status.HTTP_403_FORBIDDEN, "identity_mismatch", str(exc)) from exc
@@ -1360,9 +1406,7 @@ async def list_storage_v2_sessions(
             "invalid_cursor",
             "Timeline cursor timestamp must include a UTC offset.",
         )
-    owner_value = getattr(_auth, "owner_id", None)
-    if owner_value is None:
-        raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
+    owner_value = owner_id_from_caller(_auth)
     catalogd = get_catalogd_client()
     if catalogd is None:
         raise _http_error(
@@ -1430,9 +1474,7 @@ async def read_storage_v2_session_raw(
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     timing = ServerTimingRecorder(surface="raw_export")
-    owner_value = getattr(_auth, "owner_id", None)
-    if owner_value is None:
-        raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
+    owner_value = owner_id_from_caller(_auth)
     after = None
     if cursor is not None:
         try:
@@ -1733,7 +1775,24 @@ async def read_storage_v2_session_events_page(
                     if (anchor == "start" and (cursor_key is None or key > cursor_key)) or (
                         anchor == "tail" and (cursor_key is None or key < cursor_key)
                     ):
-                        ordered_events.append((key, _render_event_wire(session_id, generation_id, decoded, record)))
+                        try:
+                            wire = _render_event_wire(session_id, generation_id, decoded, record)
+                        except ValueError:
+                            # One unserializable row must not cost the reader
+                            # the whole page. Sealing now rejects timestamps
+                            # the read cannot express, so only pre-bound
+                            # objects can land here and a parser-revision
+                            # re-mint repairs them from durable raw.
+                            logger.warning(
+                                "storage-v2 render event skipped: unrepresentable timestamp "
+                                "session_id=%s generation_id=%s event_id=%s order_time_us=%s",
+                                session_id,
+                                generation_id,
+                                record.event_id,
+                                record.order_time_us,
+                            )
+                            continue
+                        ordered_events.append((key, wire))
             next_object_index += len(batch_manifests)
             ordered_events.sort(key=lambda item: item[0])
             if len(ordered_events) > limit:
@@ -1810,9 +1869,7 @@ async def read_storage_v2_session_events(
     _auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
-    owner_value = getattr(_auth, "owner_id", None)
-    if owner_value is None:
-        raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
+    owner_value = owner_id_from_caller(_auth)
     timing = ServerTimingRecorder(surface="session_detail")
     result = await read_storage_v2_session_events_page(
         session_id=session_id,

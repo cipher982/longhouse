@@ -42,8 +42,7 @@ export default function SearchPage() {
         Results are ranked by relevance and recency.
       </p>
       <p>
-        Use the sidebar filters to narrow by date range, provider (Claude,
-        Codex, Antigravity, OpenCode), or project.
+        Use the sidebar filters to narrow by date range, provider, or project.
       </p>
 
       <h2>Search from the API</h2>
@@ -63,8 +62,8 @@ export default function SearchPage() {
         were never used.
       </p>
       <CodeBlock title="terminal">
-        {`longhouse recall "how did I handle auth token refresh"
-longhouse recall "the session where I fixed the CI pipeline"`}
+        {`longhouse-server recall "how did I handle auth token refresh"
+longhouse-server recall "the session where I fixed the CI pipeline"`}
       </CodeBlock>
       <div className="docs-callout">
         <p>
@@ -73,10 +72,10 @@ longhouse recall "the session where I fixed the CI pipeline"`}
           use recall when you remember what happened but not the words.
         </p>
         <p>
-          <strong>See also:</strong> Use{" "}
-          <code>longhouse wall</code> to see active and recent sessions across
-          all projects — a quick way to find what you or others are working on
-          right now.
+          <strong>See also:</strong> the wall query,{" "}
+          <code>GET /api/agents/sessions/wall</code>, returns active and
+          recently active sessions across projects — a quick way to find what
+          you or others are working on right now.
         </p>
       </div>
 

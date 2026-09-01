@@ -32,6 +32,15 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cyc
 logger = logging.getLogger(__name__)
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
 _CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor", "antigravity"})
+# The live-control capabilities this module can authorize, and the reducer
+# operation each one requires. Anything else is refused as ``unsupported``.
+# Turn-scoped Console commands (session.turn.start / session.turn.interrupt) are
+# deliberately absent: they never reach this gate.
+_CANONICAL_OPERATION_BY_CAPABILITY = {
+    "send": "send_input",
+    "interrupt": "interrupt",
+    "terminate": "terminate",
+}
 _INPUT_RECOVERY_CATALOG_TIMEOUT_SECONDS = 5.0
 
 
@@ -39,6 +48,17 @@ def canonical_command_authorization_providers() -> tuple[str, ...]:
     """Return providers whose adapters can produce canonical control facts."""
 
     return tuple(sorted(_CANONICAL_AUTH_PROVIDERS))
+
+
+def canonical_live_control_capabilities() -> tuple[str, ...]:
+    """Return the capabilities ``get_canonical_live_control_grant`` can serve.
+
+    Callers that need to know which advertised controls are subject to canonical
+    authorization read this instead of hand-copying the set, which is how the
+    two statements drift apart.
+    """
+
+    return tuple(sorted(_CANONICAL_OPERATION_BY_CAPABILITY))
 
 
 @dataclass(frozen=True)
@@ -336,11 +356,7 @@ def get_canonical_live_control_grant(
 ) -> tuple[LiveControlGrant | None, str | None]:
     """Require exact agreement between the catalog lease and reducer evidence."""
 
-    operation = {
-        "send": "send_input",
-        "interrupt": "interrupt",
-        "terminate": "terminate",
-    }.get(capability)
+    operation = _CANONICAL_OPERATION_BY_CAPABILITY.get(capability)
     if operation is None:
         return None, "unsupported"
     normalized_provider = str(provider or "").strip().lower()

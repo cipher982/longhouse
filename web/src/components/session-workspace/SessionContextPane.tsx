@@ -54,11 +54,7 @@ export function SessionContextPane({
   continuationNotice = null,
   hideHero = false,
 }: SessionContextPaneProps) {
-  const interaction = getSessionInteractionCapabilities({
-    session,
-    isViewingHead,
-    headThreadSession,
-  });
+  const interaction = getSessionInteractionCapabilities({ session });
   const turnCount = session.user_messages + session.assistant_messages;
   const homeLabel = normalizeExecutionVenueLabel(session.home_label);
   const sessionControl = session.control ?? null;

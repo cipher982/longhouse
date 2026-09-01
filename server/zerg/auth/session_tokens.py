@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import Optional
 
+import jwt
 from fastapi import Response
 from zerg.auth.strategy import SESSION_COOKIE_NAME
 from zerg.auth.strategy import SESSION_TOKEN_KIND
@@ -105,31 +103,7 @@ def _issue_access_token(
 
 
 def _encode_jwt(payload: dict[str, Any], secret: str) -> str:
-    """Encode a compact HS256 JWT with a lightweight fallback for tests."""
-    try:
-        from jose import jwt  # type: ignore
-    except ModuleNotFoundError:  # pragma: no cover
-        import json
-
-        class _MiniJWT:
-            @staticmethod
-            def _b64(data: bytes) -> bytes:
-                return base64.urlsafe_b64encode(data).rstrip(b"=")
-
-            @classmethod
-            def encode(cls, payload_: dict[str, Any], secret_: str, algorithm: str = "HS256") -> str:
-                if algorithm != "HS256":
-                    raise ValueError("Only HS256 supported in fallback")
-
-                header = {"alg": algorithm, "typ": "JWT"}
-                header_b64 = cls._b64(json.dumps(header, separators=(",", ":")).encode())
-                payload_b64 = cls._b64(json.dumps(payload_, separators=(",", ":")).encode())
-                signing_input = header_b64 + b"." + payload_b64
-                signature = hmac.new(secret_.encode(), signing_input, hashlib.sha256).digest()
-                sig_b64 = cls._b64(signature)
-                return (signing_input + b"." + sig_b64).decode()
-
-        jwt = _MiniJWT  # type: ignore
+    """Encode a compact HS256 JWT."""
 
     return jwt.encode(payload, secret, algorithm="HS256")
 

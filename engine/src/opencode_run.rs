@@ -1,8 +1,6 @@
 //! OpenCode Console turns through stock `opencode run --format json`.
 
-use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -14,12 +12,12 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
+use crate::console_adapter::{claim_process_liveness, read_growth, stderr_tail, ClaimLiveness};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
 
 pub const OPENCODE_RUN_ADAPTER: &str = "opencode_run";
-const STDERR_TAIL_LINES: usize = 40;
 
 #[derive(Clone, Debug)]
 pub struct OpenCodeRunConfig {
@@ -127,6 +125,9 @@ pub async fn start_opencode_run_turn(config: OpenCodeRunConfig) -> Result<OpenCo
     if let Some(model) = normalized_optional(&config.model) {
         args.extend(["--model".to_string(), model]);
     }
+    // End of options, so a message that opens with `--` lands in opencode's
+    // `message` positional instead of being parsed as flags.
+    args.push("--".to_string());
     args.push(config.prompt.clone());
     validate_console_argv(&args)?;
     let argv = std::iter::once(config.opencode_bin.clone())
@@ -234,6 +235,9 @@ pub async fn recover_opencode_run_turns(
     local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
+    // One coherent inventory for the pass; `None` means `ps` was unreadable,
+    // which must leave claims alone rather than settle them.
+    let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
     for claim in registry.list_nonterminal()? {
         if claim.adapter.as_deref() != Some(OPENCODE_RUN_ADAPTER) || claim.state != "spawned" {
@@ -265,18 +269,25 @@ pub async fn recover_opencode_run_turns(
             local_db_path: local_db_path.clone(),
             runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
-        if claim_process_is_live(&claim) {
-            let lock_key = claim
-                .provider_thread_id
-                .as_deref()
-                .unwrap_or(&claim.session_id);
-            let lock = acquire_turn_lock(&opencode_console_root()?, lock_key)?;
-            tokio::spawn(async move {
-                monitor_recovered_claim(claim, stdout_path, stderr_path, sink, lock).await;
-            });
-            recovered += 1;
-        } else {
-            settle_recovered_dead_claim(&claim, &stdout_path, &stderr_path, &sink).await;
+        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+            ClaimLiveness::Live => {
+                let lock_key = claim
+                    .provider_thread_id
+                    .as_deref()
+                    .unwrap_or(&claim.session_id);
+                let lock = acquire_turn_lock(&opencode_console_root()?, lock_key)?;
+                tokio::spawn(async move {
+                    monitor_recovered_claim(claim, stdout_path, stderr_path, sink, lock).await;
+                });
+                recovered += 1;
+            }
+            ClaimLiveness::Gone => {
+                settle_recovered_dead_claim(&claim, &stdout_path, &stderr_path, &sink).await;
+            }
+            ClaimLiveness::Unknown => tracing::warn!(
+                run_id = %claim.run_id,
+                "Process inventory unavailable; leaving OpenCode Console turn claim for a later scan"
+            ),
         }
     }
     Ok(recovered)
@@ -443,7 +454,7 @@ async fn monitor_recovered_claim(
             &sink,
         )
         .await;
-        if projection.is_err() || !claim_process_is_live(&claim) {
+        if projection.is_err() || claim_process_liveness(&claim) == ClaimLiveness::Gone {
             let current = crate::turn_claims::default_registry()
                 .and_then(|registry| registry.read(&claim.run_id))
                 .ok();
@@ -892,11 +903,18 @@ fn rollback_binding(root: &Path, session_id: &str, launch_id: &str) {
 }
 
 fn validate_console_argv(args: &[String]) -> Result<()> {
-    if !args.iter().any(|arg| arg == "--auto") {
+    // Only the flag segment is checked. Past `--` the tokens are the user's
+    // message, and a message that happens to read `--continue` is text, not a
+    // flag we forbid.
+    let flags = match args.iter().position(|arg| arg == "--") {
+        Some(index) => &args[..index],
+        None => args,
+    };
+    if !flags.iter().any(|arg| arg == "--auto") {
         anyhow::bail!("OpenCode Console argv must include --auto");
     }
     for forbidden in ["--continue", "--attach", "--dangerously-skip-permissions"] {
-        if args.iter().any(|arg| arg == forbidden) {
+        if flags.iter().any(|arg| arg == forbidden) {
             anyhow::bail!("OpenCode Console argv must not include {forbidden}");
         }
     }
@@ -910,45 +928,8 @@ fn validate_provider_thread_id(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn read_growth(path: &Path, offset: &mut u64, pending: &mut Vec<u8>) -> Result<Vec<Vec<u8>>> {
-    let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(*offset))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    *offset += bytes.len() as u64;
-    pending.extend(bytes);
-    let mut lines = Vec::new();
-    while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
-        let mut line = pending.drain(..=index).collect::<Vec<_>>();
-        line.pop();
-        if !line.is_empty() {
-            lines.push(line);
-        }
-    }
-    Ok(lines)
-}
-
-fn claim_process_is_live(claim: &crate::turn_claims::TurnClaim) -> bool {
-    claim
-        .pid
-        .zip(claim.process_start_time.as_deref())
-        .and_then(|(pid, expected)| {
-            crate::process_identity::collect_process_facts_by_pid()
-                .get(&pid)
-                .map(|fact| fact.lstart == expected)
-        })
-        .unwrap_or(false)
-}
-
 async fn cleanup_process_group(process_group_id: Option<i32>) {
-    let Some(pgid) = process_group_id else {
-        return;
-    };
-    let outcome =
-        crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
-    if !outcome.is_gone() {
-        eprintln!("[opencode-run] process group {pgid} survived SIGKILL and was left running");
-    }
+    crate::console_adapter::cleanup_process_group("opencode-run", process_group_id).await;
 }
 
 fn opencode_console_root() -> Result<PathBuf> {
@@ -1014,18 +995,6 @@ fn set_private_dir(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
-}
-
-fn stderr_tail(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let mut lines = text
-        .lines()
-        .rev()
-        .take(STDERR_TAIL_LINES)
-        .collect::<VecDeque<_>>();
-    lines.make_contiguous().reverse();
-    let value = lines.into_iter().collect::<Vec<_>>().join("\n");
-    (!value.is_empty()).then_some(value)
 }
 
 fn normalized_optional(value: &Option<String>) -> Option<String> {
@@ -1120,6 +1089,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an authenticated stock opencode and spends provider tokens"]
     async fn installed_opencode_completes_and_resumes_through_production_console_adapter() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {

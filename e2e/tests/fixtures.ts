@@ -151,29 +151,13 @@ export const test = base.extend<TestFixtures>({
     const context = await browser.newContext();
     await installWorkerHeaderRouting(context, workerId);
 
-    const reactBaseUrl = process.env.PLAYWRIGHT_FRONTEND_BASE || 'http://localhost:3000';
-
-    await context.addInitScript((config: { baseUrl: string, workerId: string }) => {
-      (window as any).__TEST_WORKER_ID__ = config.workerId;
-      try {
-        const normalized = config.baseUrl.replace(/\/$/, '');
-        window.localStorage.setItem('zerg_use_react_dashboard', '1');
-        window.localStorage.setItem('zerg_use_react_chat', '1');
-        window.localStorage.setItem('zerg_react_automations_url', `${normalized}/automations`);
-
-        // Add test JWT token for React authentication
-        window.localStorage.setItem('zerg_jwt', 'test-jwt-token-for-e2e-tests');
-
-        } catch (error) {
-          // If localStorage is unavailable (unlikely), continue without failing tests.
-          console.warn('Playwright init: unable to seed React flags', error);
-        }
-      }, { baseUrl: reactBaseUrl, workerId });
+    await context.addInitScript((wid: string) => {
+      (window as any).__TEST_WORKER_ID__ = wid;
+    }, workerId);
 
     // -------------------------------------------------------------------
     // Monkey-patch *browser.newContext* so ad-hoc contexts created **inside**
-    // a spec inherit the worker header automatically (see realtime_updates
-    // tests that open multiple tabs).
+    // a spec inherit the worker header automatically.
     // -------------------------------------------------------------------
     const originalNewContext = browser.newContext.bind(browser);
     // Type-cast via immediate IIFE to keep TypeScript happy.

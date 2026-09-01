@@ -24,8 +24,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,12 +32,13 @@ from zerg.qa.claude_live_session_support import artifact_manifest
 from zerg.qa.claude_live_session_support import sha256_file
 from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.codex_auth import login_with_api_key
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.provider_launch_oracles import ASSERTION_ID
 from zerg.qa.provider_launch_oracles import SCENARIO_ID
 from zerg.qa.provider_launch_oracles import helm_launch_assertions
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import _start_transcript_shipper
+from zerg.qa.provider_release_identity import now
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import PROVIDER_RELEASE_SUBJECT
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -92,10 +91,6 @@ REGISTRATION = ProducerRegistration(
     provider_artifact_required=True,
     subject_kind=PROVIDER_RELEASE_SUBJECT,
 )
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _cleanup_evidence(cleanups: list[dict[str, Any]]) -> tuple[str, dict[str, bool]]:
@@ -220,7 +215,7 @@ class RuntimeHostRecordingProxy:
             if response_payload.get(key) is not None
         }
         record = {
-            "received_at": _now(),
+            "received_at": now(),
             "received_monotonic": time.monotonic(),
             "http_status": status,
             "request": request_payload,
@@ -474,7 +469,7 @@ def _human_launch_sequence(
         cwd=workspace,
     )
     write_json(root / "human-auth-receipt.json", login_receipt)
-    shipper = _start_transcript_shipper(
+    shipper = start_transcript_shipper(
         "codex",
         args,
         home=Path(environment["HOME"]),
@@ -644,7 +639,7 @@ def _automation_launch(
         cwd=workspace,
     )
     write_json(root / "automation-auth-receipt.json", login_receipt)
-    shipper = _start_transcript_shipper(
+    shipper = start_transcript_shipper(
         "codex",
         args,
         home=Path(environment["HOME"]),
@@ -818,7 +813,7 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": REGISTRATION.scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": status,
             "observation": observation,
             "assertions": assertions,
@@ -838,7 +833,7 @@ def run_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": REGISTRATION.scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "failure_code": "codex_helm_launch_visibility_failed",
             "error": f"{type(exc).__name__}: {exc}",

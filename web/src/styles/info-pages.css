@@ -90,173 +90,16 @@
   }
 
   /* --------------------------------------------------------
-   Pricing Page Specific
-   -------------------------------------------------------- */
-
-  .pricing-tiers {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: var(--space-6);
-    margin-bottom: var(--space-12);
-  }
-
-  .pricing-tier {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-xl);
-    padding: var(--space-8);
-    position: relative;
-    transition: border-color var(--motion-duration-fast);
-  }
-
-  .pricing-tier:hover {
-    border-color: var(--color-brand-primary);
-  }
-
-  .pricing-tier.featured {
-    border-color: var(--color-brand-primary);
-    box-shadow: 0 0 24px rgba(201, 166, 107, 0.15);
-  }
-
-  .pricing-tier-badge {
-    position: absolute;
-    top: calc(-1 * var(--space-3));
-    left: 50%;
-    transform: translateX(-50%);
-    background: linear-gradient(
-      135deg,
-      var(--color-brand-primary),
-      var(--color-brand-secondary)
-    );
-    color: white;
-    padding: var(--space-1) var(--space-4);
-    border-radius: var(--radius-full);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    text-transform: uppercase;
-  }
-
-  .pricing-tier-name {
-    font-family: var(--font-family-display);
-    font-size: var(--font-size-xl);
-    font-weight: var(--font-weight-semibold);
-    margin-bottom: var(--space-2);
-  }
-
-  .pricing-tier-price {
-    font-family: var(--font-family-display);
-    font-size: var(--font-size-4xl);
-    font-weight: var(--font-weight-bold);
-    margin-bottom: var(--space-1);
-  }
-
-  .pricing-tier-price span {
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-normal);
-    color: var(--color-text-muted);
-  }
-
-  .pricing-tier-desc {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-    margin-bottom: var(--space-6);
-  }
-
-  .pricing-tier-features {
-    list-style: none;
-    padding: 0;
-    margin: 0 0 var(--space-6);
-  }
-
-  .pricing-tier-features li {
-    padding: var(--space-2) 0;
-    padding-left: var(--space-6);
-    position: relative;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-  }
-
-  .pricing-tier-features li::before {
-    content: "✓";
-    position: absolute;
-    left: 0;
-    color: var(--color-intent-success);
-    font-weight: var(--font-weight-bold);
-  }
-
-  .pricing-tier-cta {
-    width: 100%;
-  }
-
-  .pricing-faq {
-    max-width: 700px;
-    margin: 0 auto;
-  }
-
-  .pricing-faq h2 {
-    font-family: var(--font-family-display);
-    font-size: var(--font-size-2xl);
-    font-weight: var(--font-weight-semibold);
-    margin-bottom: var(--space-6);
-    text-align: center;
-  }
-
-  /* --------------------------------------------------------
    Docs Page Specific
    -------------------------------------------------------- */
 
-  .docs-nav {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: var(--space-4);
-    margin-bottom: var(--space-12);
-  }
-
-  .docs-nav-card {
-    display: block;
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-lg);
-    padding: var(--space-6);
-    text-decoration: none;
-    color: inherit;
-    transition:
-      border-color var(--motion-duration-fast),
-      transform var(--motion-duration-fast);
-  }
-
-  .docs-nav-card:hover {
-    border-color: var(--color-brand-primary);
-    transform: translateY(-2px);
-  }
-
   /*
    * These public pages use document scrolling. While the page is moving under a
-   * stationary cursor, keep the hover states but remove the transition work so
-   * card animations do not pile up during a fast scroll.
+   * stationary cursor, keep the hover state but drop the transition work so
+   * animations do not pile up during a fast scroll.
    */
-  html.public-page--scrolling .pricing-tier,
-  html.public-page--scrolling .docs-nav-card,
   html.public-page--scrolling .info-page-back {
     transition: none !important;
-  }
-
-  .docs-nav-icon {
-    font-size: 2rem;
-    margin-bottom: var(--space-3);
-    color: var(--color-brand-primary);
-  }
-
-  .docs-nav-card h3 {
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-semibold);
-    margin-bottom: var(--space-2);
-  }
-
-  .docs-nav-card p {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-    margin: 0;
   }
 
   .docs-section {
@@ -295,49 +138,6 @@
     color: var(--color-text-secondary);
   }
 
-  .docs-ambient-preview {
-    margin: var(--space-5) 0;
-    padding: var(--space-4);
-    background: var(--color-surface-section);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-lg);
-  }
-
-  .docs-ambient-preview img {
-    display: block;
-    width: min(100%, 420px);
-    border-radius: var(--radius-md);
-    border: 1px solid var(--color-border-subtle);
-    box-shadow: var(--shadow-md);
-  }
-
-  .docs-ambient-preview figcaption {
-    margin-top: var(--space-3);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-    line-height: var(--font-line-height-relaxed);
-  }
-
-  .docs-inline-icon {
-    vertical-align: middle;
-    margin-right: var(--space-2);
-  }
-
-  .docs-code {
-    background: var(--color-surface-section);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-md);
-    padding: var(--space-4);
-    margin: var(--space-4) 0;
-    overflow-x: auto;
-  }
-
-  .docs-code code {
-    font-family: var(--font-family-mono);
-    font-size: var(--font-size-sm);
-    color: var(--color-brand-secondary);
-  }
-
   /* --------------------------------------------------------
    Changelog Page Specific
    -------------------------------------------------------- */
@@ -354,96 +154,6 @@
 
   .changelog-empty-links {
     margin-top: var(--space-6);
-  }
-
-  .changelog-list {
-    max-width: 700px;
-  }
-
-  .changelog-entry {
-    padding: var(--space-6) 0;
-    border-bottom: 1px solid var(--color-border-subtle);
-  }
-
-  .changelog-entry:last-child {
-    border-bottom: none;
-  }
-
-  .changelog-version {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    margin-bottom: var(--space-3);
-  }
-
-  .changelog-version-tag {
-    background: linear-gradient(
-      135deg,
-      var(--color-brand-primary),
-      var(--color-brand-secondary)
-    );
-    color: white;
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-md);
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-semibold);
-    font-family: var(--font-family-mono);
-  }
-
-  .changelog-date {
-    font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
-  }
-
-  .changelog-title {
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-semibold);
-    margin-bottom: var(--space-3);
-  }
-
-  .changelog-changes {
-    list-style: none;
-    padding: 0;
-  }
-
-  .changelog-changes li {
-    padding: var(--space-1) 0;
-    padding-left: var(--space-5);
-    position: relative;
-    font-size: var(--font-size-sm);
-    color: var(--color-text-secondary);
-  }
-
-  .changelog-changes li::before {
-    content: "•";
-    position: absolute;
-    left: 0;
-    color: var(--color-brand-primary);
-  }
-
-  .changelog-badge {
-    display: inline-block;
-    padding: var(--space-0\.5) var(--space-2);
-    border-radius: var(--radius-sm);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    text-transform: uppercase;
-    margin-right: var(--space-2);
-  }
-
-  .changelog-badge.new {
-    background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
-    color: var(--color-intent-success);
-  }
-
-  .changelog-badge.improved {
-    background: color-mix(in srgb, var(--color-brand-primary) 15%, transparent);
-    color: var(--color-brand-primary);
-  }
-
-  .changelog-badge.fixed {
-    background: color-mix(in srgb, var(--color-intent-warning) 15%, transparent);
-    color: var(--color-intent-warning);
   }
 
   /* --------------------------------------------------------
@@ -547,65 +257,6 @@
     margin: 0;
   }
 
-  .security-architecture {
-    background: var(--color-surface-section);
-    border-radius: var(--radius-xl);
-    padding: var(--space-8);
-    margin: var(--space-8) 0;
-  }
-
-  .security-architecture h3 {
-    font-family: var(--font-family-display);
-    font-size: var(--font-size-xl);
-    font-weight: var(--font-weight-semibold);
-    margin-bottom: var(--space-4);
-  }
-
-  .security-roadmap {
-    background: var(--color-surface-card);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-lg);
-    padding: var(--space-6);
-    margin: var(--space-8) 0;
-  }
-
-  .security-roadmap h3 {
-    font-size: var(--font-size-lg);
-    font-weight: var(--font-weight-semibold);
-    margin-bottom: var(--space-4);
-  }
-
-  .security-roadmap-item {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-3);
-    padding: var(--space-3) 0;
-  }
-
-  .security-roadmap-status {
-    flex-shrink: 0;
-    padding: var(--space-1) var(--space-2);
-    border-radius: var(--radius-sm);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    text-transform: uppercase;
-  }
-
-  .security-roadmap-status.done {
-    background: rgba(93, 155, 74, 0.15);
-    color: var(--color-intent-success);
-  }
-
-  .security-roadmap-status.in-progress {
-    background: rgba(201, 166, 107, 0.15);
-    color: var(--color-brand-primary);
-  }
-
-  .security-roadmap-status.planned {
-    background: var(--color-surface-section);
-    color: var(--color-text-muted);
-  }
-
   .security-contact {
     background: var(--color-surface-card);
     border: 1px solid var(--color-border-subtle);
@@ -652,10 +303,6 @@
 
     .info-page-subtitle {
       font-size: var(--font-size-lg);
-    }
-
-    .pricing-tiers {
-      grid-template-columns: 1fr;
     }
 
     .security-highlights {

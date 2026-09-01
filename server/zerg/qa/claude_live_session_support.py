@@ -39,6 +39,8 @@ from pathlib import Path
 from typing import Any
 from typing import Callable
 
+from zerg.qa.live_session_toolkit import TranscriptShipper
+from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.managed_claude_live import assistant_transcript_contains
 from zerg.qa.managed_claude_live import channel_send
 from zerg.qa.managed_claude_live import find_channel_session_id
@@ -47,8 +49,6 @@ from zerg.qa.managed_claude_live import strip_terminal_controls
 from zerg.qa.managed_claude_live import transcript_lookup_id
 from zerg.qa.managed_claude_live import transcript_paths
 from zerg.qa.managed_claude_live import wait_for_channel_ready
-from zerg.qa.provider_native_resume import TranscriptShipper
-from zerg.qa.provider_native_resume import _start_transcript_shipper
 from zerg.qa.pty_session import ProviderPtySession
 
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
@@ -339,7 +339,7 @@ def start_machine_and_shipper(args: Any, *, isolation_root: Path, evidence_root:
     environment = os.environ.copy()
     environment["HOME"] = str(home)
     environment["LONGHOUSE_HOME"] = str(longhouse_home)
-    shipper = _start_transcript_shipper(
+    shipper = start_transcript_shipper(
         "claude",
         args,
         home=home,

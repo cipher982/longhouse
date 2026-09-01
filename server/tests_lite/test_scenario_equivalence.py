@@ -9,9 +9,9 @@ import pytest
 
 from tests_lite._provider_harness_test_helpers import install_fake_engine
 from zerg.qa import codex_helm_interrupt
-from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import provider_harness_qualification as bridge
+from zerg.qa import provider_release_identity
 from zerg.qa.scenario_equivalence import compare_scenario_results
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "scenario_equivalence"
@@ -19,8 +19,8 @@ FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "scenario_equivalence"
 
 @pytest.fixture(autouse=True)
 def _stable_runner_checkout(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: "test-sha")
-    monkeypatch.setattr(codex_release_identity, "_git_dirty", lambda _root: False)
+    monkeypatch.setattr(provider_release_identity, "git_sha", lambda _root: "test-sha")
+    monkeypatch.setattr(provider_release_identity, "git_dirty", lambda _root: False)
     engine = install_fake_engine(tmp_path / "longhouse-engine")
     monkeypatch.setenv("LONGHOUSE_ENGINE_BIN", str(engine))
 

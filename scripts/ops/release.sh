@@ -171,7 +171,6 @@ echo "Waiting for pre-release exact-SHA gates before creating $VERSION..."
   --required-workflow "CI" \
   --required-workflow "Deploy and Verify" \
   --required-workflow "Launch Gate" \
-  --required-workflow "Installer Validation Ring" \
   --skip-release \
   --skip-public-package \
   --skip-runtime-artifacts \

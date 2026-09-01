@@ -23,12 +23,13 @@ struct SessionResumeHydrationTests {
         store.save(
             serverURL: serverURL,
             sessionId: sessionId,
-            detail: workspace.session,
-            events: workspace.events,
-            loadedProjectionItemCount: workspace.events.count,
-            totalProjectionItemCount: workspace.projection.total,
-            tailSnapshotEventId: workspace.events.compactMap(\.legacyNumericId).max().map(String.init),
-            lastPubsubSeq: nil
+            snapshot: TranscriptSnapshot(
+                detail: workspace.session,
+                events: workspace.events,
+                loadedProjectionItemCount: workspace.events.count,
+                totalProjectionItemCount: workspace.projection.total,
+                tailSnapshotEventId: workspace.events.compactMap(\.legacyNumericId).max().map(String.init)
+            )
         )
         store.waitForPendingWrites()
     }
@@ -37,7 +38,7 @@ struct SessionResumeHydrationTests {
     func coldRelaunchHydratesFromDiskBeforeNetwork() async throws {
         let dir = tempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = TranscriptSnapshotStore(directory: dir)
+        let store = TranscriptSnapshotStore(directory: dir, memoryMaxBytes: 0)
         let cached = try makeWorkspace(eventId: 30, content: "Disk tail")
         seedDiskSnapshot(store: store, workspace: cached)
 
@@ -48,7 +49,6 @@ struct SessionResumeHydrationTests {
         let model = SessionViewModel(
             apiFactory: { _ in api },
             enableRealtime: false,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: store
         )
 
@@ -70,7 +70,7 @@ struct SessionResumeHydrationTests {
     func coldRelaunchWithFailedRefreshKeepsTranscriptVisible() async throws {
         let dir = tempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = TranscriptSnapshotStore(directory: dir)
+        let store = TranscriptSnapshotStore(directory: dir, memoryMaxBytes: 0)
         let cached = try makeWorkspace(eventId: 30, content: "Disk tail")
         seedDiskSnapshot(store: store, workspace: cached)
 
@@ -81,7 +81,6 @@ struct SessionResumeHydrationTests {
         let model = SessionViewModel(
             apiFactory: { _ in api },
             enableRealtime: false,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: store
         )
 
@@ -106,7 +105,6 @@ struct SessionResumeHydrationTests {
         let model = SessionViewModel(
             apiFactory: { _ in api },
             enableRealtime: false,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: nil
         )
 
@@ -131,7 +129,7 @@ struct SessionResumeHydrationTests {
     func coldLoadWithNoCacheShowsBlockingErrorOnFailure() async throws {
         let dir = tempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = TranscriptSnapshotStore(directory: dir)
+        let store = TranscriptSnapshotStore(directory: dir, memoryMaxBytes: 0)
         // Nothing seeded on disk.
         let placeholder = try makeWorkspace(eventId: 1, content: "unused")
         let api = FakeResumeClient(workspaces: [placeholder])
@@ -141,7 +139,6 @@ struct SessionResumeHydrationTests {
         let model = SessionViewModel(
             apiFactory: { _ in api },
             enableRealtime: false,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: store
         )
 

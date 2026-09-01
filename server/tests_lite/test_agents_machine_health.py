@@ -10,7 +10,6 @@ from datetime import timezone
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -23,10 +22,7 @@ import pytest
 import zerg.services.agent_heartbeat_health as machine_health_service
 from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
-from zerg.database import Base
-from zerg.database import get_db
 from zerg.database import make_engine
-from zerg.models.agents import AgentHeartbeat
 from zerg.models.live_store import LiveBase
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.routers.agents_machines import archive_backlog_control_command_type
@@ -318,15 +314,6 @@ def test_machine_health_prioritizes_dead_letters_over_archive_pause():
     assert summary.reasons == ("archive_dead_lettered", "archive_repair_paused")
 
 
-def _make_db(tmp_path):
-    db_path = tmp_path / "test_agents_machine_health.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    engine = engine.execution_options(schema_translate_map={"agents": None})
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    return SessionLocal
-
-
 def _make_live_db(tmp_path):
     db_path = tmp_path / "test_live_machine_health.db"
     engine = make_engine(f"sqlite:///{db_path}")
@@ -404,29 +391,6 @@ def test_machine_health_service_reads_bounded_live_heartbeat_stamps(tmp_path, mo
     assert catalog_total == 1
     assert catalog_summaries[0].history_import.inventory is not None
     assert catalog_summaries[0].history_import.inventory.footprint_bytes == 24149562450
-
-
-def _make_client(SessionLocal):
-    from zerg.dependencies.agents_auth import require_single_tenant
-    from zerg.dependencies.agents_auth import verify_agents_token
-    from zerg.main import api_app
-    from zerg.main import app
-
-    def override_get_db():
-        with SessionLocal() as db:
-            yield db
-
-    def override_verify_agents_token():
-        return SimpleNamespace(device_id="testclient", id="token-1", owner_id=1)
-
-    def override_require_single_tenant():
-        return None
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
-    api_app.dependency_overrides[require_single_tenant] = override_require_single_tenant
-    client = TestClient(app, backend="asyncio")
-    return client, api_app
 
 
 # The heartbeat stamp catalogd validates: every field is required, so the
@@ -618,48 +582,32 @@ def test_machine_health_route_keeps_single_transient_connect_error_healthy(live_
     assert machine["reasons"] == []
 
 
-def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(tmp_path, monkeypatch):
-    """The archive-backlog route reads the archived heartbeat, not the catalog.
+def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(live_catalog, live_catalog_client, monkeypatch):
+    """The archive-backlog route projects the same catalog heartbeat as /health."""
 
-    Archive heartbeat rows are drained out of the live store by the archive
-    outbox, so this route keeps reading the archive session it always read.
-    """
-
-    SessionLocal = _make_db(tmp_path)
     pinned_now = datetime(2026, 6, 2, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "cinder")
 
-    with SessionLocal() as db:
-        db.add(
-            AgentHeartbeat(
-                device_id="cinder",
-                received_at=pinned_now - timedelta(seconds=30),
-                version="0.6.0",
-                spool_pending=6375,
-                spool_dead=0,
-                parse_errors_1h=0,
-                consecutive_failures=0,
-                ship_attempts_1h=10,
-                ship_successes_1h=10,
-                disk_free_bytes=100,
-                is_offline=0,
-                raw_json=json.dumps({"archive_backlog": ARCHIVE_BACKLOG_FIXTURE}),
-            )
-        )
-        db.commit()
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="cinder",
+        received_at=pinned_now - timedelta(seconds=30),
+        spool_pending=6375,
+        ship_attempts_1h=10,
+        ship_successes_1h=10,
+        raw_json=json.dumps({"archive_backlog": ARCHIVE_BACKLOG_FIXTURE}),
+    )
 
-    client, api_app_ref = _make_client(SessionLocal)
+    response = live_catalog_client.get("/agents/machines/cinder/archive-backlog", headers=headers)
 
-    try:
-        response = client.get("/api/agents/machines/cinder/archive-backlog")
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["device_id"] == "cinder"
-        assert payload["archive_repair"]["state"] == "pending"
-        assert payload["archive_repair"]["pending_ranges"] == 6375
-        assert payload["archive_repair"]["pending_bytes"] == 16_699_227_012
-    finally:
-        api_app_ref.dependency_overrides = {}
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["device_id"] == "cinder"
+    assert payload["archive_repair"]["state"] == "pending"
+    assert payload["archive_repair"]["pending_ranges"] == 6375
+    assert payload["archive_repair"]["pending_bytes"] == 16_699_227_012
 
 
 def test_machine_health_route_projects_archive_backlog_and_history_import(live_catalog, live_catalog_client, monkeypatch):

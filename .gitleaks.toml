@@ -4,7 +4,8 @@
 # scoped allowlist for the handful of intentionally secret-SHAPED strings that
 # live in the tree: redaction-test fixtures and example/placeholder tokens.
 #
-# Referenced by .pre-commit-config.yaml and the secret-scan CI job.
+# Used by the gitleaks pre-commit hook in .pre-commit-config.yaml. Nothing in
+# .github/workflows runs gitleaks, so this is a local gate, not a CI one.
 # If a real secret fires, fix the source — do not add it here.
 
 [extend]

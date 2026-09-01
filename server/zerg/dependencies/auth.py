@@ -9,7 +9,6 @@ easier to test.
 
 from __future__ import annotations
 
-import hmac
 import os
 
 from fastapi import Depends
@@ -21,7 +20,6 @@ from zerg.auth.strategy import SESSION_COOKIE_NAME
 from zerg.auth.strategy import DevAuthStrategy
 from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.auth.strategy import JWTAuthStrategy
-from zerg.auth.strategy import _decode_jwt_fallback as _decode_jwt_fallback  # type: ignore
 from zerg.config import get_settings
 from zerg.database import get_db
 
@@ -42,13 +40,6 @@ AUTH_DISABLED: bool = _settings.auth_disabled  # noqa: N816 – keep legacy name
 # The JWT secret is still re-exported so the test-suite can decode tokens via
 # the fallback helper.
 JWT_SECRET: str = _settings.jwt_secret  # noqa: N816 – legacy export
-
-# Also expose the tiny decoder for tests that want to introspect JWT content.
-
-
-# Dev e-mail constant used in a handful of assertions
-DEV_EMAIL: str = "dev@local"  # noqa: N816 – keep legacy name
-
 
 # ---------------------------------------------------------------------------
 # Strategy selector – returns singleton per mode, toggles when flag patched.
@@ -117,28 +108,6 @@ def get_current_user(request: Request, db=Depends(_auth_compat_db)):
     return _get_strategy().get_current_user(request, db)
 
 
-def get_optional_user(request: Request, db=Depends(_auth_compat_db)):
-    """Return the authenticated *User* row or **None**.
-
-    This is a non-throwing variant for endpoints that need to detect auth
-    status without spamming 401s in the browser console.
-    """
-    # In dev mode, auth is disabled and the strategy always returns a user.
-    if AUTH_DISABLED:
-        return _get_strategy().get_current_user(request, db)
-
-    has_bearer = "Authorization" in request.headers
-    has_cookie = SESSION_COOKIE_NAME in request.cookies
-
-    if not has_bearer and not has_cookie:
-        return None
-
-    try:
-        return _get_strategy().get_current_user(request, db)
-    except HTTPException:
-        return None
-
-
 def require_admin(current_user=Depends(get_current_user)):
     """FastAPI dependency that ensures the user has role == ``ADMIN``."""
 
@@ -146,57 +115,6 @@ def require_admin(current_user=Depends(get_current_user)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
 
     return current_user
-
-
-def require_super_admin(current_user=Depends(get_current_user)):
-    """FastAPI dependency that ensures the user is in ADMIN_EMAILS list (super admin)."""
-
-    # First check if they're an admin
-    if getattr(current_user, "role", "USER") != "ADMIN":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
-
-    # In test/dev environments with auth disabled, any admin user is considered super admin
-    settings = get_settings()
-    if settings.auth_disabled or settings.testing:
-        return current_user
-
-    # Then check if they're a super admin (in ADMIN_EMAILS)
-    admin_emails = {e.strip().lower() for e in (settings.admin_emails or "").split(",") if e.strip()}
-    user_email = getattr(current_user, "email", "").lower()
-
-    if user_email not in admin_emails:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin privileges required")
-
-    return current_user
-
-
-def require_internal_call(request: Request):
-    """FastAPI dependency that ensures the call is internal (backend-to-backend).
-
-    Internal endpoints should only be called from within the backend process,
-    not exposed to external clients. This uses a shared secret token approach:
-    1. Requires X-Internal-Token header matching INTERNAL_API_SECRET
-    2. Fails closed when the shared secret is missing or invalid
-
-    This is a security measure for endpoints like /internal/runs/{run_id}/continue
-    that are called by background tasks.
-    """
-    settings = get_settings()
-
-    internal_token = request.headers.get("X-Internal-Token")
-    expected_token = settings.internal_api_secret
-
-    if not expected_token:
-        # INTERNAL_API_SECRET not configured - fail secure
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal API secret not configured",
-        )
-
-    if internal_token and hmac.compare_digest(internal_token, expected_token):
-        return True
-
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Internal endpoint - external access forbidden")
 
 
 # ---------------------------------------------------------------------------
@@ -210,20 +128,8 @@ def validate_ws_jwt(token: str | None, db=None):
     return _get_strategy().validate_ws_token(token, db)
 
 
-# ---------------------------------------------------------------------------
-# Re-export strategy so tests can monkey-patch
-# ---------------------------------------------------------------------------
-
-
-# Expose the strategy getter for testing monkey-patching
-_strategy = _get_strategy
-
 __all__ = [
     "get_current_user",
-    "get_optional_user",
     "require_admin",
-    "require_super_admin",
-    "require_internal_call",
     "validate_ws_jwt",
-    "_strategy",  # exported for test monkey-patching
 ]

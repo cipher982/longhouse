@@ -121,7 +121,7 @@ pub fn collect_observations_from(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<CodexBridgeObservation> {
-    let paths = state_file_paths(state_dir);
+    let paths = crate::managed_scan::state_file_paths(state_dir);
     collect_observations_from_paths(&paths, process_facts)
 }
 
@@ -223,21 +223,6 @@ fn bridge_process_identity_matches(
             && fact.command.contains(session_id)
             && lstart_matches_recorded(fact, recorded_start)
     })
-}
-
-fn state_file_paths(state_dir: &Path) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let Ok(entries) = fs::read_dir(state_dir) else {
-        return paths;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        paths.push(path);
-    }
-    paths
 }
 
 #[cfg(test)]

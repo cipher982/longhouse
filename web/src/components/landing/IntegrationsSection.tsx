@@ -20,17 +20,37 @@ const CAPABILITIES: Capability[] = [
   { key: "resume", label: "Resume", supported: (provider) => provider.resume },
 ];
 
+function joinClause(parts: string[]): string {
+  if (parts.length < 3) return parts.join(" and ");
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
+
+/**
+ * Built from the booleans rather than matched against them. The branch version
+ * of this never read `provider.interrupt`, so Antigravity's row claimed
+ * "Launch, send, and interrupt" directly beside a chip reading Interrupt: not
+ * supported.
+ */
 function providerSummary(provider: LaunchProviderSupport): string {
   if (provider.steerMidTurn) {
     return "Full remote control, including steering during a turn.";
   }
-  if (provider.launchAndSend && provider.resume) {
-    return "Launch, interrupt, and resume. Your next instruction lands when the current turn ends.";
+  if (!provider.launchAndSend) {
+    return "Syncs in for watching and search. No Longhouse control path.";
   }
-  if (provider.launchAndSend) {
-    return "Launch, send, and interrupt. Resume is not available yet.";
+
+  const have = ["launch", "send"];
+  const missing: string[] = [];
+  (provider.interrupt ? have : missing).push("interrupt");
+  (provider.resume ? have : missing).push("resume");
+
+  const claim = joinClause(have);
+  const opening = `${claim.charAt(0).toUpperCase()}${claim.slice(1)}.`;
+  if (missing.length === 0) {
+    return `${opening} Your next instruction lands when the current turn ends.`;
   }
-  return "Syncs in for watching and search. No Longhouse control path.";
+  const verb = missing.length === 1 ? "is" : "are";
+  return `${opening} ${joinClause(missing).replace(/^./, (c) => c.toUpperCase())} ${verb} not available yet.`;
 }
 
 function CapabilityChip({ capability, provider }: { capability: Capability; provider: LaunchProviderSupport }) {

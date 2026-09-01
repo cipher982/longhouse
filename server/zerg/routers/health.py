@@ -241,21 +241,7 @@ def readyz_check():
     ping over its socket is the whole check. The probe carries a short timeout
     so it never blocks behind a long write transaction.
     """
-    # Access the parent app via the request scope (health is mounted on api_app,
-    # which is mounted on app). We need app.state from the root app.
-    # FastAPI stores the app in request.app, but we need the *root* app.
-    # Since this router is included on api_app, request.app is api_app.
-    # The root app is accessible via request.app.state if needed, but here
-    # we rely on a module-level reference set during app creation.
-
     _settings = get_settings()
-
-    single_tenant_violation = getattr(_health_app_ref, "single_tenant_violation", None)
-    if single_tenant_violation:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unhealthy", "reason": single_tenant_violation},
-        )
 
     # The factory assurance runtime runs with testing settings against a real
     # catalogd, so its readiness is catalogd readiness like any other host.
@@ -319,14 +305,6 @@ def health_check(request: Request):
         health_status["build"] = {"error": "missing", "detail": str(exc)}
 
     checks = {}
-
-    # 0. Single-tenant violation check
-    single_tenant_violation = getattr(_health_app_ref, "single_tenant_violation", None)
-    if single_tenant_violation:
-        health_status["status"] = "unhealthy"
-        health_status["message"] = single_tenant_violation
-        checks["single_tenant"] = {"status": "fail", "error": single_tenant_violation}
-        critical_failure = True
 
     # 1. Environment validation
     try:
@@ -620,12 +598,3 @@ def health_check(request: Request):
     if critical_failure:
         return JSONResponse(status_code=503, content=health_status)
     return health_status
-
-
-def set_health_app_ref(app):
-    """Set the root app reference for health checks that need app.state."""
-    global _health_app_ref
-    _health_app_ref = app
-
-
-_health_app_ref = None

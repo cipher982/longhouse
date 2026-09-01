@@ -4896,61 +4896,54 @@ def scenario_result(
     )
 
 
-def run_probe_identity(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+# Scenario id -> the AgentHarnessAdapter method that produces its payload.
+# Each of these ran through its own byte-identical wrapper function until they
+# were collapsed into `run_adapter_scenario`; the method name matches the
+# scenario id except where the adapter surface predates the scenario id.
+ADAPTER_SCENARIO_METHODS: dict[str, str] = {
+    "action_matrix": "action_matrix",
+    "adapter_conformance": "adapter_conformance",
+    "answer_pause_request": "answer_pause_request",
+    "collect_raw_evidence": "collect_evidence",
+    "control_surface": "control_surface",
+    "conversation_reset": "conversation_reset",
+    "conversation_reset_resume": "conversation_reset_resume",
+    "crash_timeout_cleanup": "crash_timeout_cleanup",
+    "external_event_channel": "external_event_channel",
+    "interaction_semantics": "interaction_semantics",
+    "interrupt_cancel": "interrupt_cancel",
+    "launch_managed_session": "launch_managed_session",
+    "live_token_streaming": "live_token_streaming",
+    "managed_session_e2e": "managed_session_e2e",
+    "multi_turn_continuity": "multi_turn_continuity",
+    "pause_request_detect": "pause_request_detect",
+    "permission_prompt": "permission_prompt",
+    "probe_identity": "probe",
+    "resume_reattach": "resume_reattach",
+    "runtime_phase": "runtime_phase",
+    "session_projection": "session_projection",
+    "steer_active_turn": "steer_active_turn",
+    "tail_output": "tail_output",
+    "terminate_cleanup": "terminate_cleanup",
+    "timeline_projection": "timeline_projection",
+    "tool_call_result": "tool_call_result",
+    "transcript_binding": "transcript_binding",
+}
+
+
+def run_adapter_scenario(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    """Prepare, run the scenario's adapter method, clean up, wrap the payload.
+
+    The scenario id is read off the package rather than baked into a
+    per-scenario wrapper: `run_scenario` builds the package from the same id it
+    dispatches on, so the two can never disagree.
+    """
     adapter.prepare(package)
-    payload = adapter.probe(package)
+    payload = getattr(adapter, ADAPTER_SCENARIO_METHODS[package.scenario])(package)
     adapter.cleanup(package)
     return scenario_result(
         provider=adapter.config.provider,
-        scenario="probe_identity",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_adapter_conformance(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.adapter_conformance(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="adapter_conformance",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_collect_raw_evidence(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.collect_evidence(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="collect_raw_evidence",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_action_matrix(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.action_matrix(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="action_matrix",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_control_surface(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.control_surface(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="control_surface",
+        scenario=package.scenario,
         package=package,
         payload=payload,
     )
@@ -5101,30 +5094,6 @@ def run_orchestration_capability_matrix(adapter: AgentHarnessAdapter, package: E
     )
 
 
-def run_session_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.session_projection(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="session_projection",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_timeline_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.timeline_projection(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="timeline_projection",
-        package=package,
-        payload=payload,
-    )
-
-
 def run_tool_presentation_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     """Run the shared transcript factory corpus inside the universal harness."""
 
@@ -5265,18 +5234,6 @@ def run_prompt_once(adapter: AgentHarnessAdapter, package: EvidencePackage, prom
     )
 
 
-def run_launch_managed_session(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.launch_managed_session(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="launch_managed_session",
-        package=package,
-        payload=payload,
-    )
-
-
 def run_send_receive(adapter: AgentHarnessAdapter, package: EvidencePackage, prompt: str | None) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.send_receive(package, prompt or DEFAULT_HARNESS_PROMPT)
@@ -5284,66 +5241,6 @@ def run_send_receive(adapter: AgentHarnessAdapter, package: EvidencePackage, pro
     return scenario_result(
         provider=adapter.config.provider,
         scenario="send_receive",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_steer_active_turn(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.steer_active_turn(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="steer_active_turn",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_pause_request_detect(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.pause_request_detect(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="pause_request_detect",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_answer_pause_request(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.answer_pause_request(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="answer_pause_request",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_interrupt_cancel(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.interrupt_cancel(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="interrupt_cancel",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_tool_call_result(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.tool_call_result(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="tool_call_result",
         package=package,
         payload=payload,
     )
@@ -5543,18 +5440,6 @@ def run_tool_call_result_projection(
     )
 
 
-def run_resume_reattach(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.resume_reattach(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="resume_reattach",
-        package=package,
-        payload=payload,
-    )
-
-
 def run_provider_resume_factory(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = run_provider_resume_scenario(adapter.config.provider, package.scenario)
@@ -5604,150 +5489,6 @@ def run_provider_resume_factory(adapter: AgentHarnessAdapter, package: EvidenceP
     )
 
 
-def run_terminate_cleanup(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.terminate_cleanup(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="terminate_cleanup",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_tail_output(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.tail_output(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="tail_output",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_runtime_phase(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.runtime_phase(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="runtime_phase",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_transcript_binding(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.transcript_binding(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="transcript_binding",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_multi_turn_continuity(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.multi_turn_continuity(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="multi_turn_continuity",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_conversation_reset(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.conversation_reset(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="conversation_reset",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_conversation_reset_resume(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.conversation_reset_resume(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="conversation_reset_resume",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_interaction_semantics(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.interaction_semantics(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="interaction_semantics",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_external_event_channel(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.external_event_channel(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="external_event_channel",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_permission_prompt(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.permission_prompt(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="permission_prompt",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_crash_timeout_cleanup(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.crash_timeout_cleanup(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="crash_timeout_cleanup",
-        package=package,
-        payload=payload,
-    )
-
-
-def run_live_token_streaming(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.live_token_streaming(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="live_token_streaming",
-        package=package,
-        payload=payload,
-    )
-
-
 def run_baseline_compare(
     adapter: AgentHarnessAdapter,
     package: EvidencePackage,
@@ -5787,55 +5528,17 @@ def run_old_new_release_diff(
     )
 
 
-def run_managed_session_e2e(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
-    adapter.prepare(package)
-    payload = adapter.managed_session_e2e(package)
-    adapter.cleanup(package)
-    return scenario_result(
-        provider=adapter.config.provider,
-        scenario="managed_session_e2e",
-        package=package,
-        payload=payload,
-    )
-
-
 SCENARIO_RUNNERS = {
-    "probe_identity": run_probe_identity,
-    "adapter_conformance": run_adapter_conformance,
-    "collect_raw_evidence": run_collect_raw_evidence,
-    "action_matrix": run_action_matrix,
-    "control_surface": run_control_surface,
+    **{scenario: run_adapter_scenario for scenario in ADAPTER_SCENARIO_METHODS},
     "full_action_suite": run_full_action_suite,
     "parse_ingest_project": run_parse_ingest_project,
     "orchestration_capability_matrix": run_orchestration_capability_matrix,
-    "session_projection": run_session_projection,
-    "timeline_projection": run_timeline_projection,
     "tool_presentation_projection": run_tool_presentation_projection,
     "run_prompt_once": run_prompt_once,
-    "launch_managed_session": run_launch_managed_session,
     "send_receive": run_send_receive,
-    "managed_session_e2e": run_managed_session_e2e,
-    "steer_active_turn": run_steer_active_turn,
-    "pause_request_detect": run_pause_request_detect,
-    "answer_pause_request": run_answer_pause_request,
-    "interrupt_cancel": run_interrupt_cancel,
     "tool_call_result_projection": run_tool_call_result_projection,
-    "tool_call_result": run_tool_call_result,
     "codex_tool_call_result_strict": run_codex_tool_call_result_strict,
-    "resume_reattach": run_resume_reattach,
     **{scenario: run_provider_resume_factory for scenario in PROVIDER_RESUME_SCENARIOS},
-    "terminate_cleanup": run_terminate_cleanup,
-    "tail_output": run_tail_output,
-    "runtime_phase": run_runtime_phase,
-    "transcript_binding": run_transcript_binding,
-    "multi_turn_continuity": run_multi_turn_continuity,
-    "conversation_reset": run_conversation_reset,
-    "conversation_reset_resume": run_conversation_reset_resume,
-    "interaction_semantics": run_interaction_semantics,
-    "external_event_channel": run_external_event_channel,
-    "permission_prompt": run_permission_prompt,
-    "crash_timeout_cleanup": run_crash_timeout_cleanup,
-    "live_token_streaming": run_live_token_streaming,
     "baseline_compare": run_baseline_compare,
     "old_new_release_diff": run_old_new_release_diff,
 }

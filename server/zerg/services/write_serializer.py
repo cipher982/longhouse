@@ -307,9 +307,7 @@ class InterruptedWriteError(RuntimeError):
     def __init__(self, *, label: str, interrupt_after_seconds: float) -> None:
         self.label = label
         self.interrupt_after_seconds = interrupt_after_seconds
-        super().__init__(
-            f"WriteSerializer write for {label or 'unlabeled'} exceeded " f"{interrupt_after_seconds:.1f}s and was interrupted"
-        )
+        super().__init__(f"WriteSerializer write for {label or 'unlabeled'} exceeded {interrupt_after_seconds:.1f}s and was interrupted")
 
 
 def request_session_released_by_serializer(ws: object) -> bool:
@@ -607,7 +605,7 @@ class WriteSerializer:
         self._last_active_stack_dump_text = stack_text
 
         logger.warning(
-            "WriteSerializer active writer stack dump name=%s reason=%s label=%s job_id=%s thread_id=%s " "age_ms=%.1f stage=%s\n%s",
+            "WriteSerializer active writer stack dump name=%s reason=%s label=%s job_id=%s thread_id=%s age_ms=%.1f stage=%s\n%s",
             self._name,
             reason,
             self._active_label or "unlabeled",
@@ -652,7 +650,7 @@ class WriteSerializer:
             conn = self._active_sqlite_connection
             if conn is None:
                 logger.warning(
-                    "WriteSerializer interrupt requested but no sqlite connection is visible " "name=%s label=%s job_id=%s age_ms=%.1f",
+                    "WriteSerializer interrupt requested but no sqlite connection is visible name=%s label=%s job_id=%s age_ms=%.1f",
                     self._name,
                     label or "unlabeled",
                     job_id,
@@ -661,7 +659,7 @@ class WriteSerializer:
                 return
 
             logger.warning(
-                "WriteSerializer interrupting active sqlite writer " "name=%s label=%s job_id=%s age_ms=%.1f deadline_s=%.1f",
+                "WriteSerializer interrupting active sqlite writer name=%s label=%s job_id=%s age_ms=%.1f deadline_s=%.1f",
                 self._name,
                 label or "unlabeled",
                 job_id,

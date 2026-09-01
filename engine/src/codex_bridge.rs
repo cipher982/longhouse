@@ -59,7 +59,7 @@ const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const TUI_OWNED_RESUME_TIMEOUT_SECS: u64 = 30;
 const TUI_OWNED_RESUME_PROBE_TIMEOUT_SECS: u64 = 2;
-const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
+const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = crate::codex_config::DISABLE_UPDATE_CHECK;
 /// Provider-private variable Codex reads the relay bearer token from, so the
 /// token stays out of the TUI's argv. Named for Codex, not Longhouse: the
 /// managed-identity overlay owns `LONGHOUSE_*` and scrubs it.
@@ -179,7 +179,6 @@ pub struct BridgeRunConfig {
     pub api_url: String,
     pub api_token: String,
     pub codex_bin: String,
-    pub session_source: Option<String>,
     pub approval_policy: Option<String>,
     pub sandbox: Option<String>,
     pub model: Option<String>,
@@ -760,24 +759,20 @@ async fn handle_ipc_connection(
     tx: mpsc::UnboundedSender<IpcCommand>,
     pause_responder: Option<PauseRequestResponder>,
 ) -> Result<()> {
-    let mut buf = vec![0u8; 8192];
-    let mut total = 0usize;
-    // Read until newline or EOF
-    loop {
-        if total >= buf.len() {
-            bail!("IPC request too large");
+    let read = read_ipc_request(&mut stream).await;
+    let request: Value = match read
+        .and_then(|buf| serde_json::from_slice(&buf).context("parsing IPC request JSON"))
+    {
+        Ok(request) => request,
+        Err(e) => {
+            // The client is waiting on a line of JSON. Dropping the
+            // connection here reads to the caller as "the message vanished",
+            // so answer with the reason before closing.
+            let reported = anyhow!("{e:#}");
+            write_ipc_result(&mut stream, Err(reported)).await?;
+            return Err(e);
         }
-        let n = stream.read(&mut buf[total..]).await?;
-        if n == 0 {
-            break;
-        }
-        total += n;
-        if buf[..total].contains(&b'\n') {
-            break;
-        }
-    }
-    let request: Value =
-        serde_json::from_slice(&buf[..total]).context("parsing IPC request JSON")?;
+    };
     if request.get("kind").and_then(Value::as_str) == Some("pause_response") {
         let responder = pause_responder.context("pause response IPC is not enabled")?;
         let result = responder.respond(request).await;
@@ -863,6 +858,40 @@ async fn handle_ipc_connection(
 
     write_ipc_result(&mut stream, result).await?;
     Ok(())
+}
+
+/// Upper bound on one IPC request line.
+///
+/// The old bound was an 8 KiB fixed buffer, which a long steer message
+/// exceeded without the sender ever learning why. Attachments travel as
+/// references (`codex_attachments::parse_attachments`), not inline blobs, so
+/// the payload is essentially the message text; 1 MiB is far past any real
+/// one while still refusing to buffer without limit for a local peer.
+#[cfg(unix)]
+const MAX_IPC_REQUEST_BYTES: usize = 1024 * 1024;
+
+/// Read one newline-terminated (or EOF-terminated) IPC request.
+#[cfg(unix)]
+async fn read_ipc_request(stream: &mut tokio::net::UnixStream) -> Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(8192);
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > MAX_IPC_REQUEST_BYTES {
+            bail!(
+                "IPC request exceeds the {MAX_IPC_REQUEST_BYTES} byte limit ({} bytes read)",
+                buf.len()
+            );
+        }
+        if chunk[..n].contains(&b'\n') {
+            break;
+        }
+    }
+    Ok(buf)
 }
 
 #[cfg(unix)]
@@ -3160,36 +3189,41 @@ fn codex_app_server_args(
         OsString::from("-c"),
         OsString::from(CODEX_DISABLE_UPDATE_CHECK_CONFIG),
         OsString::from("-c"),
-        OsString::from(format!(
-            "mcp_servers.longhouse.command={}",
-            serde_json::to_string(&coordination_command.display().to_string())
-                .expect("coordination command is serializable")
+        OsString::from(crate::codex_config::string_override(
+            "mcp_servers.longhouse.command",
+            &coordination_command.display().to_string(),
         )),
         OsString::from("-c"),
-        OsString::from("mcp_servers.longhouse.args=[\"claude-channel\",\"serve\"]"),
+        OsString::from(crate::codex_config::literal_override(
+            "mcp_servers.longhouse.args",
+            "[\"claude-channel\",\"serve\"]",
+        )),
     ];
     for tool in LONGHOUSE_COORDINATION_TOOLS {
         args.push(OsString::from("-c"));
-        args.push(OsString::from(format!(
-            "mcp_servers.longhouse.tools.{tool}.approval_mode=\"approve\""
+        args.push(OsString::from(crate::codex_config::string_override(
+            &format!("mcp_servers.longhouse.tools.{tool}.approval_mode"),
+            "approve",
         )));
     }
     args.push(OsString::from("-c"));
-    args.push(OsString::from(format!(
-        "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID={}",
-        serde_json::to_string(&config.session_id).expect("session id is serializable")
+    args.push(OsString::from(crate::codex_config::string_override(
+        "mcp_servers.longhouse.env.LONGHOUSE_MANAGED_SESSION_ID",
+        &config.session_id,
     )));
     if let Some(token_file) = coordination_token_file {
         args.push(OsString::from("-c"));
-        args.push(OsString::from(format!(
-            "mcp_servers.longhouse.env.LONGHOUSE_COORDINATION_TOKEN_FILE={}",
-            serde_json::to_string(&token_file.display().to_string())
-                .expect("coordination token path is serializable")
+        args.push(OsString::from(crate::codex_config::string_override(
+            "mcp_servers.longhouse.env.LONGHOUSE_COORDINATION_TOKEN_FILE",
+            &token_file.display().to_string(),
         )));
     }
     if let Some(effort) = config.model_reasoning_effort.as_deref() {
         args.push(OsString::from("-c"));
-        args.push(OsString::from(format!("model_reasoning_effort={effort}")));
+        args.push(OsString::from(crate::codex_config::string_override(
+            "model_reasoning_effort",
+            effort,
+        )));
     }
     if let Some(model) = config.model.as_deref() {
         args.push(OsString::from("--model"));
@@ -3218,10 +3252,6 @@ fn codex_app_server_args(
         OsString::from("--enable"),
         OsString::from("request_permissions_tool"),
     ]);
-    if let Some(src) = config.session_source.as_deref() {
-        args.push(OsString::from("--session-source"));
-        args.push(OsString::from(src));
-    }
     args
 }
 
@@ -6931,7 +6961,6 @@ mod tests {
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
             codex_bin: "codex".to_string(),
-            session_source: None,
             approval_policy: None,
             sandbox: None,
             model: None,
@@ -8437,6 +8466,68 @@ mod tests {
         .unwrap();
 
         server.await.unwrap();
+    }
+
+    /// A long steer message used to hit a fixed 8 KiB buffer and be dropped
+    /// with the connection closed and no reply, so the sender saw the message
+    /// simply vanish. Anything within the bound now goes through.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_steer_message_larger_than_eight_kilobytes_is_delivered() {
+        let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let task = tokio::spawn(handle_ipc_connection(server, tx, None));
+
+        let long_text = "x".repeat(64 * 1024);
+        let mut bytes = serde_json::to_vec(&json!({
+            "kind": "steer",
+            "text": long_text,
+            "thread_id": "thread-1",
+            "expected_turn_id": "turn-1",
+        }))
+        .unwrap();
+        assert!(bytes.len() > 8192);
+        bytes.push(b'\n');
+        client.write_all(&bytes).await.unwrap();
+
+        let command = rx.recv().await.unwrap();
+        let IpcCommand::Steer { text, reply, .. } = command else {
+            panic!("expected steer command");
+        };
+        assert_eq!(text.len(), long_text.len());
+        reply.send(Ok(json!({}))).unwrap();
+
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        let parsed: Value = serde_json::from_slice(response.trim_ascii_end()).unwrap();
+        assert_eq!(parsed["ok"], true);
+        task.await.unwrap().unwrap();
+    }
+
+    /// Past the bound the caller gets a reason, not silence.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_oversized_ipc_request_is_refused_out_loud() {
+        let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let task = tokio::spawn(handle_ipc_connection(server, tx, None));
+
+        let writer = tokio::spawn(async move {
+            let chunk = vec![b'x'; 64 * 1024];
+            // No trailing newline: the connection is refused on size, not EOF.
+            while client.write_all(&chunk).await.is_ok() {}
+            let mut response = Vec::new();
+            let _ = client.read_to_end(&mut response).await;
+            response
+        });
+
+        assert!(task.await.unwrap().is_err());
+        let response = writer.await.unwrap();
+        let parsed: Value = serde_json::from_slice(response.trim_ascii_end()).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert!(parsed["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("byte limit")));
     }
 
     #[cfg(unix)]

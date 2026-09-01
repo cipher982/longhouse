@@ -4,7 +4,7 @@
 
 → **[longhouse.ai](https://longhouse.ai)** · [Download for macOS](https://longhouse.ai/download/macos) · [Hosted](https://control.longhouse.ai/signup) · [Docs](https://longhouse.ai/docs)
 
-Watch any Claude Code, Codex, Cursor, or OpenCode session live from the web or your iPhone. Search everything they've done. Send your next instruction while the agent keeps running in its real terminal on your machine. Apache-2.0 open core.
+Watch any Claude Code, Codex, Cursor, or OpenCode session live from the web. Search everything they've done. Send your next instruction while the agent keeps running in its real terminal on your machine. Apache-2.0 open core.
 
 ![Longhouse timeline — one searchable view of your coding-agent sessions across providers and machines](web/public/images/landing/timeline-preview.png)
 
@@ -43,13 +43,15 @@ longhouse claude       # managed channel session: send, interrupt, steer, resume
 longhouse codex        # managed app-server session: send, interrupt, steer, resume
 longhouse opencode     # managed server session: send, interrupt, reattach (not active-turn steer)
 longhouse cursor       # managed PTY session: send, interrupt, reattach (not active-turn steer)
+longhouse pi --prompt "..."   # managed one-shot turn: send, interrupt (no reattach)
+longhouse antigravity  # managed hook-inbox session: send only
 ```
 
 Use `longhouse opencode --model <provider/model>` when the OpenCode session
 must stay on a specific model. Longhouse carries that explicit choice through
 both the initial Helm launch and a later cold reattach.
 
-OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer. Cursor Helm supports send, interrupt, terminate, and reattach but not active-turn steer or pause-answer.
+OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer. Cursor Helm supports send, interrupt, terminate, and reattach but not active-turn steer or pause-answer. Antigravity is the narrowest of the six: it launches under Longhouse's hook inbox and accepts send, but not interrupt, terminate, or reattach — and it refuses to start at all if its hook is not installed, rather than opening an unmanaged session wearing a managed session id.
 
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
 
@@ -62,7 +64,7 @@ The web UI lives at `http://localhost:8080`. Runtime Host administration is a
 separate server lane and uses `longhouse-server`:
 
 ```bash
-longhouse-server wall --json
+longhouse-server status --json
 longhouse-server recall "that auth refresh bug from last week"
 longhouse-server tail <session-id>
 ```
@@ -108,7 +110,7 @@ longhouse machine repair                               # restart a configured ma
 longhouse machine repair --repair-service              # install/repair its native service
 ```
 
-`longhouse --help` lists every subcommand. Full docs: <https://longhouse.ai/docs>.
+`longhouse --help` lists the device commands; `longhouse-server --help` lists the Runtime Host ones. Full docs: <https://longhouse.ai/docs>.
 
 ## What makes Longhouse different
 
@@ -127,7 +129,11 @@ Actively developed pre-release. Every provider Longhouse supports syncs into one
 | Antigravity | ✓ | ✓ | — | — | — |
 | Pi Agent | ✓ | ✓ | ✓ | — | — |
 
-iOS companion ships APNs push on `needs_user`. See [RELEASE.md](RELEASE.md) for what's changed.
+The iOS client lives in `ios/` and handles APNs push on `needs_user`, but there is no
+TestFlight or App Store build and no `.ipa` in any release. Getting it on a phone today
+means opening `ios/XcodeHarness` in Xcode and running it onto your own device.
+
+See [RELEASE.md](RELEASE.md) for how releases are cut.
 
 Built and maintained by [David W. Rose](https://drose.io/)
 ([cipher982](https://github.com/cipher982)). Apache-2.0.

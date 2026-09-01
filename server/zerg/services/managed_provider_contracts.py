@@ -153,25 +153,31 @@ class ManagedProviderContract:
         # (managed_control_dispatcher.py `_session_uses_engine_control`).
         # tail_output and resume have no machine-control operation; they stay on
         # the flag.
+        #
+        # The support must be the EXACT live-control one. Several suffixes share
+        # one contract flag -- `turn_interrupt` and `interrupt` both gate on
+        # `interrupt` (MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX) -- so asking
+        # "does any support map to this operation?" let Pi's Console-only
+        # `pi.turn_interrupt` light up `can_interrupt`, i.e. a live Interrupt
+        # control on a session whose `session.interrupt` the dispatcher refuses.
         return {
-            "can_send_input": int(self.dispatchable_operation("send_input")),
-            "can_interrupt": int(self.dispatchable_operation("interrupt")),
-            "can_terminate": int(self.dispatchable_operation("terminate")),
+            "can_send_input": int(self.dispatchable_live_control("send")),
+            "can_interrupt": int(self.dispatchable_live_control("interrupt")),
+            "can_terminate": int(self.dispatchable_live_control("terminate")),
             "can_tail_output": int(self.tail_output),
             "can_resume": int(self.reattach),
         }
 
-    def dispatchable_operation(self, operation: str) -> bool:
-        """Whether the operation flag is set AND some advertised machine-control
-        support maps to it, i.e. whether a remote command can actually be
-        dispatched for it."""
+    def dispatchable_live_control(self, operation: str) -> bool:
+        """Whether a live-control command for this exact operation can be
+        dispatched: the contract flag is set AND the matching
+        `<provider>.<operation>` machine-control support is advertised.
 
-        if not self.supports_contract_operation(operation):
-            return False
-        return any(
-            MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(support.partition(".")[2]) == operation
-            for support in self.machine_control_supports
-        )
+        `operation` is a machine-control support suffix (send/interrupt/
+        terminate), not a contract flag name, precisely so a turn-scoped
+        support cannot stand in for its live-control sibling."""
+
+        return self.machine_control_capability_for_operation(operation) is not None
 
     def operation_evidence_for(self, operation: str) -> Mapping[str, str]:
         return self.operation_evidence.get(operation, {})

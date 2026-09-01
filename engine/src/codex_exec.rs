@@ -24,7 +24,6 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::mpsc;
 use walkdir::WalkDir;
 
-const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
 const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_app_server";
 const STDERR_TAIL_LINES: usize = 40;
 const APP_SERVER_TURN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -358,13 +357,13 @@ struct CodexExecRuntimeSink {
 pub fn codex_exec_args(config: &CodexExecRunConfig) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("-c"),
-        OsString::from(CODEX_DISABLE_UPDATE_CHECK_CONFIG),
+        OsString::from(crate::codex_config::DISABLE_UPDATE_CHECK),
     ];
     if let Some(approval_policy) = normalized_optional(&config.approval_policy) {
         args.push(OsString::from("-c"));
-        args.push(OsString::from(format!(
-            "approval_policy={}",
-            toml_quote_string(&approval_policy)
+        args.push(OsString::from(crate::codex_config::string_override(
+            "approval_policy",
+            &approval_policy,
         )));
     }
     if let Some(sandbox) = normalized_optional(&config.sandbox) {
@@ -373,20 +372,14 @@ pub fn codex_exec_args(config: &CodexExecRunConfig) -> Vec<OsString> {
     }
     if let Some(model) = normalized_optional(&config.model) {
         args.push(OsString::from("-c"));
-        args.push(OsString::from(format!(
-            "model={}",
-            toml_quote_string(&model)
+        args.push(OsString::from(crate::codex_config::string_override(
+            "model", &model,
         )));
     }
     args.push(OsString::from("app-server"));
     args.push(OsString::from("--listen"));
     args.push(OsString::from("stdio://"));
     args
-}
-
-fn toml_quote_string(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 fn warm_pool_compatible(config: &CodexExecRunConfig) -> bool {
@@ -2187,7 +2180,19 @@ mod tests {
             resume_thread_id: None,
             fork_thread_id: None,
             machine_name: "cinder".to_string(),
-            local_db_path: None,
+            // Point the sink at a private (nonexistent) path rather than
+            // leaving it to fall back on the process-global
+            // `$LONGHOUSE_HOME/agent/transcript-wake.sock`. That fallback made
+            // a full-turn test here deliver its completion wake into whatever
+            // listener another module's test had bound there.
+            local_db_path: Some(
+                std::env::temp_dir()
+                    .join(format!(
+                        "longhouse-codex-exec-test-{}",
+                        uuid::Uuid::new_v4()
+                    ))
+                    .join("longhouse-shipper.db"),
+            ),
         }
     }
 

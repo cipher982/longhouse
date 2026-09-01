@@ -33,7 +33,7 @@ export interface paths {
         };
         /**
          * Get Super Admin Status
-         * @description Check if the current user is a super admin and if password confirmation is required.
+         * @description Check whether the current user is a super admin (listed in ADMIN_EMAILS).
          */
         get: operations["get_super_admin_status_admin_super_admin_status_get"];
         put?: never;
@@ -55,10 +55,10 @@ export interface paths {
         put?: never;
         /**
          * Reset Database
-         * @description Reset the database by dropping all tables and recreating them.
+         * @description Clear the E2E catalog and search stores between Playwright runs.
          *
-         *     Requires super admin privileges (user must be in ADMIN_EMAILS).
-         *     In production environments, requires additional password confirmation.
+         *     This is a test fixture, not an operator tool: no deployment outside
+         *     ``test:e2e`` has a reset path, so every other environment is refused.
          */
         post: operations["reset_database_admin_reset_database_post"];
         delete?: never;
@@ -90,68 +90,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/admin/migration-log": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Migration Log
-         * @description Get the migration log from container startup.
-         */
-        get: operations["get_migration_log_admin_migration_log_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/admin/fix-database-schema": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fix Database Schema
-         * @description Directly fix the missing updated_at column issue.
-         */
-        post: operations["fix_database_schema_admin_fix_database_schema_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/admin/debug/db-schema": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Debug Db Schema
-         * @description Debug endpoint: returns database info.
-         *
-         *     TESTING-only. Returns table counts for debugging.
-         */
-        get: operations["debug_db_schema_admin_debug_db_schema_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/admin/test/sessions/{session_id}/runtime": {
         parameters: {
             query?: never;
@@ -166,56 +104,6 @@ export interface paths {
          * @description Materialize managed runtime facts through the canonical E2E catalog.
          */
         post: operations["configure_test_session_runtime_admin_test_sessions__session_id__runtime_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/admin/users": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Users With Usage
-         * @description List all users with their LLM usage statistics.
-         *
-         *     Returns users sorted by the specified field with usage stats for today, 7d, and 30d.
-         *     Admin-only endpoint.
-         */
-        get: operations["list_users_with_usage_admin_users_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/admin/users/{user_id}/usage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get User Usage Details
-         * @description Get detailed LLM usage for a specific user.
-         *
-         *     Returns:
-         *     - User info with usage summary for all periods
-         *     - Daily breakdown for the specified period
-         *     - Top automations by cost for the specified period
-         *
-         *     Admin-only endpoint.
-         */
-        get: operations["get_user_usage_details_admin_users__user_id__usage_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -826,30 +714,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/users/me/usage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read Current User Usage
-         * @description Return the authenticated user's LLM usage stats.
-         *
-         *     Returns token counts, costs, and daily budget limit status.
-         *     The `limit` field always reflects today's daily limit usage,
-         *     regardless of the selected period.
-         */
-        get: operations["read_current_user_usage_users_me_usage_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/users/me/notifications": {
         parameters: {
             query?: never;
@@ -1071,60 +935,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/ops/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Summary
-         * @description Return primary KPIs for the Ops dashboard (admin-only).
-         */
-        get: operations["get_summary_ops_summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/ops/timeseries": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Timeseries */
-        get: operations["get_timeseries_ops_timeseries_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/ops/top": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Top */
-        get: operations["get_top_ops_top_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/observability/checks": {
         parameters: {
             query?: never;
@@ -1284,6 +1094,130 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/media/claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Media Claims
+         * @description Return which content-addressed media blobs this Runtime Host needs.
+         */
+        post: operations["create_media_claims_agents_media_claims_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/media/{sha256}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Media Blob
+         * @description Upload a media blob once, keyed by sha256.
+         */
+        put: operations["put_media_blob_agents_media__sha256__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        /**
+         * Head Media Blob
+         * @description Cheap integrity probe for a media blob.
+         */
+        head: operations["head_media_blob_agents_media__sha256__head"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/media/{sha256}/blob": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Media Blob
+         * @description Fetch a media blob by sha256 over machine-token auth.
+         */
+        get: operations["get_media_blob_agents_media__sha256__blob_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/media/{sha256}/blob": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Browser Media Blob
+         * @description Fetch a browser-visible media blob by sha256.
+         */
+        get: operations["get_browser_media_blob_media__sha256__blob_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/media/{sha256}/thumb": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Browser Media Thumbnail
+         * @description Fetch a derived thumbnail for a browser-visible media object.
+         */
+        get: operations["get_browser_media_thumbnail_media__sha256__thumb_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/media/{sha256}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /**
+         * Head Browser Media Blob
+         * @description Cheap browser integrity probe for a visible media blob.
+         */
+        head: operations["head_browser_media_blob_media__sha256__head"];
         patch?: never;
         trace?: never;
     };
@@ -2170,47 +2104,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/timeline/sessions/{session_id}/turns": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Timeline Session Turns */
-        get: operations["get_timeline_session_turns_timeline_sessions__session_id__turns_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/timeline/sessions/{session_id}/workflows": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Timeline Session Workflow Runs
-         * @description List dynamic-workflow runs whose subagent threads live under this session.
-         *
-         *     Browser-cookie-authenticated mirror of the machine-facing
-         *     ``/agents/sessions/{id}/workflows``. Each entry is one collapsible workflow
-         *     run node for the session detail UI.
-         */
-        get: operations["get_timeline_session_workflow_runs_timeline_sessions__session_id__workflows_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/timeline/sessions/{session_id}/subagents": {
         parameters: {
             query?: never;
@@ -2226,61 +2119,6 @@ export interface paths {
          *     tool call that spawned them.
          */
         get: operations["get_timeline_session_subagents_timeline_sessions__session_id__subagents_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/timeline/sessions/{session_id}/graph": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Timeline Session Graph */
-        get: operations["get_timeline_session_graph_timeline_sessions__session_id__graph_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/timeline/workflows/{workflow_run_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Timeline Workflow Run
-         * @description Return one dynamic-workflow run's subagent threads (browser-auth mirror of
-         *     ``/agents/workflows/{run_id}``).
-         */
-        get: operations["get_timeline_workflow_run_timeline_workflows__workflow_run_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/timeline/sessions/{session_id}/turns/{turn_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Timeline Session Turn */
-        get: operations["get_timeline_session_turn_timeline_sessions__session_id__turns__turn_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2368,26 +2206,6 @@ export interface paths {
         get: operations["export_timeline_session_timeline_sessions__session_id__export_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/ingest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Ingest Session
-         * @description Require storage-v2 rather than retaining a second transcript writer.
-         */
-        post: operations["ingest_session_agents_ingest_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2573,130 +2391,6 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/media/claims": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create Media Claims
-         * @description Return which content-addressed media blobs this Runtime Host needs.
-         */
-        post: operations["create_media_claims_agents_media_claims_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/media/{sha256}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Put Media Blob
-         * @description Upload a media blob once, keyed by sha256.
-         */
-        put: operations["put_media_blob_agents_media__sha256__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        /**
-         * Head Media Blob
-         * @description Cheap integrity probe for a media blob.
-         */
-        head: operations["head_media_blob_agents_media__sha256__head"];
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/media/{sha256}/blob": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Media Blob
-         * @description Fetch a media blob by sha256 over machine-token auth.
-         */
-        get: operations["get_media_blob_agents_media__sha256__blob_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/media/{sha256}/blob": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Browser Media Blob
-         * @description Fetch a browser-visible media blob by sha256.
-         */
-        get: operations["get_browser_media_blob_media__sha256__blob_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/media/{sha256}/thumb": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Browser Media Thumbnail
-         * @description Fetch a derived thumbnail for a browser-visible media object.
-         */
-        get: operations["get_browser_media_thumbnail_media__sha256__thumb_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/media/{sha256}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        /**
-         * Head Browser Media Blob
-         * @description Cheap browser integrity probe for a visible media blob.
-         */
-        head: operations["head_browser_media_blob_media__sha256__head"];
         patch?: never;
         trace?: never;
     };
@@ -3374,26 +3068,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/source-lines/claims": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Create Source Line Claims
-         * @description Return which source-line identities are already durable on this host.
-         */
-        post: operations["create_source_line_claims_agents_source_lines_claims_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agents/storage/v2/media/claims": {
         parameters: {
             query?: never;
@@ -3557,75 +3231,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/backfill-summaries": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Backfill Progress
-         * @description Check backfill progress.
-         */
-        get: operations["backfill_progress_agents_backfill_summaries_get"];
-        put?: never;
-        /**
-         * Backfill Summaries
-         * @description Start backfilling missing summaries as a background task.
-         */
-        post: operations["backfill_summaries_agents_backfill_summaries_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/media/backfill-inline-data-urls": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Backfill Inline Data Url Media
-         * @description Opportunistically backfill legacy inline image data URLs into media objects.
-         */
-        post: operations["backfill_inline_data_url_media_agents_media_backfill_inline_data_urls_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/backfill-cursor-roles": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Backfill Cursor Roles
-         * @description Repair one batch of legacy Cursor ``role="user"`` events.
-         *
-         *     Re-roles Cursor's environment-context injection to ``system`` and unwraps
-         *     the real user turn from ``<user_query>...</user_query>`` for rows that
-         *     predate the decoder fix. Idempotent; paginated via ``after_id`` (loop until
-         *     ``scanned == 0``). ``raw_json`` is never modified.
-         */
-        post: operations["backfill_cursor_roles_agents_backfill_cursor_roles_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agents/ingest-health": {
         parameters: {
             query?: never;
@@ -3638,26 +3243,6 @@ export interface paths {
          * @description Check ingest freshness -- detects if sessions have stopped shipping.
          */
         get: operations["get_ingest_health_agents_ingest_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/usage-stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Usage Stats
-         * @description Session activity statistics by provider, queried live from sessions table.
-         */
-        get: operations["get_usage_stats_agents_usage_stats_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4183,53 +3768,6 @@ export interface components {
          * @enum {string}
          */
         ActivityRecency: "live" | "recent" | "stale" | "none";
-        /**
-         * AdminUserDetailResponse
-         * @description Response for GET /api/admin/users/{id}/usage.
-         */
-        AdminUserDetailResponse: {
-            user: components["schemas"]["AdminUserRow"];
-            /** Period */
-            period: string;
-            summary: components["schemas"]["PeriodUsage"];
-            /** Daily Breakdown */
-            daily_breakdown: components["schemas"]["DailyBreakdown"][];
-            /** Top Automations */
-            top_automations: components["schemas"]["TopAutomationUsage"][];
-        };
-        /**
-         * AdminUserRow
-         * @description User row with usage stats for admin list view.
-         */
-        AdminUserRow: {
-            /** Id */
-            id: number;
-            /** Email */
-            email: string;
-            /** Display Name */
-            display_name?: string | null;
-            /** Role */
-            role: string;
-            /** Is Active */
-            is_active: boolean;
-            /** Created At */
-            created_at?: string | null;
-            usage: components["schemas"]["UserUsageSummary"];
-        };
-        /**
-         * AdminUsersResponse
-         * @description Response for GET /api/admin/users.
-         */
-        AdminUsersResponse: {
-            /** Users */
-            users: components["schemas"]["AdminUserRow"][];
-            /** Total */
-            total: number;
-            /** Limit */
-            limit: number;
-            /** Offset */
-            offset: number;
-        };
         /** ArchiveBacklogControlRequest */
         ArchiveBacklogControlRequest: {
             /**
@@ -4290,62 +3828,6 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /**
-         * BackfillProgressResponse
-         * @description Response for backfill progress check.
-         */
-        BackfillProgressResponse: {
-            /** Running */
-            running: boolean;
-            /**
-             * Backfilled
-             * @default 0
-             */
-            backfilled: number;
-            /**
-             * Skipped
-             * @default 0
-             */
-            skipped: number;
-            /**
-             * Errors
-             * @default 0
-             */
-            errors: number;
-            /**
-             * Remaining
-             * @default 0
-             */
-            remaining: number;
-            /**
-             * Total
-             * @default 0
-             */
-            total: number;
-        };
-        /**
-         * BackfillSummariesResponse
-         * @description Response for summary backfill endpoint.
-         */
-        BackfillSummariesResponse: {
-            /**
-             * Status
-             * @description 'started', 'already_running', or 'nothing_to_do'
-             */
-            status: string;
-            /**
-             * Total
-             * @description Total sessions to process
-             * @default 0
-             */
-            total: number;
-            /**
-             * Message
-             * @description Human-readable status message
-             * @default
-             */
-            message: string;
-        };
         /** Body_create_session_input_with_attachments_sessions__session_id__inputs_multipart_post */
         Body_create_session_input_with_attachments_sessions__session_id__inputs_multipart_post: {
             /**
@@ -4371,18 +3853,6 @@ export interface components {
              * @description Avatar image file (PNG/JPEG/WebP ≤2 MB)
              */
             file: string;
-        };
-        /**
-         * BudgetInfo
-         * @description Budget information with limit and usage.
-         */
-        BudgetInfo: {
-            /** Limit Cents */
-            limit_cents: number;
-            /** Used Usd */
-            used_usd: number;
-            /** Percent */
-            percent: number | null;
         };
         /** CLILoginRequest */
         CLILoginRequest: {
@@ -4623,63 +4093,6 @@ export interface components {
              * @description When the token was created
              */
             created_at: string;
-        };
-        /**
-         * CursorRoleBackfillResponse
-         * @description Response for one batch of Cursor user-event role re-classification.
-         */
-        CursorRoleBackfillResponse: {
-            /** Dry Run */
-            dry_run: boolean;
-            /**
-             * Scanned
-             * @default 0
-             */
-            scanned: number;
-            /**
-             * Re Roleed
-             * @default 0
-             */
-            re_roleed: number;
-            /**
-             * Unwrapped
-             * @default 0
-             */
-            unwrapped: number;
-            /** Last Id */
-            last_id?: number | null;
-            /**
-             * Message
-             * @default
-             */
-            message: string;
-        };
-        /**
-         * DailyBreakdown
-         * @description Single day's usage stats.
-         */
-        DailyBreakdown: {
-            /**
-             * Date
-             * Format: date
-             */
-            date: string;
-            /** Tokens */
-            tokens: number;
-            /** Cost Usd */
-            cost_usd: number;
-            /** Runs */
-            runs: number;
-        };
-        /**
-         * DatabaseResetRequest
-         * @description Request model for database reset with optional password confirmation.
-         */
-        DatabaseResetRequest: {
-            /** Confirmation Password */
-            confirmation_password?: string | null;
-            /** @default clear_data */
-            reset_type: components["schemas"]["ResetType"];
         };
         /**
          * DirectedInputCreate
@@ -5269,20 +4682,6 @@ export interface components {
             media_repair_bytes: number;
         };
         /**
-         * IngestResponse
-         * @description Response for ingest endpoint.
-         */
-        IngestResponse: {
-            /** Session Id */
-            session_id: string;
-            /** Events Inserted */
-            events_inserted: number;
-            /** Events Skipped */
-            events_skipped: number;
-            /** Session Created */
-            session_created: boolean;
-        };
-        /**
          * InputOriginResponse
          * @description Semantic origin for a user-authored transcript event.
          */
@@ -5303,16 +4702,6 @@ export interface components {
              * @description Client idempotency key when supplied by the Longhouse client
              */
             client_request_id?: string | null;
-        };
-        /**
-         * LatencyStats
-         * @description Latency statistics.
-         */
-        LatencyStats: {
-            /** P50 */
-            p50: number;
-            /** P95 */
-            p95: number;
         };
         /**
          * Lifecycle
@@ -6196,66 +5585,6 @@ export interface components {
             /** Providers */
             providers: components["schemas"]["ManagedTurnProviderSummaryResponse"][];
         };
-        /**
-         * MediaBackfillInlineDataUrlsResponse
-         * @description Response for guarded legacy inline media backfill.
-         */
-        MediaBackfillInlineDataUrlsResponse: {
-            /** Dry Run */
-            dry_run: boolean;
-            /**
-             * Scanned Source Lines
-             * @default 0
-             */
-            scanned_source_lines: number;
-            /**
-             * Candidate Refs
-             * @default 0
-             */
-            candidate_refs: number;
-            /**
-             * Decoded Bytes
-             * @default 0
-             */
-            decoded_bytes: number;
-            /**
-             * Stored Objects
-             * @default 0
-             */
-            stored_objects: number;
-            /**
-             * Refs Upserted
-             * @default 0
-             */
-            refs_upserted: number;
-            /**
-             * Skipped Existing Refs
-             * @default 0
-             */
-            skipped_existing_refs: number;
-            /**
-             * Skipped Budget
-             * @default 0
-             */
-            skipped_budget: number;
-            /**
-             * Skipped Disk Floor
-             * @default 0
-             */
-            skipped_disk_floor: number;
-            /**
-             * Rejected
-             * @default 0
-             */
-            rejected: number;
-            /** Last Source Line Id */
-            last_source_line_id?: number | null;
-            /**
-             * Message
-             * @default
-             */
-            message: string;
-        };
         /** MediaClaimItem */
         MediaClaimItem: {
             /** Sha256 */
@@ -6361,61 +5690,6 @@ export interface components {
              */
             slow_turn_total: number;
         };
-        /**
-         * OpsSeriesPoint
-         * @description Single point in a time series.
-         */
-        OpsSeriesPoint: {
-            /** Hour Iso */
-            hour_iso: string;
-            /** Value */
-            value: number;
-        };
-        /**
-         * OpsSummary
-         * @description Operations summary with all KPIs.
-         */
-        OpsSummary: {
-            /** Window */
-            window: string;
-            /** Window Label */
-            window_label: string;
-            /** Runs */
-            runs: number;
-            /** Cost Usd */
-            cost_usd: number | null;
-            budget_user: components["schemas"]["BudgetInfo"];
-            budget_global: components["schemas"]["BudgetInfo"];
-            /** Active Users 24H */
-            active_users_24h: number;
-            /** Automations Total */
-            automations_total: number;
-            /** Automations Scheduled */
-            automations_scheduled: number;
-            latency_ms: components["schemas"]["LatencyStats"];
-            /** Errors Last Hour */
-            errors_last_hour: number;
-            /** Top Automations */
-            top_automations: components["schemas"]["OpsTopAutomation"][];
-        };
-        /**
-         * OpsTopAutomation
-         * @description Top performing automation information.
-         */
-        OpsTopAutomation: {
-            /** Automation Id */
-            automation_id: number;
-            /** Name */
-            name: string;
-            /** Owner Email */
-            owner_email: string;
-            /** Runs */
-            runs: number;
-            /** Cost Usd */
-            cost_usd: number | null;
-            /** P95 Ms */
-            p95_ms: number;
-        };
         /** PasswordLoginRequest */
         PasswordLoginRequest: {
             /** Password */
@@ -6450,27 +5724,6 @@ export interface components {
             /** Status */
             status: string;
             pause_request: components["schemas"]["SessionPauseRequestProjectionResponse"];
-        };
-        /**
-         * PeriodUsage
-         * @description Usage stats for a single period.
-         */
-        PeriodUsage: {
-            /**
-             * Tokens
-             * @description Total tokens
-             */
-            tokens: number;
-            /**
-             * Cost Usd
-             * @description Total cost in USD
-             */
-            cost_usd: number;
-            /**
-             * Runs
-             * @description Number of runs
-             */
-            runs: number;
         };
         /**
          * PermissionDecisionOut
@@ -7372,12 +6625,6 @@ export interface components {
             /** Matched By */
             matched_by: ("lexical" | "dense")[];
         };
-        /**
-         * ResetType
-         * @description Database reset operation types.
-         * @enum {string}
-         */
-        ResetType: "clear_data" | "full_rebuild";
         /** ResolvedBridgeIn */
         ResolvedBridgeIn: {
             /** Bridge Pid */
@@ -10172,112 +9419,6 @@ export interface components {
             stale_reason?: ("freshness_window_expired" | "missing_preview_timestamp" | "superseded_by_durable") | null;
         };
         /**
-         * SessionTurnEnvelopeResponse
-         * @description Envelope for turn detail responses.
-         */
-        SessionTurnEnvelopeResponse: {
-            turn: components["schemas"]["SessionTurnResponse"];
-        };
-        /**
-         * SessionTurnResponse
-         * @description Canonical public timing fields for one session turn.
-         */
-        SessionTurnResponse: {
-            /**
-             * Id
-             * @description Turn integer id
-             */
-            id: number;
-            /**
-             * Session Id
-             * @description Owning session UUID
-             */
-            session_id: string;
-            /**
-             * Request Id
-             * @description Transport request id when available, otherwise a synthetic canonical id for reconstructed native turns
-             */
-            request_id?: string | null;
-            /**
-             * Session Input Id
-             * @description SessionInput row that authored this turn, when any
-             */
-            session_input_id?: number | null;
-            /**
-             * State
-             * @description created|send_accepted|active|terminal|durable|failed
-             */
-            state: string;
-            /**
-             * Terminal Phase
-             * @description Observed terminal phase when known
-             */
-            terminal_phase?: string | null;
-            /**
-             * Error Code
-             * @description Canonical irrecoverable error code when failed
-             */
-            error_code?: string | null;
-            /**
-             * User Event Id
-             * @description Triggering durable user event id
-             */
-            user_event_id?: number | null;
-            /**
-             * Durable Assistant Event Id
-             * @description Durable assistant event id that closed the turn
-             */
-            durable_assistant_event_id?: number | null;
-            /**
-             * Baseline Event Id
-             * @description Latest durable event id observed before the turn began
-             */
-            baseline_event_id?: number | null;
-            /**
-             * Baseline Observation Cursor
-             * @description Latest runtime observation cursor before the turn began
-             */
-            baseline_observation_cursor?: number | null;
-            /**
-             * User Submitted At
-             * Format: date-time
-             * @description When the user prompt was accepted as a turn
-             */
-            user_submitted_at: string;
-            /**
-             * Send Accepted At
-             * @description When transport accepted the prompt send
-             */
-            send_accepted_at?: string | null;
-            /**
-             * Active Phase Observed At
-             * @description When Longhouse first observed active runtime work
-             */
-            active_phase_observed_at?: string | null;
-            /**
-             * Terminal At
-             * @description When the turn reached terminal phase
-             */
-            terminal_at?: string | null;
-            /**
-             * Durable At
-             * @description When transcript durability was established
-             */
-            durable_at?: string | null;
-            /**
-             * Created At
-             * @description Row creation timestamp
-             */
-            created_at?: string | null;
-            /**
-             * Updated At
-             * @description Row update timestamp
-             */
-            updated_at?: string | null;
-            /** @description Derived read-time durations between canonical turn milestones */
-            timing: components["schemas"]["SessionTurnTimingResponse"];
-        };
-        /**
          * SessionTurnTimingResponse
          * @description Derived durations computed from canonical turn timestamps.
          */
@@ -10312,16 +9453,6 @@ export interface components {
              * @description Best available completion time: (durable_at or terminal_at) - user_submitted_at
              */
             total_turn_time_ms?: number | null;
-        };
-        /**
-         * SessionTurnsListResponse
-         * @description Response for a stable per-session turn listing.
-         */
-        SessionTurnsListResponse: {
-            /** Turns */
-            turns: components["schemas"]["SessionTurnResponse"][];
-            /** Total */
-            total: number;
         };
         /**
          * SessionWorkspaceResponse
@@ -10639,59 +9770,6 @@ export interface components {
             /** Providers */
             providers?: components["schemas"]["ProviderSourceInventory"][];
         };
-        /** SourceLineClaimItem */
-        SourceLineClaimItem: {
-            /**
-             * Session Id
-             * Format: uuid
-             */
-            session_id: string;
-            /** Source Path */
-            source_path: string;
-            /** Source Offset */
-            source_offset: number;
-            /** Line Hash */
-            line_hash: string;
-        };
-        /** SourceLineClaimResponseItem */
-        SourceLineClaimResponseItem: {
-            /** Source Path */
-            source_path: string;
-            /** Source Offset */
-            source_offset: number;
-            /** Line Hash */
-            line_hash: string;
-        };
-        /** SourceLineClaimsRequest */
-        SourceLineClaimsRequest: {
-            /** Items */
-            items: components["schemas"]["SourceLineClaimItem"][];
-        };
-        /** SourceLineClaimsResponse */
-        SourceLineClaimsResponse: {
-            /**
-             * Proof Version
-             * @default head-source-bytes-ro-v1
-             */
-            proof_version: string;
-            /** Present */
-            present: components["schemas"]["SourceLineClaimResponseItem"][];
-            /** Missing */
-            missing: components["schemas"]["SourceLineClaimResponseItem"][];
-            /** Rejected */
-            rejected: components["schemas"]["SourceLineRejectedItem"][];
-        };
-        /** SourceLineRejectedItem */
-        SourceLineRejectedItem: {
-            /** Source Path */
-            source_path?: string | null;
-            /** Source Offset */
-            source_offset?: number | null;
-            /** Line Hash */
-            line_hash?: string | null;
-            /** Reason */
-            reason: string;
-        };
         /**
          * StartupContextItemResponse
          * @description One recent session summary for startup continuity injection.
@@ -10767,22 +9845,12 @@ export interface components {
         SuperAdminStatusResponse: {
             /** Is Super Admin */
             is_super_admin: boolean;
-            /** Requires Password */
-            requires_password: boolean;
         };
         /**
          * TerminalReason
          * @enum {string}
          */
         TerminalReason: "session_ended" | "user_closed" | "bridge_stop" | "provider_exit" | "process_gone" | "owner_gone" | "host_expired" | "provider_signal" | "unknown";
-        /**
-         * TimeSeriesResponse
-         * @description Time series response.
-         */
-        TimeSeriesResponse: {
-            /** Series */
-            series: components["schemas"]["OpsSeriesPoint"][];
-        };
         /** TimelineBadgePresentationResponse */
         TimelineBadgePresentationResponse: {
             /**
@@ -10874,27 +9942,6 @@ export interface components {
              * @description Server-owned word that qualifies the status timestamp
              */
             seen_at_prefix: string;
-        };
-        /**
-         * TokenBreakdown
-         * @description Breakdown of token usage by type.
-         */
-        TokenBreakdown: {
-            /**
-             * Prompt
-             * @description Prompt/input tokens (if tracked)
-             */
-            prompt?: number | null;
-            /**
-             * Completion
-             * @description Completion/output tokens (if tracked)
-             */
-            completion?: number | null;
-            /**
-             * Total
-             * @description Total tokens used
-             */
-            total: number;
         };
         /**
          * TokenListResponse
@@ -11070,30 +10117,6 @@ export interface components {
             shell_summary?: components["schemas"]["ShellCommandSummaryResponse"] | null;
         };
         /**
-         * TopAutomationUsage
-         * @description Automation usage stats for user detail view.
-         */
-        TopAutomationUsage: {
-            /** Automation Id */
-            automation_id: number;
-            /** Name */
-            name: string;
-            /** Tokens */
-            tokens: number;
-            /** Cost Usd */
-            cost_usd: number;
-            /** Runs */
-            runs: number;
-        };
-        /**
-         * TopAutomationsResponse
-         * @description Response containing top automations list.
-         */
-        TopAutomationsResponse: {
-            /** Top Automations */
-            top_automations: components["schemas"]["OpsTopAutomation"][];
-        };
-        /**
          * TranscriptActionResponse
          * @description Provider-neutral lifecycle/control action projected into a transcript.
          */
@@ -11210,55 +10233,6 @@ export interface components {
              */
             observed_at: string;
         };
-        /**
-         * UsageLimit
-         * @description User's daily budget limit status.
-         */
-        UsageLimit: {
-            /**
-             * Daily Cost Cents
-             * @description Configured daily limit in cents (0=unlimited)
-             */
-            daily_cost_cents: number;
-            /**
-             * Used Percent
-             * @description Percentage of daily limit used
-             */
-            used_percent: number;
-            /**
-             * Remaining Usd
-             * @description Remaining budget in USD
-             */
-            remaining_usd: number;
-            /**
-             * Status
-             * @description ok=<80%, warning=80-99%, exceeded=>=100%, unlimited=no limit configured
-             * @enum {string}
-             */
-            status: "ok" | "warning" | "exceeded" | "unlimited";
-        };
-        /** UsageStatsByProvider */
-        UsageStatsByProvider: {
-            /** Provider */
-            provider: string;
-            /** Sessions */
-            sessions: number;
-            /** Messages */
-            messages: number;
-        };
-        /** UsageStatsResponse */
-        UsageStatsResponse: {
-            /** Total Sessions */
-            total_sessions: number;
-            /** Total Messages */
-            total_messages: number;
-            /** Date Range */
-            date_range: {
-                [key: string]: string;
-            };
-            /** By Provider */
-            by_provider: components["schemas"]["UsageStatsByProvider"][];
-        };
         /** UserClientPresenceHeartbeat */
         UserClientPresenceHeartbeat: {
             /** Client Id */
@@ -11368,41 +10342,6 @@ export interface components {
             prefs?: {
                 [key: string]: unknown;
             } | null;
-        };
-        /**
-         * UserUsageResponse
-         * @description Response for GET /api/users/me/usage.
-         */
-        UserUsageResponse: {
-            /**
-             * Period
-             * @description Time period for usage stats
-             * @enum {string}
-             */
-            period: "today" | "7d" | "30d";
-            /** @description Token usage breakdown */
-            tokens: components["schemas"]["TokenBreakdown"];
-            /**
-             * Cost Usd
-             * @description Total cost in USD
-             */
-            cost_usd: number;
-            /**
-             * Runs
-             * @description Number of runs in period
-             */
-            runs: number;
-            /** @description Daily budget limit info (always today's limit) */
-            limit: components["schemas"]["UsageLimit"];
-        };
-        /**
-         * UserUsageSummary
-         * @description Multi-period usage summary for a user.
-         */
-        UserUsageSummary: {
-            today: components["schemas"]["PeriodUsage"];
-            seven_days: components["schemas"]["PeriodUsage"];
-            thirty_days: components["schemas"]["PeriodUsage"];
         };
         /** ValidationError */
         ValidationError: {
@@ -11735,11 +10674,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatabaseResetRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -11748,15 +10683,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -11783,66 +10709,6 @@ export interface operations {
             };
         };
     };
-    get_migration_log_admin_migration_log_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    fix_database_schema_admin_fix_database_schema_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    debug_db_schema_admin_debug_db_schema_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
     configure_test_session_runtime_admin_test_sessions__session_id__runtime_post: {
         parameters: {
             query?: never;
@@ -11865,80 +10731,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_users_with_usage_admin_users_get: {
-        parameters: {
-            query?: {
-                /** @description Sort field: cost_today, cost_7d, cost_30d, email, created_at */
-                sort?: "cost_today" | "cost_7d" | "cost_30d" | "email" | "created_at";
-                /** @description Sort order: asc or desc */
-                order?: "asc" | "desc";
-                /** @description Max results */
-                limit?: number;
-                /** @description Pagination offset */
-                offset?: number;
-                /** @description Filter by active status (true/false). Omit for all users. */
-                active?: boolean | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdminUsersResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_user_usage_details_admin_users__user_id__usage_get: {
-        parameters: {
-            query?: {
-                /** @description Period for daily breakdown */
-                period?: "today" | "7d" | "30d";
-            };
-            header?: never;
-            path: {
-                user_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdminUserDetailResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12809,38 +11601,6 @@ export interface operations {
             };
         };
     };
-    read_current_user_usage_users_me_usage_get: {
-        parameters: {
-            query?: {
-                /** @description Time period for usage stats */
-                period?: "today" | "7d" | "30d";
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserUsageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     read_current_user_notification_settings_users_me_notifications_get: {
         parameters: {
             query?: never;
@@ -13128,102 +11888,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    get_summary_ops_summary_get: {
-        parameters: {
-            query?: {
-                window?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OpsSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_timeseries_ops_timeseries_get: {
-        parameters: {
-            query: {
-                metric: string;
-                window?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TimeSeriesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_top_ops_top_get: {
-        parameters: {
-            query?: {
-                kind?: string;
-                window?: string;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TopAutomationsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -13579,6 +12243,236 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProductHealthCheckSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_media_claims_agents_media_claims_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MediaClaimsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaClaimsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_media_blob_agents_media__sha256__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Longhouse-Session-Id"?: string | null;
+            };
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    head_media_blob_agents_media__sha256__head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_media_blob_agents_media__sha256__blob_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_browser_media_blob_media__sha256__blob_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_browser_media_thumbnail_media__sha256__thumb_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    head_browser_media_blob_media__sha256__head: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -15258,77 +14152,6 @@ export interface operations {
             };
         };
     };
-    get_timeline_session_turns_timeline_sessions__session_id__turns_get: {
-        parameters: {
-            query?: {
-                /** @description Max turns to return (server clamps to 100) */
-                limit?: number;
-                /** @description Offset within the stable per-session turn order */
-                offset?: number;
-                /** @description Turn order: asc|desc */
-                order?: string;
-            };
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionTurnsListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_timeline_session_workflow_runs_timeline_sessions__session_id__workflows_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_timeline_session_subagents_timeline_sessions__session_id__subagents_get: {
         parameters: {
             query?: never;
@@ -15349,104 +14172,6 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_timeline_session_graph_timeline_sessions__session_id__graph_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_timeline_workflow_run_timeline_workflows__workflow_run_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workflow_run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_timeline_session_turn_timeline_sessions__session_id__turns__turn_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-                turn_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionTurnEnvelopeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -15670,26 +14395,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    ingest_session_agents_ingest_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IngestResponse"];
                 };
             };
         };
@@ -15995,236 +14700,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderLiveProofAcceptedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_media_claims_agents_media_claims_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MediaClaimsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MediaClaimsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_media_blob_agents_media__sha256__put: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Longhouse-Session-Id"?: string | null;
-            };
-            path: {
-                sha256: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MediaUploadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    head_media_blob_agents_media__sha256__head: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                sha256: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_media_blob_agents_media__sha256__blob_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                sha256: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_browser_media_blob_media__sha256__blob_get: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path: {
-                sha256: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_browser_media_thumbnail_media__sha256__thumb_get: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path: {
-                sha256: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    head_browser_media_blob_media__sha256__head: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path: {
-                sha256: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -17487,39 +15962,6 @@ export interface operations {
             };
         };
     };
-    create_source_line_claims_agents_source_lines_claims_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SourceLineClaimsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SourceLineClaimsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     claim_storage_v2_media_agents_storage_v2_media_claims_post: {
         parameters: {
             query?: never;
@@ -17830,140 +16272,6 @@ export interface operations {
             };
         };
     };
-    backfill_progress_agents_backfill_summaries_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackfillProgressResponse"];
-                };
-            };
-        };
-    };
-    backfill_summaries_agents_backfill_summaries_post: {
-        parameters: {
-            query?: {
-                /** @description Max concurrent LLM requests */
-                concurrency?: number;
-                /** @description Optional project filter */
-                project?: string | null;
-                /** @description Re-summarize sessions that already have summaries */
-                force?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackfillSummariesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    backfill_inline_data_url_media_agents_media_backfill_inline_data_urls_post: {
-        parameters: {
-            query?: {
-                /** @description When true, scan and report without writing media rows or blobs */
-                dry_run?: boolean;
-                /** @description Maximum source_lines rows to scan in this batch */
-                max_rows?: number;
-                /** @description Decoded byte budget */
-                max_bytes?: number;
-                /** @description Only scan source_lines rows with id greater than this value */
-                after_id?: number;
-                /** @description Required when dry_run=false */
-                confirmed_backup_gate?: boolean;
-                /** @description Minimum free bytes to leave on the media filesystem when writing */
-                disk_floor_bytes?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MediaBackfillInlineDataUrlsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    backfill_cursor_roles_agents_backfill_cursor_roles_post: {
-        parameters: {
-            query?: {
-                /** @description When true, classify and report without writing */
-                dry_run?: boolean;
-                /** @description Only scan Cursor user events with id greater than this value */
-                after_id?: number;
-                /** @description Max events to scan in this batch */
-                batch_size?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CursorRoleBackfillResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_ingest_health_agents_ingest_health_get: {
         parameters: {
             query?: never;
@@ -17980,38 +16288,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestHealthResponse"];
-                };
-            };
-        };
-    };
-    get_usage_stats_agents_usage_stats_get: {
-        parameters: {
-            query?: {
-                /** @description Days to look back (max 365) */
-                days?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UsageStatsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

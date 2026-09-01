@@ -14,15 +14,12 @@ def build_api_openapi_schema(api_app: FastAPI) -> dict[str, Any]:
         title="Longhouse API",
         version="1.0.0",
         description=(
-            "Complete REST API specification for Longhouse. "
-            "This schema is the single source of truth for frontend-backend contracts."
+            "Complete REST API specification for Longhouse. This schema is the single source of truth for frontend-backend contracts."
         ),
         routes=api_app.routes,
     )
 
-    openapi_schema["paths"] = {
-        f"/api{path}": ops for path, ops in openapi_schema.get("paths", {}).items()
-    }
+    openapi_schema["paths"] = {f"/api{path}": ops for path, ops in openapi_schema.get("paths", {}).items()}
     openapi_schema["servers"] = [
         {"url": "http://localhost:8001", "description": "Development server"},
         {"url": "https://api.longhouse.ai", "description": "Production server"},

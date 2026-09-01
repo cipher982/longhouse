@@ -18,9 +18,9 @@ from fastapi import HTTPException
 from fastapi import Query
 from sqlalchemy.orm import Session
 
-from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.request_db import no_request_db
 from zerg.models.device_token import DeviceToken
 from zerg.schemas.machines import ArchiveBacklogControlRequest
 from zerg.schemas.machines import ArchiveBacklogControlResponse
@@ -37,7 +37,6 @@ from zerg.schemas.machines import WorkspaceSuggestionsResponse
 from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
-from zerg.services.agent_heartbeat_health import list_machine_transport_health
 from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import active_owner_id
@@ -60,12 +59,6 @@ ARCHIVE_BACKLOG_CONTROL_COMMAND_V2 = "archive.backlog_control.v2"
 PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS = 15
 
 
-def _machine_read_db_dependency():
-    """Machine routes read through catalogd, so there is no request session."""
-
-    yield None
-
-
 def _request_owner_id(db: Session | None, device_token: DeviceToken | None) -> int:
     owner_id = getattr(device_token, "owner_id", None)
     if owner_id is not None:
@@ -85,7 +78,7 @@ def archive_backlog_control_command_type(mode: str) -> str:
 
 @router.get("", response_model=MachineDirectoryResponse)
 def list_machines(
-    db: Session | None = Depends(_machine_read_db_dependency),
+    db: Session | None = Depends(no_request_db),
     device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineDirectoryResponse:
@@ -103,7 +96,7 @@ def list_machines(
 async def update_machine_name(
     device_id: str,
     request: MachineRenameRequest,
-    db: Session | None = Depends(_machine_read_db_dependency),
+    db: Session | None = Depends(no_request_db),
     device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineRenameResponse:
@@ -135,7 +128,7 @@ def list_machine_health(
         le=24 * 60 * 60,
         description="Treat heartbeats older than this as offline",
     ),
-    db: Session | None = Depends(_machine_read_db_dependency),
+    db: Session | None = Depends(no_request_db),
     device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineHealthListResponse:
@@ -162,7 +155,7 @@ def list_machine_workspaces(
     device_id: str,
     limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
     days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
-    db: Session | None = Depends(_machine_read_db_dependency),
+    db: Session | None = Depends(no_request_db),
     device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> WorkspaceSuggestionsResponse:
@@ -184,13 +177,21 @@ def list_machine_workspaces(
 @router.get("/{device_id}/archive-backlog", response_model=ArchiveBacklogResponse)
 def get_machine_archive_backlog(
     device_id: str,
-    db: Session = Depends(get_db),
-    _auth: object = Depends(verify_agents_caller),
+    db: Session | None = Depends(no_request_db),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ArchiveBacklogResponse:
-    summaries, _total = list_machine_transport_health(
-        db,
-        device_id=device_id,
+    try:
+        payload = machine_heartbeats(
+            owner_id=_request_owner_id(db, device_token),
+            device_id=device_id,
+            recent_after=None,
+            limit=1,
+        )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    summaries, _total = machine_transport_health_from_catalog_rows(
+        payload.get("heartbeats", []),
         limit=1,
     )
     if not summaries:
@@ -205,7 +206,7 @@ def get_machine_archive_backlog(
 async def control_machine_archive_backlog(
     device_id: str,
     request: ArchiveBacklogControlRequest,
-    db: Session | None = Depends(_machine_read_db_dependency),
+    db: Session | None = Depends(no_request_db),
     device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ArchiveBacklogControlResponse:
@@ -247,7 +248,7 @@ async def control_machine_archive_backlog(
 @router.get("/operations/{operation_id}", response_model=MachineControlOperationResponse)
 def get_machine_control_operation(
     operation_id: str,
-    db: Session | None = Depends(_machine_read_db_dependency),
+    db: Session | None = Depends(no_request_db),
     device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> MachineControlOperationResponse:
@@ -266,7 +267,7 @@ def get_machine_control_operation(
 async def run_provider_live_proof(
     device_id: str,
     request: ProviderLiveProofRequest,
-    db: Session | None = Depends(_machine_read_db_dependency),
+    db: Session | None = Depends(no_request_db),
     device_token: DeviceToken | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> ProviderLiveProofAcceptedResponse:

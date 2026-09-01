@@ -1,165 +1,190 @@
 import { Link } from "react-router-dom";
 import { usePageMeta } from "../../hooks/usePageMeta";
+import { getLaunchProviderSupportList } from "../../lib/providers";
 import { CodeBlock } from "./CodeBlock";
+
+const PROVIDERS = getLaunchProviderSupportList();
+
+/**
+ * Where the Machine Agent looks for each provider's own history, from
+ * engine/src/discovery.rs. Capability claims are NOT here — those come from the
+ * contract via getLaunchProviderSupportList().
+ */
+const IMPORT_SOURCES: Record<string, { binary: string; paths: string[] }> = {
+  claude: { binary: "claude", paths: ["~/.claude/projects/"] },
+  codex: { binary: "codex", paths: ["~/.codex/sessions/"] },
+  cursor: {
+    binary: "cursor-agent",
+    paths: ["~/.cursor/chats/", "~/.cursor/projects/", "$XDG_CONFIG_HOME/cursor/chats/"],
+  },
+  opencode: { binary: "opencode", paths: ["~/.local/share/opencode/"] },
+  pi: { binary: "pi", paths: [] },
+  antigravity: {
+    binary: "agy",
+    paths: ["~/.gemini/antigravity-cli/brain/", "~/.gemini/antigravity/brain/", "~/.gemini/tmp/"],
+  },
+};
+
+function yesNo(value: boolean) {
+  return value ? "Yes" : "No";
+}
 
 export default function IntegrationsPage() {
   usePageMeta({
     title: "Integrations - Longhouse Docs",
-    description: "Supported CLI agents: Claude Code, Codex CLI, Cursor Agent, Antigravity CLI, and OpenCode.",
+    description:
+      "The six CLI agents Longhouse launches and controls: Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent, and Antigravity CLI.",
   });
 
   return (
     <>
       <h1>Integrations</h1>
       <p className="docs-subtitle">
-        Longhouse reads the session files your CLI tools already produce.
-        No plugins or provider-side configuration needed. Bare CLI runs import
-        as unmanaged history; launching through Longhouse creates managed
-        sessions and keeps the control path explicit. Import exists so
-        Longhouse is useful immediately, but starting through Longhouse is the
-        path we want users on.
+        Longhouse reads the session files your CLI tools already produce. No
+        plugins, no provider-side configuration. Bare CLI runs import as
+        unmanaged history; launching through Longhouse creates managed sessions
+        and keeps the control path explicit. Import exists so Longhouse is
+        useful immediately, but starting through Longhouse is the path we want
+        users on.
       </p>
 
-      <h2>Claude Code</h2>
+      <h2>Six providers ship today</h2>
       <p>
-        <strong>Strongest today.</strong> Claude has the best end-to-end story:
-        import, search, raw session detail, and the strongest control-after-launch
-        path when launched through Longhouse.
+        All six launch through the native <code>longhouse</code> CLI and land in
+        the same timeline. What they can do after launch differs, and the
+        difference is not cosmetic — it is what each provider&apos;s own CLI
+        exposes. The table is generated from{" "}
+        <code>schemas/managed_providers.yml</code>, the same contract the
+        runtime reads, so it cannot drift from what the product will let you do.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Launch</th>
+            <th>Send</th>
+            <th>Interrupt</th>
+            <th>Mid-turn steer</th>
+            <th>Resume</th>
+          </tr>
+        </thead>
+        <tbody>
+          {PROVIDERS.map((provider) => (
+            <tr key={provider.id}>
+              <td>{provider.marketingName}</td>
+              <td>
+                {provider.nativeLaunchCommand ? (
+                  <code>{provider.nativeLaunchCommand}</code>
+                ) : (
+                  "—"
+                )}
+              </td>
+              <td>{yesNo(provider.launchAndSend)}</td>
+              <td>{yesNo(provider.interrupt)}</td>
+              <td>{yesNo(provider.steerMidTurn)}</td>
+              <td>{yesNo(provider.resume)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p>
+        Search, session detail, and the raw event stream work the same for every
+        row. Those are properties of the archive, not of the control path, so
+        they do not vary by provider.
+      </p>
+
+      <h2>What gets imported, and from where</h2>
+      <p>
+        The Machine Agent watches each provider&apos;s own history directory and
+        imports what it finds there, whether or not Longhouse launched it.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Bare CLI</th>
+            <th>Watched history</th>
+          </tr>
+        </thead>
+        <tbody>
+          {PROVIDERS.map((provider) => {
+            const source = IMPORT_SOURCES[provider.id];
+            return (
+              <tr key={provider.id}>
+                <td>{provider.marketingName}</td>
+                <td><code>{source.binary}</code></td>
+                <td>
+                  {source.paths.length === 0 ? (
+                    "Managed launches only — no stock history directory"
+                  ) : (
+                    source.paths.map((path, index) => (
+                      <span key={path}>
+                        {index > 0 && ", "}
+                        <code>{path}</code>
+                      </span>
+                    ))
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p>
+        Sessions are deduplicated by provider session ID, so re-importing is
+        safe and idempotent. Anything imported this way is a Shadow session:
+        searchable and observable, with no control path, because Longhouse never
+        owned one.
+      </p>
+
+      <h2>Notes per provider</h2>
+      <p>
+        <strong>Claude Code and Codex CLI</strong> are the deepest paths. Both
+        support mid-turn steer, so you can redirect a turn that is already
+        running rather than waiting for it to finish.
       </p>
       <CodeBlock title="terminal">
-        {`longhouse claude               # start with control channel`}
+        {`longhouse claude
+longhouse codex`}
       </CodeBlock>
       <p>
-        Claude Code sessions are imported from{" "}
-        <code>~/.claude/projects/</code>. Longhouse reads the JSONL session
-        files Claude produces and indexes every message, tool call, and output.
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Capability</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>Session import</td><td>Full</td></tr>
-          <tr><td>Search & detail</td><td>Full</td></tr>
-          <tr><td>Live control (wall, tail, message)</td><td>Strongest today</td></tr>
-          <tr><td>Continue / branch</td><td>Strongest today</td></tr>
-        </tbody>
-      </table>
-
-      <h2>Codex CLI</h2>
-      <p>
-        Archive and search are solid, and managed launch through Longhouse is
-        supported. Bare Codex runs still import as unmanaged history. Codex can
-        stay reachable after launch, but the continuation path is still
-        catching up to Claude. For new work, prefer <code>longhouse codex</code>{" "}
-        over bare <code>codex</code>.
+        <strong>OpenCode</strong> takes send, interrupt, terminate, and
+        pause-answer through its permission reply endpoint. Mid-turn steer is
+        not advertised because OpenCode exposes no stable mid-turn injection
+        semantic. Pass <code>--model</code> when a session must stay on a
+        specific model; Longhouse carries that choice through the initial launch
+        and a later cold reattach.
       </p>
       <CodeBlock title="terminal">
-        {`longhouse codex                # start with control channel`}
+        {`longhouse opencode
+longhouse opencode --model <provider/model>`}
       </CodeBlock>
-      <table>
-        <thead>
-          <tr>
-            <th>Capability</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>Session import</td><td>Full</td></tr>
-          <tr><td>Search & detail</td><td>Full</td></tr>
-          <tr><td>Launch through Longhouse</td><td>Supported</td></tr>
-          <tr><td>Live control</td><td>Supported</td></tr>
-          <tr><td>Continue / branch</td><td>Supported, maturing</td></tr>
-        </tbody>
-      </table>
-
-      <h2>Antigravity CLI</h2>
       <p>
-        Antigravity sessions are observed as Shadow sessions. Native Helm is
-        explicitly excluded until one native runtime owns the hook and control contract.
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Capability</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>Session import</td><td>Full</td></tr>
-          <tr><td>Search & detail</td><td>Full</td></tr>
-          <tr><td>Launch through Longhouse</td><td>Excluded from native Helm</td></tr>
-          <tr><td>Phase hooks</td><td>Excluded from native Helm</td></tr>
-          <tr><td>Live control</td><td>Unavailable</td></tr>
-          <tr><td>Continue / branch</td><td>Not yet</td></tr>
-        </tbody>
-      </table>
-
-      <h2>OpenCode</h2>
-      <p>
-        OpenCode lands in the timeline alongside the other CLIs. Launch through
-        Longhouse with <code>longhouse opencode</code> for a managed-control
-        session: archive, transcript, process-level health, remote send,
-        interrupt, lifecycle terminate, and pause-answer through OpenCode&apos;s
-        permission reply endpoint. Active-turn steer is not advertised because
-        OpenCode does not expose a stable mid-turn injection semantic.
-      </p>
-      <CodeBlock title="terminal">
-        {`longhouse opencode             # start OpenCode with Longhouse session ownership`}
-      </CodeBlock>
-      <table>
-        <thead>
-          <tr>
-            <th>Capability</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>Session import</td><td>Full</td></tr>
-          <tr><td>Search & detail</td><td>Full</td></tr>
-          <tr><td>Launch through Longhouse</td><td>Supported</td></tr>
-          <tr><td>Live control</td><td>Send, interrupt, and lifecycle control</td></tr>
-          <tr><td>Continue / branch</td><td>Not yet</td></tr>
-        </tbody>
-      </table>
-
-      <h2>Cursor Agent</h2>
-      <p>
-        <code>longhouse cursor</code> launches a managed Helm session whose
+        <strong>Cursor Agent</strong> runs as a managed Helm session whose
         native runtime owns the PTY, control, permission, and transcript
-        lifecycle. Bare <code>cursor-agent</code> sessions remain Shadow.
+        lifecycle. Send, interrupt, terminate, and reattach work; mid-turn steer
+        and pause-answer do not.
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Capability</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>Session import / archive</td><td>Supported</td></tr>
-          <tr><td>Search & detail</td><td>Supported</td></tr>
-          <tr><td>Launch through Longhouse (Helm)</td><td>Supported</td></tr>
-          <tr><td>Headless launch (Console / ACP)</td><td>Supported</td></tr>
-          <tr><td>Live control</td><td>Send, interrupt, terminate, and reattach</td></tr>
-          <tr><td>Live transcript</td><td>Supported</td></tr>
-          <tr><td>Pause-answer</td><td>Supported</td></tr>
-          <tr><td>Active-turn steer</td><td>Not supported</td></tr>
-        </tbody>
-      </table>
+      <p>
+        <strong>Pi Agent</strong> is a one-shot console adapter. Send, interrupt,
+        and terminate work within a turn; there is no reattach and no resume,
+        and nothing persists between turns.
+      </p>
+      <p>
+        <strong>Antigravity CLI</strong> is the narrowest of the six. It launches
+        under Longhouse&apos;s hook-inbox control path and accepts send;
+        interrupt, terminate, and reattach are not supported. It refuses to
+        start if its Longhouse hook is not installed rather than opening an
+        unmanaged session wearing a managed session id, and send stays gated per
+        session on observed hook readiness.
+      </p>
 
-      <h2>How import works</h2>
+      <h2>Import an existing machine</h2>
       <p>
-        Longhouse watches for new session files and imports them into the local
-        SQLite database. Sessions are deduplicated by provider session ID, so
-        re-importing is safe and idempotent.
-      </p>
-      <p>
-        The native Machine Agent service is installed with <code>longhouse machine repair --repair-service</code> after <code>longhouse auth</code>.
-        The Runtime Host can trigger a one-time import with:
+        The native Machine Agent service is installed with{" "}
+        <code>longhouse machine repair --repair-service</code> after{" "}
+        <code>longhouse auth</code>. To backfill Claude Code history that
+        predates it, the Runtime Host can run a one-shot import:
       </p>
       <CodeBlock title="terminal">{`longhouse-server ship`}</CodeBlock>
 

@@ -194,9 +194,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let timelineAnchorAt: String?
     let userMessages: Int?
     let toolCalls: Int?
-    let liveControlAvailable: Bool?
-    let hostReattachAvailable: Bool?
-    let replyToLiveSessionAvailable: Bool?
     let runtimeDisplay: SessionRuntimeDisplay
     let timelineCard: TimelineCardPresentation?
     @DefaultUnknownSessionStateFacts var stateFacts: SessionStateFacts
@@ -226,9 +223,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         timelineAnchorAt: String? = nil,
         userMessages: Int? = nil,
         toolCalls: Int? = nil,
-        liveControlAvailable: Bool? = nil,
-        hostReattachAvailable: Bool? = nil,
-        replyToLiveSessionAvailable: Bool? = nil,
         runtimeDisplay: SessionRuntimeDisplay,
         timelineCard: TimelineCardPresentation? = nil,
         stateFacts: SessionStateFacts = .unknown
@@ -257,9 +251,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.timelineAnchorAt = timelineAnchorAt
         self.userMessages = userMessages
         self.toolCalls = toolCalls
-        self.liveControlAvailable = liveControlAvailable
-        self.hostReattachAvailable = hostReattachAvailable
-        self.replyToLiveSessionAvailable = replyToLiveSessionAvailable
         self.runtimeDisplay = runtimeDisplay
         self.timelineCard = timelineCard
         self.stateFacts = stateFacts
@@ -506,40 +497,20 @@ enum TimelineSignal {
     }
 }
 
+/// The subset of the server capability projection the app actually consults.
+/// The response carries more fields; add one here when a screen reads it.
 struct SessionCapabilities: Codable, Sendable {
-    let liveControlAvailable: Bool
-    let hostReattachAvailable: Bool
-    let replyToLiveSessionAvailable: Bool
     let canQueueNextInput: Bool?
     let canSteerActiveTurn: Bool?
-    let displayLabel: String?
-    let displayDetail: String?
-    let displayTone: String?
-    let inputMode: String?
     let defaultInputIntent: String?
-    let composerEnabled: Bool?
     let composerPlaceholder: String?
-    let composerDisabledReason: String?
-    let sendDisabledReason: String?
-    let turnState: String?
-    let canStartTurn: Bool?
-    let startTurnBlockedBy: String?
-    let canInterruptActiveTurn: Bool?
     let attachImages: Bool?
-    let stalenessReason: String?
 }
 
-struct TimelineBadgePresentation: Codable, Hashable, Sendable {
-    let label: String
-    let tone: String
-}
-
-struct TimelineStatusPresentation: Codable, Hashable, Sendable {
-    let label: String
-    let tone: String
-    let seenAt: String?
-    let seenAtPrefix: String
-}
+/// The wire shape is the whole model: these carry no default, no derived
+/// value, and no behavior the screens do not read straight off the response.
+typealias TimelineBadgePresentation = APITimelineBadgePresentationResponse
+typealias TimelineStatusPresentation = APITimelineStatusPresentationResponse
 
 struct TimelineCardPresentation: Codable, Hashable, Sendable {
     let ownership: TimelineBadgePresentation
@@ -651,17 +622,9 @@ struct SessionInputResponse: Codable, Sendable {
     }
 }
 
-struct ConsoleTurnReceipt: Codable, Hashable, Sendable {
-    let turnId: String
-    let runId: String?
-    let state: String
-}
+typealias ConsoleTurnReceipt = APIConsoleTurnReceiptResponse
 
-struct SessionPauseQuestionOption: Codable, Hashable, Sendable {
-    let label: String
-    let description: String?
-    let value: String?
-}
+typealias SessionPauseQuestionOption = APISessionPauseQuestionOptionResponse
 
 struct SessionPauseQuestion: Codable, Hashable, Sendable {
     let id: String
@@ -1435,18 +1398,7 @@ enum ToolCallState: String, Codable, Hashable, Sendable, CaseIterable {
     case dropped
 }
 
-struct SessionEventMediaRef: Codable, Hashable, Sendable {
-    let sha256: String
-    let mediaState: String
-    let mimeType: String?
-    let byteSize: Int?
-    let blobUrl: String
-    let thumbUrl: String?
-    let sourcePath: String?
-    let sourceOffset: Int?
-    let jsonPointer: String?
-    let originalKind: String
-}
+typealias SessionEventMediaRef = APIEventMediaRefResponse
 
 struct ToolPresentationChild: Codable, Hashable, Sendable {
     let version: Int
@@ -1818,22 +1770,6 @@ enum JSONValue: Codable, Sendable, Hashable {
         case .object(let v): try c.encode(v)
         }
     }
-}
-
-struct SessionTurn: Codable, Identifiable, Sendable {
-    let id: Int
-    let sessionId: String
-    let sessionInputId: Int?
-    let state: String
-    let terminalPhase: String?
-    let errorCode: String?
-    let userSubmittedAt: String
-    let terminalAt: String?
-}
-
-struct SessionTurnsResponse: Codable, Sendable {
-    let turns: [SessionTurn]
-    let total: Int
 }
 
 struct DraftReplyResponse: Codable, Sendable {

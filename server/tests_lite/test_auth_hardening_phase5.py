@@ -15,7 +15,6 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
-from starlette.requests import Request
 
 from tests_lite.live_catalog_harness import provision_live_catalog
 from zerg.main import _enforce_single_tenant_startup
@@ -34,21 +33,6 @@ def test_agents_routes_allow_missing_device_token_when_auth_disabled(monkeypatch
 
         assert response.status_code == 200, response.text
         assert response.json()["total"] == 0
-
-
-def test_internal_calls_require_shared_secret_even_when_auth_disabled():
-    from zerg.dependencies.auth import require_internal_call
-
-    request = Request({"type": "http", "headers": []})
-    settings = SimpleNamespace(auth_disabled=True, internal_api_secret="test-internal-secret")
-
-    with patch("zerg.dependencies.auth.get_settings", return_value=settings):
-        with pytest.raises(Exception) as exc_info:
-            require_internal_call(request)
-
-    exc = exc_info.value
-    assert getattr(exc, "status_code", None) == 403
-    assert getattr(exc, "detail", None) == "Internal endpoint - external access forbidden"
 
 
 def test_single_tenant_config_requires_explicit_owner_email():

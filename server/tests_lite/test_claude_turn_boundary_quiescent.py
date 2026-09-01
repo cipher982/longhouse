@@ -98,7 +98,7 @@ def test_run_turn_boundary_passes_when_activity_settles_to_quiescent(tmp_path: P
     fake_session = _FakeSession()
 
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": str(tmp_path)}))
-    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
     monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
     monkeypatch.setattr(
         m,
@@ -153,7 +153,7 @@ def test_run_turn_boundary_fails_closed_when_activity_never_settles(tmp_path: Pa
     fake_session = _FakeSession()
 
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": str(tmp_path)}))
-    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
     monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
     monkeypatch.setattr(m, "await_assistant_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
     monkeypatch.setattr(m, "wait_for_served_quiescent", lambda **_k: (False, 90.0, ["thinking", "thinking"]))
@@ -180,7 +180,7 @@ def test_run_turn_boundary_records_a_typed_failure_on_launch_exception(tmp_path:
     fake_shipper = _FakeShipper()
 
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": str(tmp_path)}))
-    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
 
     def _boom(**_k: object) -> object:
         raise RuntimeError("Claude Helm process exited before its TUI became ready")

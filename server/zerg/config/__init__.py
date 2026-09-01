@@ -223,16 +223,6 @@ class Settings:  # noqa: D401 – simple data container
     # Discord alerts/digest (ops)
     discord_webhook_url: str | None
     discord_enable_alerts: bool
-    discord_daily_digest_cron: str
-
-    # Database reset security
-    db_reset_password: str | None
-
-    # Managed workspace integration ------------------------------------
-    longhouse_workspace_path: str  # Base path for managed workspaces
-
-    # Completion notifications ------------------------------------------
-    notification_webhook: str | None  # Discord/Slack webhook for run completion
 
     # Control plane connection (runtime SSO key fetching) -----------------
     control_plane_url: str | None  # e.g. https://control.longhouse.ai
@@ -240,29 +230,8 @@ class Settings:  # noqa: D401 – simple data container
     # Smoke testing -----------------------------------------------------
     smoke_test_secret: str | None  # Service account login for smoke tests
 
-    # Container runner settings ----------------------------------------
-    container_default_image: str | None
-    container_network_enabled: bool
-    container_user_id: str | None
-    container_memory_limit: str | None
-    container_cpus: str | None
-    container_timeout_secs: int
-    container_seccomp_profile: str | None
-    container_tools_enabled: bool
-
-    # Roundabout LLM decider settings ----------------------------------
-    roundabout_routing_model: str | None  # Override routing model (default: use_case lookup)
-    roundabout_llm_timeout: float  # Timeout for LLM routing calls (default: 1.5s)
-
-    # Bootstrap API settings -------------------------------------------
-    bootstrap_token: str | None  # Token for CLI-based bootstrap API auth
-
-    # OSS first-run UX ------------------------------------------------
-    skip_demo_seed: bool  # Legacy flag; normal first run no longer auto-seeds demo data
-
     # Tool output storage --------------------------------------------
     tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
-    tool_output_preview_chars: int  # Preview size for stored tool outputs
 
     # Frontend analytics --------------------------------------------
     umami_website_id: str | None = None
@@ -270,11 +239,6 @@ class Settings:  # noqa: D401 – simple data container
     umami_domains: str | None = None
     umami_tag: str | None = None
     live_database_url: str = ""
-
-    # Loop PWA web push -------------------------------------------------
-    loop_push_vapid_public_key: str | None = None
-    loop_push_vapid_private_key: str | None = None
-    loop_push_vapid_subject: str | None = None
 
     # iOS APNs push -----------------------------------------------------
     apns_team_id: str | None = None
@@ -297,11 +261,6 @@ class Settings:  # noqa: D401 – simple data container
     # reported as an unfenced diagnostic projection rather than guessed.
     provider_capability_expected_longhouse_sha: str | None = None
     provider_capability_expected_epoch_digest: str | None = None
-
-    # Memory Files -----------------------------------------------------
-    memory_files_enabled: bool = False
-    memory_files_context_enabled: bool = False
-    memory_files_auto_summary_enabled: bool = False
 
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
@@ -350,11 +309,6 @@ class Settings:  # noqa: D401 – simple data container
     def llm_disabled(self) -> bool:  # noqa: D401
         """Return True when outbound LLM calls are globally disabled."""
         return _truthy(os.getenv("LLM_DISABLED"))
-
-    @property
-    def loop_push_enabled(self) -> bool:  # noqa: D401
-        """Return True when Loop PWA web push is fully configured."""
-        return bool(self.loop_push_vapid_public_key and self.loop_push_vapid_private_key and self.loop_push_vapid_subject)
 
     @property
     def apns_enabled(self) -> bool:  # noqa: D401
@@ -592,40 +546,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         daily_cost_global_cents=int(os.getenv("DAILY_COST_GLOBAL_CENTS", "0")),
         discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL"),
         discord_enable_alerts=_truthy(os.getenv("DISCORD_ENABLE_ALERTS")),
-        discord_daily_digest_cron=os.getenv("DISCORD_DAILY_DIGEST_CRON", "0 8 * * *"),
-        db_reset_password=os.getenv("DB_RESET_PASSWORD"),
-        longhouse_workspace_path=os.getenv(
-            "LONGHOUSE_WORKSPACE_PATH",
-            str(Path.home() / ".longhouse" / "workspaces"),
-        ),
-        memory_files_enabled=_truthy(os.getenv("MEMORY_FILES_ENABLED")),
-        memory_files_context_enabled=_truthy(os.getenv("MEMORY_FILES_CONTEXT_ENABLED")),
-        memory_files_auto_summary_enabled=_truthy(os.getenv("MEMORY_FILES_AUTO_SUMMARY_ENABLED")),
-        notification_webhook=os.getenv("NOTIFICATION_WEBHOOK"),
         control_plane_url=os.getenv("CONTROL_PLANE_URL"),
         smoke_test_secret=os.getenv("SMOKE_TEST_SECRET"),
-        # Container runner defaults
-        container_default_image=os.getenv("CONTAINER_DEFAULT_IMAGE", "python:3.11-slim"),
-        container_network_enabled=_truthy(os.getenv("CONTAINER_NETWORK_ENABLED")),
-        container_user_id=os.getenv("CONTAINER_USER_ID", "65532"),
-        container_memory_limit=os.getenv("CONTAINER_MEMORY_LIMIT", "512m"),
-        container_cpus=os.getenv("CONTAINER_CPUS", "0.5"),
-        container_timeout_secs=int(os.getenv("CONTAINER_TIMEOUT_SECS", "30")),
-        container_seccomp_profile=os.getenv("CONTAINER_SECCOMP_PROFILE"),
-        container_tools_enabled=_truthy(os.getenv("CONTAINER_TOOLS_ENABLED")),
-        # Roundabout settings
-        roundabout_routing_model=os.getenv("ROUNDABOUT_ROUTING_MODEL"),  # None = use default
-        roundabout_llm_timeout=float(os.getenv("ROUNDABOUT_LLM_TIMEOUT", "1.5")),
-        # Bootstrap API settings
-        bootstrap_token=os.getenv("BOOTSTRAP_TOKEN"),
-        # OSS first-run UX
-        skip_demo_seed=_truthy(os.getenv("SKIP_DEMO_SEED")),
-        # Tool output storage
         tool_output_max_chars=int(os.getenv("LONGHOUSE_TOOL_OUTPUT_MAX_CHARS", "8000")),
-        tool_output_preview_chars=int(os.getenv("LONGHOUSE_TOOL_OUTPUT_PREVIEW_CHARS", "1200")),
-        loop_push_vapid_public_key=os.getenv("LOOP_PUSH_VAPID_PUBLIC_KEY"),
-        loop_push_vapid_private_key=os.getenv("LOOP_PUSH_VAPID_PRIVATE_KEY"),
-        loop_push_vapid_subject=os.getenv("LOOP_PUSH_VAPID_SUBJECT"),
         apns_team_id=os.getenv("APNS_TEAM_ID"),
         apns_key_id=os.getenv("APNS_KEY_ID"),
         apns_private_key_p8=os.getenv("APNS_PRIVATE_KEY_P8"),

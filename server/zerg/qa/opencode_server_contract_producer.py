@@ -56,16 +56,16 @@ mapping, not a gap like the sibling turn-boundary producer's.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import opencode_server_qualification
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.services.provider_capability_proof import AssertionOutcome
 
@@ -123,34 +123,10 @@ REGISTRATION = ProducerRegistration(
 _KNOWN_ASSERTION_IDS = tuple(assertion_id for assertion_id, _variant in REGISTRATION.assertion_cells)
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _write_json(path: Path, payload: object) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     temporary.replace(path)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def requested_assertion_id(variant: str) -> str:
@@ -212,7 +188,7 @@ def run_server_contract(args: argparse.Namespace) -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=False)
     provider_receipt = {
         "path": str(args.provider_bin),
-        "sha256": _sha256(args.provider_bin),
+        "sha256": sha256_file(args.provider_bin),
     }
     _write_json(root / "provider-binary-receipt.json", provider_receipt)
 
@@ -264,7 +240,7 @@ def run_server_contract(args: argparse.Namespace) -> dict[str, Any]:
         "scenario_id": REGISTRATION.scenario_id,
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_no_token",
-        "generated_at": _now(),
+        "generated_at": now(),
         "status": "pass" if assertions[target_assertion_id] else "fail",
         "observation": observation,
         "assertions": assertions,
@@ -272,7 +248,7 @@ def run_server_contract(args: argparse.Namespace) -> dict[str, Any]:
         "provider_binary": provider_receipt,
         "artifact_manifest": [],
     }
-    result["artifact_manifest"] = _artifact_manifest(root)
+    result["artifact_manifest"] = artifact_manifest(root)
     _write_json(root / "result.json", result)
     return result
 

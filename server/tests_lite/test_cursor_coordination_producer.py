@@ -205,7 +205,7 @@ def test_run_coordination_awareness_create_passes_when_the_model_calls_the_tool(
     launched_prompts: list[str] = []
     waited_markers: list[str] = []
 
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
 
     def launch(*_args, **kwargs):  # noqa: ANN001 - test double
         launched_prompts.append(kwargs["prompt"])
@@ -281,7 +281,7 @@ def test_run_coordination_awareness_create_retains_false_assertion_as_failed_sce
     launched_prompts: list[str] = []
     waited_markers: list[str] = []
 
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
 
     def launch(*_args, **kwargs):  # noqa: ANN001 - test double
         launched_prompts.append(kwargs["prompt"])
@@ -325,7 +325,7 @@ def test_awareness_timeout_is_a_typed_provider_finding(tmp_path: Path, monkeypat
     )
     session = _fake_session("awareness-timeout", tmp_path / "timeout-cwd")
     _install_fake_machine(monkeypatch, tmp_path)
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *_a, **_k: session)
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(
@@ -362,7 +362,7 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
     steps: list[str] = []
     launched_prompts: list[str] = []
 
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
 
     def launch_on_machine(_args, _root, machine, **kwargs):  # noqa: ANN001 - test double
         launched_machines.append(machine)
@@ -381,11 +381,11 @@ def test_run_coordination_directed_input_send_and_receive_pass(tmp_path: Path, m
 
     monkeypatch.setattr(m, "_wait_marker_reply", wait_marker)
     monkeypatch.setattr(m, "_wait_first_turn_settled", wait_settled)
-    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
-    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(m, "wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "assistant_event_digests", lambda _tail: set())
     monkeypatch.setattr(
         m,
-        "_wait_assistant_response_after_marker",
+        "wait_assistant_response_after_marker",
         lambda *a, **k: (
             {"events": []},
             {
@@ -514,16 +514,16 @@ def test_run_coordination_directed_input_retains_asymmetric_assertions_in_one_ob
     tokens = iter(["source-token-2", "target-token-2"])
     _install_fake_machine(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: a[3])
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
-    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
-    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(m, "wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "assistant_event_digests", lambda _tail: set())
     monkeypatch.setattr(
         m,
-        "_wait_assistant_response_after_marker",
+        "wait_assistant_response_after_marker",
         lambda *a, **k: (
             {"events": []},
             {
@@ -580,16 +580,16 @@ def test_a_provider_that_never_replies_does_not_fail_longhouse_delivery(tmp_path
     tokens = iter(["source-token-3", "target-token-3"])
     _install_fake_machine(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: a[3])
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
-    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
-    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(m, "wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "assistant_event_digests", lambda _tail: set())
     monkeypatch.setattr(
         m,
-        "_wait_assistant_response_after_marker",
+        "wait_assistant_response_after_marker",
         lambda *a, **k: (
             {"events": []},
             {
@@ -638,16 +638,16 @@ def test_an_input_the_target_is_never_served_still_fails(tmp_path: Path, monkeyp
     tokens = iter(["source-token-4", "target-token-4"])
     _install_fake_machine(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: a[3])
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
-    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
-    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(m, "wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "assistant_event_digests", lambda _tail: set())
     monkeypatch.setattr(
         m,
-        "_wait_assistant_response_after_marker",
+        "wait_assistant_response_after_marker",
         lambda *a, **k: (
             {"events": []},
             {"method": "assistant_marker_then_new_assistant_event", "timed_out": False, "marker_observed_in_assistant": True},
@@ -741,7 +741,7 @@ def test_aggregate_cleanup_requires_complete_zero_orphan_session_receipts(tmp_pa
 def test_run_coordination_reports_a_typed_failure_for_an_unrecognized_variant(tmp_path: Path, monkeypatch) -> None:
     args = _base_args(tmp_path, evidence_root=tmp_path / "evidence-unknown")
     args.variant = "cell:cursor:some_future_assertion:some_future_scenario"
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
 
     result = m.run_coordination(args)
 
@@ -797,18 +797,18 @@ def test_every_assertion_cell_redacts_the_agents_token_from_evidence(tmp_path: P
     sessions = iter([session, second_session])
     _install_fake_machine(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *a, **k: next(sessions))
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_marker_reply", lambda *a, **k: "attributed untrusted input from a peer, marker")
     monkeypatch.setattr(m, "_control_send", lambda *a, **k: {"returncode": 0}, raising=False)
     monkeypatch.setattr(m, "_cursor_mcp_config_has_coordination_server", lambda _cwd: True)
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)
-    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {"events": []})
-    monkeypatch.setattr(m, "_assistant_event_digests", lambda _tail: set())
+    monkeypatch.setattr(m, "wait_session_tail", lambda *a, **k: {"events": []})
+    monkeypatch.setattr(m, "assistant_event_digests", lambda _tail: set())
     monkeypatch.setattr(
         m,
-        "_wait_assistant_response_after_marker",
+        "wait_assistant_response_after_marker",
         lambda *a, **k: (
             {"events": []},
             {
@@ -830,14 +830,14 @@ def test_every_assertion_cell_redacts_the_agents_token_from_evidence(tmp_path: P
     # Plant a secret-shaped leak under the evidence root before the redaction
     # pass runs, matching the real hard-won lesson: don't assume redaction
     # happened, prove it did.
-    original_write_json = m._write_json
+    original_write_json = m.write_json
 
     def write_json_with_leak(path, payload):  # noqa: ANN001
         original_write_json(path, payload)
         if path.name == "provider-binary-receipt.json":
             path.write_text(path.read_text() + args.agents_token)
 
-    monkeypatch.setattr(m, "_write_json", write_json_with_leak)
+    monkeypatch.setattr(m, "write_json", write_json_with_leak)
 
     result = m.run_coordination(args)
 
@@ -865,7 +865,7 @@ def test_awareness_visibility_is_not_decided_by_how_the_model_phrases_it(tmp_pat
     session = _fake_session("awareness-prose", tmp_path / "cwd-prose")
     _install_fake_machine(monkeypatch, tmp_path)
 
-    monkeypatch.setattr(m, "_sha256", lambda _p: "sha256:fake")
+    monkeypatch.setattr(m, "sha256_file", lambda _p: "sha256:fake")
     monkeypatch.setattr(m, "_launch_cursor_session", lambda *_a, **_k: session)
     monkeypatch.setattr(m, "_teardown_cursor_session", lambda *_a, **_k: _cleanup_diagnostics())
     monkeypatch.setattr(m, "_wait_first_turn_settled", lambda *a, **k: None)

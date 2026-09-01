@@ -21,6 +21,7 @@ from zerg.schemas.observability import ProductHealthCheckThresholdsResponse
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import list_machine_transport_health
 from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
+from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import machine_heartbeats
 from zerg.services.client_render_observations import ClientRenderObservation
 from zerg.services.client_render_observations import ClientRenderObservationList
@@ -401,12 +402,25 @@ def _build_machine_connected_summary(
             limit=10_000,
         )
     else:
-        payload = machine_heartbeats(
-            owner_id=owner_id,
-            device_id=None,
-            recent_after=(generated_at - window.delta).isoformat(),
-            limit=100,
-        )
+        try:
+            payload = machine_heartbeats(
+                owner_id=owner_id,
+                device_id=None,
+                recent_after=(generated_at - window.delta).isoformat(),
+                limit=100,
+            )
+        except CatalogReadError:
+            # An unreachable catalog means we cannot see the machines, not that
+            # they are down. One unavailable sub-check must not take the whole
+            # checks list to 503 either.
+            return ProductHealthCheckSummaryResponse(
+                check=MACHINE_CONNECTED_CHECK_ID,
+                verdict="unknown",
+                coverage="none",
+                window=window.label,
+                generated_at=generated_at,
+                headline="Machine heartbeat evidence is unavailable.",
+            )
         machines, total = machine_transport_health_from_catalog_rows(
             payload.get("heartbeats", []),
             stale_after_seconds=DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,

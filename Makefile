@@ -3,7 +3,6 @@
 -include .env
 export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 
-COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 CARGO_ENGINE := python3 scripts/build/cargo.py exec --
 CARGO_ARTIFACT := python3 scripts/build/cargo.py artifact
 
@@ -12,14 +11,9 @@ E2E_FRONTEND_PORT ?=
 SOURCE_REVIEW_STATUS ?= not_run
 SOURCE_REVIEW_NOTE ?= Provider release proof invoked from Makefile.
 BASELINE_ROOT ?= .provider-release-proofs
-CODEX_API_URL ?=
-CODEX_AGENTS_TOKEN ?=
-CLAUDE_API_URL ?=
-CLAUDE_AGENTS_TOKEN ?=
-CLAUDE_DEVICE_ID ?=
 PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
-.PHONY: help check-push-readiness dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-e2e test-e2e-core qa-landing-live test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
+.PHONY: help check-push-readiness dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-e2e test-e2e-core qa-landing-live test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: validate-playwright-install
@@ -69,7 +63,7 @@ observability-down: ## Stop the god-view observability stack
 # ---------------------------------------------------------------------------
 # Testing — run the tier that matches your change
 #
-#  make test              backend (server/)          ~10s
+#  make test              backend (server/)          ~7.5min
 #  make test-ios          iOS (ios/)                 ~1m
 #  make test-ios-session-open iOS tap-to-paint benchmark
 #  make test-mobile-chat  mobile chat focused path
@@ -78,10 +72,10 @@ observability-down: ## Stop the god-view observability stack
 #  make test-engine       engine (engine/)           ~20s
 #  make test-runner       runner (runner/)           ~5s
 #  make test-e2e          browser E2E                ~2min
-#  make test-ci           pre-push                   ~3min
-#  make test-full         everything                 ~8min
+#  make test-ci           pre-push                   ~20min
+#  make test-full         everything                 >10min
 # ---------------------------------------------------------------------------
-test: ## Backend unit tests (tests_lite/, ~10s)
+test: ## Backend unit tests (tests_lite/, ~7.5min)
 	@cd server && ./run_backend_tests_lite.sh
 
 test-backend-single: ## Focused backend test file/node (TEST=tests_lite/test_file.py)
@@ -431,7 +425,6 @@ check-push-readiness: ## Detect stale duplicate commits on main before pushing (
 test-ci: ## Pre-push CI check (~20min)
 	$(MAKE) validate
 	$(MAKE) import-smoke
-	$(MAKE) test-web-entrypoint
 	$(MAKE) test
 	$(MAKE) test-frontend
 	$(MAKE) test-runner
@@ -439,7 +432,7 @@ test-ci: ## Pre-push CI check (~20min)
 	$(MAKE) test-wheel-package
 	$(MAKE) test-shipper-e2e
 
-test-full: ## Full suite — all tiers (~8min)
+test-full: ## Full suite — all tiers (>10min)
 	$(MAKE) test
 	$(MAKE) test-frontend
 	$(MAKE) test-runner
@@ -459,21 +452,9 @@ test-install: ## Installer syntax + first-run smoke
 	@bash -n scripts/install.sh
 	@bash scripts/ci/native-installer-smoke.sh
 
-test-install-first-run: ## @internal Disposable first-run installer smoke
-	@./scripts/ci/installer-first-run.sh
-
-test-install-macos-ambient: ## @internal Disposable macOS first-run smoke with menu bar install
-	@./scripts/ci/installer-first-run.sh --menubar
-
-test-install-runner: ## @internal Install-runner script tests
-	@bash scripts/tests/install-runner.test.sh
-
 test-hosted-instance: ## @internal Hosted-instance helper tests
 	@bash scripts/tests/hosted-instance-auth.test.sh
 	@bash scripts/tests/hosted-session-debug.test.sh
-
-test-web-entrypoint: ## @internal Web runtime entrypoint tests
-	@bash scripts/tests/web-docker-entrypoint.test.sh
 
 test-wheel-package: ## @internal CLI wheel packaging smoke
 	@./scripts/qa/test-wheel-package.sh
@@ -526,6 +507,7 @@ validate: ## Run all contract checks
 	@$(MAKE) validate-ios-api
 	@$(MAKE) validate-makefile
 	@$(MAKE) validate-build-identity
+	@$(MAKE) validate-build-scripts
 	@$(MAKE) validate-playwright-install
 	@$(MAKE) validate-public-surface
 	@$(MAKE) validate-provider-brands
@@ -569,6 +551,9 @@ validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 validate-build-identity: ## @internal Build identity freshness check
 	@python3 scripts/build/generate_build_identity.py >/dev/null
 	@python3 scripts/build/check_build_identity_fresh.py
+
+validate-build-scripts: ## @internal Unit tests for the Rust build wrapper and build-identity generator
+	@uv run --no-project --with pytest pytest -q scripts/build/test_cargo.py scripts/build/test_generate_build_identity.py
 
 validate-managed-codex-contract: ## @internal Guard against reintroducing packaged managed Codex runtimes
 	@bash scripts/qa/check-managed-codex-contract.sh
@@ -654,7 +639,7 @@ validate-provider-cli-canaries: ## @internal Provider release canary wrapper tes
 provider-interaction-probe: ## Run the explicit provider-native interaction probe
 	@cd server && uv run python -m zerg.qa.provider_interaction_probe $(ARGS)
 
-provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=... and optional PROVIDER_BIN=...
+provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=..., optional PROVIDER_BIN=..., scenario flags via ARGS
 	@set -eu; \
 	if [ -z "$(PROVIDER)" ]; then echo "PROVIDER is required" >&2; exit 2; fi; \
 	if [ -n "$(QUALIFICATION_PROFILE)" ]; then \
@@ -670,31 +655,9 @@ provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=..
 		--source-review-note "$(SOURCE_REVIEW_NOTE)" \
 		--json; \
 	if [ -n "$(PROVIDER_BIN)" ]; then set -- "$$@" --provider-bin "$(PROVIDER_BIN)"; fi; \
-	if [ -n "$(PROVIDER_VERSION)" ]; then set -- "$$@" --provider-version "$(PROVIDER_VERSION)"; fi; \
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	if [ -n "$(EVIDENCE_ROOT)" ]; then set -- "$$@" --evidence-root "$(EVIDENCE_ROOT)"; fi; \
-	if [ -n "$(SCENARIO_ID)" ]; then set -- "$$@" --scenario-id "$(SCENARIO_ID)"; fi; \
-	if [ -n "$(PREFLIGHT_ONLY)" ]; then set -- "$$@" --preflight-only; fi; \
-	if [ -n "$(TIMEOUT_SECS)" ]; then set -- "$$@" --timeout-secs "$(TIMEOUT_SECS)"; fi; \
-	if [ -n "$(CODEX_RUN_FAKE_APP_SERVER)" ]; then set -- "$$@" --codex-run-fake-app-server; fi; \
-	if [ -n "$(CODEX_RUN_RAW_FRESH_REMOTE)" ]; then set -- "$$@" --codex-run-raw-fresh-remote; fi; \
-	if [ -n "$(CODEX_RUN_MANAGED_TUI_ATTACH)" ]; then set -- "$$@" --codex-run-managed-tui-attach; fi; \
-	if [ -n "$(CODEX_RUN_DETACHED_UI)" ]; then set -- "$$@" --codex-run-detached-ui; fi; \
-	if [ -n "$(CODEX_RUN_MANAGED_LIVE_SEND)" ]; then set -- "$$@" --codex-run-managed-live-send; fi; \
-	if [ -n "$(CODEX_RUN_MANAGED_LIVE_INTERRUPT)" ]; then set -- "$$@" --codex-run-managed-live-interrupt; fi; \
-	if [ -n "$(CODEX_LIVE_INTERRUPT_TIMEOUT_SECS)" ]; then set -- "$$@" --codex-live-interrupt-timeout-secs "$(CODEX_LIVE_INTERRUPT_TIMEOUT_SECS)"; fi; \
-	if [ -n "$(CODEX_RUN_REAL_TOOL)" ]; then set -- "$$@" --codex-run-real-tool; fi; \
-	if [ -n "$(CODEX_REAL_TOOL_TIMEOUT_SECS)" ]; then set -- "$$@" --codex-real-tool-timeout-secs "$(CODEX_REAL_TOOL_TIMEOUT_SECS)"; fi; \
-	if [ -n "$(CODEX_API_URL)" ]; then set -- "$$@" --codex-api-url "$(CODEX_API_URL)"; fi; \
-	if [ -n "$(CLAUDE_RUN_MACHINE_LIVE_PROOF)" ]; then set -- "$$@" --claude-run-machine-live-proof; fi; \
-	if [ -n "$(CLAUDE_RUN_REAL_PRINT)" ]; then set -- "$$@" --claude-run-real-print; fi; \
-	if [ -n "$(CLAUDE_API_URL)" ]; then set -- "$$@" --claude-api-url "$(CLAUDE_API_URL)"; fi; \
-	if [ -n "$(CLAUDE_DEVICE_ID)" ]; then set -- "$$@" --claude-device-id "$(CLAUDE_DEVICE_ID)"; fi; \
-	if [ -n "$(CLAUDE_PRINT_TIMEOUT_SECS)" ]; then set -- "$$@" --claude-print-timeout-secs "$(CLAUDE_PRINT_TIMEOUT_SECS)"; fi; \
-	if [ -n "$(OPENCODE_RUN_REAL_TOOL)" ]; then set -- "$$@" --opencode-run-real-tool; fi; \
-	if [ -n "$(OPENCODE_RUN_TIMEOUT_SECS)" ]; then set -- "$$@" --opencode-run-timeout-secs "$(OPENCODE_RUN_TIMEOUT_SECS)"; fi; \
-	if [ -n "$(ANTIGRAVITY_RUN_REAL_AGY_SEND)" ]; then set -- "$$@" --antigravity-run-real-agy-send; fi; \
-	python3 "$$@"
+	python3 "$$@" $(ARGS)
 
 provider-release-proof-accept: ## Accept provider proof baseline; set PROOF=... and optional BASELINE_ROOT=...
 	@set -eu; \

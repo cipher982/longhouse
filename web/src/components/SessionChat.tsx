@@ -2,17 +2,12 @@
  * SessionChat - Live-send dock for timeline sessions.
  *
  * Features:
- * - Streaming assistant response via SSE
- * - Cancel button with AbortController
  * - Lock status indicators
  * - Error handling with retry
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { buildUrl } from "../services/api/base";
-import { fetchWithRefresh } from "../lib/auth-refresh";
-import { consumeSessionChatSseBuffer, flushSessionChatSseBuffer } from "../lib/sessionChatSse";
 import {
   cancelSessionInput,
   fetchSessionInputs,
@@ -27,52 +22,12 @@ import {
 import type { AgentSession } from "../services/api/agents";
 import type { ManagedLaunchSuggestion, TimelineItem } from "../lib/sessionWorkspace";
 import { useComposerAttachments } from "../lib/useComposerAttachments";
-import { Badge, Button, Spinner } from "./ui";
+import { Badge, Button } from "./ui";
 import { AttachmentTray } from "./AttachmentTray";
 import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
 import { ProviderGlyph } from "./ProviderGlyph";
 import { getProviderLabel } from "../lib/providers";
 import "../styles/session-chat.css";
-
-interface SSEAssistantDelta {
-  text: string;
-  accumulated: string;
-}
-
-interface SSEToolUse {
-  name: string;
-  id: string;
-}
-
-interface SSEError {
-  error: string;
-  details?: string;
-}
-
-interface SSEDone {
-  session_id?: string;
-  source_session_id?: string;
-  shipped_session_id?: string | null;
-  created_branch?: boolean;
-  branched_from_event_id?: number | null;
-  exit_code: number;
-  total_text_length: number;
-  persisted_events?: number;
-  persistence_error?: string | null;
-  sync_status?: "pending" | "complete" | "failed";
-  control_status?: "completed" | "needs_user" | "blocked" | "failed";
-  timestamp: string;
-}
-
-// Message for display
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  timestamp: Date;
-  isStreaming?: boolean;
-  toolNotices?: string[]; // Track tool notices separately to avoid overwrite
-}
 
 interface PendingManagedLocalInput {
   text: string;
@@ -88,12 +43,7 @@ interface SessionChatProps {
   emptyStateTitle?: string;
   hintText?: string;
   composerPlaceholder?: string;
-  onSessionChanged?: (nextSessionId: string, createdBranch: boolean) => void;
   layout?: "panel" | "dock";
-  dockHeaderStyle?: "callout" | "divider" | "hidden";
-  introEyebrow?: string;
-  introTitle?: string;
-  introDescription?: string;
   submitLabel?: string;
   requireClickForFirstSend?: boolean;
   keyboardHintText?: string;
@@ -131,15 +81,6 @@ interface SessionChatProps {
 
 export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider" | "capabilities" | "session_state">;
 
-function getToolPrefix(toolNotices?: string[]): string {
-  return toolNotices?.length ? toolNotices.join("\n") + "\n\n" : "";
-}
-
-function getAssistantText(message: ChatMessage): string {
-  const toolPrefix = getToolPrefix(message.toolNotices);
-  return message.content.startsWith(toolPrefix) ? message.content.slice(toolPrefix.length).trim() : message.content.trim();
-}
-
 function newClientRequestId(): string {
   const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
   if (randomUUID) return `web-${randomUUID()}`;
@@ -169,12 +110,7 @@ export function SessionChat({
   emptyStateTitle,
   hintText,
   composerPlaceholder,
-  onSessionChanged,
   layout = "panel",
-  dockHeaderStyle = "callout",
-  introEyebrow,
-  introTitle,
-  introDescription,
   submitLabel = "Send",
   requireClickForFirstSend = false,
   keyboardHintText,
@@ -195,19 +131,15 @@ export function SessionChat({
   const composerAttachments = useComposerAttachments();
   const showComposerUnavailableState = isComposerDisabled;
   const queryClient = useQueryClient();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isInterrupting, setIsInterrupting] = useState(false);
-  const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
 
   const [sentConfirmation, setSentConfirmation] = useState(false);
   const [pendingManagedLocalInput, setPendingManagedLocalInput] =
     useState<PendingManagedLocalInput | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -218,15 +150,8 @@ export function SessionChat({
     }
   }, []);
 
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
   useEffect(() => {
     return () => {
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
       if (sentConfirmationTimerRef.current) clearTimeout(sentConfirmationTimerRef.current);
     };
   }, []);
@@ -260,97 +185,6 @@ export function SessionChat({
       setPendingManagedLocalInput(null);
     }
   }, [pendingManagedLocalInput, timelineItems]);
-
-  const handleSSEEvent = useCallback(
-    (eventType: string, data: unknown, assistantId: string) => {
-      switch (eventType) {
-        case "assistant_delta": {
-          const delta = data as SSEAssistantDelta;
-          // Preserve tool notices by prepending them to accumulated text
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== assistantId) return m;
-              const toolPrefix = getToolPrefix(m.toolNotices);
-              return { ...m, content: toolPrefix + delta.accumulated };
-            }),
-          );
-          break;
-        }
-        case "tool_use": {
-          const tool = data as SSEToolUse;
-          // Track tool notices separately so they persist across assistant_delta overwrites
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== assistantId) return m;
-              const notice = `[Using tool: ${tool.name}]`;
-              const toolNotices = [...(m.toolNotices || []), notice];
-              const toolPrefix = getToolPrefix(toolNotices);
-              // Update content to include the new notice
-              // Extract the accumulated text (content without tool prefix)
-              const existingToolPrefix = getToolPrefix(m.toolNotices);
-              const accumulatedText = m.content.startsWith(existingToolPrefix)
-                ? m.content.slice(existingToolPrefix.length)
-                : m.content;
-              return { ...m, toolNotices, content: toolPrefix + accumulatedText };
-            }),
-          );
-          break;
-        }
-        case "error": {
-          const err = data as SSEError;
-          setError(err.error);
-          break;
-        }
-        case "done": {
-          const done = data as SSEDone;
-          const persistedEvents = done.persisted_events ?? 0;
-          const syncStatus =
-            done.sync_status ??
-            (done.persistence_error ? "failed" : persistedEvents > 0 ? "complete" : undefined);
-          const isPendingSync = syncStatus === "pending";
-          const isPersisted = syncStatus === "complete" || (!syncStatus && persistedEvents > 0);
-          const hasPersistenceFailure = Boolean(done.persistence_error) && !isPendingSync;
-
-          if (hasPersistenceFailure && done.persistence_error) {
-            setError(done.persistence_error);
-          }
-
-          if (isPendingSync) {
-            setMessages((prev) =>
-              prev.map((m) => {
-                if (m.id !== assistantId || getAssistantText(m)) {
-                  return m;
-                }
-
-                return {
-                  ...m,
-                  content: getToolPrefix(m.toolNotices),
-                  isStreaming: true,
-                };
-              }),
-            );
-            void refreshCurrentSessionWorkspace();
-          }
-
-          const nextSessionId = done.shipped_session_id;
-          if (nextSessionId && isPersisted && !hasPersistenceFailure) {
-            if (nextSessionId === session.id) {
-              void refreshCurrentSessionWorkspace().finally(() => {
-                setMessages([]);
-              });
-            } else {
-              onSessionChanged?.(nextSessionId, Boolean(done.created_branch));
-            }
-          }
-          break;
-        }
-        default:
-          // system, tool_result - ignore for now
-          break;
-      }
-    },
-    [onSessionChanged, refreshCurrentSessionWorkspace, session.id],
-  );
 
   const lockStatusQuery = useQuery<SessionLockInfo | null>({
     queryKey: ["session-lock", session.id],
@@ -412,14 +246,6 @@ export function SessionChat({
     (row) => row.status === "failed" && !(row.intent === "steer" && row.last_error === "turn_ended"),
   );
   const queueFull = activeQueuedInputs.length >= 5;
-
-  const handleCancel = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setIsStreaming(false);
-  }, []);
 
   // Set when the most recent send failed with turn_ended; lets the UI
   // offer a one-click "Queue instead" fallback instead of silently re-mapping
@@ -702,12 +528,7 @@ export function SessionChat({
       if (isSendLocked) {
         return;
       }
-      if (
-        requireClickForFirstSend &&
-        messages.length === 0 &&
-        draft.trim() &&
-        !blockedKeyboardSubmit
-      ) {
+      if (requireClickForFirstSend && draft.trim() && !blockedKeyboardSubmit) {
         setBlockedKeyboardSubmit(true);
         return;
       }
@@ -717,8 +538,6 @@ export function SessionChat({
 
   const statusBadge = isComposerDisabled
     ? { variant: "warning" as const, label: "Unavailable" }
-    : isStreaming
-    ? { variant: "success" as const, label: "Streaming" }
     : isSubmitting
       ? { variant: "warning" as const, label: "Sending" }
     : isStalled
@@ -764,73 +583,12 @@ export function SessionChat({
       "Agent is working. Draft a message or Stop to interrupt; sending will be available when it is ready.";
   }
 
-  const renderMessages = () =>
-    messages.map((msg) => {
-      const assistantText = msg.role === "assistant" ? getAssistantText(msg) : msg.content.trim();
-      const showStreamingPlaceholder = Boolean(msg.isStreaming && !assistantText);
-
-      return (
-        <div key={msg.id} className={`session-chat-message session-chat-message--${msg.role}`}>
-          <div className="session-chat-message-role">{msg.role}</div>
-          <div className="session-chat-message-content">
-            {showStreamingPlaceholder ? (
-              <>
-                {msg.content ? `${msg.content}\n` : null}
-                <Spinner size="sm" />
-              </>
-            ) : (
-              msg.content
-            )}
-          </div>
-        </div>
-      );
-    });
-
   return (
     <div
       className={`session-chat${isDock ? " session-chat--dock" : ""}`}
       data-testid={isDock ? "session-continuation-panel" : undefined}
     >
-      {isDock ? (
-        dockHeaderStyle === "hidden" ? null : dockHeaderStyle === "divider" ? (
-          <div className="session-chat-divider" data-testid="session-chat-divider">
-            <div className="session-chat-divider__copy">
-              <div className="session-chat-divider__rule" />
-              <div className="session-chat-divider__body">
-                {introEyebrow ? (
-                  <div className="session-chat-divider__eyebrow">{introEyebrow}</div>
-                ) : null}
-                {introTitle ? <div className="session-chat-divider__title">{introTitle}</div> : null}
-                {introDescription ? (
-                  <p className="session-chat-divider__description">{introDescription}</p>
-                ) : null}
-                {hintText ? <p className="session-chat-divider__hint">{hintText}</p> : null}
-              </div>
-            </div>
-            <div className="session-chat-status">
-              <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
-            </div>
-          </div>
-        ) : (
-          <div
-            className={`session-chat-callout${requireClickForFirstSend ? " session-chat-callout--branching" : ""}`}
-          >
-            <div className="session-chat-callout__copy">
-              {introEyebrow ? (
-                <div className="session-chat-callout__eyebrow">{introEyebrow}</div>
-              ) : null}
-              {introTitle ? <div className="session-chat-callout__title">{introTitle}</div> : null}
-              {introDescription ? (
-                <p className="session-chat-callout__description">{introDescription}</p>
-              ) : null}
-              {hintText ? <p className="session-chat-callout__hint">{hintText}</p> : null}
-            </div>
-            <div className="session-chat-status">
-              <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
-            </div>
-          </div>
-        )
-      ) : (
+      {isDock ? null : (
         <div className="session-chat-header">
           <div className="session-chat-info">
             {onClose && (
@@ -897,7 +655,7 @@ export function SessionChat({
         </div>
       ) : null}
 
-      {isSendLocked && !isStreaming && !isStalled && (
+      {isSendLocked && !isStalled && (
         <div className="session-chat-turn-notice">
           <span>{turnNoticeText}</span>
         </div>
@@ -976,31 +734,17 @@ export function SessionChat({
         </div>
       ) : null}
 
-      {isDock && isManagedLocal ? null : isDock ? (
-        <div className="session-chat-messages session-chat-messages--dock">
-          {messages.length > 0 ? (
-            <>
-              {renderMessages()}
-              <div ref={messagesEndRef} />
-            </>
-          ) : null}
-        </div>
-      ) : (
+      {isDock ? null : (
         <div className="session-chat-messages">
-          {messages.length === 0 ? (
-            <div className="session-chat-empty">
-              <p>{emptyStateTitle || "Start a conversation with this session."}</p>
-              <p className="session-chat-hint">
-                {hintText
-                  || (isManagedLocal
-                    ? `Longhouse will send your next prompt into the live ${session.provider} session.`
-                    : "Earlier synced turns stay visible here. Your first message continues from that context.")}
-              </p>
-            </div>
-          ) : (
-            renderMessages()
-          )}
-          <div ref={messagesEndRef} />
+          <div className="session-chat-empty">
+            <p>{emptyStateTitle || "Start a conversation with this session."}</p>
+            <p className="session-chat-hint">
+              {hintText
+                || (isManagedLocal
+                  ? `Longhouse will send your next prompt into the live ${session.provider} session.`
+                  : "Earlier synced turns stay visible here. Your first message continues from that context.")}
+            </p>
+          </div>
         </div>
       )}
 
@@ -1081,45 +825,37 @@ export function SessionChat({
                 {isManagedLocal && sentConfirmation ? (
                   <span className="session-chat-sent-notice">Sent</span>
                 ) : null}
-                {isStreaming ? (
-                  <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>
-                    Cancel
+                {showInlineInterrupt ? (
+                  <Button
+                    type="button"
+                    variant="danger"
+                    size="sm"
+                    onClick={() => void handleInterrupt()}
+                    disabled={isInterrupting}
+                    data-testid="session-chat-interrupt"
+                  >
+                    {isInterrupting ? "Stopping" : "Stop"}
                   </Button>
-                ) : (
-                  <>
-                    {showInlineInterrupt ? (
-                      <Button
-                        type="button"
-                        variant="danger"
-                        size="sm"
-                        onClick={() => void handleInterrupt()}
-                        disabled={isInterrupting}
-                        data-testid="session-chat-interrupt"
-                      >
-                        {isInterrupting ? "Stopping" : "Stop"}
-                      </Button>
-                    ) : null}
-                    {canSteerNow && canQueueNow ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => void handleSecondaryQueue()}
-                        disabled={!draft.trim() || isSubmitting}
-                      >
-                        Queue next
-                      </Button>
-                    ) : null}
-                    <Button
-                      type="submit"
-                      variant="primary"
-                      size="sm"
-                      disabled={!hasComposerContent || isSubmitting || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
-                    >
-                      {submitButtonLabel}
-                    </Button>
-                  </>
-                )}
+                ) : null}
+                {canSteerNow && canQueueNow ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void handleSecondaryQueue()}
+                    disabled={!draft.trim() || isSubmitting}
+                  >
+                    Queue next
+                  </Button>
+                ) : null}
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={!hasComposerContent || isSubmitting || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
+                >
+                  {submitButtonLabel}
+                </Button>
               </div>
             ) : (
               <>
@@ -1134,46 +870,38 @@ export function SessionChat({
                   title={composerDisabledReason ?? undefined}
                 />
                 <div className="session-chat-actions">
-                  {isStreaming ? (
-                    <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>
-                      Cancel
+                  {showInlineInterrupt ? (
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      onClick={() => void handleInterrupt()}
+                      disabled={isInterrupting}
+                      data-testid="session-chat-interrupt"
+                    >
+                      {isInterrupting ? "Stopping" : "Stop"}
                     </Button>
-                  ) : (
-                    <>
-                      {showInlineInterrupt ? (
-                        <Button
-                          type="button"
-                          variant="danger"
-                          size="sm"
-                          onClick={() => void handleInterrupt()}
-                          disabled={isInterrupting}
-                          data-testid="session-chat-interrupt"
-                        >
-                          {isInterrupting ? "Stopping" : "Stop"}
-                        </Button>
-                      ) : null}
-                      {canSteerNow && canQueueNow ? (
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => void handleSecondaryQueue()}
-                          disabled={isComposerDisabled || !draft.trim() || isSubmitting}
-                        >
-                          Queue next
-                        </Button>
-                      ) : null}
-                      <Button
-                        type="submit"
-                        variant="primary"
-                        size="sm"
-                        disabled={isComposerDisabled || !hasComposerContent || isSubmitting || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
-                        title={composerDisabledReason ?? undefined}
-                      >
-                        {submitButtonLabel}
-                      </Button>
-                    </>
-                  )}
+                  ) : null}
+                  {canSteerNow && canQueueNow ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void handleSecondaryQueue()}
+                      disabled={isComposerDisabled || !draft.trim() || isSubmitting}
+                    >
+                      Queue next
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    disabled={isComposerDisabled || !hasComposerContent || isSubmitting || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
+                    title={composerDisabledReason ?? undefined}
+                  >
+                    {submitButtonLabel}
+                  </Button>
                 </div>
               </>
             )}

@@ -42,10 +42,28 @@ describe("landing provider claims", () => {
       expect(chips, `${name} chips disagree with the provider contract`).toEqual(capabilityRow(id));
     }
 
-    const missingResume = (Object.keys(GENERATED_PROVIDER_CAPABILITIES) as GeneratedProviderId[]).filter(
-      (id) => !GENERATED_PROVIDER_CAPABILITIES[id].resume,
-    );
-    expect(screen.getAllByText(/Resume is not available yet/i)).toHaveLength(missingResume.length);
+    // Counting one phrase across the page cannot catch a row that claims a
+    // capability it does not have. Check each summary against its own contract
+    // row instead: a supported capability is named in the opening claim, an
+    // unsupported one only after it, in the "not available yet" clause.
+    for (const id of Object.keys(GENERATED_PROVIDER_CAPABILITIES) as GeneratedProviderId[]) {
+      const c = GENERATED_PROVIDER_CAPABILITIES[id];
+      if (c.steerMidTurn) continue;
+      const name = lookupProviderBrand(id).marketingName;
+      const summary = railFor(name)?.querySelector("p")?.textContent ?? "";
+      expect(summary, `${name} has no summary`).not.toBe("");
+      const [claim, denial = ""] = summary.split(/\.\s+/, 2);
+      for (const capability of ["interrupt", "resume"] as const) {
+        const supported = c[capability];
+        expect(
+          claim.toLowerCase().includes(capability),
+          `${name}: summary ${supported ? "must" : "must not"} claim ${capability} — got "${summary}"`,
+        ).toBe(supported);
+        if (!supported && c.launchAndSend) {
+          expect(denial.toLowerCase(), `${name} must say ${capability} is unavailable`).toContain(capability);
+        }
+      }
+    }
   });
 
   // The FAQ answer is hand-written prose, so no assertion can prove it matches

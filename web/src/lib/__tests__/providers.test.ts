@@ -158,9 +158,17 @@ describe("providers launch support", () => {
 
       const support = getLaunchProviderSupport(id);
       expect(support).not.toBeNull();
-      // launchAndSend folds launch_local + send_input; interrupt folds interrupt + terminate.
-      expect(support!.launchAndSend).toBe(contract.launch_local && contract.send_input);
-      expect(support!.interrupt).toBe(contract.interrupt && contract.terminate);
+      // Both folds admit the Console lane, not just the live one: the landing
+      // matrix asks whether Longhouse can start work here and whether you can
+      // stop it. Pi forces this -- no live send_input and no terminate, but
+      // `longhouse pi` ships and its Console turns start and interrupt.
+      const turnInterrupt = (contract.machine_control_supports ?? []).includes(
+        `${contract.provider}.turn_interrupt`,
+      );
+      expect(support!.launchAndSend).toBe(
+        contract.launch_local && (contract.send_input || contract.turn_start),
+      );
+      expect(support!.interrupt).toBe((contract.interrupt && contract.terminate) || turnInterrupt);
       expect(support!.steerMidTurn).toBe(contract.steer_active_turn);
       expect(support!.resume).toBe(contract.can_resume);
       expect(support!.cloudSessionStart).toBe(

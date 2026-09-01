@@ -338,7 +338,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         token = str(args.agents_token or "")
         if not url or not token:
             raise RuntimeError(
-                "Cursor product canary requires --api-url/--agents-token or " "LONGHOUSE_RUNTIME_API_URL/LONGHOUSE_RUNTIME_AGENTS_TOKEN"
+                "Cursor product canary requires --api-url/--agents-token or LONGHOUSE_RUNTIME_API_URL/LONGHOUSE_RUNTIME_AGENTS_TOKEN"
             )
         headers = {"X-Agents-Token": token}
 

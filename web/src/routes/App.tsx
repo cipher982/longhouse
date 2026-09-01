@@ -20,7 +20,6 @@ import TermsPage from "../pages/TermsPage";
 import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
 import DevicesPage from "../pages/DevicesPage";
-import AdminPage from "../pages/AdminPage";
 import ObservabilityPage from "../pages/ObservabilityPage";
 import ProviderCapabilitiesPage from "../pages/ProviderCapabilitiesPage";
 import RunnersPage from "../pages/RunnersPage";
@@ -258,14 +257,6 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
                 element: (
                   <ErrorBoundary>
                     <DevicesPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/admin",
-                element: (
-                  <ErrorBoundary>
-                    <AdminPage />
                   </ErrorBoundary>
                 ),
               },

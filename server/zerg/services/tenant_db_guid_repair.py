@@ -156,10 +156,8 @@ def render_summary(summary: RepairSummary) -> str:
     lines = []
     for finding in summary.findings:
         pk = ", ".join(f"{key}={value}" for key, value in finding.primary_key.items()) or "<no-pk>"
-        lines.append(f"{finding.db_path}: {finding.table}.{finding.column} [{pk}] " f"value={finding.value!r} action={finding.action}")
-    lines.append(
-        "Summary: " f"findings={len(summary.findings)} " f"repaired={summary.repaired_count} " f"unsupported={summary.unsupported_count}"
-    )
+        lines.append(f"{finding.db_path}: {finding.table}.{finding.column} [{pk}] value={finding.value!r} action={finding.action}")
+    lines.append(f"Summary: findings={len(summary.findings)} repaired={summary.repaired_count} unsupported={summary.unsupported_count}")
     return "\n".join(lines)
 
 

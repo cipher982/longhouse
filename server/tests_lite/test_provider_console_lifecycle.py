@@ -79,7 +79,7 @@ def test_artifact_manifest_covers_nested_shipper_diagnostics(tmp_path):
     nested.write_text("diagnostic\n", encoding="utf-8")
     (tmp_path / "result.json").write_text("not self-bound\n", encoding="utf-8")
 
-    manifest = lifecycle._artifact_manifest(tmp_path)
+    manifest = lifecycle.artifact_manifest(tmp_path)
 
     assert {item["path"] for item in manifest} == {
         "cleanup-receipt.json",

@@ -790,23 +790,6 @@ struct SessionModelsTests {
           ]
         }
         """.data(using: .utf8)!
-        let turnsJSON = """
-        {
-          "turns": [
-            {
-              "id": 99,
-              "session_id": "session-1",
-              "state": "terminal",
-              "terminal_phase": "needs_user",
-              "error_code": null,
-              "user_submitted_at": "2026-04-26T23:10:00Z",
-              "terminal_at": "2026-04-26T23:11:00Z",
-              "timing": {}
-            }
-          ],
-          "total": 1
-        }
-        """.data(using: .utf8)!
         let draftJSON = """
         {
           "draft_text": "Looks good.",
@@ -823,13 +806,11 @@ struct SessionModelsTests {
         """.data(using: .utf8)!
 
         let input = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionInputResponse.self, from: inputJSON).sessionInputResponse
-        let turns = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionTurnsListResponse.self, from: turnsJSON).sessionTurnsResponse
         let draft = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionDraftReplyResponse.self, from: draftJSON).draftReplyResponse
         let loop = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionLoopModeResponse.self, from: loopJSON).loopModeResponse
 
         #expect(input.outcome == .queued)
         #expect(input.visibleFailedInputCount == 0)
-        #expect(turns.turns.first?.terminalPhase == "needs_user")
         #expect(draft.basedOnEventIds == [1, 2])
         #expect(loop.loopMode == .autopilot)
     }
@@ -1017,7 +998,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionSummaryShowsManagedAxisNotLiveControlCapability() {
+    func sessionSummaryManagementAxisComesFromStateFacts() {
         let summary = SessionSummary(
             id: "session-control-offline",
             title: "Offline managed session",
@@ -1026,9 +1007,6 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "idle",
-            liveControlAvailable: false,
-            hostReattachAvailable: true,
-            replyToLiveSessionAvailable: false,
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
                 signalTier: "phase_signal",

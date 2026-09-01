@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.dependencies.auth import require_admin
+from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import canary_latency_seconds
 from zerg.metrics import canary_observations_total
 from zerg.metrics import canary_seq_last_seen
@@ -81,11 +82,6 @@ _BUCKET_REFILL_PER_SEC = 20.0
 _buckets: dict[str, tuple[float, float]] = {}  # ip -> (tokens, last_refill_mono)
 _buckets_max_size = 10_000  # Cap memory; evict LRU-ish by clearing when full.
 logger = logging.getLogger("longhouse.client_render")
-
-
-def _get_telemetry_db():
-    """Legacy persistence is optional; live catalog is owned by catalogd."""
-    yield None
 
 
 def _take_token(ip: str, now: float) -> bool:
@@ -191,7 +187,7 @@ def _persist_render_beacon(db: Session, beacon: RenderBeacon, *, latency_ms: int
         payload["webkit"] = beacon.webkit.model_dump(exclude_none=True)
     record_session_observation(
         db,
-        observation_id=(f"client_render:{beacon.surface}:{session_id}:" f"{beacon.event_id}:{beacon.rendered_at_ms}"),
+        observation_id=(f"client_render:{beacon.surface}:{session_id}:{beacon.event_id}:{beacon.rendered_at_ms}"),
         session_id=session_id,
         runtime_key=None,
         provider=provider,
@@ -223,7 +219,7 @@ async def _persist_render_beacons(
 async def client_render_beacon(
     beacons: list[RenderBeacon] | RenderBeacon,
     request: Request,
-    db: Session | None = Depends(_get_telemetry_db),
+    db: Session | None = Depends(no_request_db),
 ) -> dict:
     """Accept one or a batch of render beacons.
 
@@ -311,7 +307,7 @@ async def recent_client_render_beacons(
     session_id: str | None = None,
     event_id: str | None = None,
     limit: int = 50,
-    db: Session | None = Depends(_get_telemetry_db),
+    db: Session | None = Depends(no_request_db),
 ) -> dict:
     """Return recent persisted browser/iOS render beacons for forensic debugging."""
     if db is None:

@@ -11,6 +11,9 @@ process.env.PLAYWRIGHT_API_BASE_URL = apiBaseUrl;
 
 const config = {
   testDir: './tests/live',
+  // `**/*.test.ts` under tests/live are bun unit tests (`make validate-cohort-journey`),
+  // not Playwright specs; loading one aborts collection on its `bun:test` import.
+  testIgnore: ['**/*.test.ts'],
   fullyParallel: false,
   workers: 1,
   retries: 0,

@@ -39,6 +39,7 @@ from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_caller
+from zerg.dependencies.request_db import no_request_db
 from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_requests_total
@@ -102,17 +103,11 @@ _HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS = 5.0
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 
-def _no_heartbeat_db():
-    """The Runtime Host must not open SQLite for hosted heartbeats."""
-
-    yield None
-
-
 _settings = get_settings()
 _heartbeat_db_dependency = (
     _catalog_db_dependency
     if _settings.testing or os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV or not live_store_configured()
-    else _no_heartbeat_db
+    else no_request_db
 )
 
 

@@ -33,6 +33,7 @@ from zerg.database import get_db
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
 from zerg.dependencies.auth import get_current_user
+from zerg.dependencies.request_db import no_request_db
 from zerg.middleware.access_log import log_ws_principal
 from zerg.models.models import User
 from zerg.request_urls import get_request_public_base_url
@@ -67,13 +68,7 @@ logger = logging.getLogger(__name__)
 _catalog_db_dependency = catalog_db_dependency()
 
 
-def _runner_db():
-    """Runner rows are RPC-owned in catalog mode; retain ordinary DB overrides in tests."""
-
-    yield None
-
-
-_runner_db_dependency = get_db if _catalog_db_dependency is get_db else _runner_db
+_runner_db_dependency = get_db if _catalog_db_dependency is get_db else no_request_db
 
 
 def _runner_write_serializer():

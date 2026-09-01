@@ -547,7 +547,7 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
     provider_bin, pre_execution_identity, runner_sha = identity_bridge._preflight(  # noqa: SLF001
         request, output_root, _REPO_ROOT
     )
-    generated_at = identity_bridge._now()  # noqa: SLF001
+    generated_at = provider_release_identity.now()
 
     try:
         build_ref = _build_provider_build_ref(request, provider_bin, output_root=output_root)
@@ -585,9 +585,7 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
         interaction_evidence_class=(request.get("scenario_evidence") or {}).get("interaction_semantics"),
     )
 
-    post_execution_identity = identity_bridge._sha256_file(  # noqa: SLF001
-        provider_bin
-    )
+    post_execution_identity = provider_release_identity.sha256_file(provider_bin)
     identity_outcome = AssertionOutcome.PASS if post_execution_identity == pre_execution_identity else AssertionOutcome.INFRASTRUCTURE_ERROR
     version_outcome, reported_version = _reported_version(probe_result, request["expected_provider_version"])
     strict_outcomes = _strict_outcomes(strict_result, required_keys=_TOOL_CALL_RESULT_STRICT_KEYS)
@@ -671,9 +669,7 @@ def run_codex_helm_interrupt(request_path: Path, output_root: Path) -> dict[str,
     probe_result = _scenario_result(harness_payload, provider="codex", scenario="probe_identity")
     interrupt_result = _scenario_result(harness_payload, provider="codex", scenario="interrupt_cancel")
 
-    post_execution_identity = identity_bridge._sha256_file(  # noqa: SLF001
-        provider_bin
-    )
+    post_execution_identity = provider_release_identity.sha256_file(provider_bin)
     identity_outcome = AssertionOutcome.PASS if post_execution_identity == pre_execution_identity else AssertionOutcome.INFRASTRUCTURE_ERROR
     version_outcome, reported_version = _reported_version(probe_result, request["expected_provider_version"])
     interrupt_data = interrupt_result.get("data") or {}

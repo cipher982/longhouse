@@ -39,6 +39,9 @@ from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
 from zerg.storage_v2.contracts import render_detail_cursor_token
 from zerg.storage_v2.raw_objects import read_raw_object
+from zerg.storage_v2.render_objects import MAX_ORDER_TIME_US
+from zerg.storage_v2.render_objects import RenderObjectSpec
+from zerg.storage_v2.render_objects import RenderRecord
 from zerg.storage_v2.render_objects import read_render_object
 from zerg.storage_v2.render_objects import seal_render_object
 
@@ -1213,3 +1216,265 @@ async def test_storage_v2_rejects_oversized_body_before_catalog_work(monkeypatch
         )
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "storage_envelope_too_large"
+
+
+class _FailingRenderPool:
+    """Render worker whose seal always fails, mirroring lane saturation."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.seal_attempts = 0
+
+    @asynccontextmanager
+    async def admission(self, _lane):
+        yield
+
+    async def seal(self, _spec, *, lane):
+        assert lane in {"live", "repair"}
+        self.seal_attempts += 1
+        raise self.error
+
+
+@asynccontextmanager
+async def _storage_v2_stack(monkeypatch, *, render_pool_factory, prefix: str):
+    tempdir = TemporaryDirectory(prefix=prefix, dir="/tmp")
+    root = Path(tempdir.name)
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    workers = RawObjectWorkerPool(root / "objects", live_workers=1, repair_workers=1, queue_multiplier=1)
+    await workers.start()
+    render_workers = render_pool_factory(root / "objects")
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    reset_pubsub_for_test()
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            yield SimpleNamespace(client=client, catalog=catalog, render_workers=render_workers, object_root=root / "objects")
+    finally:
+        reset_pubsub_for_test()
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_render_seal_failure_rejects_the_envelope_instead_of_committing_it(monkeypatch):
+    """A render that will not seal must fail the commit, not become silent debt.
+
+    Committing raw-only handed the engine a durable receipt and advanced its
+    cursor, while the events reached no timeline, detail, search or embedding
+    read. Renders are per-batch deltas, so nothing backfilled them and a
+    re-send short-circuited on dedup.
+    """
+
+    pool = _FailingRenderPool(storage_router.RenderObjectWorkerBusy("render lane full"))
+    async with _storage_v2_stack(
+        monkeypatch,
+        render_pool_factory=lambda _root: pool,
+        prefix="lh2-render-seal-failure-",
+    ) as stack:
+        payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
+        bus = get_pubsub()
+
+        response = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+
+        assert pool.seal_attempts == 1
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"]["code"] == "storage_lane_busy"
+
+        existing = await stack.catalog.call(
+            "storage.raw_object.exists.batch.v2",
+            {"envelope_ids": [payload["expected_envelope_id"]]},
+        )
+        assert existing["objects"][0]["exists"] is False
+        assert existing["objects"][0]["receipt"] is None
+
+        with bus.subscribe(topic_session(payload["session_id"]), since_seq=0) as session_sub:
+            assert await session_sub.next_message(timeout=0.05) is None
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_envelope_without_message_rows_still_wakes_clients(monkeypatch):
+    """Fanout follows served state, not message counters.
+
+    An envelope of only system rows changes what the timeline and detail pages
+    serve while leaving user/assistant/tool counts at zero. Gating the fanout
+    on those counters left the change invisible until an unrelated commit
+    happened to wake the page.
+    """
+
+    async with _storage_v2_stack(
+        monkeypatch,
+        render_pool_factory=_InlineRenderPool,
+        prefix="lh2-system-only-fanout-",
+    ) as stack:
+        payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
+        for record in payload["render"]["records"]:
+            record["role"] = "system"
+        bus = get_pubsub()
+
+        response = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["render_state"] == "ready"
+
+        session = await stack.catalog.call("storage.session.read.v2", {"session_id": payload["session_id"]})
+        assert session["session"]["user_messages"] == 0
+        assert session["session"]["assistant_messages"] == 0
+        assert session["session"]["tool_calls"] == 0
+
+        with (
+            bus.subscribe(topic_session(payload["session_id"]), since_seq=0) as session_sub,
+            bus.subscribe(TOPIC_TIMELINE, since_seq=0) as timeline_sub,
+        ):
+            session_msg = await session_sub.next_message(timeout=0.1)
+            timeline_msg = await timeline_sub.next_message(timeout=0.1)
+        assert session_msg is not None
+        assert timeline_msg is not None
+        assert session_msg.payload == timeline_msg.payload
+        assert session_msg.payload["events_inserted"] == 2
+
+        replay = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+        assert replay.status_code == 200
+        with bus.subscribe(topic_session(payload["session_id"]), since_seq=0) as replay_sub:
+            assert await replay_sub.next_message(timeout=0.05) is not None
+            assert await replay_sub.next_message(timeout=0.05) is None
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_render_page_drops_one_unreadable_event_instead_of_the_page(monkeypatch):
+    """A single poisoned row must not 503 the whole detail page.
+
+    Objects sealed before `order_time_us` was bounded to the representable
+    datetime range can still hold a row the read path cannot express. A
+    parser-revision re-mint repairs them from durable raw; until then the page
+    serves the rows it can read.
+    """
+
+    session_id = uuid4()
+    generation_id = uuid4()
+    source_epoch = uuid4()
+    object_hash = "a" * 64
+    source_envelope_id = "b" * 64
+
+    spec = RenderObjectSpec(
+        session_id=session_id,
+        render_generation=generation_id,
+        parser_revision="engine-parser-v2",
+        ordering_revision="semantic-order-v2",
+        machine_id="cinder",
+        provider="codex",
+        opaque_source_id="history.jsonl",
+        source_epoch=source_epoch,
+        source_envelope_id=source_envelope_id,
+        records=(
+            RenderRecord(
+                event_id="poisoned",
+                order_time_us=MAX_ORDER_TIME_US + 1,
+                source_position=0,
+                event_subordinal=0,
+                role="user",
+                content_text="unreadable",
+            ),
+            RenderRecord(
+                event_id="readable",
+                order_time_us=1_720_780_400_000_000,
+                source_position=1,
+                event_subordinal=0,
+                role="user",
+                content_text="hello",
+            ),
+        ),
+    )
+
+    class _Catalog:
+        async def call(self, method, _params, *, timeout_seconds=None):
+            assert method == "storage.session.render_manifest.v2"
+            return {
+                "found": True,
+                "current_generation_id": str(generation_id),
+                "generation": {"generation_id": str(generation_id), "event_count": 2},
+                "objects": [
+                    {
+                        "object_path": "render.zst",
+                        "object_hash": object_hash,
+                        "source_envelope_id": source_envelope_id,
+                    }
+                ],
+            }
+
+    class _RenderPool:
+        async def read(self, *_args, **_kwargs):
+            return SimpleNamespace(spec=spec, object_hash=object_hash, payload_hash=object_hash)
+
+    async def no_recovery(**_kwargs):
+        return {}
+
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: _Catalog())
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: _RenderPool())
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: SimpleNamespace())
+    monkeypatch.setattr(storage_router, "recover_render_interaction_kinds", no_recovery)
+
+    page = await storage_router.read_storage_v2_session_events_page(
+        session_id=session_id,
+        owner_id="1",
+        cursor=None,
+        anchor="start",
+        limit=20,
+    )
+
+    assert [event["event_id"] for event in page["events"]] == ["readable"]
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_unrepresentable_order_time_is_rejected_as_an_invalid_envelope(monkeypatch):
+    """A render row the read path cannot express is a contract violation.
+
+    The engine quarantines a 422 into health where `longhouse shipping discard`
+    clears it; a 503 would make it retry the same invalid bytes forever.
+    """
+
+    async with _storage_v2_stack(
+        monkeypatch,
+        render_pool_factory=_InlineRenderPool,
+        prefix="lh2-order-time-bound-",
+    ) as stack:
+        payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
+        payload["render"]["records"][0]["order_time_us"] = MAX_ORDER_TIME_US + 1
+        payload["render"]["records"][1]["order_time_us"] = MAX_ORDER_TIME_US + 2
+
+        response = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "invalid_envelope"
+        assert "representable timestamp range" in response.json()["detail"]["message"]
+
+        existing = await stack.catalog.call(
+            "storage.raw_object.exists.batch.v2",
+            {"envelope_ids": [payload["expected_envelope_id"]]},
+        )
+        assert existing["objects"][0]["exists"] is False

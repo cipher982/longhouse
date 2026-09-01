@@ -14,7 +14,6 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import File
 from fastapi import HTTPException
-from fastapi import Query
 from fastapi import Request
 from fastapi import UploadFile
 from fastapi import status
@@ -23,35 +22,23 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.auth.catalog_gateway import update_user
-from zerg.config import get_settings
-from zerg.config import resolve_cors_origins
-from zerg.database import get_db
 
 # Auth guard ---------------------------------------------------------------
 from zerg.dependencies.auth import get_current_user
+from zerg.dependencies.form_post_origin import reject_cross_origin_form_post
+from zerg.dependencies.request_db import no_request_db
 from zerg.events import EventType
 from zerg.events.decorators import publish_event
 from zerg.schemas.schemas import UserOut
 from zerg.schemas.schemas import UserUpdate
-from zerg.schemas.usage import UserUsageResponse
 
 # Avatar helper
 from zerg.services.avatar_service import store_avatar_for_user
 from zerg.services.notification_policy import apply_user_notification_prefs
 from zerg.services.notification_policy import load_user_notification_prefs
-
-# Usage service
-from zerg.services.usage_service import get_user_usage
 from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(tags=["users"], dependencies=[Depends(get_current_user)])
-
-
-def _no_client_presence_db():
-    yield None
-
-
-_client_presence_db_dependency = _no_client_presence_db
 
 
 class UserNotificationSettingsResponse(BaseModel):
@@ -97,26 +84,6 @@ def read_current_user(current_user=Depends(get_current_user)):
     """Return the authenticated user's profile."""
 
     return current_user  # SQLAlchemy row – FastAPI will use attrs to dict
-
-
-# ---------------------------------------------------------------------------
-# /users/me/usage – LLM usage stats
-# ---------------------------------------------------------------------------
-
-
-@router.get("/users/me/usage", response_model=UserUsageResponse)
-def read_current_user_usage(
-    period: Literal["today", "7d", "30d"] = Query("today", description="Time period for usage stats"),
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    """Return the authenticated user's LLM usage stats.
-
-    Returns token counts, costs, and daily budget limit status.
-    The `limit` field always reflects today's daily limit usage,
-    regardless of the selected period.
-    """
-    return get_user_usage(db, current_user.id, period)
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +167,7 @@ async def update_current_user_notification_settings(
 @router.post("/users/me/client-presence", response_model=UserClientPresenceResponse)
 async def update_current_user_client_presence(
     heartbeat: UserClientPresenceHeartbeat,
-    db: Session | None = Depends(_client_presence_db_dependency),
+    db: Session | None = Depends(no_request_db),
     current_user=Depends(get_current_user),
 ) -> UserClientPresenceResponse:
     """Record whether a browser client is actively watching Longhouse."""
@@ -234,27 +201,6 @@ async def update_current_user_client_presence(
 # ---------------------------------------------------------------------------
 
 
-def _reject_cross_origin_form_post(request: Request) -> None:
-    """Reject a cross-origin browser submit of this multipart route.
-
-    ``multipart/form-data`` is a CORS-simple content type, so a form on another
-    origin can POST here with the session cookie attached and CORS never gets to
-    preflight it. Cookies are ``SameSite=Lax``, but tenants are subdomains of one
-    site, so SameSite cannot separate them either. Non-browser clients (iOS, CLI)
-    send neither header and are unaffected.
-    """
-    fetch_site = request.headers.get("Sec-Fetch-Site")
-    if fetch_site is not None and fetch_site not in ("same-origin", "none"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="cross-origin request rejected")
-    origin = request.headers.get("Origin")
-    if origin is None:
-        return
-    allowed = {f"{request.url.scheme}://{request.url.netloc}"}
-    allowed.update(o for o in resolve_cors_origins(get_settings()) if o != "*")
-    if origin not in allowed:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="cross-origin request rejected")
-
-
 @router.post("/users/me/avatar", response_model=UserOut, status_code=status.HTTP_200_OK)
 @publish_event(EventType.USER_UPDATED)
 async def upload_current_user_avatar(
@@ -265,7 +211,7 @@ async def upload_current_user_avatar(
 ):
     """Handle *multipart/form-data* avatar upload for the authenticated user."""
 
-    _reject_cross_origin_form_post(request)
+    reject_cross_origin_form_post(request)
 
     avatar_url = store_avatar_for_user(file)
 

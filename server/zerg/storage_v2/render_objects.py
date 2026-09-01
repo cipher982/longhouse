@@ -8,6 +8,9 @@ import os
 import tempfile
 from dataclasses import asdict
 from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -26,6 +29,13 @@ MAX_RENDER_BYTES = 4 * 1024 * 1024
 MAX_RENDER_EVENTS = 10_000
 MAX_RENDER_COMPRESSED_BYTES = 8 * 1024 * 1024
 _ROLES = {"user", "assistant", "tool", "system"}
+
+# Read paths turn `order_time_us` back into an aware UTC datetime, which only
+# spans years 1..9999. Sealing the whole i64 would mint an object that the
+# detail read cannot serve, so the seal accepts exactly what the read accepts.
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+MIN_ORDER_TIME_US = (datetime(1, 1, 1, tzinfo=UTC) - _EPOCH) // timedelta(microseconds=1)
+MAX_ORDER_TIME_US = (datetime(9999, 12, 31, 23, 59, 59, 999999, tzinfo=UTC) - _EPOCH) // timedelta(microseconds=1)
 
 
 class RenderObjectError(RuntimeError):
@@ -258,8 +268,8 @@ def _validate_spec(spec: RenderObjectSpec) -> None:
     for record in spec.records:
         if not record.event_id or len(record.event_id.encode()) > 255:
             raise RenderObjectValidationError("render event_id must contain 1 to 255 UTF-8 bytes")
-        if not -(1 << 63) <= record.order_time_us < 1 << 63:
-            raise RenderObjectValidationError("render order_time_us exceeds i64")
+        if not MIN_ORDER_TIME_US <= record.order_time_us <= MAX_ORDER_TIME_US:
+            raise RenderObjectValidationError("render order_time_us is outside the representable timestamp range")
         if not 0 <= record.source_position < 1 << 64 or not 0 <= record.event_subordinal < 1 << 32:
             raise RenderObjectValidationError("render source position/subordinal is out of range")
         if record.role not in _ROLES or not 0 <= record.raw_record_ordinal < MAX_RENDER_EVENTS:
@@ -376,6 +386,8 @@ def _is_hash(value: object) -> bool:
 
 
 __all__ = [
+    "MAX_ORDER_TIME_US",
+    "MIN_ORDER_TIME_US",
     "DecodedRenderObject",
     "RenderObjectCorruptError",
     "RenderObjectError",

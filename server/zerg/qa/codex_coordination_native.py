@@ -27,7 +27,6 @@ recall are never evidence.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -36,23 +35,25 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from websockets.sync.client import connect as websocket_connect
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import qualification_secrets
+from zerg.qa.live_session_toolkit import redact_state_for_evidence
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.live_session_toolkit import write_json
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
 from zerg.qa.provider_coordination_oracles import awareness_post_compaction_assertions
 from zerg.qa.provider_coordination_oracles import directed_input_assertions
 from zerg.qa.provider_coordination_scenarios import observe_codex_post_compaction_bootstrap
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import _qualification_secrets
-from zerg.qa.provider_native_resume import _redact_state_for_evidence
-from zerg.qa.provider_native_resume import _start_transcript_shipper
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -151,36 +152,6 @@ class _RuntimeHostHTTPError(RuntimeError):
         self.status = status
         self.detail = detail
         super().__init__(f"Runtime Host HTTP {status}: {detail}")
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _write_json(path: Path, payload: object) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def _redact_retained_secrets(root: Path, secrets: list[str]) -> list[str]:
@@ -539,7 +510,7 @@ def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[st
             f'Call the Longhouse peers MCP tool with repo="{probe_repo}" and active_only=false. '
             f"After the tool returns, reply with exactly {marker} and nothing else."
         )
-        _write_json(root / "awareness-probe.json", {"marker": marker, "probe_repo": probe_repo, "prompt": prompt})
+        write_json(root / "awareness-probe.json", {"marker": marker, "probe_repo": probe_repo, "prompt": prompt})
         state = _live_send_and_wait(
             args,
             isolation_root,
@@ -548,12 +519,12 @@ def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[st
             prompt,
             timeout=args.live_send_timeout_secs,
         )
-        _write_json(root / "post-question-bridge-state.json", _redact_state_for_evidence(state))
+        write_json(root / "post-question-bridge-state.json", redact_state_for_evidence(state))
         thread_path = Path(str(state.get("thread_path") or ""))
         assistant_text = _last_assistant_message(thread_path) if thread_path.is_file() else ""
         (root / "assistant-response.txt").write_text(assistant_text, encoding="utf-8")
         tool_calls = _codex_tool_call_evidence(thread_path) if thread_path.is_file() else []
-        _write_json(root / "native-tool-call-evidence.json", tool_calls)
+        write_json(root / "native-tool-call-evidence.json", tool_calls)
         peers_invoked = any(
             isinstance(item.get("tool"), str) and item["tool"].rsplit("__", 1)[-1].rsplit(".", 1)[-1] == "peers" for item in tool_calls
         )
@@ -570,14 +541,14 @@ def _run_awareness_create(args: argparse.Namespace, root: Path) -> tuple[dict[st
         if session_id:
             receipts["session"] = bridge_canary._stop_bridge(args, session_id, isolation_root)
         cleanup = _aggregate_cleanup_receipt(receipts)
-        _write_json(root / "cleanup-receipt.json", cleanup)
+        write_json(root / "cleanup-receipt.json", cleanup)
         if observation is not None:
             observation.update(cleanup["required_cleanup"])
 
 
 def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tuple[dict[str, Any], dict[str, bool]]:
     bootstrap_observation = observe_codex_post_compaction_bootstrap()
-    _write_json(root / "bootstrap-noise-observation.json", bootstrap_observation)
+    write_json(root / "bootstrap-noise-observation.json", bootstrap_observation)
 
     isolation_root = Path(tempfile.mkdtemp(prefix="lcp-", dir="/tmp"))
     session_id = ""
@@ -620,7 +591,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
             ws_auth_token=ws_auth_token,
             timeout=float(args.live_send_timeout_secs),
         )
-        _write_json(root / "typed-compaction-receipt.json", compaction_receipt)
+        write_json(root / "typed-compaction-receipt.json", compaction_receipt)
         compaction_signal_observed = bool(
             compaction_receipt.get("request_completed")
             and compaction_receipt.get("context_compaction_completed")
@@ -640,7 +611,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         assistant_text = _last_assistant_message(final_thread_path) if final_thread_path.is_file() else ""
         (root / "post-compaction-assistant-response.txt").write_text(assistant_text, encoding="utf-8")
         tool_calls = _codex_tool_call_evidence(final_thread_path) if final_thread_path.is_file() else []
-        _write_json(root / "post-compaction-tool-call-evidence.json", tool_calls)
+        write_json(root / "post-compaction-tool-call-evidence.json", tool_calls)
         inbox_invoked = any(
             isinstance(item.get("tool"), str) and item["tool"].rsplit("__", 1)[-1].rsplit(".", 1)[-1] == "inbox" for item in tool_calls
         )
@@ -650,7 +621,7 @@ def _run_awareness_post_compaction(args: argparse.Namespace, root: Path) -> tupl
         if session_id:
             receipts["session"] = bridge_canary._stop_bridge(args, session_id, isolation_root)
         cleanup = _aggregate_cleanup_receipt(receipts)
-        _write_json(root / "cleanup-receipt.json", cleanup)
+        write_json(root / "cleanup-receipt.json", cleanup)
 
     observation = {
         "visible_bootstrap_count": bootstrap_observation.get("visible_bootstrap_count"),
@@ -678,7 +649,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
     try:
         machine_environment = bridge_canary._provider_runtime_environment(os.environ, machine_isolation)
         machine_environment["LONGHOUSE_CODEX_BIN"] = str(args.codex_bin)
-        shipper = _start_transcript_shipper(
+        shipper = start_transcript_shipper(
             "codex",
             args,
             home=Path(machine_environment["HOME"]),
@@ -763,7 +734,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
                     break
             if not input_receipt_linked or not input_visible:
                 time.sleep(0.5)
-        _write_json(
+        write_json(
             root / "target-send-readiness.json",
             {
                 "session_id": target_session_id,
@@ -771,11 +742,11 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
                 "create_attempts": create_attempts,
             },
         )
-        _write_json(
+        write_json(
             root / "directed-input-create-receipt.json",
             {"id": directed_input_id, "has_immediate_receipt": created.get("input_receipt") is not None},
         )
-        _write_json(
+        write_json(
             root / "directed-input-poll-result.json",
             {
                 "input_receipt_linked": input_receipt_linked,
@@ -793,16 +764,16 @@ def _run_directed_input(args: argparse.Namespace, root: Path) -> tuple[dict[str,
     finally:
         redacted = _redact_retained_secrets(root, minted_secrets)
         if redacted:
-            _write_json(root / "redacted-secret-files.json", {"paths": redacted})
+            write_json(root / "redacted-secret-files.json", {"paths": redacted})
         cleanup_receipts: dict[str, Any] = {}
         if source_session_id:
             cleanup_receipts["source"] = bridge_canary._stop_bridge(args, source_session_id, machine_isolation)
         if target_session_id:
             cleanup_receipts["target"] = bridge_canary._stop_bridge(args, target_session_id, machine_isolation)
         if shipper is not None:
-            _write_json(root / "machine-shipper-receipt.json", shipper.stop())
+            write_json(root / "machine-shipper-receipt.json", shipper.stop())
         cleanup = _aggregate_cleanup_receipt(cleanup_receipts)
-        _write_json(root / "cleanup-receipt.json", cleanup)
+        write_json(root / "cleanup-receipt.json", cleanup)
         if observation is not None:
             observation.update(cleanup["required_cleanup"])
 
@@ -813,10 +784,10 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=False)
     provider_receipt = {
         "path": str(args.codex_bin),
-        "sha256": _sha256(args.codex_bin),
+        "sha256": sha256_file(args.codex_bin),
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
     }
-    _write_json(root / "provider-binary-receipt.json", provider_receipt)
+    write_json(root / "provider-binary-receipt.json", provider_receipt)
     try:
         if scenario_id == _SCENARIO_CREATE:
             observation, assertions = _run_awareness_create(args, root)
@@ -824,7 +795,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             observation, assertions = _run_awareness_post_compaction(args, root)
         else:
             observation, assertions = _run_directed_input(args, root)
-        _write_json(root / "coordination-observation.json", observation)
+        write_json(root / "coordination-observation.json", observation)
         result: dict[str, Any] = {
             "schema_version": 1,
             "artifact_kind": "codex_coordination_result",
@@ -834,15 +805,15 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "pass" if all(assertions.values()) else "fail",
             "observation_scope": "scenario",
             "observation": observation,
             "assertions": assertions,
             "provider_binary": provider_receipt,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", result)
+        write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         failure = {
@@ -854,15 +825,15 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "observation_scope": "scenario",
             "failure_code": "codex_coordination_scenario_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "assertions": {assertion_id: False},
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", failure)
+        write_json(root / "result.json", failure)
         return failure
 
 
@@ -902,7 +873,7 @@ def main(argv: list[str] | None = None) -> int:
     result = run_coordination(args)
     redacted = _redact_retained_secrets(
         args.evidence_root,
-        list(_qualification_secrets(os.environ, args.agents_token)),
+        list(qualification_secrets(os.environ, args.agents_token)),
     )
     if redacted and result.get("status") == "pass":
         result["status"] = "fail"
@@ -910,7 +881,7 @@ def main(argv: list[str] | None = None) -> int:
         assertions = result.get("assertions")
         if isinstance(assertions, dict):
             assertions[_CELL_BY_VARIANT[args.variant][0]] = False
-        _write_json(args.evidence_root / "result.json", result)
+        write_json(args.evidence_root / "result.json", result)
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1
 

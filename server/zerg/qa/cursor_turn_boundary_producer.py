@@ -40,25 +40,24 @@ import json
 import os
 import subprocess
 import sys
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import cursor_helm_product_e2e
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import TranscriptShipper
-from zerg.qa.provider_native_resume import _artifact_manifest
-from zerg.qa.provider_native_resume import _bound_terminal_recordings
-from zerg.qa.provider_native_resume import _isolated_provider_home
-from zerg.qa.provider_native_resume import _qualification_secrets
-from zerg.qa.provider_native_resume import _secret_scan
-from zerg.qa.provider_native_resume import _sha256
-from zerg.qa.provider_native_resume import _start_transcript_shipper
-from zerg.qa.provider_native_resume import _wait_pid_dead
-from zerg.qa.provider_native_resume import _wait_process_group_dead
-from zerg.qa.provider_native_resume import _write_json
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import TranscriptShipper
+from zerg.qa.live_session_toolkit import bound_terminal_recordings
+from zerg.qa.live_session_toolkit import isolated_provider_home
+from zerg.qa.live_session_toolkit import qualification_secrets
+from zerg.qa.live_session_toolkit import secret_scan
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.live_session_toolkit import wait_pid_dead
+from zerg.qa.live_session_toolkit import wait_process_group_dead
+from zerg.qa.live_session_toolkit import write_json
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 
 # The default Cursor model baked into cursor_helm_product_e2e.py itself.
@@ -73,7 +72,7 @@ def _bound_product_terminal_recording(root: Path) -> None:
 
     product_e2e_root = root / "product-e2e"
     if product_e2e_root.is_dir():
-        _bound_terminal_recordings(
+        bound_terminal_recordings(
             product_e2e_root,
             provider="cursor-turn-boundary",
             states=[],
@@ -125,23 +124,19 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     provider_receipt = {
         "path": str(args.provider_bin),
-        "sha256": _sha256(args.provider_bin),
+        "sha256": sha256_file(args.provider_bin),
         "version": subprocess.run(
             [str(args.provider_bin), "--version"], capture_output=True, text=True, timeout=30, check=False
         ).stdout.strip(),
     }
-    _write_json(root / "provider-binary-receipt.json", provider_receipt)
+    write_json(root / "provider-binary-receipt.json", provider_receipt)
 
-    home = _isolated_provider_home()
+    home = isolated_provider_home()
     shipper: TranscriptShipper | None = None
     report: dict[str, Any] | None = None
     previous_cursor_bin = os.environ.get("LONGHOUSE_CURSOR_BIN")
@@ -158,19 +153,19 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
         os.environ["LONGHOUSE_LAUNCH_SURFACE"] = "test"
 
         # Passing os.environ itself (not a copy) so the machine-identity
-        # LONGHOUSE_HOME binding _start_transcript_shipper writes lands on
+        # LONGHOUSE_HOME binding start_transcript_shipper writes lands on
         # this process's real environment -- run_product_e2e's own
         # get_zerg_url()/load_token() calls read local file config resolved
         # from that same env var, and its launched `longhouse cursor`
         # subprocess inherits it too (it passes no explicit env=).
-        shipper = _start_transcript_shipper(
+        shipper = start_transcript_shipper(
             "cursor",
             args,
             home=home,
             environment=os.environ,
             evidence_root=root,
         )
-        _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
+        write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
 
         e2e_args = argparse.Namespace(
             workspace=home / "canaries" / "provider-live" / "cursor" / "turn-boundary" / "workspace",
@@ -197,14 +192,14 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             raise
         finally:
             if isinstance(report, dict):
-                _write_json(root / "product-e2e-report.json", report)
+                write_json(root / "product-e2e-report.json", report)
 
         raw_cursor_pid = report.get("cursor_pid")
         cursor_pid = (
             raw_cursor_pid if isinstance(raw_cursor_pid, int) and not isinstance(raw_cursor_pid, bool) and raw_cursor_pid > 1 else None
         )
-        provider_process_dead = cursor_pid is not None and _wait_pid_dead(cursor_pid)
-        provider_process_group_dead = cursor_pid is not None and _wait_process_group_dead(cursor_pid)
+        provider_process_dead = cursor_pid is not None and wait_pid_dead(cursor_pid)
+        provider_process_group_dead = cursor_pid is not None and wait_process_group_dead(cursor_pid)
         session_stopped = report.get("run_lifecycle_after_teardown") == "ended"
         no_orphans = provider_process_dead and provider_process_group_dead
         required_cleanup = {
@@ -229,7 +224,7 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             "quiescent_at_every_observed_turn_boundary": native_ok,
         }
         assertions = {"activity_returns_to_quiescent_at_turn_boundary": native_ok}
-        _write_json(
+        write_json(
             root / "cleanup-receipt.json",
             {
                 "schema_version": 1,
@@ -248,10 +243,10 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             },
         )
         if shipper is not None:
-            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             shipper = None
         _bound_product_terminal_recording(root)
-        redacted_secret_files = _secret_scan(root, list(_qualification_secrets(dict(os.environ), args.agents_token)))
+        redacted_secret_files = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
         result: dict[str, Any] = {
             "schema_version": 1,
             "artifact_kind": "direct_turn_boundary_result",
@@ -268,25 +263,25 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": REGISTRATION.scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "pass" if native_ok else "fail",
             "observation": observation,
             "assertions": assertions,
             "session_id": report.get("session_id"),
             "provider_binary": provider_receipt,
             "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", result)
+        write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         if shipper is not None:
             try:
-                _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             except Exception:  # noqa: BLE001 - preserve the causal failure
                 pass
         _bound_product_terminal_recording(root)
-        redacted_secret_files = _secret_scan(root, list(_qualification_secrets(dict(os.environ), args.agents_token)))
+        redacted_secret_files = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
         failure = {
             "schema_version": 1,
             "artifact_kind": "direct_turn_boundary_result",
@@ -296,19 +291,19 @@ def run_turn_boundary(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": REGISTRATION.scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "failure_code": "direct_turn_boundary_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", failure)
+        write_json(root / "result.json", failure)
         return failure
     finally:
         if shipper is not None:
             try:
-                _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+                write_json(root / "transcript-shipper-receipt.json", shipper.stop())
             except Exception:  # noqa: BLE001 - best-effort final shipper stop
                 pass
         for name, previous in (

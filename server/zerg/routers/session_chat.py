@@ -36,6 +36,7 @@ from zerg.database import catalog_db_dependency
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
+from zerg.dependencies.request_db import no_request_db
 from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.routers import agents_sessions as _sessions_router
@@ -104,15 +105,9 @@ _STEER_ACTIVE_PRESENCE_STATES = frozenset({"thinking", "running"})
 _MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS = 300
 
 
-def _no_catalog_control_db():
-    """Catalog-owned control routes receive no request-scoped SQLite session."""
-
-    yield None
-
-
 # Selected once while routes are registered so FastAPI's dependency override
 # machinery has a stable callable to key on.
-_catalog_control_db_dependency = _no_catalog_control_db
+_catalog_control_db_dependency = no_request_db
 
 
 # ---------------------------------------------------------------------------

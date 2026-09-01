@@ -1600,11 +1600,17 @@ providers:
   # run_once is a legacy command Codex alone carries; pi's one-shot is turn_start.
   run_once: false
   reattach: false
-  send_input: true
+  # Live-session control (send_input/terminate) needs the unwired engine bridge.
+  # `longhouse pi` registers a Console one-shot and enqueues session.turn.start;
+  # there is no long-running pi session for a composer to talk to, and
+  # control_channel.rs has no pi branch for session.send_text or
+  # session.terminate. `interrupt` stays true because it backs the turn-scoped
+  # pi.turn_interrupt that `pi_print::interrupt_pi_print_turn` really serves.
+  send_input: false
   interrupt: true
   steer_active_turn: false
   answer_pause: false
-  terminate: true
+  terminate: false
   tail_output: true
   runtime_phase: false
   transcript_binding: true
@@ -1640,12 +1646,15 @@ providers:
       owner_action: "wire a pi managed bridge (like cursor_helm) that resumes the session JSONL by --session-id"
       blocker: "budget"
     send_input:
-      level: live_token
-      source: "The pi factory adapter sends a real prompt (`pi -p`) and binds the response transcript to the session jsonl."
-      disposition: "implemented"
+      level: none
+      source: the pi factory adapter's `pi -p` prompt is a one-shot turn, not input into a live session; the engine has no pi send_text branch
+      disposition: "not_implemented"
+      reason: "Pi's only wired surface is the Console one-shot; there is no live session to send into."
+      owner_action: "wire a pi managed bridge over pi's rpc/server socket and prove session.send_text against a running pi session"
+      blocker: "budget"
     interrupt:
       level: hermetic
-      source: "pi -p has no pause channel; a factory adapter interrupt canary SIGINTs the child and confirms clean exit plus a parseable session file."
+      source: "Turn-scoped only: an interrupt canary SIGINTs the one-shot `pi -p` child and confirms clean exit plus a parseable session file, which is what pi.turn_interrupt advertises. Live-session interrupt has no pi branch in control_channel.rs."
       disposition: "implemented"
     steer_active_turn:
       level: none
@@ -1662,9 +1671,12 @@ providers:
       owner_action: "confirm pi permission hooks or add a pull-based pause surface"
       blocker: "upstream"
     terminate:
-      level: hermetic
-      source: "The pi factory adapter terminates the child process and confirms cleanup of the managed session."
-      disposition: "implemented"
+      level: none
+      source: killing the factory adapter's one-shot child is not remote session terminate; control_channel.rs answers pi session.terminate with unsupported_command
+      disposition: "not_implemented"
+      reason: "Longhouse has no pi control plane to terminate; the Console turn owns its own child process lifetime."
+      owner_action: "wire a pi managed bridge with a terminate path and prove session.terminate against a running pi session"
+      blocker: "budget"
     tail_output:
       level: hermetic
       source: "The pi factory adapter reads the append-only session JSONL and normalizes entries into raw events."
@@ -1684,8 +1696,5 @@ providers:
       source: "pi -p/--continue one-shot turn semantics exercised by the factory adapter"
       disposition: "implemented"
   machine_control_supports:
-  - pi.send
-  - pi.interrupt
-  - pi.terminate
   - pi.turn_start
   - pi.turn_interrupt

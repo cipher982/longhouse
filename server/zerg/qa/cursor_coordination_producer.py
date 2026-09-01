@@ -50,8 +50,6 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from typing import TypedDict
@@ -63,30 +61,31 @@ from zerg.qa.cursor_helm_product_e2e import _activity_state
 from zerg.qa.cursor_helm_product_e2e import _assistant_texts
 from zerg.qa.cursor_helm_product_e2e import _canonical_state_from_diagnostics
 from zerg.qa.cursor_helm_product_e2e import _wait_until
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import PtyProcess
+from zerg.qa.live_session_toolkit import TranscriptShipper
+from zerg.qa.live_session_toolkit import assistant_event_digests
+from zerg.qa.live_session_toolkit import cleanup_processes
+from zerg.qa.live_session_toolkit import cursor_bootstrap_prompt
+from zerg.qa.live_session_toolkit import initialize_cursor_workspace
+from zerg.qa.live_session_toolkit import launch_command
+from zerg.qa.live_session_toolkit import qualification_secrets
+from zerg.qa.live_session_toolkit import secret_scan
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.live_session_toolkit import state_candidates
+from zerg.qa.live_session_toolkit import stop_session
+from zerg.qa.live_session_toolkit import wait_assistant_response_after_marker
+from zerg.qa.live_session_toolkit import wait_cursor_tui_ready
+from zerg.qa.live_session_toolkit import wait_session_tail
+from zerg.qa.live_session_toolkit import wait_state
+from zerg.qa.live_session_toolkit import write_json
 from zerg.qa.provider_coordination_oracles import awareness_create_assertions
 from zerg.qa.provider_coordination_oracles import directed_input_assertions
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
 from zerg.qa.provider_native_resume import SPECS
-from zerg.qa.provider_native_resume import PtyProcess
-from zerg.qa.provider_native_resume import TranscriptShipper
-from zerg.qa.provider_native_resume import _artifact_manifest
-from zerg.qa.provider_native_resume import _assistant_event_digests
-from zerg.qa.provider_native_resume import _cleanup_processes
-from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
-from zerg.qa.provider_native_resume import _initialize_cursor_workspace
-from zerg.qa.provider_native_resume import _launch_command
-from zerg.qa.provider_native_resume import _qualification_secrets
-from zerg.qa.provider_native_resume import _secret_scan
-from zerg.qa.provider_native_resume import _sha256
-from zerg.qa.provider_native_resume import _start_transcript_shipper
-from zerg.qa.provider_native_resume import _state_candidates
-from zerg.qa.provider_native_resume import _stop
-from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
-from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
-from zerg.qa.provider_native_resume import _wait_session_tail
-from zerg.qa.provider_native_resume import _wait_state
-from zerg.qa.provider_native_resume import _write_json
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 
@@ -177,10 +176,6 @@ _DISPATCH: dict[str, tuple[str, str, str]] = {
 }
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 @dataclass
 class _CursorMachine:
     home: Path
@@ -264,7 +259,7 @@ def _start_cursor_machine(
 
     evidence_root = root / "shipper"
     evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    shipper = _start_transcript_shipper(
+    shipper = start_transcript_shipper(
         "cursor",
         args,
         home=home,
@@ -273,7 +268,7 @@ def _start_cursor_machine(
     )
     machine = _CursorMachine(home=home, environment=environment, shipper=shipper)
     try:
-        _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
+        write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
     except Exception:
         _teardown_cursor_machine(machine)
         raise
@@ -293,7 +288,7 @@ def _launch_cursor_session(
 
     provider_cwd = root / f"cursor-workspace-{label}"
     provider_cwd.mkdir(mode=0o700, parents=True, exist_ok=True)
-    _initialize_cursor_workspace(provider_cwd)
+    initialize_cursor_workspace(provider_cwd)
 
     hooks = subprocess.run(
         [str(args.engine), "cursor-helm", "configure-hooks", "--cursor-dir", str(provider_cwd / ".cursor")],
@@ -307,15 +302,15 @@ def _launch_cursor_session(
     if hooks.returncode != 0:
         raise RuntimeError(f"Cursor native hook configuration failed for {label}: {hooks.stderr[-1000:]}")
 
-    prior_state_paths = set(_state_candidates(_SPEC, home))
+    prior_state_paths = set(state_candidates(_SPEC, home))
     process = PtyProcess(
-        _launch_command(_SPEC, args, None, use_credential_files=True, cwd=provider_cwd, prompt=prompt),
+        launch_command(_SPEC, args, None, use_credential_files=True, cwd=provider_cwd, prompt=prompt),
         cwd=provider_cwd,
         env=environment,
         recording=root / f"{label}.tty",
     )
-    state = _wait_state(_SPEC, home, process=process, exclude_paths=prior_state_paths)
-    _wait_cursor_tui_ready(process, root / f"{label}.tty")
+    state = wait_state(_SPEC, home, process=process, exclude_paths=prior_state_paths)
+    wait_cursor_tui_ready(process, root / f"{label}.tty")
     return _CursorSession(
         session_id=str(state["session_id"]),
         provider_thread_id=str(state["provider_session_id"]),
@@ -353,7 +348,7 @@ def _teardown_cursor_session(
     graceful_stop: dict[str, Any] | None = None
     graceful_stop_error: str | None = None
     try:
-        graceful_stop = _stop(
+        graceful_stop = stop_session(
             _SPEC,
             args,
             session.state,
@@ -364,7 +359,7 @@ def _teardown_cursor_session(
         )
     except Exception as exc:  # noqa: BLE001 - exact-owner cleanup below is the bounded fallback
         graceful_stop_error = f"{type(exc).__name__}: {exc}"
-    cleanup = _cleanup_processes(_SPEC, (session.process,), [session.state])
+    cleanup = cleanup_processes(_SPEC, (session.process,), [session.state])
     # An abnormal provider timeout can leave the exact session's Unix socket
     # inode behind after every owning process is dead. It is no longer a live
     # endpoint, but required cleanup means removing the stale inode too.
@@ -429,7 +424,7 @@ def _write_session_launch_receipts(
         "provider": "cursor",
         "sessions": sessions,
     }
-    _write_json(root / "session-launch-receipts.json", receipt)
+    write_json(root / "session-launch-receipts.json", receipt)
 
 
 def _session_cleanup_receipt(
@@ -739,14 +734,14 @@ def _run_awareness_create(args: argparse.Namespace, root: Path, isolation_root: 
             "coordination_instructions_model_visible": mcp_registered and peers_invoked,
             "probe_marker": marker,
         }
-        _write_json(root / "coordination-observation.json", observation)
+        write_json(root / "coordination-observation.json", observation)
         return observation
     finally:
         cleanup = _session_cleanup_receipt("awareness", args, session, launch_attempted=launch_attempted)
-        _write_json(root / "cleanup-receipt-awareness.json", cleanup)
+        write_json(root / "cleanup-receipt-awareness.json", cleanup)
         machine_cleanup = _teardown_cursor_machine(machine)
-        _write_json(root / "cleanup-receipt-machine.json", machine_cleanup)
-        _write_json(
+        write_json(root / "cleanup-receipt-machine.json", machine_cleanup)
+        write_json(
             root / "cleanup-receipt.json",
             _aggregate_cleanup_receipt({"awareness": cleanup}, machine_cleanup),
         )
@@ -761,8 +756,8 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
     # identifier.
     source_ready_marker = f"LH_CURSOR_SRC_{uuid4().hex[:10]}"
     target_ready_marker = f"LH_CURSOR_TGT_{uuid4().hex[:10]}"
-    source_prompt = _cursor_bootstrap_prompt(source_ready_marker)
-    target_prompt = _cursor_bootstrap_prompt(target_ready_marker)
+    source_prompt = cursor_bootstrap_prompt(source_ready_marker)
+    target_prompt = cursor_bootstrap_prompt(target_ready_marker)
     machine: _CursorMachine | None = None
     source: _CursorSession | None = None
     target: _CursorSession | None = None
@@ -804,13 +799,13 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                     timeout=args.live_timeout_secs,
                 )
                 _wait_first_turn_settled(args.api_url, args.agents_token, target.session_id, timeout=args.live_timeout_secs)
-                prior_target_tail = _wait_session_tail(
+                prior_target_tail = wait_session_tail(
                     args.api_url,
                     args.agents_token,
                     target.session_id,
                     timeout=args.live_timeout_secs,
                 )
-                prior_target_assistant_digests = _assistant_event_digests(prior_target_tail)
+                prior_target_assistant_digests = assistant_event_digests(prior_target_tail)
 
                 source_token = _mint_coordination_token(args.api_url, args.agents_token, source.session_id, timeout=args.live_timeout_secs)
                 target_token = _mint_coordination_token(args.api_url, args.agents_token, target.session_id, timeout=args.live_timeout_secs)
@@ -844,7 +839,7 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                 input_id = created.get("id")
                 input_receipt = created.get("input_receipt")
 
-                _, provider_response_correlation = _wait_assistant_response_after_marker(
+                _, provider_response_correlation = wait_assistant_response_after_marker(
                     args.api_url,
                     args.agents_token,
                     target.session_id,
@@ -889,24 +884,24 @@ def _run_directed_input(args: argparse.Namespace, root: Path, isolation_root: Pa
                     "inbox_item_source_session_id": inbox_source_session_id,
                     "source_attribution_matches": source_attribution_matches,
                 }
-                _write_json(root / "coordination-observation.json", observation)
+                write_json(root / "coordination-observation.json", observation)
                 return observation
             finally:
                 target_cleanup = _session_cleanup_receipt("target", args, target, launch_attempted=target_launch_attempted)
-                _write_json(root / "cleanup-receipt-target.json", target_cleanup)
+                write_json(root / "cleanup-receipt-target.json", target_cleanup)
         finally:
             source_cleanup = _session_cleanup_receipt("source", args, source, launch_attempted=source_launch_attempted)
-            _write_json(root / "cleanup-receipt-source.json", source_cleanup)
+            write_json(root / "cleanup-receipt-source.json", source_cleanup)
     finally:
         if source_cleanup is None:
             source_cleanup = _session_cleanup_receipt("source", args, source, launch_attempted=source_launch_attempted)
-            _write_json(root / "cleanup-receipt-source.json", source_cleanup)
+            write_json(root / "cleanup-receipt-source.json", source_cleanup)
         if target_cleanup is None:
             target_cleanup = _session_cleanup_receipt("target", args, target, launch_attempted=target_launch_attempted)
-            _write_json(root / "cleanup-receipt-target.json", target_cleanup)
+            write_json(root / "cleanup-receipt-target.json", target_cleanup)
         machine_cleanup = _teardown_cursor_machine(machine)
-        _write_json(root / "cleanup-receipt-machine.json", machine_cleanup)
-        _write_json(
+        write_json(root / "cleanup-receipt-machine.json", machine_cleanup)
+        write_json(
             root / "cleanup-receipt.json",
             _aggregate_cleanup_receipt({"source": source_cleanup, "target": target_cleanup}, machine_cleanup),
         )
@@ -917,9 +912,9 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=False)
     provider_receipt = {
         "path": str(args.provider_bin),
-        "sha256": _sha256(args.provider_bin),
+        "sha256": sha256_file(args.provider_bin),
     }
-    _write_json(root / "provider-binary-receipt.json", provider_receipt)
+    write_json(root / "provider-binary-receipt.json", provider_receipt)
 
     dispatch = _DISPATCH.get(args.variant)
     if dispatch is None:
@@ -932,13 +927,13 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": None,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "failure_code": "unrecognized_execution_variant",
             "error": f"--variant {args.variant!r} did not match any known coordination assertion cell",
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", result)
+        write_json(root / "result.json", result)
         return result
 
     kind, scenario_id, _assertion_id = dispatch
@@ -951,7 +946,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             observation = _run_directed_input(args, root, isolation_root)
             assertions = directed_input_assertions(observation)
 
-        redacted_secret_files = _secret_scan(root, list(_qualification_secrets(dict(os.environ), args.agents_token)))
+        redacted_secret_files = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
         result: dict[str, Any] = {
             "schema_version": 1,
             "artifact_kind": "direct_coordination_result",
@@ -967,7 +962,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             # This producer executes one scenario and emits its complete
             # assertion map. The process result still has to describe that
             # complete observation truthfully; the factory then projects each
@@ -978,12 +973,12 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "assertions": assertions,
             "provider_binary": provider_receipt,
             "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", result)
+        write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
-        redacted_secret_files = _secret_scan(root, list(_qualification_secrets(dict(os.environ), args.agents_token)))
+        redacted_secret_files = secret_scan(root, list(qualification_secrets(dict(os.environ), args.agents_token)))
         failure = {
             "schema_version": 1,
             "artifact_kind": "direct_coordination_result",
@@ -993,15 +988,15 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "observation_scope": "scenario",
             "failure_code": "direct_coordination_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-        _write_json(root / "result.json", failure)
+        write_json(root / "result.json", failure)
         return failure
     finally:
         shutil.rmtree(isolation_root, ignore_errors=True)

@@ -124,7 +124,6 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(runtime.truthTier).toBe("fresh");
     expect(runtime.presenceState).toBe("running");
     expect(runtime.presenceTool).toBe("Shell");
     expect(runtime.displayPhase).toBe("Using Shell");

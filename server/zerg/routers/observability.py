@@ -18,6 +18,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_auth import get_current_browser_caller
+from zerg.dependencies.request_db import no_request_db
 from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.schemas.observability import ManagedTurnsSummaryEnvelopeResponse
@@ -59,13 +60,6 @@ agents_router = APIRouter(
 )
 
 
-def _live_catalog_no_db():
-    yield None
-
-
-_machine_health_db_dependency = _live_catalog_no_db
-
-
 def _resolve_recent_machine_window_seconds(*, recent_within_hours: int) -> int:
     return max(1, recent_within_hours) * 60 * 60
 
@@ -77,21 +71,34 @@ def _owned_legacy_sessions(db: Session, *, caller: Caller, hours_back: int = 24 
     from zerg.models.agents import SessionObservation
     from zerg.models.agents import SessionTurn
 
-    since = utc_now() - timedelta(hours=max(1, hours_back))
+    # Bounded by recency, not by a wall clock. The observation queries
+    # downstream already apply the caller's window; gating the authorized set
+    # on a fixed 24h here would silently drop owned sessions from any longer
+    # window the endpoint accepts, and answer "no data" instead of "not yours".
+    del hours_back
     activity_anchor = func.coalesce(AgentSession.last_activity_at, AgentSession.started_at)
     candidates = [
-        *(row[0] for row in db.query(AgentSession.id).filter(activity_anchor >= since).limit(2_000).all()),
+        *(row[0] for row in db.query(AgentSession.id).order_by(activity_anchor.desc()).limit(2_000).all()),
         *(
             row[0]
             for row in db.query(SessionObservation.session_id)
-            .filter(SessionObservation.session_id.isnot(None), SessionObservation.observed_at >= since)
+            .filter(SessionObservation.session_id.isnot(None))
+            .order_by(SessionObservation.observed_at.desc())
             .distinct()
             .limit(2_000)
             .all()
         ),
-        *(row[0] for row in db.query(SessionTurn.session_id).filter(SessionTurn.user_submitted_at >= since).distinct().limit(2_000).all()),
+        *(row[0] for row in db.query(SessionTurn.session_id).order_by(SessionTurn.user_submitted_at.desc()).distinct().limit(2_000).all()),
     ]
-    return owned_session_ids([str(value) for value in candidates], owner_id=caller.owner_id)
+    try:
+        return owned_session_ids([str(value) for value in candidates], owner_id=caller.owner_id)
+    except CatalogReadError:
+        # Fail closed to an empty owned set rather than 503-ing the whole
+        # health surface. Without the catalog we cannot prove ownership, so we
+        # show nothing session-scoped -- but the checks that need no ownership
+        # (machine connectivity, title dependency) still answer, and this
+        # endpoint is exactly what someone opens when the catalog is down.
+        return frozenset()
 
 
 @router.get("/checks", response_model=ProductHealthCheckListResponse)
@@ -224,7 +231,7 @@ async def list_machine_health(
         le=24 * 30,
         description="Only include machines with a heartbeat in this recent window",
     ),
-    db: Session | None = Depends(_machine_health_db_dependency),
+    db: Session | None = Depends(no_request_db),
     caller: Caller = Depends(get_current_browser_caller),
 ) -> MachineHealthListResponse:
     recent_within_seconds = _resolve_recent_machine_window_seconds(
@@ -256,8 +263,7 @@ async def list_slow_turns(
     state: str | None = Query(
         None,
         description=(
-            "Filter by completed turn state (for example terminal|durable|failed). "
-            "Only turns with terminal_at or durable_at are eligible."
+            "Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible."
         ),
     ),
     machine_status: MachineHealthStatus | None = Query(None, description="Filter by current machine transport state"),
@@ -328,8 +334,7 @@ async def summarize_turns(
     state: str | None = Query(
         None,
         description=(
-            "Filter by completed turn state (for example terminal|durable|failed). "
-            "Only turns with terminal_at or durable_at are eligible."
+            "Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible."
         ),
     ),
     machine_status: MachineHealthStatus | None = Query(None, description="Filter by current machine transport state"),
@@ -394,8 +399,7 @@ async def read_observability_overview(
     state: str | None = Query(
         None,
         description=(
-            "Filter completed turns by state (for example terminal|durable|failed). "
-            "Only turns with terminal_at or durable_at are eligible."
+            "Filter completed turns by state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible."
         ),
     ),
     machine_status: MachineHealthStatus | None = Query(

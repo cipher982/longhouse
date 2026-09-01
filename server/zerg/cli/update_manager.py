@@ -30,7 +30,7 @@ PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 UPDATE_CACHE_TTL_SECONDS = 24 * 60 * 60
 UPDATE_CHECK_LOCK_SECONDS = 5 * 60
 UPDATE_CHECK_ENV = "LONGHOUSE_SKIP_UPDATE_NOTIFIER"
-UPDATE_CHECK_COMMAND_SNIPPET = "from zerg.cli.update_manager import refresh_update_cache; " "refresh_update_cache(background=True)"
+UPDATE_CHECK_COMMAND_SNIPPET = "from zerg.cli.update_manager import refresh_update_cache; refresh_update_cache(background=True)"
 
 
 @dataclass(frozen=True)
@@ -435,7 +435,7 @@ def maybe_notify_update(argv: Sequence[str] | None = None) -> None:
     cached = load_update_cache()
     if cached and cached.installed_version == installed_version and cached.update_available:
         typer.secho(
-            f"Update available: Longhouse {cached.latest_version} (you have {cached.installed_version}). " f"Run: {cached.upgrade_command}",
+            f"Update available: Longhouse {cached.latest_version} (you have {cached.installed_version}). Run: {cached.upgrade_command}",
             fg=typer.colors.YELLOW,
             err=True,
         )
@@ -602,25 +602,29 @@ def _reconcile_runtime_after_upgrade() -> None:
             fg=typer.colors.YELLOW,
         )
         typer.echo("Re-run when ready: longhouse machine repair")
-        typer.echo("First install instead: longhouse connect --install")
         return
 
-    typer.echo("Verify with: longhouse doctor")
+    typer.echo("Verify with: longhouse local-health")
 
 
 def _resolve_longhouse_entrypoint() -> str | None:
-    """Return the filesystem path of the installed `longhouse` CLI entrypoint."""
+    """Return the filesystem path of the native `longhouse` device facade.
+
+    `machine repair` is a facade verb. This ran under `longhouse-server`, whose
+    argv[0] also starts with "longhouse", so a prefix match handed back the
+    Runtime Host binary and every post-upgrade refresh failed on "No such
+    command 'machine'". Only an argv[0] named exactly `longhouse` counts.
+    """
 
     candidate = sys.argv[0] if sys.argv else ""
-    if candidate and Path(candidate).name.startswith("longhouse"):
+    if candidate and Path(candidate).name == "longhouse":
         resolved = Path(candidate).resolve()
         if resolved.exists():
             return str(resolved)
 
     from shutil import which
 
-    discovered = which("longhouse")
-    return discovered
+    return which("longhouse")
 
 
 def record_install_command(

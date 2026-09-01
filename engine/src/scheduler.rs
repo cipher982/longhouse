@@ -6,7 +6,6 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -32,18 +31,17 @@ const LIVE_IN_FLIGHT_CAP: usize = 8;
 /// than `LIVE_RESERVED`, Retry+Scan still get one slot so they can drain.
 const LIVE_RESERVED: usize = LIVE_IN_FLIGHT_CAP;
 
-/// Backlog cap floor — used as both the cold-start cap and the AIMD floor.
-const BACKLOG_CAP_FLOOR: usize = 1;
-
-/// Backlog cap ceiling. The Runtime Host serializes SQLite writes per tenant
-/// behind a single mutex, so concurrency past ~16 mostly adds queue wait
-/// without raising goodput. Capped here to bound the AIMD search space.
-const BACKLOG_CAP_CEILING: usize = 16;
+/// Concurrency budget shared by the Retry and Scan lanes.
+///
+/// This used to be an AIMD controller driven by `X-Ingest-Queue-Wait-Ms` on
+/// each ship receipt. Storage-v2 receipts do not carry those headers, and no
+/// route in the Runtime Host sets them any more, so the only input that could
+/// raise the cap stopped arriving and it sat at its cold-start value of 1. A
+/// constant says that out loud. Raising it is a throughput decision to make
+/// against `bench.rs`, not something to infer from a signal that no longer
+/// exists.
+const BACKLOG_CAP: usize = 1;
 const SCAN_IN_FLIGHT_CAP: usize = 1;
-
-/// Target SLO for server-side ingest queue wait. AIMD increases the cap when
-/// the EWMA stays below this and halves it when the EWMA crosses above.
-const TARGET_QUEUE_WAIT_MS: f64 = 200.0;
 const LIVE_LATENCY_WARN_MS: u64 = 5_000;
 const LIVE_LATENCY_SLA_MS: u64 = 10_000;
 const LIVE_ENQUEUE_WARN_MS: u64 = 1_000;
@@ -58,96 +56,36 @@ pub const ARCHIVE_BATCH_TARGET_MIN_BYTES: u64 = 64 * 1024;
 pub const ARCHIVE_BATCH_TARGET_BASE_BYTES: u64 = 256 * 1024;
 pub const ARCHIVE_BATCH_TARGET_MAX_BYTES: u64 = 1024 * 1024;
 
-/// EWMA smoothing factor for `queue_wait_ms`. Hand-picked to give a roughly
-/// 4-sample memory: a single spike does not flip the cap, but a sustained
-/// pattern moves the EWMA decisively.
-const EWMA_ALPHA: f64 = 0.3;
-
-/// Damping window. AIMD only adjusts the cap when *both* counters elapse:
-/// at least N observations and at least M ms since the last adjust. This
-/// keeps the cap from oscillating on noise while still allowing fast cold
-/// ramp-up (each successful ship is one observation).
-const DAMP_MIN_SAMPLES: u32 = 4;
-const DAMP_MIN_INTERVAL_MS: u64 = 500;
 const BACKPRESSURE_DEFAULT_COOLDOWN: Duration = Duration::from_secs(5);
 const BACKPRESSURE_MAX_COOLDOWN: Duration = Duration::from_secs(60);
 
-/// Last direction the limiter moved the cap.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum LimiterDirection {
-    Held,
-    Increased,
-    Decreased,
-}
-
-impl LimiterDirection {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LimiterDirection::Held => "held",
-            LimiterDirection::Increased => "increased",
-            LimiterDirection::Decreased => "decreased",
-        }
-    }
-}
-
-/// Adaptive concurrency limiter for the backlog (Retry+Scan) lane.
+/// Archive-pressure limiter for the backlog (Retry+Scan) lane.
 ///
-/// Drives an AIMD controller off `X-Ingest-Queue-Wait-Ms` returned by the
-/// Runtime Host. The signal is direct (we measure how long the request waited
-/// behind the SQLite write serializer), so plain AIMD beats inferred-capacity
-/// schemes like Gradient2 / Vegas for this workload.
+/// What it still controls: how large an archive replay request may be, and
+/// whether a huge remaining range is eligible at all. Both react to the two
+/// signals the Runtime Host actually sends — explicit archive-admission
+/// backpressure (with its retry-after window) and observed live-lane p95
+/// latency — each of which opens a cooldown that decays on its own.
 ///
-/// Concurrency model: `current_cap` is `AtomicUsize` for hot reads on the
-/// scheduler path. State that only matters for adjustment decisions
-/// (EWMA, damping, observation counters) is behind a single `Mutex` and is
-/// only touched on `observe()` / `note_missing_signal()`.
+/// What it no longer controls: backlog concurrency. See `BACKLOG_CAP`.
 pub struct AdaptiveLimiter {
-    current_cap: AtomicUsize,
     state: Mutex<AdaptiveLimiterState>,
 }
 
 #[derive(Debug)]
 struct AdaptiveLimiterState {
-    ewma_queue_wait_ms: Option<f64>,
-    ewma_exec_ms: Option<f64>,
-    ewma_commit_ms: Option<f64>,
-    samples_since_adjust: u32,
-    last_adjust: Option<Instant>,
-    last_direction: LimiterDirection,
-    total_observations: u64,
-    total_increases: u64,
-    total_decreases: u64,
     total_backpressure: u64,
-    last_observed_queue_wait_ms: Option<f64>,
-    last_observed_exec_ms: Option<f64>,
-    last_observed_commit_count: Option<u64>,
-    last_observed_commit_ms: Option<f64>,
-    last_observed_chunk_size: Option<u64>,
-    last_observed_store_stage_ms: Option<BTreeMap<String, f64>>,
     last_backpressure_retry_after_ms: Option<u64>,
     backpressure_cooldown_until: Option<Instant>,
     last_live_latency_p95_ms: Option<u64>,
     last_live_enqueue_to_job_p95_ms: Option<u64>,
     live_pressure_cooldown_until: Option<Instant>,
-    missing_signal_logged: bool,
 }
 
 /// Snapshot of limiter state for engine status JSON / flight recorder.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LimiterSnapshot {
     pub current_cap: usize,
-    pub floor: usize,
-    pub ceiling: usize,
-    pub target_queue_wait_ms: f64,
-    pub ewma_queue_wait_ms: Option<f64>,
-    pub last_observed_queue_wait_ms: Option<f64>,
-    pub ewma_exec_ms: Option<f64>,
-    pub last_observed_exec_ms: Option<f64>,
-    pub ewma_commit_ms: Option<f64>,
-    pub last_observed_commit_count: Option<u64>,
-    pub last_observed_commit_ms: Option<f64>,
-    pub last_observed_chunk_size: Option<u64>,
-    pub last_observed_store_stage_ms: Option<BTreeMap<String, f64>>,
     pub pressure_state: &'static str,
     pub huge_range_eligible: bool,
     pub huge_range_suppressed_reason: Option<&'static str>,
@@ -156,10 +94,6 @@ pub struct LimiterSnapshot {
     pub last_live_latency_p95_ms: Option<u64>,
     pub last_live_enqueue_to_job_p95_ms: Option<u64>,
     pub live_pressure_cooldown_remaining_ms: Option<u64>,
-    pub last_direction: &'static str,
-    pub total_observations: u64,
-    pub total_increases: u64,
-    pub total_decreases: u64,
     pub total_backpressure: u64,
     pub last_backpressure_retry_after_ms: Option<u64>,
     pub backpressure_cooldown_remaining_ms: Option<u64>,
@@ -191,103 +125,25 @@ pub struct SchedulerSnapshot {
 impl AdaptiveLimiter {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            current_cap: AtomicUsize::new(BACKLOG_CAP_FLOOR),
             state: Mutex::new(AdaptiveLimiterState {
-                ewma_queue_wait_ms: None,
-                ewma_exec_ms: None,
-                ewma_commit_ms: None,
-                samples_since_adjust: 0,
-                last_adjust: None,
-                last_direction: LimiterDirection::Held,
-                total_observations: 0,
-                total_increases: 0,
-                total_decreases: 0,
                 total_backpressure: 0,
-                last_observed_queue_wait_ms: None,
-                last_observed_exec_ms: None,
-                last_observed_commit_count: None,
-                last_observed_commit_ms: None,
-                last_observed_chunk_size: None,
-                last_observed_store_stage_ms: None,
                 last_backpressure_retry_after_ms: None,
                 backpressure_cooldown_until: None,
                 last_live_latency_p95_ms: None,
                 last_live_enqueue_to_job_p95_ms: None,
                 live_pressure_cooldown_until: None,
-                missing_signal_logged: false,
             }),
         })
     }
 
     pub fn current_cap(&self) -> usize {
-        self.current_cap.load(Ordering::Relaxed)
+        BACKLOG_CAP
     }
 
-    /// Test helper for queue-wait-only observations.
-    #[cfg(test)]
-    pub fn observe(&self, queue_wait_ms: f64) {
-        self.observe_ingest_timing(queue_wait_ms, None, None, None, None, None);
-    }
-
-    /// Feed successful ingest timing into the controller.
-    ///
-    /// Queue wait drives the archive concurrency AIMD loop. Exec time is kept
-    /// as first-class telemetry so local health can separate "queued behind
-    /// the writer" from "writer itself is slow" before later controller slices
-    /// tune batch sizing.
-    pub fn observe_ingest_timing(
-        &self,
-        queue_wait_ms: f64,
-        exec_ms: Option<f64>,
-        commit_count: Option<u64>,
-        commit_ms: Option<f64>,
-        chunk_size: Option<u64>,
-        store_stage_ms: Option<BTreeMap<String, f64>>,
-    ) {
-        if !queue_wait_ms.is_finite() || queue_wait_ms < 0.0 {
-            return;
-        }
-        let mut state = self.state.lock().expect("limiter state poisoned");
-        state.total_observations = state.total_observations.saturating_add(1);
-        state.last_observed_queue_wait_ms = Some(queue_wait_ms);
-        state.ewma_queue_wait_ms = Some(match state.ewma_queue_wait_ms {
-            Some(prev) => EWMA_ALPHA * queue_wait_ms + (1.0 - EWMA_ALPHA) * prev,
-            None => queue_wait_ms,
-        });
-        if let Some(exec_ms) = exec_ms.filter(|value| value.is_finite() && *value >= 0.0) {
-            state.last_observed_exec_ms = Some(exec_ms);
-            state.ewma_exec_ms = Some(match state.ewma_exec_ms {
-                Some(prev) => EWMA_ALPHA * exec_ms + (1.0 - EWMA_ALPHA) * prev,
-                None => exec_ms,
-            });
-        }
-        if let Some(commit_count) = commit_count {
-            state.last_observed_commit_count = Some(commit_count);
-        }
-        if let Some(commit_ms) = commit_ms.filter(|value| value.is_finite() && *value >= 0.0) {
-            state.last_observed_commit_ms = Some(commit_ms);
-            state.ewma_commit_ms = Some(match state.ewma_commit_ms {
-                Some(prev) => EWMA_ALPHA * commit_ms + (1.0 - EWMA_ALPHA) * prev,
-                None => commit_ms,
-            });
-        }
-        if let Some(chunk_size) = chunk_size {
-            state.last_observed_chunk_size = Some(chunk_size);
-        }
-        if let Some(store_stage_ms) = store_stage_ms.filter(|stages| !stages.is_empty()) {
-            state.last_observed_store_stage_ms = Some(store_stage_ms);
-        }
-        state.samples_since_adjust = state.samples_since_adjust.saturating_add(1);
-        state.missing_signal_logged = false;
-        self.try_adjust(&mut state);
-    }
-
-    /// Feed an explicit Runtime Host archive-admission backpressure signal.
-    ///
-    /// This is stronger than a high queue-wait sample: the host rejected
-    /// reconstructable backlog work before write execution. Cut the backlog
-    /// cap immediately, remember the retry-after window, and suppress cap
-    /// increases until the cooldown expires.
+    /// Feed an explicit Runtime Host archive-admission backpressure signal:
+    /// the host rejected reconstructable backlog work before write execution.
+    /// Remember the retry-after window and shrink archive requests until it
+    /// expires.
     pub fn observe_backpressure(&self, retry_after: Option<Duration>) {
         let now = Instant::now();
         let retry_after = retry_after
@@ -295,33 +151,13 @@ impl AdaptiveLimiter {
             .min(BACKPRESSURE_MAX_COOLDOWN);
         let retry_after_ms = retry_after.as_millis().min(u128::from(u64::MAX)) as u64;
         let mut state = self.state.lock().expect("limiter state poisoned");
-        state.total_observations = state.total_observations.saturating_add(1);
         state.total_backpressure = state.total_backpressure.saturating_add(1);
         state.last_backpressure_retry_after_ms = Some(retry_after_ms);
         state.backpressure_cooldown_until = now.checked_add(retry_after);
-        state.ewma_queue_wait_ms = Some(match state.ewma_queue_wait_ms {
-            Some(prev) => prev.max(TARGET_QUEUE_WAIT_MS * 2.0),
-            None => TARGET_QUEUE_WAIT_MS * 2.0,
-        });
-        state.samples_since_adjust = 0;
-        state.last_adjust = Some(now);
-        state.missing_signal_logged = false;
-
-        let cap = self.current_cap.load(Ordering::Relaxed);
-        let new_cap = (cap / 2).max(BACKLOG_CAP_FLOOR);
-        if new_cap < cap {
-            state.total_decreases = state.total_decreases.saturating_add(1);
-            state.last_direction = LimiterDirection::Decreased;
-            self.current_cap.store(new_cap, Ordering::Relaxed);
-        } else {
-            state.last_direction = LimiterDirection::Held;
-        }
         tracing::info!(
             target: "longhouse_engine::adaptive_limiter",
-            from_cap = cap,
-            to_cap = self.current_cap.load(Ordering::Relaxed),
             retry_after_ms,
-            "archive backpressure observed; backlog limiter cooled down"
+            "archive backpressure observed; archive requests cooled down"
         );
     }
 
@@ -359,49 +195,14 @@ impl AdaptiveLimiter {
             LIVE_PRESSURE_COOLDOWN
         };
         state.live_pressure_cooldown_until = now.checked_add(cooldown);
-        state.samples_since_adjust = 0;
-        state.last_adjust = Some(now);
-
-        let cap = self.current_cap.load(Ordering::Relaxed);
-        let new_cap = if critical {
-            BACKLOG_CAP_FLOOR
-        } else {
-            (cap / 2).max(BACKLOG_CAP_FLOOR)
-        };
-        if new_cap < cap {
-            state.total_decreases = state.total_decreases.saturating_add(1);
-            state.last_direction = LimiterDirection::Decreased;
-            self.current_cap.store(new_cap, Ordering::Relaxed);
-        } else {
-            state.last_direction = LimiterDirection::Held;
-        }
 
         tracing::info!(
             target: "longhouse_engine::adaptive_limiter",
-            from_cap = cap,
-            to_cap = self.current_cap.load(Ordering::Relaxed),
             live_latency_p95_ms = ?latency_p95_ms,
             live_enqueue_to_job_p95_ms = ?enqueue_to_job_p95_ms,
             critical,
             "live lane latency guard reduced archive pressure"
         );
-    }
-
-    /// Successful ship but no server timing header (older / bridged Runtime
-    /// Host). Per phase-2 review: freeze the cap at its current value and log
-    /// once. We still bump observation counters so debugging telemetry shows
-    /// the controller is alive.
-    pub fn note_missing_signal(&self) {
-        let mut state = self.state.lock().expect("limiter state poisoned");
-        state.total_observations = state.total_observations.saturating_add(1);
-        if !state.missing_signal_logged {
-            state.missing_signal_logged = true;
-            tracing::info!(
-                target: "longhouse_engine::adaptive_limiter",
-                current_cap = self.current_cap.load(Ordering::Relaxed),
-                "no X-Ingest-Queue-Wait-Ms header on successful ship; freezing adaptive cap"
-            );
-        }
     }
 
     fn huge_range_policy(
@@ -428,17 +229,6 @@ impl AdaptiveLimiter {
                 Some("backpressure_cooldown"),
             );
         }
-        if state
-            .ewma_queue_wait_ms
-            .is_some_and(|ewma| ewma > TARGET_QUEUE_WAIT_MS)
-        {
-            // Queue pressure already forces one archive worker and the minimum
-            // batch size. Do not also suppress paths whose remaining range is
-            // large: if only large paths remain, that creates a closed loop
-            // with no future observation capable of clearing the EWMA. The
-            // explicit retry-after cooldown above is the admission gate.
-            return (true, "host_queue_pressure", None);
-        }
         (true, "normal", None)
     }
 
@@ -449,36 +239,20 @@ impl AdaptiveLimiter {
     }
 
     fn archive_target_batch_bytes_for_state(state: &AdaptiveLimiterState, now: Instant) -> u64 {
+        // Either cooldown means the host just told us to back off, so shrink
+        // to the minimum until it expires. Both windows decay on their own,
+        // which is the property the old EWMA branch lacked: one backpressure
+        // event pinned the batch size to the minimum for the life of the
+        // process, because nothing could ever lower the EWMA again.
         if state
             .live_pressure_cooldown_until
             .is_some_and(|until| until > now)
+            || state
+                .backpressure_cooldown_until
+                .is_some_and(|until| until > now)
         {
             return ARCHIVE_BATCH_TARGET_MIN_BYTES;
         }
-
-        if state
-            .backpressure_cooldown_until
-            .is_some_and(|until| until > now)
-        {
-            return ARCHIVE_BATCH_TARGET_MIN_BYTES;
-        }
-
-        let queue_wait = state.ewma_queue_wait_ms;
-        if queue_wait.is_some_and(|ewma| ewma > TARGET_QUEUE_WAIT_MS) {
-            return ARCHIVE_BATCH_TARGET_MIN_BYTES;
-        }
-
-        let exec_ms = state.ewma_exec_ms;
-        if exec_ms.is_some_and(|ewma| ewma > TARGET_QUEUE_WAIT_MS * 2.0) {
-            return ARCHIVE_BATCH_TARGET_BASE_BYTES;
-        }
-
-        if queue_wait.is_some_and(|ewma| ewma <= TARGET_QUEUE_WAIT_MS / 4.0)
-            && exec_ms.map_or(true, |ewma| ewma <= TARGET_QUEUE_WAIT_MS)
-        {
-            return ARCHIVE_BATCH_TARGET_MAX_BYTES;
-        }
-
         ARCHIVE_BATCH_TARGET_BASE_BYTES
     }
 
@@ -487,108 +261,22 @@ impl AdaptiveLimiter {
         Self::archive_target_batch_bytes_for_state(&state, Instant::now())
     }
 
-    fn try_adjust(&self, state: &mut AdaptiveLimiterState) {
-        if state.samples_since_adjust < DAMP_MIN_SAMPLES {
-            return;
-        }
-        if let Some(last) = state.last_adjust {
-            if last.elapsed().as_millis() < u128::from(DAMP_MIN_INTERVAL_MS) {
-                return;
-            }
-        }
-        let Some(ewma) = state.ewma_queue_wait_ms else {
-            return;
-        };
-        let now = Instant::now();
-        if ewma <= TARGET_QUEUE_WAIT_MS
-            && state
-                .backpressure_cooldown_until
-                .is_some_and(|until| until > now)
-        {
-            state.last_direction = LimiterDirection::Held;
-            return;
-        }
-        if ewma <= TARGET_QUEUE_WAIT_MS
-            && state
-                .live_pressure_cooldown_until
-                .is_some_and(|until| until > now)
-        {
-            state.last_direction = LimiterDirection::Held;
-            return;
-        }
-        let cap = self.current_cap.load(Ordering::Relaxed);
-        let new_cap = if ewma > TARGET_QUEUE_WAIT_MS {
-            (cap / 2).max(BACKLOG_CAP_FLOOR)
-        } else {
-            cap.saturating_add(1).min(BACKLOG_CAP_CEILING)
-        };
-        let direction = match new_cap.cmp(&cap) {
-            std::cmp::Ordering::Greater => {
-                state.total_increases = state.total_increases.saturating_add(1);
-                LimiterDirection::Increased
-            }
-            std::cmp::Ordering::Less => {
-                state.total_decreases = state.total_decreases.saturating_add(1);
-                LimiterDirection::Decreased
-            }
-            std::cmp::Ordering::Equal => LimiterDirection::Held,
-        };
-        state.last_direction = direction;
-        state.last_adjust = Some(Instant::now());
-        state.samples_since_adjust = 0;
-        if direction != LimiterDirection::Held {
-            self.current_cap.store(new_cap, Ordering::Relaxed);
-            tracing::debug!(
-                target: "longhouse_engine::adaptive_limiter",
-                from_cap = cap,
-                to_cap = new_cap,
-                ewma_queue_wait_ms = ewma,
-                target_ms = TARGET_QUEUE_WAIT_MS,
-                direction = direction.as_str(),
-                "adaptive limiter adjusted"
-            );
-        }
-    }
-
-    /// Test-only: clear the wall-clock damping cooldown so the next observation
-    /// burst can trigger another adjustment without waiting `DAMP_MIN_INTERVAL_MS`.
-    /// Production code never calls this; the controller relies on real elapsed
-    /// time to keep the cap from oscillating on noise.
-    #[cfg(test)]
-    pub fn clear_adjust_cooldown(&self) {
-        self.state
-            .lock()
-            .expect("limiter state poisoned")
-            .last_adjust = None;
-    }
-
     pub fn snapshot(&self) -> LimiterSnapshot {
-        let cap = self.current_cap.load(Ordering::Relaxed);
         let state = self.state.lock().expect("limiter state poisoned");
         let now = Instant::now();
         let (huge_range_eligible, pressure_state, huge_range_suppressed_reason) =
             Self::huge_range_policy(&state, now);
         let archive_target_batch_bytes = Self::archive_target_batch_bytes_for_state(&state, now);
-        let live_pressure_cooldown_remaining_ms =
-            state.live_pressure_cooldown_until.and_then(|until| {
+        let remaining = |until: Option<Instant>| {
+            until.and_then(|until| {
                 until
                     .checked_duration_since(now)
                     .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-            });
+            })
+        };
+        let live_pressure_cooldown_remaining_ms = remaining(state.live_pressure_cooldown_until);
         LimiterSnapshot {
-            current_cap: cap,
-            floor: BACKLOG_CAP_FLOOR,
-            ceiling: BACKLOG_CAP_CEILING,
-            target_queue_wait_ms: TARGET_QUEUE_WAIT_MS,
-            ewma_queue_wait_ms: state.ewma_queue_wait_ms,
-            last_observed_queue_wait_ms: state.last_observed_queue_wait_ms,
-            ewma_exec_ms: state.ewma_exec_ms,
-            last_observed_exec_ms: state.last_observed_exec_ms,
-            ewma_commit_ms: state.ewma_commit_ms,
-            last_observed_commit_count: state.last_observed_commit_count,
-            last_observed_commit_ms: state.last_observed_commit_ms,
-            last_observed_chunk_size: state.last_observed_chunk_size,
-            last_observed_store_stage_ms: state.last_observed_store_stage_ms.clone(),
+            current_cap: BACKLOG_CAP,
             pressure_state,
             huge_range_eligible,
             huge_range_suppressed_reason,
@@ -601,19 +289,9 @@ impl AdaptiveLimiter {
             last_live_latency_p95_ms: state.last_live_latency_p95_ms,
             last_live_enqueue_to_job_p95_ms: state.last_live_enqueue_to_job_p95_ms,
             live_pressure_cooldown_remaining_ms,
-            last_direction: state.last_direction.as_str(),
-            total_observations: state.total_observations,
-            total_increases: state.total_increases,
-            total_decreases: state.total_decreases,
             total_backpressure: state.total_backpressure,
             last_backpressure_retry_after_ms: state.last_backpressure_retry_after_ms,
-            backpressure_cooldown_remaining_ms: state.backpressure_cooldown_until.and_then(
-                |until| {
-                    until
-                        .checked_duration_since(now)
-                        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-                },
-            ),
+            backpressure_cooldown_remaining_ms: remaining(state.backpressure_cooldown_until),
         }
     }
 }
@@ -1270,14 +948,7 @@ mod tests {
 
     #[test]
     fn test_scheduler_snapshot_counts_ready_and_in_flight_by_lane() {
-        let limiter = AdaptiveLimiter::new();
-        limiter.observe(0.0);
-        limiter.observe(0.0);
-        limiter.observe(0.0);
-        limiter.observe(0.0);
-        limiter.clear_adjust_cooldown();
-        limiter.observe(0.0);
-        let mut scheduler = PathScheduler::with_limiter(32, limiter);
+        let mut scheduler = PathScheduler::new(32);
 
         scheduler.enqueue(
             PathBuf::from("/tmp/live-a.jsonl"),
@@ -1329,7 +1000,7 @@ mod tests {
         assert_eq!(snapshot.in_flight_scan_bytes, 0);
         assert_eq!(snapshot.ready_backlog_bytes, 6_000);
         assert_eq!(snapshot.in_flight_backlog_bytes, 1_000);
-        assert!(snapshot.backlog_cap >= 2);
+        assert_eq!(snapshot.backlog_cap, BACKLOG_CAP);
     }
 
     #[test]
@@ -1766,11 +1437,12 @@ mod tests {
         }
     }
 
+    /// `backlog_cap` is what Retry and Scan share, and the snapshot has to
+    /// report the number the scheduler actually launches against -- the
+    /// smaller of the live reservation's leftovers and `BACKLOG_CAP`.
     #[test]
     fn test_snapshot_backlog_cap_is_the_actual_combined_launch_limit() {
-        let limiter = AdaptiveLimiter::new();
-        limiter.current_cap.store(16, Ordering::Relaxed);
-        let mut scheduler = PathScheduler::with_limiter(10, limiter);
+        let mut scheduler = PathScheduler::new(10);
 
         scheduler.enqueue(
             PathBuf::from("/tmp/retry-a.jsonl"),
@@ -1788,18 +1460,13 @@ mod tests {
             WorkPriority::Scan,
         );
 
-        assert_eq!(
-            scheduler.pop_launchable().unwrap().priority,
-            WorkPriority::Retry
-        );
-        assert_eq!(
-            scheduler.pop_launchable().unwrap().priority,
-            WorkPriority::Scan
-        );
+        for _ in 0..BACKLOG_CAP {
+            assert!(scheduler.pop_launchable().is_some());
+        }
         assert!(scheduler.pop_launchable().is_none());
 
         let snapshot = scheduler.snapshot();
-        assert_eq!(snapshot.backlog_cap, 2);
+        assert_eq!(snapshot.backlog_cap, BACKLOG_CAP);
         assert_eq!(snapshot.in_flight_backlog, snapshot.backlog_cap);
     }
 
@@ -2003,187 +1670,80 @@ mod tests {
 
     /// Steady well-below-target queue waits should ramp the cap monotonically
     /// from the floor up to the ceiling.
+    /// The backlog concurrency cap is a constant now. It used to be an AIMD
+    /// controller fed by `X-Ingest-Queue-Wait-Ms`; nothing emits that header,
+    /// so the controller was pinned at its cold-start value forever.
     #[test]
-    fn adaptive_limiter_ramps_up_under_low_queue_wait() {
+    fn backlog_cap_is_constant() {
         let limiter = AdaptiveLimiter::new();
-        assert_eq!(limiter.current_cap(), BACKLOG_CAP_FLOOR);
-        let mut last_cap = limiter.current_cap();
-        for _ in 0..(BACKLOG_CAP_CEILING * 8) {
-            for _ in 0..DAMP_MIN_SAMPLES {
-                limiter.observe(10.0); // well under TARGET_QUEUE_WAIT_MS
-            }
-            limiter.clear_adjust_cooldown();
-            let now = limiter.current_cap();
-            assert!(now >= last_cap, "cap regressed: {last_cap} -> {now}");
-            last_cap = now;
-            if now == BACKLOG_CAP_CEILING {
-                break;
-            }
-        }
-        assert_eq!(limiter.current_cap(), BACKLOG_CAP_CEILING);
-        let snap = limiter.snapshot();
-        assert!(snap.total_increases > 0);
-        assert_eq!(snap.total_decreases, 0);
+        assert_eq!(limiter.current_cap(), BACKLOG_CAP);
+        limiter.observe_backpressure(Some(Duration::from_secs(5)));
+        limiter.observe_live_latency(Some(LIVE_LATENCY_SLA_MS), Some(LIVE_ENQUEUE_CRITICAL_MS));
+        assert_eq!(limiter.current_cap(), BACKLOG_CAP);
+        assert_eq!(limiter.snapshot().current_cap, BACKLOG_CAP);
     }
 
-    /// A sustained spike past the SLO must halve the cap, and a return to good
-    /// queue waits must let it ramp back up again.
     #[test]
-    fn adaptive_limiter_halves_on_spike_then_recovers() {
+    fn archive_backpressure_shrinks_requests_and_records_its_cooldown() {
         let limiter = AdaptiveLimiter::new();
-        // Climb to a non-floor cap first.
-        for _ in 0..6 {
-            for _ in 0..DAMP_MIN_SAMPLES {
-                limiter.observe(20.0);
-            }
-            limiter.clear_adjust_cooldown();
-        }
-        let pre_spike = limiter.current_cap();
-        assert!(pre_spike > BACKLOG_CAP_FLOOR, "expected ramp-up first");
-
-        // Sustained spike: feed enough above-target samples to dominate the EWMA.
-        for _ in 0..16 {
-            limiter.observe(2_000.0);
-        }
-        limiter.clear_adjust_cooldown();
-        // Force one more adjust cycle on top of the spike.
-        for _ in 0..DAMP_MIN_SAMPLES {
-            limiter.observe(2_000.0);
-        }
-        let post_spike = limiter.current_cap();
-        assert!(
-            post_spike < pre_spike,
-            "spike should drop cap: {pre_spike} -> {post_spike}"
-        );
-        assert!(post_spike >= BACKLOG_CAP_FLOOR);
-
-        // Recovery: low queue waits must ramp back up.
-        for _ in 0..32 {
-            for _ in 0..DAMP_MIN_SAMPLES {
-                limiter.observe(10.0);
-            }
-            limiter.clear_adjust_cooldown();
-        }
-        assert!(
-            limiter.current_cap() > post_spike,
-            "expected recovery above {post_spike}, got {}",
-            limiter.current_cap()
-        );
-        let snap = limiter.snapshot();
-        assert!(snap.total_decreases > 0);
-        assert!(snap.total_increases > 0);
-    }
-
-    /// Alternating below-target signal should keep the cap monotonically
-    /// non-decreasing. The controller only halves when the *EWMA* crosses the
-    /// SLO, so noise that averages below it must not cause oscillation.
-    #[test]
-    fn adaptive_limiter_holds_under_below_target_noise() {
-        let limiter = AdaptiveLimiter::new();
-        // Ramp to a steady cap with low queue waits.
-        for _ in 0..4 {
-            for _ in 0..DAMP_MIN_SAMPLES {
-                limiter.observe(10.0);
-            }
-            limiter.clear_adjust_cooldown();
-        }
-        let stable_cap = limiter.current_cap();
-
-        // 50 samples alternating between 20ms and 150ms — both below target,
-        // EWMA can never cross 200ms.
-        for i in 0..50 {
-            let sample = if i % 2 == 0 { 20.0 } else { 150.0 };
-            limiter.observe(sample);
-            if i % 4 == 3 {
-                limiter.clear_adjust_cooldown();
-            }
-        }
-        let snap = limiter.snapshot();
+        assert!(limiter.huge_range_eligible());
         assert_eq!(
-            snap.total_decreases, 0,
-            "below-target noise must not halve the cap"
+            limiter.archive_target_batch_bytes(),
+            ARCHIVE_BATCH_TARGET_BASE_BYTES
         );
-        assert!(
-            limiter.current_cap() >= stable_cap,
-            "cap regressed under benign noise: {stable_cap} -> {}",
-            limiter.current_cap()
-        );
-    }
-
-    /// Successful ships without a server timing header must freeze the cap
-    /// rather than drifting it. The log-once flag prevents spam.
-    #[test]
-    fn adaptive_limiter_freezes_on_missing_signal() {
-        let limiter = AdaptiveLimiter::new();
-        // Climb to a non-floor cap.
-        for _ in 0..3 {
-            for _ in 0..DAMP_MIN_SAMPLES {
-                limiter.observe(10.0);
-            }
-            limiter.clear_adjust_cooldown();
-        }
-        let frozen_cap = limiter.current_cap();
-        for _ in 0..50 {
-            limiter.note_missing_signal();
-        }
-        assert_eq!(limiter.current_cap(), frozen_cap);
-        let snap = limiter.snapshot();
-        assert!(snap.total_observations >= 50);
-    }
-
-    #[test]
-    fn adaptive_limiter_cuts_cap_on_backpressure_and_records_cooldown() {
-        let limiter = AdaptiveLimiter::new();
-        for _ in 0..6 {
-            for _ in 0..DAMP_MIN_SAMPLES {
-                limiter.observe(10.0);
-            }
-            limiter.clear_adjust_cooldown();
-        }
-        let pre_backpressure = limiter.current_cap();
-        assert!(pre_backpressure > BACKLOG_CAP_FLOOR);
 
         limiter.observe_backpressure(Some(Duration::from_secs(5)));
 
-        let post_backpressure = limiter.current_cap();
-        assert!(post_backpressure < pre_backpressure);
         let snap = limiter.snapshot();
         assert_eq!(snap.total_backpressure, 1);
         assert_eq!(snap.last_backpressure_retry_after_ms, Some(5_000));
         assert!(snap.backpressure_cooldown_remaining_ms.is_some());
-        assert_eq!(snap.last_direction, "decreased");
         assert!(!snap.huge_range_eligible);
         assert_eq!(snap.pressure_state, "backpressure_cooldown");
         assert_eq!(
             snap.huge_range_suppressed_reason,
             Some("backpressure_cooldown")
         );
+        assert_eq!(
+            snap.archive_target_batch_bytes,
+            ARCHIVE_BATCH_TARGET_MIN_BYTES
+        );
+    }
+
+    /// The old EWMA branch had no way back: one backpressure event pushed the
+    /// queue-wait EWMA above target and nothing could ever lower it again, so
+    /// archive requests stayed at the minimum for the life of the process.
+    /// A cooldown expires on its own.
+    #[test]
+    fn archive_pressure_lifts_when_the_cooldown_expires() {
+        let limiter = AdaptiveLimiter::new();
+        limiter.observe_backpressure(Some(Duration::from_millis(50)));
+        assert_eq!(
+            limiter.archive_target_batch_bytes(),
+            ARCHIVE_BATCH_TARGET_MIN_BYTES
+        );
+
+        std::thread::sleep(Duration::from_millis(120));
+
+        assert_eq!(
+            limiter.archive_target_batch_bytes(),
+            ARCHIVE_BATCH_TARGET_BASE_BYTES
+        );
+        assert!(limiter.huge_range_eligible());
+        assert_eq!(limiter.snapshot().pressure_state, "normal");
     }
 
     #[test]
-    fn adaptive_limiter_cuts_archive_cap_on_live_latency_pressure() {
+    fn live_latency_pressure_shrinks_archive_requests() {
         let limiter = AdaptiveLimiter::new();
-        for _ in 0..6 {
-            for _ in 0..DAMP_MIN_SAMPLES {
-                limiter.observe(10.0);
-            }
-            limiter.clear_adjust_cooldown();
-        }
-        let pre_pressure = limiter.current_cap();
-        assert!(pre_pressure > BACKLOG_CAP_FLOOR);
-
         limiter.observe_live_latency(Some(LIVE_LATENCY_WARN_MS), Some(100));
 
-        let post_pressure = limiter.current_cap();
-        assert!(
-            post_pressure < pre_pressure,
-            "live p95 pressure should reduce archive cap: {pre_pressure} -> {post_pressure}"
-        );
         let snap = limiter.snapshot();
         assert_eq!(snap.live_latency_guard_state, "pressure");
         assert_eq!(snap.last_live_latency_p95_ms, Some(LIVE_LATENCY_WARN_MS));
         assert_eq!(snap.last_live_enqueue_to_job_p95_ms, Some(100));
         assert!(snap.live_pressure_cooldown_remaining_ms.is_some());
+        assert!(!snap.huge_range_eligible);
         assert_eq!(snap.pressure_state, "live_latency_pressure");
         assert_eq!(
             snap.huge_range_suppressed_reason,
@@ -2196,149 +1756,18 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_limiter_floors_archive_cap_on_critical_live_pressure() {
+    fn healthy_live_latency_leaves_archive_requests_alone() {
         let limiter = AdaptiveLimiter::new();
-        for _ in 0..6 {
-            for _ in 0..DAMP_MIN_SAMPLES {
-                limiter.observe(10.0);
-            }
-            limiter.clear_adjust_cooldown();
-        }
-        assert!(limiter.current_cap() > BACKLOG_CAP_FLOOR);
-
-        limiter.observe_live_latency(Some(500), Some(LIVE_ENQUEUE_CRITICAL_MS));
+        limiter.observe_live_latency(Some(100), Some(10));
 
         let snap = limiter.snapshot();
-        assert_eq!(limiter.current_cap(), BACKLOG_CAP_FLOOR);
-        assert_eq!(snap.live_latency_guard_state, "pressure");
-        assert_eq!(snap.last_live_latency_p95_ms, Some(500));
-        assert_eq!(
-            snap.last_live_enqueue_to_job_p95_ms,
-            Some(LIVE_ENQUEUE_CRITICAL_MS)
-        );
-        assert!(!snap.huge_range_eligible);
-        assert_eq!(snap.pressure_state, "live_latency_pressure");
-    }
-
-    #[test]
-    fn adaptive_limiter_holds_increase_during_backpressure_cooldown() {
-        let limiter = AdaptiveLimiter::new();
-        limiter.observe_backpressure(Some(Duration::from_secs(5)));
-        let cooled_cap = limiter.current_cap();
-
-        for _ in 0..16 {
-            for _ in 0..DAMP_MIN_SAMPLES {
-                limiter.observe(1.0);
-            }
-            limiter.clear_adjust_cooldown();
-        }
-
-        assert_eq!(
-            limiter.current_cap(),
-            cooled_cap,
-            "low queue waits must not ramp archive while host retry-after cooldown is active"
-        );
-        let snap = limiter.snapshot();
-        assert_eq!(snap.total_backpressure, 1);
-        assert!(snap.backpressure_cooldown_remaining_ms.is_some());
-        assert_eq!(snap.last_direction, "held");
-    }
-
-    #[test]
-    fn adaptive_limiter_probes_huge_ranges_after_pressure_cooldown() {
-        let limiter = AdaptiveLimiter::new();
-        assert!(limiter.huge_range_eligible());
-
-        for _ in 0..DAMP_MIN_SAMPLES {
-            limiter.observe(1_000.0);
-        }
-
-        let snap = limiter.snapshot();
-        assert!(limiter.huge_range_eligible());
-        assert!(snap.huge_range_eligible);
-        assert_eq!(snap.pressure_state, "host_queue_pressure");
-        assert_eq!(snap.huge_range_suppressed_reason, None);
-        assert_eq!(
-            limiter.archive_target_batch_bytes(),
-            ARCHIVE_BATCH_TARGET_MIN_BYTES
-        );
-    }
-
-    #[test]
-    fn adaptive_limiter_allows_huge_ranges_when_pressure_is_below_target() {
-        let limiter = AdaptiveLimiter::new();
-        for _ in 0..DAMP_MIN_SAMPLES {
-            limiter.observe(10.0);
-        }
-
-        let snap = limiter.snapshot();
-        assert!(limiter.huge_range_eligible());
+        assert_eq!(snap.live_latency_guard_state, "healthy");
+        assert_eq!(snap.last_live_latency_p95_ms, Some(100));
         assert!(snap.huge_range_eligible);
         assert_eq!(snap.pressure_state, "normal");
-        assert_eq!(snap.huge_range_suppressed_reason, None);
-    }
-
-    #[test]
-    fn adaptive_limiter_tunes_archive_batch_target_from_host_pressure() {
-        let limiter = AdaptiveLimiter::new();
         assert_eq!(
-            limiter.archive_target_batch_bytes(),
+            snap.archive_target_batch_bytes,
             ARCHIVE_BATCH_TARGET_BASE_BYTES
         );
-
-        for _ in 0..DAMP_MIN_SAMPLES {
-            limiter.observe_ingest_timing(10.0, Some(50.0), None, None, None, None);
-        }
-        assert_eq!(
-            limiter.archive_target_batch_bytes(),
-            ARCHIVE_BATCH_TARGET_MAX_BYTES
-        );
-
-        for _ in 0..DAMP_MIN_SAMPLES {
-            limiter.observe_ingest_timing(2_000.0, Some(50.0), None, None, None, None);
-        }
-        assert_eq!(
-            limiter.archive_target_batch_bytes(),
-            ARCHIVE_BATCH_TARGET_MIN_BYTES
-        );
-
-        limiter.observe_backpressure(Some(Duration::from_secs(5)));
-        assert_eq!(
-            limiter.snapshot().archive_target_batch_bytes,
-            ARCHIVE_BATCH_TARGET_MIN_BYTES
-        );
-    }
-
-    #[test]
-    fn adaptive_limiter_records_host_exec_timing_without_driving_cap() {
-        let limiter = AdaptiveLimiter::new();
-        let stages = BTreeMap::from([
-            ("provider_event_observations".to_string(), 40.0),
-            ("total".to_string(), 120.0),
-        ]);
-        limiter.observe_ingest_timing(
-            10.0,
-            Some(500.0),
-            Some(3),
-            Some(450.0),
-            Some(100),
-            Some(stages),
-        );
-        limiter.observe_ingest_timing(10.0, Some(100.0), Some(1), Some(80.0), Some(100), None);
-
-        let snap = limiter.snapshot();
-        assert_eq!(snap.last_observed_queue_wait_ms, Some(10.0));
-        assert_eq!(snap.last_observed_exec_ms, Some(100.0));
-        assert_eq!(snap.last_observed_commit_count, Some(1));
-        assert_eq!(snap.last_observed_commit_ms, Some(80.0));
-        assert_eq!(snap.last_observed_chunk_size, Some(100));
-        assert!(snap
-            .last_observed_store_stage_ms
-            .as_ref()
-            .is_some_and(|stages| stages.get("total") == Some(&120.0)));
-        assert!(snap.ewma_exec_ms.is_some());
-        assert!(snap.ewma_commit_ms.is_some());
-        assert_eq!(snap.current_cap, BACKLOG_CAP_FLOOR);
-        assert!(snap.huge_range_eligible);
     }
 }

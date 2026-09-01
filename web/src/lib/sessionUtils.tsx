@@ -277,13 +277,8 @@ export function getRuntimeMetaLabel(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
   relativeNowMs?: number,
 ): string | null {
-  if (runtime.truthTier === "managed-local") {
-    return "Live on host";
-  }
-  if (runtime.lastLiveAt) {
-    if (runtime.truthTier === "stale" || runtime.confidence === "stale") {
-      return `Updated ${formatRelativeTime(runtime.lastLiveAt, relativeNowMs)}`;
-    }
+  if (runtime.lastLiveAt && runtime.confidence === "stale") {
+    return `Updated ${formatRelativeTime(runtime.lastLiveAt, relativeNowMs)}`;
   }
   return null;
 }

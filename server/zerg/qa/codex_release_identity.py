@@ -33,26 +33,6 @@ _PROFILE = identity.IdentityProfile(
 )
 
 
-def _redact_text(value: str) -> str:
-    return identity.redact_text(value)
-
-
-def _now() -> str:
-    return identity.now()
-
-
-def _sha256(data: bytes) -> str:
-    return identity.sha256(data)
-
-
-def _sha256_file(path: Path) -> str:
-    return identity.sha256_file(path)
-
-
-def _atomic_json(path: Path, payload: Any) -> None:
-    identity.atomic_json(path, payload)
-
-
 def _atomic_canonical_json(path: Path, payload: Any) -> None:
     identity.atomic_json(path, payload, canonical=True)
 
@@ -65,21 +45,13 @@ def _load_request(path: Path) -> dict[str, Any]:
     return _load_request_for_profile(path, PROFILE)
 
 
-def _git_sha(root: Path) -> str | None:
-    return identity.git_sha(root)
-
-
-def _git_dirty(root: Path) -> bool:
-    return identity.git_dirty(root)
-
-
 def _preflight(request: dict[str, Any], output_root: Path, repo_root: Path) -> tuple[Path, str, str]:
     return identity.preflight(
         request,
         output_root,
         repo_root,
-        git_sha_fn=_git_sha,
-        git_dirty_fn=_git_dirty,
+        git_sha_fn=identity.git_sha,
+        git_dirty_fn=identity.git_dirty,
     )
 
 
@@ -90,8 +62,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         profile=_PROFILE,
         repo_root=Path(__file__).resolve().parents[3],
         timeout_seconds=TIMEOUT_SECONDS,
-        git_sha_fn=_git_sha,
-        git_dirty_fn=_git_dirty,
+        git_sha_fn=identity.git_sha,
+        git_dirty_fn=identity.git_dirty,
     )
 
 

@@ -6,9 +6,7 @@
 //! Unlike Cursor, Claude's native resume restores full model context, so no
 //! synthetic continuation prompt is needed.
 
-use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -21,6 +19,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
+use crate::console_adapter::{claim_process_liveness, read_growth, stderr_tail, ClaimLiveness};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
@@ -28,7 +27,6 @@ use uuid::Uuid;
 pub const CLAUDE_PRINT_ADAPTER: &str = "claude_print";
 #[cfg(test)]
 pub const DEFAULT_CLAUDE_BIN: &str = "claude";
-const STDERR_TAIL_LINES: usize = 40;
 
 #[derive(Clone, Debug)]
 pub struct ClaudePrintRunConfig {
@@ -220,6 +218,11 @@ pub async fn recover_claude_print_turns(
     local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
+    // One coherent inventory for the whole pass, and `None` when `ps` could
+    // not be read at all. Settling a claim is an actuator -- it kills the
+    // process group and dispatches the next queued turn -- so a scan we could
+    // not read leaves every claim alone for a later pass.
+    let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
     for claim in registry.list_nonterminal()? {
         if claim.adapter.as_deref() != Some(CLAUDE_PRINT_ADAPTER) || claim.state != "spawned" {
@@ -260,14 +263,21 @@ pub async fn recover_claude_print_turns(
             local_db_path: local_db_path.clone(),
             runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
-        if claim_process_is_live(&claim) {
-            let lock = acquire_conversation_lock(&claude_managed_root()?, &provider_thread_id)?;
-            tokio::spawn(async move {
-                monitor_recovered_claim(claim, stdout_path, stderr_path, sink, lock).await;
-            });
-            recovered += 1;
-        } else {
-            settle_recovered_dead_claim(&claim, &stdout_path, &stderr_path, &sink).await;
+        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+            ClaimLiveness::Live => {
+                let lock = acquire_conversation_lock(&claude_managed_root()?, &provider_thread_id)?;
+                tokio::spawn(async move {
+                    monitor_recovered_claim(claim, stdout_path, stderr_path, sink, lock).await;
+                });
+                recovered += 1;
+            }
+            ClaimLiveness::Gone => {
+                settle_recovered_dead_claim(&claim, &stdout_path, &stderr_path, &sink).await;
+            }
+            ClaimLiveness::Unknown => tracing::warn!(
+                run_id = %claim.run_id,
+                "Process inventory unavailable; leaving Claude Console turn claim for a later scan"
+            ),
         }
     }
     Ok(recovered)
@@ -480,7 +490,7 @@ async fn monitor_recovered_claim(
                 persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
             }
         }
-        if !claim_process_is_live(&claim) {
+        if claim_process_liveness(&claim) == ClaimLiveness::Gone {
             let cancel_requested = crate::turn_claims::default_registry()
                 .and_then(|registry| registry.read(&claim.run_id))
                 .ok()
@@ -560,44 +570,7 @@ fn persist_projection_checkpoint(run_id: &str, read_offset: u64, pending_len: us
 }
 
 async fn cleanup_process_group(process_group_id: Option<i32>) {
-    let Some(pgid) = process_group_id else {
-        return;
-    };
-    let outcome =
-        crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
-    if !outcome.is_gone() {
-        eprintln!("[claude-print] process group {pgid} survived SIGKILL and was left running");
-    }
-}
-
-fn claim_process_is_live(claim: &crate::turn_claims::TurnClaim) -> bool {
-    claim
-        .pid
-        .zip(claim.process_start_time.as_deref())
-        .and_then(|(pid, expected)| {
-            crate::process_identity::collect_process_facts_by_pid()
-                .get(&pid)
-                .map(|fact| fact.lstart == expected)
-        })
-        .unwrap_or(false)
-}
-
-fn read_growth(path: &Path, offset: &mut u64, pending: &mut Vec<u8>) -> Result<Vec<Vec<u8>>> {
-    let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(*offset))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    *offset += bytes.len() as u64;
-    pending.extend(bytes);
-    let mut lines = Vec::new();
-    while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
-        let mut line = pending.drain(..=index).collect::<Vec<_>>();
-        line.pop();
-        if !line.is_empty() {
-            lines.push(line);
-        }
-    }
-    Ok(lines)
+    crate::console_adapter::cleanup_process_group("claude-print", process_group_id).await;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -955,6 +928,10 @@ fn build_claude_args(
     if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--model".to_string(), model.to_string()]);
     }
+    // End of options. Without it a message that opens with `--` is parsed by
+    // the provider CLI as flags instead of as the user's text. Verified
+    // against the installed `claude`: everything after `--` is the prompt.
+    args.push("--".to_string());
     let mut recorded = args.clone();
     args.push(prompt.to_string());
     recorded.push("[prompt omitted]".to_string());
@@ -991,18 +968,6 @@ fn set_private_dir(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
-}
-
-fn stderr_tail(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let mut lines = text
-        .lines()
-        .rev()
-        .take(STDERR_TAIL_LINES)
-        .collect::<VecDeque<_>>();
-    lines.make_contiguous().reverse();
-    let value = lines.into_iter().collect::<Vec<_>>().join("\n");
-    (!value.is_empty()).then_some(value)
 }
 
 fn normalized_optional(value: &Option<String>) -> Option<String> {
@@ -1043,6 +1008,7 @@ mod tests {
                 &provider_id,
                 "--model",
                 "claude-sonnet-4-5",
+                "--",
                 "secret prompt",
             ]
         );
@@ -1055,6 +1021,20 @@ mod tests {
         let (resume, _) = build_claude_args(&provider_id, true, None, "next");
         assert_eq!(resume[5], "--resume");
         assert_eq!(resume[6], provider_id);
+    }
+
+    /// A message that opens with `--` is text, not flags. `--` before it is
+    /// what keeps the provider CLI from parsing it as options.
+    #[test]
+    fn a_prompt_that_looks_like_flags_stays_a_prompt() {
+        let provider_id = Uuid::new_v4().to_string();
+        let (args, _) = build_claude_args(&provider_id, false, None, "--dangerous-thing");
+        let separator = args
+            .iter()
+            .position(|arg| arg == "--")
+            .expect("argv must carry an end-of-options separator");
+        assert_eq!(args[separator + 1], "--dangerous-thing");
+        assert_eq!(separator + 2, args.len());
     }
 
     #[test]
@@ -1135,6 +1115,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an authenticated stock claude and spends provider tokens"]
     async fn installed_claude_completes_and_resumes_through_production_console_adapter() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {

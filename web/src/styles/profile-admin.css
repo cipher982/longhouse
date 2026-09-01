@@ -4,6 +4,7 @@
   .profile-page-container,
   .admin-page-container {
     width: 100%;
+  }
 
   .profile-form {
     display: flex;
@@ -38,7 +39,6 @@
     gap: var(--space-4);
     justify-content: flex-end;
     padding: var(--space-6) 0;
-  }
   }
 
   /* Avatar Section */
@@ -173,22 +173,6 @@
     border-top: 1px solid var(--border-color);
   }
 
-  /* Admin Page */
-  .admin-page {
-    padding: 32px;
-    background: var(--dark-lighter);
-    max-width: 1600px;
-    margin: 0 auto;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    overflow-y: auto;
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    flex: 1 1 auto;
-  }
-
   .window-selector {
     display: flex;
     align-items: center;
@@ -277,19 +261,6 @@
     margin-top: var(--space-1);
   }
 
-    /* Admin Sections */
-  .admin-section {
-
-  .admin-section h3 {
-    color: var(--color-text-primary);
-    font-size: var(--font-size-xl);
-    font-weight: var(--font-weight-semibold);
-    letter-spacing: var(--font-tracking-tight);
-    margin: 0 0 var(--space-4);
-    border-bottom: 1px solid var(--color-border-primary);
-    padding-bottom: var(--space-2);
-  }
-
   .admin-stack {
     display: flex;
     flex-direction: column;
@@ -350,6 +321,16 @@
     animation: modalFadeIn 0.2s ease-out;
   }
 
+  @keyframes modalFadeIn {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+
   .admin-confirm-title {
     margin: 0;
   }
@@ -363,76 +344,6 @@
     gap: var(--space-3);
     justify-content: flex-end;
     margin-top: var(--space-6);
-  }
-
-  .admin-devtools-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: var(--space-4);
-  }
-
-  .admin-devtools-link {
-    text-decoration: none;
-  }
-
-  .admin-devtool-card {
-    background: var(--color-surface-card);
-    border: 1px solid var(--border-glass-1);
-    border-radius: var(--radius-md);
-    padding: var(--space-4);
-    transition:
-      background-color var(--motion-duration-fast) var(--motion-easing-standard),
-      border-color var(--motion-duration-fast) var(--motion-easing-standard),
-      box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
-      transform var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .admin-devtool-card:hover {
-    border-color: var(--color-brand-primary);
-    box-shadow: var(--shadow-glow);
-    transform: translateY(-1px);
-  }
-
-  .admin-devtool-card--trace {
-    background-color: rgba(201, 166, 107, 0.05);
-    border-color: var(--color-border);
-  }
-
-  .admin-devtool-card--trace:hover {
-    background-color: rgba(201, 166, 107, 0.10);
-    border-color: rgba(201, 166, 107, 0.30);
-  }
-
-  .admin-devtool-card--reliability {
-    background-color: rgba(16, 185, 129, 0.05);
-    border-color: var(--color-border);
-  }
-
-  .admin-devtool-card--reliability:hover {
-    background-color: rgba(16, 185, 129, 0.1);
-    border-color: rgba(16, 185, 129, 0.3);
-  }
-
-  .admin-devtool-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    margin-bottom: var(--space-2);
-  }
-
-  .admin-devtool-icon {
-    font-size: 1.25rem;
-  }
-
-  .admin-devtool-title {
-    font-weight: 600;
-    color: var(--color-text);
-  }
-
-  .admin-devtool-desc {
-    margin: 0;
-    font-size: 0.8rem;
-    color: var(--color-text-muted);
   }
 
   .agent-name {
@@ -480,17 +391,13 @@
       cursor: pointer;
     }
 
-    /* System Info */
+  /* System Info */
   .system-info {
     padding: 16px 0;
   }
 
   /* Responsive Design */
   @media (width <= 768px) {
-    .admin-page {
-      padding: 16px;
-    }
-
     .metrics-grid {
       grid-template-columns: 1fr;
     }
@@ -636,62 +543,6 @@
     cursor: not-allowed;
   }
 
-  /* Admin Page Confirmation Modal - scoped to admin page only */
-  .admin-page .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgb(0 0 0 / 75%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    animation: fadeIn var(--motion-duration-fast) ease;
-  }
-
-  .admin-page .modal-content {
-    background: var(--dark-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 32px;
-    max-width: 500px;
-    width: 90%;
-    box-shadow: 0 20px 60px rgba(18, 11, 9, 0.5);
-    animation: slideUp var(--motion-duration-normal) ease;
-  }
-
-  @keyframes slideUp {
-    from {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .admin-page .modal-content h3 {
-    color: var(--text);
-    font-size: 20px;
-    font-weight: 600;
-    margin: 0 0 16px;
-  }
-
-  .admin-page .modal-content p {
-    color: var(--text-secondary);
-    font-size: 14px;
-    line-height: 1.6;
-    margin: 0 0 24px;
-  }
-
-  .admin-page .modal-actions {
-    display: flex;
-    gap: 12px;
-    justify-content: flex-end;
-    margin-top: 24px;
-  }
-
   /* Animation */
   @keyframes fadeIn {
     from {
@@ -705,8 +556,7 @@
     }
   }
 
-  .metric-card,
-  .admin-section {
+  .metric-card {
     animation: fadeIn var(--motion-duration-normal) ease;
   }
 
@@ -739,15 +589,6 @@
     background: var(--dark-card);
     position: sticky;
     top: 0;
-  }
-
-  .users-table th.sortable {
-    cursor: pointer;
-    user-select: none;
-  }
-
-  .users-table th.sortable:hover {
-    color: var(--primary);
   }
 
   .users-table th.numeric,
@@ -811,13 +652,13 @@
   }
 
   /* User Detail Modal */
-  .user-detail-modal {
+  .admin-page-container .user-detail-modal {
     max-width: 700px;
     max-height: 85vh;
     overflow-y: auto;
   }
 
-  .modal-header {
+  .admin-page-container .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -826,13 +667,13 @@
     border-bottom: 1px solid var(--border-color);
   }
 
-  .modal-header h3 {
+  .admin-page-container .modal-header h3 {
     margin: 0;
     font-size: 18px;
     color: var(--text);
   }
 
-  .modal-close {
+  .admin-page-container .modal-close {
     background: none;
     border: none;
     color: var(--text-secondary);
@@ -846,7 +687,7 @@
       color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  .modal-close:hover {
+  .admin-page-container .modal-close:hover {
     background: #261F18;
     color: var(--text);
   }
@@ -912,11 +753,11 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .detail-section {
+  .admin-page-container .detail-section {
     margin-bottom: 24px;
   }
 
-  .detail-section h5 {
+  .admin-page-container .detail-section h5 {
     color: var(--text);
     font-size: 14px;
     font-weight: 600;
@@ -955,6 +796,4 @@
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
-}
-
 }

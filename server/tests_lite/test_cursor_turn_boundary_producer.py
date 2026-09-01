@@ -65,15 +65,15 @@ def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path
     monkeypatch.delenv("LONGHOUSE_CURSOR_BIN", raising=False)
     monkeypatch.delenv("LONGHOUSE_HOME", raising=False)
 
-    monkeypatch.setattr(cursor_turn_boundary_producer, "_isolated_provider_home", lambda: tmp_path / "home")
+    monkeypatch.setattr(cursor_turn_boundary_producer, "isolated_provider_home", lambda: tmp_path / "home")
     (tmp_path / "home").mkdir()
 
     def fake_start_transcript_shipper(*_args, **_kwargs):
         assert os.environ["LONGHOUSE_CURSOR_BIN"] == str(args.provider_bin)
         return fake_shipper
 
-    monkeypatch.setattr(cursor_turn_boundary_producer, "_start_transcript_shipper", fake_start_transcript_shipper)
-    monkeypatch.setattr(cursor_turn_boundary_producer, "_sha256", lambda _path: "sha256:fake")
+    monkeypatch.setattr(cursor_turn_boundary_producer, "start_transcript_shipper", fake_start_transcript_shipper)
+    monkeypatch.setattr(cursor_turn_boundary_producer, "sha256_file", lambda _path: "sha256:fake")
 
     def fake_run_product_e2e(e2e_args: argparse.Namespace) -> dict[str, Any]:
         assert e2e_args.skip_machine_agent_restart is True
@@ -98,8 +98,8 @@ def test_run_turn_boundary_passes_when_product_e2e_reports_passed(tmp_path: Path
         }
 
     monkeypatch.setattr(cursor_turn_boundary_producer.cursor_helm_product_e2e, "run_product_e2e", fake_run_product_e2e)
-    monkeypatch.setattr(cursor_turn_boundary_producer, "_wait_pid_dead", lambda pid: pid == 4242)
-    monkeypatch.setattr(cursor_turn_boundary_producer, "_wait_process_group_dead", lambda pgid: pgid == 4242)
+    monkeypatch.setattr(cursor_turn_boundary_producer, "wait_pid_dead", lambda pid: pid == 4242)
+    monkeypatch.setattr(cursor_turn_boundary_producer, "wait_process_group_dead", lambda pgid: pgid == 4242)
     monkeypatch.setattr(
         cursor_turn_boundary_producer.subprocess,
         "run",
@@ -144,14 +144,14 @@ def test_run_turn_boundary_fails_when_product_e2e_raises(tmp_path: Path, monkeyp
     args = _base_args(tmp_path, evidence_root=tmp_path / "evidence-fail")
     fake_shipper = _FakeShipper()
 
-    monkeypatch.setattr(cursor_turn_boundary_producer, "_isolated_provider_home", lambda: tmp_path / "home2")
+    monkeypatch.setattr(cursor_turn_boundary_producer, "isolated_provider_home", lambda: tmp_path / "home2")
     (tmp_path / "home2").mkdir()
     monkeypatch.setattr(
         cursor_turn_boundary_producer,
-        "_start_transcript_shipper",
+        "start_transcript_shipper",
         lambda *a, **k: fake_shipper,
     )
-    monkeypatch.setattr(cursor_turn_boundary_producer, "_sha256", lambda _path: "sha256:fake")
+    monkeypatch.setattr(cursor_turn_boundary_producer, "sha256_file", lambda _path: "sha256:fake")
 
     def fake_run_product_e2e_raises(_e2e_args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("timed out waiting for served Cursor activity settling to quiescent after the turn")

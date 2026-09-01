@@ -109,7 +109,6 @@ const INITIAL_SPOOL_PATH_LIMIT: usize = 64;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 128;
 const PATH_SPOOL_REPLAY_LIMIT_PRESSURE: usize = 1;
 const PATH_SPOOL_REPLAY_LIMIT_BASE: usize = 2;
-const PATH_SPOOL_REPLAY_LIMIT_FAST: usize = 8;
 const ARCHIVE_TRICKLE_TICK_BYTES: u64 = 512 * 1024 * 1024;
 const ARCHIVE_DRAIN_TICK_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const ARCHIVE_BACKPRESSURE_MAX_DEFER: Duration = Duration::from_secs(90);
@@ -144,14 +143,10 @@ const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 
 fn failed_shipment_retry_path_limit(limiter: &AdaptiveLimiter) -> usize {
-    match limiter.archive_target_batch_bytes() {
-        bytes if bytes >= crate::scheduler::ARCHIVE_BATCH_TARGET_MAX_BYTES => {
-            PATH_SPOOL_REPLAY_LIMIT_FAST
-        }
-        bytes if bytes >= crate::scheduler::ARCHIVE_BATCH_TARGET_BASE_BYTES => {
-            PATH_SPOOL_REPLAY_LIMIT_BASE
-        }
-        _ => PATH_SPOOL_REPLAY_LIMIT_PRESSURE,
+    if limiter.archive_target_batch_bytes() >= crate::scheduler::ARCHIVE_BATCH_TARGET_BASE_BYTES {
+        PATH_SPOOL_REPLAY_LIMIT_BASE
+    } else {
+        PATH_SPOOL_REPLAY_LIMIT_PRESSURE
     }
 }
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
@@ -7032,12 +7027,6 @@ mod tests {
 
         limiter.observe_backpressure(Some(Duration::from_secs(5)));
         assert_eq!(failed_shipment_retry_path_limit(limiter.as_ref()), 1);
-
-        let limiter = AdaptiveLimiter::new();
-        for _ in 0..4 {
-            limiter.observe_ingest_timing(10.0, Some(50.0), None, None, None, None);
-        }
-        assert_eq!(failed_shipment_retry_path_limit(limiter.as_ref()), 8);
     }
 
     #[test]

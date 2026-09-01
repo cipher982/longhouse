@@ -44,6 +44,23 @@ use tokio::net::{TcpListener, TcpStream};
 /// client we want to keep buffering for.
 const MAX_REQUEST_HEAD: usize = 16 * 1024;
 const REQUEST_HEAD_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the accept loop waits after a resource-exhaustion accept failure
+/// before trying again, so an EMFILE storm doesn't turn into a spin loop.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
+
+/// Whether an accept error means "the process is out of something" (retry
+/// after a pause) rather than "that one client went away" (retry immediately).
+fn accept_error_needs_backoff(err: &std::io::Error) -> bool {
+    match err.raw_os_error() {
+        Some(code) => {
+            code == libc::EMFILE
+                || code == libc::ENFILE
+                || code == libc::ENOBUFS
+                || code == libc::ENOMEM
+        }
+        None => false,
+    }
+}
 
 /// Mint the bearer token for one relay.
 ///
@@ -86,8 +103,17 @@ pub async fn spawn(upstream_url: &str, auth_token: &str) -> Result<String> {
             let (mut inbound, _peer) = match listener.accept().await {
                 Ok(pair) => pair,
                 Err(err) => {
+                    // Accept errors are per-connection, not per-listener: a
+                    // client that hung up mid-handshake, or the process
+                    // temporarily out of descriptors. Returning here used to
+                    // kill remote control for the whole bridge session until
+                    // the engine restarted. Back off only when the failure is
+                    // a resource shortage, so we don't spin on EMFILE.
                     eprintln!("codex WS relay accept failed: {err}");
-                    return;
+                    if accept_error_needs_backoff(&err) {
+                        tokio::time::sleep(ACCEPT_BACKOFF).await;
+                    }
+                    continue;
                 }
             };
             let upstream_addr = upstream_addr.clone();
@@ -214,11 +240,30 @@ mod tests {
             upgrade_head(Some(&token)).as_bytes(),
             &expected
         ));
-        assert!(!head_is_authorized(upgrade_head(None).as_bytes(), &expected));
+        assert!(!head_is_authorized(
+            upgrade_head(None).as_bytes(),
+            &expected
+        ));
         assert!(!head_is_authorized(
             upgrade_head(Some("guessed-token")).as_bytes(),
             &expected
         ));
+    }
+
+    /// The accept loop used to `return` on any accept error, which killed
+    /// remote control for that bridge session until the engine restarted. It
+    /// continues now; the classification here only decides whether to pause
+    /// first, so a descriptor shortage does not become a spin loop.
+    #[test]
+    fn only_resource_shortages_pause_the_accept_loop() {
+        let shortage = std::io::Error::from_raw_os_error(libc::EMFILE);
+        assert!(accept_error_needs_backoff(&shortage));
+
+        let aborted = std::io::Error::from_raw_os_error(libc::ECONNABORTED);
+        assert!(!accept_error_needs_backoff(&aborted));
+
+        let no_errno = std::io::Error::other("synthetic");
+        assert!(!accept_error_needs_backoff(&no_errno));
     }
 
     #[test]

@@ -111,6 +111,46 @@ parse_json() {
   fi
 }
 
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
+
+verify_release_checksum() {
+  local checksums="$1" asset="$2" downloaded="$3" expected actual
+  expected="$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset { print $1; exit }' "$checksums")"
+  actual="$(sha256_file "$downloaded")"
+  [ -n "$expected" ] && [ "$expected" = "$actual" ]
+}
+
+# Downloads one release asset and refuses to keep it unless its sha256 matches
+# checksums.txt from the same release. The release workflow publishes that file
+# next to the binaries (.github/workflows/runner-release.yml).
+download_verified_binary() {
+  local asset="$1" dest="$2" checksums="$2.checksums.txt"
+
+  echo "Downloading runner binary ($asset)..."
+  if ! curl -fsSL "${BINARY_URL}/${asset}" -o "$dest"; then
+    echo "Error: Failed to download runner binary from ${BINARY_URL}/${asset}" >&2
+    return 1
+  fi
+  if ! curl -fsSL "${BINARY_URL}/checksums.txt" -o "$checksums"; then
+    echo "Error: Failed to download checksums.txt from ${BINARY_URL}" >&2
+    rm -f "$dest" "$checksums"
+    return 1
+  fi
+  if ! verify_release_checksum "$checksums" "$asset" "$dest"; then
+    echo "Error: Checksum mismatch for $asset" >&2
+    rm -f "$dest" "$checksums"
+    return 1
+  fi
+  rm -f "$checksums"
+  echo "Verified $asset (sha256)"
+}
+
 write_launcher() {
   local launcher_path="$1"
   local current_link="$2"
@@ -219,13 +259,8 @@ case "$OS_TYPE" in
     BINARY_PATH="$VERSION_DIR/longhouse-runner"
     TMP_BINARY="$DOWNLOADS_DIR/longhouse-runner-${PLATFORM}.download"
     LAUNCHER_PATH="$BIN_DIR/longhouse-runner"
-    DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
 
-    echo "Downloading runner binary ($PLATFORM)..."
-    if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BINARY"; then
-      echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
-      exit 1
-    fi
+    download_verified_binary "longhouse-runner-${PLATFORM}" "$TMP_BINARY" || exit 1
     chmod +x "$TMP_BINARY"
     mv "$TMP_BINARY" "$BINARY_PATH"
     ln -sfn "$VERSION_DIR" "$CURRENT_LINK"
@@ -335,13 +370,8 @@ EOF
 
       BINARY_PATH="$VERSION_DIR/longhouse-runner"
       TMP_BINARY="$DOWNLOADS_DIR/longhouse-runner-${PLATFORM}.download"
-      DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
 
-      echo "Downloading runner binary ($PLATFORM)..."
-      if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BINARY"; then
-        echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
-        exit 1
-      fi
+      download_verified_binary "longhouse-runner-${PLATFORM}" "$TMP_BINARY" || exit 1
       chmod +x "$TMP_BINARY"
       mv "$TMP_BINARY" "$BINARY_PATH"
 
@@ -442,13 +472,8 @@ EOF
       VERSION_DIR="$INSTALL_ROOT/versions/$RUNNER_BINARY_VERSION"
       CURRENT_LINK="$INSTALL_ROOT/current"
       LAUNCHER_PATH="$INSTALL_HOME/.local/bin/longhouse-runner"
-      DOWNLOAD_URL="${BINARY_URL}/longhouse-runner-${PLATFORM}"
 
-      echo "Downloading runner binary ($PLATFORM)..."
-      if ! curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BINARY"; then
-        echo "Error: Failed to download runner binary from $DOWNLOAD_URL" >&2
-        exit 1
-      fi
+      download_verified_binary "longhouse-runner-${PLATFORM}" "$TMP_BINARY" || exit 1
       chmod +x "$TMP_BINARY"
       write_launcher "$TMP_LAUNCHER" "$CURRENT_LINK"
 

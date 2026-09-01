@@ -10,21 +10,19 @@ EXPECTED_COPY = {
         "OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer",
     ],
     "web/src/pages/docs/IntegrationsPage.tsx": [
-        "remote send,",
-        "interrupt, lifecycle terminate, and pause-answer",
+        "send, interrupt, terminate, and pause-answer",
         "permission reply endpoint",
-        "Active-turn steer is not advertised",
+        "Mid-turn steer is not advertised",
     ],
     "web/src/pages/docs/QuickStartPage.tsx": [
         "OpenCode Helm supports managed send, interrupt, terminate, and",
         "pause-answer but not active-turn steer",
         "not active-turn steer",
     ],
-    "web/src/pages/docs/CLIReferencePage.tsx": [
-        "OpenCode Helm supports managed send, interrupt, terminate, and",
-        "pause-answer but not active-turn steer",
-        "not active-turn steer",
-    ],
+    # CLIReferencePage no longer restates the matrix in prose -- it renders a
+    # table generated from schemas/managed_providers.yml, which cannot drift
+    # from the contract the way a sentence can. Only the FORBIDDEN_COPY guard
+    # below still applies to it.
     ".agents/skills/managed-provider-cli/SKILL.md": [
         "OpenCode server-bridge send, interrupt, and terminate are first-class Helm",
     ],
@@ -77,7 +75,13 @@ FORBIDDEN_COPY = {
 
 
 def _read(relative_path: str) -> str:
-    return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    """Read with whitespace collapsed.
+
+    These fragments are prose claims, and prose gets rewrapped. Matching the
+    raw bytes made a paragraph reflow look like a capability regression.
+    """
+
+    return " ".join((REPO_ROOT / relative_path).read_text(encoding="utf-8").split())
 
 
 def test_opencode_native_control_copy_is_current() -> None:

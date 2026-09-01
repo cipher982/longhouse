@@ -50,7 +50,7 @@ def test_catalog_runtime_batch_uses_one_rpc_without_opening_sqlite(monkeypatch):
             ]
         )
         response = Response()
-        # ``db=None`` is what ``_no_runtime_db`` yields on a Runtime Host: the
+        # ``db=None`` is what ``no_request_db`` yields on a Runtime Host: the
         # route has to answer without a SQLAlchemy session of any kind.
         result = await runtime_router.ingest_runtime_observation_batch(
             payload,

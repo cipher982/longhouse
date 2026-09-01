@@ -5,6 +5,20 @@ import Testing
 
 @MainActor
 struct SessionViewModelTests {
+    /// Throwaway root for a snapshot store's disk tier, so a cache test never
+    /// writes into the app container.
+    /// An empty cache rooted in a throwaway directory. Passing `nil` here falls
+    /// back to the process-wide `.shared` store, which lets one test hydrate the
+    /// next one's session and makes this file order-dependent.
+    static func isolatedSnapshotStore() -> TranscriptSnapshotStore {
+        TranscriptSnapshotStore(directory: tempCacheDirectory())
+    }
+
+    static func tempCacheDirectory() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-viewmodel-cache-\(UUID().uuidString)", isDirectory: true)
+    }
+
     @Test
     func startLoadsSessionWorkspace() async throws {
         let workspace = try makeWorkspace(eventId: 10, content: "Load the workspace")
@@ -108,8 +122,7 @@ struct SessionViewModelTests {
             apiFactory: { _ in api },
             streamFactory: { _, _, _, _ in Self.neverConnectingStreamSource() },
             enableRealtime: true,
-            transcriptCache: SessionTranscriptCache(maxBytes: 0),
-            snapshotStore: nil
+            snapshotStore: Self.isolatedSnapshotStore()
         )
 
         await model.start(sessionId: "session-1", appState: appState)
@@ -128,15 +141,19 @@ struct SessionViewModelTests {
         let prefetchedOlder = try makeWorkspace(eventId: 1, content: "Prefetched older page", total: 100, pageOffset: 0)
         let fetchedAfterWarning = try makeWorkspace(eventId: 2, content: "Fetched after warning", total: 100, pageOffset: 0)
         let otherSession = try makeWorkspace(eventId: 80, content: "Other cached session")
-        let cache = SessionTranscriptCache()
-        cache.store(
+        let cacheDirectory = Self.tempCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let cache = TranscriptSnapshotStore(directory: cacheDirectory)
+        cache.save(
             serverURL: "https://example.longhouse.ai",
             sessionId: "other-session",
-            detail: otherSession.session,
-            events: otherSession.events,
-            loadedProjectionItemCount: otherSession.events.count,
-            totalProjectionItemCount: otherSession.projection.total,
-            tailSnapshotEventId: otherSession.events.compactMap(\.legacyNumericId).max().map(String.init)
+            snapshot: TranscriptSnapshot(
+                detail: otherSession.session,
+                events: otherSession.events,
+                loadedProjectionItemCount: otherSession.events.count,
+                totalProjectionItemCount: otherSession.projection.total,
+                tailSnapshotEventId: otherSession.events.compactMap(\.legacyNumericId).max().map(String.init)
+            )
         )
         let api = FakeSessionWorkspaceClient(workspaces: [tail, prefetchedOlder, fetchedAfterWarning])
         await api.pauseNextTailResponse(offset: 50)
@@ -146,8 +163,7 @@ struct SessionViewModelTests {
             apiFactory: { _ in api },
             streamFactory: { _, _, _, _ in Self.neverConnectingStreamSource() },
             enableRealtime: true,
-            transcriptCache: cache,
-            snapshotStore: nil
+            snapshotStore: cache
         )
 
         await model.start(sessionId: "session-1", appState: appState)
@@ -156,8 +172,8 @@ struct SessionViewModelTests {
         await api.resumePausedTailResponses()
         await waitForTailResponseCount(api, atLeast: 2)
 
-        #expect(cache.snapshot(serverURL: "https://example.longhouse.ai", sessionId: "session-1") != nil)
-        #expect(cache.snapshot(serverURL: "https://example.longhouse.ai", sessionId: "other-session") != nil)
+        #expect(cache.load(serverURL: "https://example.longhouse.ai", sessionId: "session-1") != nil)
+        #expect(cache.load(serverURL: "https://example.longhouse.ai", sessionId: "other-session") != nil)
 
         await model.loadOlder(sessionId: "session-1", appState: appState)
 
@@ -195,20 +211,24 @@ struct SessionViewModelTests {
     func startRestoresCachedTailThenRefreshesInBackground() async throws {
         let cached = try makeWorkspace(eventId: 20, content: "Cached tail")
         let fresh = try makeWorkspace(eventId: 21, content: "Network tail")
-        let cache = SessionTranscriptCache()
-        cache.store(
+        let cacheDirectory = Self.tempCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let cache = TranscriptSnapshotStore(directory: cacheDirectory)
+        cache.save(
             serverURL: "https://example.longhouse.ai",
             sessionId: "session-1",
-            detail: cached.session,
-            events: cached.events,
-            loadedProjectionItemCount: cached.events.count,
-            totalProjectionItemCount: cached.projection.total,
-            tailSnapshotEventId: cached.events.compactMap(\.legacyNumericId).max().map(String.init)
+            snapshot: TranscriptSnapshot(
+                detail: cached.session,
+                events: cached.events,
+                loadedProjectionItemCount: cached.events.count,
+                totalProjectionItemCount: cached.projection.total,
+                tailSnapshotEventId: cached.events.compactMap(\.legacyNumericId).max().map(String.init)
+            )
         )
         let api = FakeSessionWorkspaceClient(workspaces: [fresh])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, transcriptCache: cache)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, snapshotStore: cache)
 
         await model.start(sessionId: "session-1", appState: appState)
 
@@ -224,22 +244,26 @@ struct SessionViewModelTests {
         let cached = try makeWorkspace(eventId: 20, content: "Message after interrupt")
         let fresh = try makeWorkspace(eventId: 21, content: "Network tail")
         let projectionItems = [makeActionItem()] + cached.projection.items
-        let cache = SessionTranscriptCache()
-        cache.store(
+        let cacheDirectory = Self.tempCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let cache = TranscriptSnapshotStore(directory: cacheDirectory)
+        cache.save(
             serverURL: "https://example.longhouse.ai",
             sessionId: "session-1",
-            detail: cached.session,
-            events: cached.events,
-            projectionItems: projectionItems,
-            loadedProjectionItemCount: projectionItems.count,
-            totalProjectionItemCount: projectionItems.count,
-            tailSnapshotEventId: cached.events.compactMap(\.legacyNumericId).max().map(String.init)
+            snapshot: TranscriptSnapshot(
+                detail: cached.session,
+                events: cached.events,
+                projectionItems: projectionItems,
+                loadedProjectionItemCount: projectionItems.count,
+                totalProjectionItemCount: projectionItems.count,
+                tailSnapshotEventId: cached.events.compactMap(\.legacyNumericId).max().map(String.init)
+            )
         )
         let api = FakeSessionWorkspaceClient(workspaces: [fresh])
         await api.pauseNextTailResponse(offset: 0)
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, transcriptCache: cache)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, snapshotStore: cache)
 
         await model.start(sessionId: "session-1", appState: appState)
         await waitForTailRequestCount(api, atLeast: 1)
@@ -320,21 +344,25 @@ struct SessionViewModelTests {
         """
         let cached = try makeWorkspace(eventId: 20, content: "Cached placeholder", pauseRequestJSON: cachedPauseRequestJSON)
         let fresh = try makeWorkspace(eventId: 21, content: "Network structured question", pauseRequestJSON: structuredPauseRequestJSON)
-        let cache = SessionTranscriptCache()
-        cache.store(
+        let cacheDirectory = Self.tempCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let cache = TranscriptSnapshotStore(directory: cacheDirectory)
+        cache.save(
             serverURL: "https://example.longhouse.ai",
             sessionId: "session-1",
-            detail: cached.session,
-            events: cached.events,
-            loadedProjectionItemCount: cached.events.count,
-            totalProjectionItemCount: cached.projection.total,
-            tailSnapshotEventId: cached.events.compactMap(\.legacyNumericId).max().map(String.init)
+            snapshot: TranscriptSnapshot(
+                detail: cached.session,
+                events: cached.events,
+                loadedProjectionItemCount: cached.events.count,
+                totalProjectionItemCount: cached.projection.total,
+                tailSnapshotEventId: cached.events.compactMap(\.legacyNumericId).max().map(String.init)
+            )
         )
         let api = FakeSessionWorkspaceClient(workspaces: [fresh])
         await api.pauseNextTailResponse(offset: 0)
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, transcriptCache: cache)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, snapshotStore: cache)
 
         await model.start(sessionId: "session-1", appState: appState)
         await waitForTailRequestCount(api, atLeast: 1)
@@ -360,17 +388,19 @@ struct SessionViewModelTests {
         let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
         let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
         let fresh = try makeWorkspace(eventId: 52, content: "Network tail", total: 101, pageOffset: 51)
-        let cache = SessionTranscriptCache()
+        let cacheDirectory = Self.tempCacheDirectory()
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let cache = TranscriptSnapshotStore(directory: cacheDirectory)
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
 
         let firstAPI = FakeSessionWorkspaceClient(workspaces: [tail, older])
-        let firstModel = SessionViewModel(apiFactory: { _ in firstAPI }, enableRealtime: false, transcriptCache: cache)
+        let firstModel = SessionViewModel(apiFactory: { _ in firstAPI }, enableRealtime: false, snapshotStore: cache)
         await firstModel.start(sessionId: "session-1", appState: appState)
         await firstModel.loadOlder(sessionId: "session-1", appState: appState)
 
         let secondAPI = FakeSessionWorkspaceClient(workspaces: [fresh])
-        let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, transcriptCache: cache)
+        let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, snapshotStore: cache)
         await secondModel.start(sessionId: "session-1", appState: appState)
 
         await waitForWorkspaceRequestCount(secondAPI, atLeast: 1)
@@ -1289,6 +1319,52 @@ struct SessionViewModelTests {
             stop: {},
             clockSkewMs: { 0 }
         )
+    }
+
+    /// `WebTranscriptView` skips re-encoding the transcript whenever this
+    /// counter is unchanged, so a mutation shape that fails to bump it freezes
+    /// the transcript silently. Cover every shape the view model actually uses,
+    /// in-place element writes included.
+    @Test
+    func transcriptRevisionAdvancesForEveryPayloadInputMutation() {
+        let model = SessionViewModel(enableRealtime: false)
+        var revision = model.transcriptRevision
+
+        func expectAdvance(_ label: Comment, _ mutate: () -> Void) {
+            mutate()
+            #expect(model.transcriptRevision > revision, label)
+            revision = model.transcriptRevision
+        }
+
+        expectAdvance("assigning items") {
+            model.items = [.user(makeEvent(id: 1, role: "user", content: "hello"))]
+        }
+        expectAdvance("appending a submitted input") {
+            model.submittedInputs.append(
+                SubmittedInput(
+                    id: "local-1",
+                    clientRequestId: "ios-request-1",
+                    text: "hello",
+                    intent: "auto",
+                    phase: .submitting,
+                    serverInputId: nil,
+                    lastError: nil,
+                    createdAt: Date()
+                )
+            )
+        }
+        expectAdvance("writing through a submitted input element") {
+            model.submittedInputs[0].phase = .sent
+        }
+        expectAdvance("removing submitted inputs") {
+            model.submittedInputs.removeAll()
+        }
+        expectAdvance("setting the blocking error") {
+            model.errorMessage = "Couldn't load session."
+        }
+        expectAdvance("assigning subagents") {
+            model.subagents = []
+        }
     }
 
     private func makeEvent(id: Int, role: String, content: String) -> SessionEvent {

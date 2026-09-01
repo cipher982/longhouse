@@ -9,7 +9,6 @@
 //! wakes the daemon so the pi JSONL gets shipped, mirroring the other one-shot
 //! console adapters.
 
-use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -23,13 +22,13 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
+use crate::console_adapter::{claim_process_liveness, stderr_tail, ClaimLiveness};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
 
 pub const PI_PRINT_ADAPTER: &str = "pi_print";
 pub const DEFAULT_PI_BIN: &str = "pi";
-const STDERR_TAIL_LINES: usize = 40;
 
 #[derive(Clone, Debug)]
 pub struct PiPrintRunConfig {
@@ -220,6 +219,9 @@ pub async fn recover_pi_print_turns(
     local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
+    // One coherent inventory for the pass; `None` means `ps` was unreadable,
+    // which must leave claims alone rather than settle them.
+    let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
     for claim in registry.list_nonterminal()? {
         if claim.adapter.as_deref() != Some(PI_PRINT_ADAPTER) || claim.state != "spawned" {
@@ -257,13 +259,20 @@ pub async fn recover_pi_print_turns(
             local_db_path: local_db_path.clone(),
             runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
-        if claim_process_is_live(&claim) {
-            tokio::spawn(async move {
-                monitor_recovered_claim(claim, stdout_path, stderr_path, sink).await;
-            });
-            recovered += 1;
-        } else {
-            settle_recovered_dead_claim(&claim, &stderr_path, &sink).await;
+        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+            ClaimLiveness::Live => {
+                tokio::spawn(async move {
+                    monitor_recovered_claim(claim, stdout_path, stderr_path, sink).await;
+                });
+                recovered += 1;
+            }
+            ClaimLiveness::Gone => {
+                settle_recovered_dead_claim(&claim, &stderr_path, &sink).await;
+            }
+            ClaimLiveness::Unknown => tracing::warn!(
+                run_id = %claim.run_id,
+                "Process inventory unavailable; leaving Pi Console turn claim for a later scan"
+            ),
         }
     }
     Ok(recovered)
@@ -374,7 +383,7 @@ async fn monitor_recovered_claim(
     sink: PiPrintSink,
 ) {
     loop {
-        if !claim_process_is_live(&claim) {
+        if claim_process_liveness(&claim) == ClaimLiveness::Gone {
             let cancel_requested = crate::turn_claims::default_registry()
                 .and_then(|registry| registry.read(&claim.run_id))
                 .ok()
@@ -409,11 +418,9 @@ async fn settle_pi_claim(sink: &PiPrintSink, cancel_requested: bool, stderr_path
         sink.post_terminal(
             "run_failed",
             None,
-            Some(
-                stderr_tail(stderr_path).unwrap_or_else(|| {
-                    "Pi process exited without writing a session transcript".to_string()
-                }),
-            ),
+            Some(stderr_tail(stderr_path).unwrap_or_else(|| {
+                "Pi process exited without writing a session transcript".to_string()
+            })),
         )
         .await;
         return;
@@ -524,11 +531,8 @@ impl PiPrintSink {
         }
         if let Ok(registry) = crate::turn_claims::default_registry() {
             let source = transcript.to_string_lossy().to_string();
-            let _ = registry.mark_provider_binding(
-                &self.run_id,
-                provider_session_id,
-                Some(&source),
-            );
+            let _ =
+                registry.mark_provider_binding(&self.run_id, provider_session_id, Some(&source));
         }
     }
 
@@ -715,26 +719,7 @@ impl PiPrintSink {
 }
 
 async fn cleanup_process_group(process_group_id: Option<i32>) {
-    let Some(pgid) = process_group_id else {
-        return;
-    };
-    let outcome =
-        crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
-    if !outcome.is_gone() {
-        eprintln!("[pi-print] process group {pgid} survived SIGKILL and was left running");
-    }
-}
-
-fn claim_process_is_live(claim: &crate::turn_claims::TurnClaim) -> bool {
-    claim
-        .pid
-        .zip(claim.process_start_time.as_deref())
-        .and_then(|(pid, expected)| {
-            crate::process_identity::collect_process_facts_by_pid()
-                .get(&pid)
-                .map(|fact| fact.lstart == expected)
-        })
-        .unwrap_or(false)
+    crate::console_adapter::cleanup_process_group("pi-print", process_group_id).await;
 }
 
 fn private_output_file(path: &Path) -> Result<File> {
@@ -750,18 +735,6 @@ fn set_private_dir(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
-}
-
-fn stderr_tail(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let mut lines = text
-        .lines()
-        .rev()
-        .take(STDERR_TAIL_LINES)
-        .collect::<VecDeque<_>>();
-    lines.make_contiguous().reverse();
-    let value = lines.into_iter().collect::<Vec<_>>().join("\n");
-    (!value.is_empty()).then_some(value)
 }
 
 fn normalized_optional(value: &Option<String>) -> Option<String> {
@@ -781,14 +754,6 @@ fn validate_uuid(value: &str, label: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-
-    // The engine reads LONGHOUSE_HOME from the process env for the turn-claim
-    // registry, the agent dir, and the transcript-wake socket. The two daemon
-    // tests below point it at their own temp dirs, so they must not run
-    // concurrently with each other (or the monitor task of one would resolve
-    // the other's HOME).
-    static LONGHOUSE_HOME_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
-    std::sync::OnceLock::new();
 
     #[test]
     fn pi_argv_is_bounded_one_shot_with_session_dir_and_no_tools() {
@@ -946,10 +911,7 @@ if "-p" in args:
         use tokio::io::AsyncReadExt;
         use tokio::net::UnixListener;
 
-        let _home_guard = LONGHOUSE_HOME_LOCK
-            .get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {
@@ -1044,10 +1006,7 @@ if "-p" in args:
 
     #[tokio::test]
     async fn fake_pi_interrupt_settles_cancelled() {
-        let _home_guard = LONGHOUSE_HOME_LOCK
-            .get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {

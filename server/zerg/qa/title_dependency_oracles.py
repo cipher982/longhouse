@@ -9,7 +9,6 @@ product-health projections.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
 import signal
@@ -31,6 +30,8 @@ from uuid import uuid4
 
 import httpx
 
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_ENVIRONMENT
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_CWD
 from zerg.services.internal_sessions import FACTORY_TITLE_ASSURANCE_PROJECT
@@ -46,22 +47,14 @@ class TitleDependencyTemporarilyUnavailable(RuntimeError):
     """The live product contract was blocked only by a typed availability incident."""
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
 
 
-def _sha256(path: Path) -> str:
-    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-
-
 def artifact_manifest(root: Path) -> list[dict[str, Any]]:
     return [
-        {"path": path.relative_to(root).as_posix(), "size": path.stat().st_size, "sha256": _sha256(path)}
+        {"path": path.relative_to(root).as_posix(), "size": path.stat().st_size, "sha256": sha256_file(path)}
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name != "result.json"
     ]
@@ -358,7 +351,7 @@ def _envelope(*, tenant_id: str, machine_id: str, message: str) -> tuple[str, di
             {
                 "type": "user",
                 "uuid": str(uuid4()),
-                "timestamp": _now(),
+                "timestamp": now(),
                 "message": {"role": "user", "content": message},
             },
             separators=(",", ":"),
@@ -376,7 +369,7 @@ def _envelope(*, tenant_id: str, machine_id: str, message: str) -> tuple[str, di
         range_end=len(raw),
         record_hashes=hash_records((raw,)),
     )
-    observed = _now()
+    observed = now()
     return session_id, {
         "protocol_version": 2,
         "tenant_id": tenant_id,
@@ -1080,14 +1073,14 @@ def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
                 "dependency_backlog_clear": backlog_clear,
             }
             final_snapshot = {
-                "observed_at": _now(),
+                "observed_at": now(),
                 "session": session,
                 "title_health": title_health,
                 "conditions": conditions,
             }
         except (httpx.HTTPError, ValueError) as exc:
             final_snapshot = {
-                "observed_at": _now(),
+                "observed_at": now(),
                 "error": f"{type(exc).__name__}: {exc}",
                 "conditions": {},
             }

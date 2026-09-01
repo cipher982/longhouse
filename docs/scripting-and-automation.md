@@ -9,10 +9,11 @@ get both.
 The Machine Agent discovers unmanaged (Shadow) sessions by watching each provider's own
 history directory:
 
-- Claude Code — `~/.claude/projects/`
+- Claude Code — `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`)
 - Codex CLI — `~/.codex/sessions/`
-- OpenCode — `~/.local/share/opencode/opencode.db`
-- Cursor — `~/.cursor/`
+- Antigravity CLI — `~/.gemini/antigravity-cli/brain/`, `~/.gemini/antigravity/brain/`, `~/.gemini/tmp/`
+- OpenCode — `~/.local/share/opencode/`
+- Cursor — `~/.cursor/chats/`, `~/.cursor/projects/`, `$XDG_CONFIG_HOME/cursor/chats/`
 
 Anything a provider writes there is your interactive history, the AI-coding equivalent of
 `~/.bash_history`, and it lands on your timeline. A background script that shells out to
@@ -62,6 +63,9 @@ XDG_DATA_HOME=$(mktemp -d) opencode run "check build status"
 ```
 
 Nothing is ingested, because nothing is written where the Machine Agent looks.
+
+Antigravity has no equivalent switch — the agent resolves its brain directory from `$HOME`
+with no override, so tag the run as automation instead.
 
 ## Curating after the fact
 

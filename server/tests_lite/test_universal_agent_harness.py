@@ -3810,18 +3810,58 @@ def test_parse_ingest_project_replays_fixture_without_launching_provider(tmp_pat
     assert '"type": "unknown"' in unknown
 
 
+def test_adapter_scenario_methods_all_exist_on_the_adapter() -> None:
+    """The collapsed wrappers looked their method up statically; this is the guard."""
+    adapter = uah.UniversalProviderAdapter(uah.AdapterConfig(provider="codex", binary_name="codex", binary_env=None))
+    for scenario, method_name in uah.ADAPTER_SCENARIO_METHODS.items():
+        assert callable(getattr(adapter, method_name, None)), f"{scenario} -> {method_name}"
+
+
+def test_every_adapter_scenario_dispatches_to_the_generic_runner() -> None:
+    for scenario in uah.ADAPTER_SCENARIO_METHODS:
+        assert uah.SCENARIO_RUNNERS[scenario] is uah.run_adapter_scenario
+
+
+def test_generic_runner_reads_the_scenario_from_its_package(tmp_path: Path) -> None:
+    """Scenario identity comes from the package, not a per-wrapper literal.
+
+    The 27 wrappers this replaced each hardcoded their own scenario string, so
+    a wrapper registered under the wrong key would have silently mislabelled
+    its evidence.
+    """
+    calls: list[str] = []
+
+    class RecordingAdapter:
+        config = uah.AdapterConfig(provider="codex", binary_name="codex", binary_env=None)
+
+        def prepare(self, package: uah.EvidencePackage) -> None:
+            calls.append("prepare")
+
+        def cleanup(self, package: uah.EvidencePackage) -> None:
+            calls.append("cleanup")
+
+        def probe(self, package: uah.EvidencePackage) -> dict[str, str]:
+            calls.append("probe")
+            return {"status": uah.STATUS_PASS}
+
+    package = uah.EvidencePackage(root=tmp_path, provider="codex", scenario="probe_identity")
+    package.initialize(adapter=RecordingAdapter.config)
+
+    result = uah.run_adapter_scenario(RecordingAdapter(), package)
+
+    assert calls == ["prepare", "probe", "cleanup"]
+    assert result.scenario == "probe_identity"
+
+
 def test_scenario_runner_does_not_branch_on_provider_names() -> None:
     sources = "\n".join(
         inspect.getsource(item)
         for item in (
             uah.run_scenario,
-            uah.run_probe_identity,
-            uah.run_collect_raw_evidence,
+            uah.run_adapter_scenario,
             uah.run_parse_ingest_project,
             uah.run_prompt_once,
-            uah.run_launch_managed_session,
             uah.run_send_receive,
-            uah.run_managed_session_e2e,
         )
     )
 

@@ -289,9 +289,6 @@ struct TimelineViewModelConnectivityTests {
             timelineAnchorAt: "2026-06-02T14:00:00Z",
             userMessages: 1,
             toolCalls: 1,
-            liveControlAvailable: true,
-            hostReattachAvailable: false,
-            replyToLiveSessionAvailable: true,
             runtimeDisplay: display
         )
     }

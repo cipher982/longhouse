@@ -29,10 +29,7 @@ textarea::placeholder {
 input:focus,
 textarea:focus,
 select:focus,
-.profile-input:focus,
-.modal textarea:focus,
-.modal input[type="text"]:focus,
-.scope-select:focus {
+.profile-input:focus {
   outline: none;
   border-color: var(--color-brand-primary);
   box-shadow: 0 0 0 2px rgb(100 255 218 / 25%);

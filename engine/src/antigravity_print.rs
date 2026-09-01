@@ -27,13 +27,13 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
+use crate::console_adapter::{claim_process_liveness, stderr_tail, ClaimLiveness};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
 
 pub const ANTIGRAVITY_PRINT_ADAPTER: &str = "antigravity_print";
 pub const DEFAULT_ANTIGRAVITY_BIN: &str = "agy";
-const STDERR_TAIL_LINES: usize = 40;
 pub const DEFAULT_PRINT_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Clone, Debug)]
@@ -223,6 +223,9 @@ pub async fn recover_antigravity_print_turns(
     local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
+    // One coherent inventory for the pass; `None` means `ps` was unreadable,
+    // which must leave claims alone rather than settle them.
+    let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
     for claim in registry.list_nonterminal()? {
         if claim.adapter.as_deref() != Some(ANTIGRAVITY_PRINT_ADAPTER) || claim.state != "spawned" {
@@ -254,13 +257,20 @@ pub async fn recover_antigravity_print_turns(
             local_db_path: local_db_path.clone(),
             runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
-        if claim_process_is_live(&claim) {
-            tokio::spawn(async move {
-                monitor_recovered_claim(claim, stderr_path, sink).await;
-            });
-            recovered += 1;
-        } else {
-            settle_recovered_dead_claim(&claim, &stderr_path, &sink).await;
+        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+            ClaimLiveness::Live => {
+                tokio::spawn(async move {
+                    monitor_recovered_claim(claim, stderr_path, sink).await;
+                });
+                recovered += 1;
+            }
+            ClaimLiveness::Gone => {
+                settle_recovered_dead_claim(&claim, &stderr_path, &sink).await;
+            }
+            ClaimLiveness::Unknown => tracing::warn!(
+                run_id = %claim.run_id,
+                "Process inventory unavailable; leaving Antigravity Console turn claim for a later scan"
+            ),
         }
     }
     Ok(recovered)
@@ -272,7 +282,7 @@ async fn monitor_recovered_claim(
     sink: AntigravityPrintSink,
 ) {
     loop {
-        if !claim_process_is_live(&claim) {
+        if claim_process_liveness(&claim) == ClaimLiveness::Gone {
             let cancel_requested = crate::turn_claims::default_registry()
                 .and_then(|registry| registry.read(&claim.run_id))
                 .ok()
@@ -297,18 +307,6 @@ async fn settle_recovered_dead_claim(
         cleanup_process_group(sink.process_group_id).await;
     }
     settle_antigravity_claim(sink, claim.cancel_requested_at.is_some(), None, stderr_path).await;
-}
-
-fn claim_process_is_live(claim: &crate::turn_claims::TurnClaim) -> bool {
-    claim
-        .pid
-        .zip(claim.process_start_time.as_deref())
-        .and_then(|(pid, expected)| {
-            crate::process_identity::collect_process_facts_by_pid()
-                .get(&pid)
-                .map(|fact| fact.lstart == expected)
-        })
-        .unwrap_or(false)
 }
 
 pub fn interrupt_antigravity_print_turn(run_id: &str, session_id: &str) -> Result<()> {
@@ -405,9 +403,11 @@ async fn settle_antigravity_claim(
         sink.post_terminal(
             "run_failed",
             exit_code,
-            Some(stderr_tail(stderr_path).unwrap_or_else(|| {
-                "agy exited without reporting a conversation id".to_string()
-            })),
+            Some(
+                stderr_tail(stderr_path).unwrap_or_else(|| {
+                    "agy exited without reporting a conversation id".to_string()
+                }),
+            ),
         )
         .await;
         return;
@@ -423,9 +423,11 @@ async fn settle_antigravity_claim(
         sink.post_terminal(
             "run_failed",
             exit_code,
-            Some(stderr_tail(stderr_path).unwrap_or_else(|| {
-                format!("agy reported status {}", status.unwrap_or_default())
-            })),
+            Some(
+                stderr_tail(stderr_path).unwrap_or_else(|| {
+                    format!("agy reported status {}", status.unwrap_or_default())
+                }),
+            ),
         )
         .await;
         return;
@@ -736,20 +738,10 @@ impl AntigravityPrintSink {
     }
 }
 
+/// agy leaks `run_command` children on signal, so this provider leans on the
+/// shared helper's "what survived SIGKILL" reporting more than most.
 async fn cleanup_process_group(process_group_id: Option<i32>) {
-    let Some(pgid) = process_group_id else {
-        return;
-    };
-    // The shared helper polls for group exit instead of assuming a fixed grace
-    // window, and reports what survived. An ad-hoc SIGTERM/sleep/SIGKILL is how
-    // orphans got left behind before: a child in uninterruptible I/O outlives
-    // the window, and nobody finds out. agy leaks run_command children on
-    // signal, so this provider needs the reporting more than most.
-    let outcome =
-        crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
-    if !outcome.is_gone() {
-        eprintln!("[antigravity-print] process group {pgid} survived SIGKILL and was left running");
-    }
+    crate::console_adapter::cleanup_process_group("antigravity-print", process_group_id).await;
 }
 
 fn private_output_file(path: &Path) -> Result<File> {
@@ -767,24 +759,6 @@ fn set_private_dir(path: &Path) -> Result<()> {
     permissions.set_mode(0o700);
     std::fs::set_permissions(path, permissions)?;
     Ok(())
-}
-
-fn stderr_tail(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let trimmed = content.trim_end();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let tail = trimmed
-        .lines()
-        .rev()
-        .take(STDERR_TAIL_LINES)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
-        .join("\n");
-    Some(tail)
 }
 
 fn validate_uuid(value: &str, field: &str) -> Result<()> {

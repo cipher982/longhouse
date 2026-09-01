@@ -215,18 +215,10 @@ const config = {
     {
       name: "chromium",
       testDir: "./tests",
-      testIgnore: ["**/core/**"],
+      // `**/*.test.ts` under tests/ are bun unit tests (`make validate-cohort-journey`),
+      // not Playwright specs; loading one aborts collection on its `bun:test` import.
+      testIgnore: ["**/core/**", "**/*.test.ts"],
       use: { ...devices["Desktop Chrome"] },
-    },
-    {
-      name: "mobile",
-      testDir: "./tests/mobile",
-      use: { ...devices["iPhone 13"] },
-    },
-    {
-      name: "mobile-small",
-      testDir: "./tests/mobile",
-      use: { ...devices["iPhone SE"] },
     },
   ],
 

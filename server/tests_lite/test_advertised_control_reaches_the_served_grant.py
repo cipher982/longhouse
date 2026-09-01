@@ -37,6 +37,7 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.services.live_control_catalog import canonical_command_authorization_providers
+from zerg.services.live_control_catalog import canonical_live_control_capabilities
 from zerg.services.live_control_catalog import get_canonical_live_control_grant
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.managed_provider_contracts import contract_for_provider
@@ -60,41 +61,84 @@ def live_engine(tmp_path):
 
 
 def _advertised_controls() -> list[tuple[str, str, str]]:
-    canonical = set(canonical_command_authorization_providers())
+    """Every (provider, operation, capability) a client would be offered.
+
+    Deliberately unfiltered by canonical authorization: a provider that drifts
+    outside it must fail the driving test below with a concrete grant reason,
+    not quietly drop out of the parametrization.
+    """
+
     return sorted(
         (contract.provider, operation, capability)
         for contract in all_managed_provider_contracts()
         for column, (operation, capability) in _REMOTE_CONTROLS.items()
-        if contract.connection_capabilities.get(column) and contract.provider in canonical
+        if contract.connection_capabilities.get(column)
     )
 
 
-def test_every_provider_advertising_a_remote_control_is_canonically_authorized() -> None:
-    """A provider outside canonical authorization cannot serve the controls it advertises.
+def test_every_advertised_machine_control_is_canonically_servable() -> None:
+    """The general invariant: nothing in `machine_control_supports` may be unservable.
 
-    `get_canonical_live_control_grant` refuses anything outside this set with
-    `unsupported`, so advertising `can_send_input` from outside it is the same
-    class of dead declaration Antigravity had: consistent in the schema, refused
-    at the API.
+    `get_canonical_live_control_grant` refuses any provider outside
+    `_CANONICAL_AUTH_PROVIDERS` with `unsupported`, before it looks at a single
+    fact. So a live-control entry in `machine_control_supports` from outside
+    that set is a dead declaration: the contract advertises it, the launcher
+    writes `can_send_input`/`can_interrupt`/`can_terminate` onto the born
+    connection, the client renders a composer with Interrupt and Terminate, and
+    every press fails at authorization.
 
-    Pi is a known live exclusion, not an accepted one. It advertises send,
-    interrupt and terminate while sitting outside canonical authorization, and
-    whether that is a real gap or a contract that over-advertises a one-shot
-    adapter is an open question -- pinned here so it stays visible instead of
-    being discovered the way Antigravity's was.
+    Pi shipped exactly that. `longhouse pi` registers a Console one-shot and
+    enqueues `session.turn.start`; there is no long-running pi session, and
+    `control_channel.rs` has no pi branch for `session.send_text` or
+    `session.terminate`. It advertised `pi.send`, `pi.interrupt` and
+    `pi.terminate` anyway.
+
+    Both sides of this are derived, not curated: the capability set comes from
+    `canonical_live_control_capabilities()` and the provider set from
+    `canonical_command_authorization_providers()`, so a new capability or a new
+    provider is covered the day it lands.
     """
 
-    canonical = set(canonical_command_authorization_providers())
-    advertising = {
-        contract.provider
+    canonical_providers = set(canonical_command_authorization_providers())
+    live_control_capabilities = set(canonical_live_control_capabilities())
+    unservable = sorted(
+        support
         for contract in all_managed_provider_contracts()
-        for column in _REMOTE_CONTROLS
-        if contract.connection_capabilities.get(column)
-    }
-    assert advertising - canonical == {"pi"}, (
-        "a provider started advertising remote controls it cannot have authorized; "
-        "either add it to canonical authorization or stop advertising the control"
+        for support in contract.machine_control_supports
+        if support.partition(".")[2] in live_control_capabilities and contract.provider not in canonical_providers
     )
+    assert unservable == [], (
+        f"{unservable} advertise live control that canonical authorization refuses outright. "
+        "Either the provider belongs in _CANONICAL_AUTH_PROVIDERS with an adapter that emits "
+        "control facts, or the contract must stop claiming the operation."
+    )
+
+
+def test_turn_scoped_supports_are_not_subject_to_canonical_authorization() -> None:
+    """The invariant above must not over-reach, or it deletes working Console controls.
+
+    Console turns (`session.turn.start` / `session.turn.interrupt`) never reach
+    `get_canonical_live_control_grant` -- `managed_control_dispatcher` prepares a
+    catalog operation only for send/steer/answer_pause/interrupt/terminate. Pi is
+    the live case: it keeps `pi.turn_start` and `pi.turn_interrupt` from outside
+    canonical authorization, and those really are served.
+    """
+
+    live_control_capabilities = set(canonical_live_control_capabilities())
+    assert "turn_start" not in live_control_capabilities
+    assert "turn_interrupt" not in live_control_capabilities
+
+    pi = contract_for_provider("pi")
+    assert pi is not None
+    assert pi.provider not in set(canonical_command_authorization_providers())
+    assert set(pi.machine_control_supports) == {"pi.turn_start", "pi.turn_interrupt"}
+    assert pi.connection_capabilities == {
+        "can_send_input": 0,
+        "can_interrupt": 0,
+        "can_terminate": 0,
+        "can_tail_output": 1,
+        "can_resume": 0,
+    }
 
 
 def _seed_bound_session(engine, provider: str):

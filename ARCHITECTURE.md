@@ -12,7 +12,7 @@ Longhouse is one product with two public components:
   write, ships session events to the Runtime Host with retry/spool, and emits
   heartbeats. This is the shipping path.
 - **Runtime Host** — the backend product: a FastAPI API, the bundled web UI,
-  and SQLite-backed state. It is what `longhouse serve` runs. It lives where
+  and SQLite-backed state. It is what `longhouse-server serve` runs. It lives where
   durability should live.
 
 On a laptop both run together so you can try it out, but the runtime stops when
@@ -96,7 +96,9 @@ The project uses some shorthand nouns. The important ones:
   Antigravity, `opencode`). It retains its native authentication, account
   entitlement, agent loop, and tools. Longhouse launches it through a control
   path but does not vendor, pin, proxy, or update it.
-- **Wall** — a live overview of current sessions across your machines.
+- **Wall** — a live overview of current sessions across your machines. It is a
+  query (`GET /api/agents/sessions/wall`) and the browser view over it, not a
+  CLI command.
 - **Recall** — semantic/full-text retrieval over past session history.
 - **Tail** — stream the recent events of a session.
 - **Peers** — other machines/agents reporting into the same Runtime Host.
@@ -106,7 +108,6 @@ The project uses some shorthand nouns. The important ones:
 ## Where to read next
 
 - [`VISION.md`](VISION.md) — product thesis and invariants (start here)
-- [`docs/README.md`](docs/README.md) — index of design specs
-- `docs/contracts/truth-plane.md` — the public truth-plane contract
-- `docs/README.md` — public documentation and runbooks
-- `server/README.md` / `runner/README.md` — component detail
+- [`docs/README.md`](docs/README.md) — public documentation and runbooks
+- [`docs/contracts/truth-plane.md`](docs/contracts/truth-plane.md) — the public truth-plane contract
+- [`server/README.md`](server/README.md) / [`runner/README.md`](runner/README.md) — component detail

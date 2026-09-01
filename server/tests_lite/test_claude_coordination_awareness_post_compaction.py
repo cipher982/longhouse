@@ -102,7 +102,7 @@ def _install_session_fakes(
     fake_shipper = _FakeShipper()
     fake_session = _FakeSession()
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
     monkeypatch.setattr(m, "launch_claude_session", lambda **_k: (fake_session, "session-1", "provider-session-1"))
     monkeypatch.setattr(m, "read_coordination_token", lambda *_a, **_k: "coordination-token")
     monkeypatch.setattr(m, "await_assistant_marker", lambda **_k: ("/tmp/transcript.jsonl", 3, None))
@@ -240,7 +240,7 @@ def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(t
     args = _args(tmp_path, variant)
     fake_shipper = _FakeShipper()
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
 
     def _boom(**_k: object) -> object:
         raise RuntimeError("longhouse claude exited before channel readiness")

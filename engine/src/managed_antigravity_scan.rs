@@ -75,15 +75,7 @@ pub fn default_antigravity_state_dir() -> Option<PathBuf> {
 }
 
 pub fn collect_observations_from(state_dir: &Path) -> Vec<AntigravityHookObservation> {
-    let Ok(entries) = fs::read_dir(state_dir) else {
-        return Vec::new();
-    };
-    let paths = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
-        .collect::<Vec<_>>();
-    collect_observations_from_paths(&paths)
+    collect_observations_from_paths(&crate::managed_scan::state_file_paths(state_dir))
 }
 
 pub(crate) fn collect_observations_from_paths(

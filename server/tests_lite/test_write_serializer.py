@@ -643,7 +643,7 @@ def test_full_app_requires_storage_v2_in_subprocess_without_testing_flag(tmp_pat
             with TestClient(app) as client:
                 ingest = client.post("/api/agents/ingest", content=json.dumps(payload))
                 print("ingest", ingest.status_code, ingest.text)
-                if ingest.status_code != 426 or ingest.json().get("detail", {}).get("code") != "storage_v2_required":
+                if ingest.status_code != 404:
                     raise SystemExit(1)
 
                 capabilities = client.get("/api/agents/storage/v2/capabilities?machine_id=test-machine")

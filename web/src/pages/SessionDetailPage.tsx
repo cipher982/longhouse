@@ -265,8 +265,6 @@ function SessionDetailWorkspaceRoute({
   const branchSourceSession = currentThreadSession || session;
   const interaction = getSessionInteractionCapabilities({
     session: branchSourceSession,
-    isViewingHead,
-    headThreadSession,
   });
   const activePauseRequest =
     branchSourceSession.session_state.pending_interaction != null &&
@@ -542,7 +540,6 @@ function SessionDetailWorkspaceRoute({
                   key={`${sessionChatTarget.id}:${interaction.mode}`}
                   session={sessionChatTarget}
                   layout="dock"
-                  dockHeaderStyle="hidden"
                   chatMode={
                     interaction.mode === "managed_local"
                       ? "managed_local"
@@ -568,13 +565,6 @@ function SessionDetailWorkspaceRoute({
                     displaySession.session_state.activity,
                     nowMs,
                   )}
-                  onSessionChanged={(nextSessionId) => {
-                    if (!nextSessionId || nextSessionId === session.id) return;
-                    navigate(`/timeline/${nextSessionId}`, {
-                      replace: true,
-                      state: { from: returnTo },
-                    });
-                  }}
                 />
                 {showLoopModePill ? (
                   <LoopModePill

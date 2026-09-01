@@ -16,9 +16,9 @@ from datetime import timezone
 from typing import Any
 from uuid import UUID
 
+import jwt
 from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import _encode_jwt
-from zerg.auth.strategy import _decode_jwt_fallback
 from zerg.auth.strategy import _hosted_audience
 from zerg.config import get_settings
 
@@ -110,8 +110,6 @@ def validate_managed_session_token(token: str) -> ManagedSessionToken | None:
         return None
 
     try:
-        from jose import jwt  # type: ignore
-
         payload = jwt.decode(
             encoded,
             JWT_SECRET,
@@ -119,22 +117,10 @@ def validate_managed_session_token(token: str) -> ManagedSessionToken | None:
             audience=expected_audience,
             issuer=MANAGED_SESSION_TOKEN_ISSUER,
         )
-    except ModuleNotFoundError:
-        try:
-            payload = _decode_jwt_fallback(encoded, JWT_SECRET)
-        except Exception:
-            return None
     except Exception:
         return None
 
     if str(payload.get("typ") or "") != MANAGED_SESSION_TOKEN_KIND:
-        return None
-    # The fallback decoder checks signature and expiry only, so bind the token
-    # to this instance here: the shared secret makes another tenant's token
-    # otherwise indistinguishable from ours.
-    if str(payload.get("iss") or "") != MANAGED_SESSION_TOKEN_ISSUER:
-        return None
-    if str(payload.get("aud") or "") != expected_audience:
         return None
     scope = str(payload.get("scp") or "").strip()
     if scope not in MANAGED_SESSION_SCOPES:

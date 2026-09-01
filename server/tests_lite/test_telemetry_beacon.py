@@ -18,6 +18,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.auth import require_admin
+from zerg.dependencies.request_db import no_request_db
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.routers import telemetry as telemetry_mod
@@ -55,7 +56,7 @@ def _client() -> tuple[TestClient, sessionmaker]:
     app.dependency_overrides[require_admin] = lambda: None
     app.dependency_overrides[require_canary_token] = lambda: None
     app.dependency_overrides[get_db] = override_db
-    app.dependency_overrides[telemetry_mod._get_telemetry_db] = override_db
+    app.dependency_overrides[no_request_db] = override_db
     app.include_router(beacon_router)
     app.include_router(admin_router)
     app.include_router(canary_router)

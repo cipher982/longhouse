@@ -23,18 +23,19 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from zerg.qa.codex_auth import login_with_api_key
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import TranscriptShipper
-from zerg.qa.provider_native_resume import _isolated_provider_home
-from zerg.qa.provider_native_resume import _start_transcript_shipper
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import TranscriptShipper
+from zerg.qa.live_session_toolkit import isolated_provider_home
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.live_session_toolkit import write_json
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
@@ -121,34 +122,12 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _sha256_bytes(value: bytes) -> str:
     return f"sha256:{hashlib.sha256(value).hexdigest()}"
 
 
 def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
-
-
-def _write_json(path: Path, payload: object) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def _artifact_manifest(root: Path) -> list[dict[str, object]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": _sha256_file(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def _artifact_manifest_after_shipper_stopped(
@@ -159,7 +138,7 @@ def _artifact_manifest_after_shipper_stopped(
 
     if shipper is not None:
         shipper.stop()
-    return _artifact_manifest(root)
+    return artifact_manifest(root)
 
 
 def _expected_variant(provider: str) -> str:
@@ -669,7 +648,7 @@ def _retain_failure_claim_diagnostics(
                 "streams": streams,
             }
         )
-    _write_json(root / "provider-failure-diagnostics.json", {"claims": retained})
+    write_json(root / "provider-failure-diagnostics.json", {"claims": retained})
 
 
 def console_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
@@ -732,7 +711,7 @@ def _observation_from_receipts(
 def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path) -> dict[str, Any]:
     if variant != _expected_variant(provider):
         raise RuntimeError(f"{provider} requires variant={_expected_variant(provider)}")
-    home = _isolated_provider_home()
+    home = isolated_provider_home()
     environment = _provider_environment(provider, args, home)
     if provider == "codex":
         auth_receipt = login_with_api_key(
@@ -743,7 +722,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         )
         environment.pop("CODEX_API_KEY", None)
         environment.pop("OPENAI_API_KEY", None)
-        _write_json(root / "provider-auth-receipt.json", auth_receipt)
+        write_json(root / "provider-auth-receipt.json", auth_receipt)
     if provider == "claude":
         _configure_claude_hook(args, environment)
 
@@ -761,7 +740,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         "version": args.provider_version,
         "raw_version_output": raw_version_output,
     }
-    _write_json(root / "provider-binary-receipt.json", binary_receipt)
+    write_json(root / "provider-binary-receipt.json", binary_receipt)
 
     # HOME is already unique to one mount-isolated qualification. Keep
     # ephemeral IPC paths compact: Linux Unix sockets cap the complete path
@@ -794,7 +773,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     shipper: TranscriptShipper | None = None
     cleanup_written = False
     try:
-        shipper = _start_transcript_shipper(
+        shipper = start_transcript_shipper(
             provider,
             args,
             home=home,
@@ -881,9 +860,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "qualification_model_bound": True,
             "argv": (first_claim.get("result") or {}).get("argv"),
         }
-        _write_json(root / "adapter-dispatch-receipt.json", dispatch)
+        write_json(root / "adapter-dispatch-receipt.json", dispatch)
         flush_receipt = _retain_flush_diagnostics(shipper.flush("console-first-turn"))
-        _write_json(root / "transcript-flush-receipt.json", flush_receipt)
+        write_json(root / "transcript-flush-receipt.json", flush_receipt)
         marker_count = provider_response_evidence.get("provider_response_marker_count") if provider_response_evidence is not None else None
         flush_ok = (
             flush_receipt.get("status") == "pass"
@@ -906,7 +885,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "transcript_flush_status": flush_receipt.get("status"),
             "transcript_flush_events_shipped": flush_receipt.get("events_shipped"),
         }
-        _write_json(root / "console-boundary-receipt.json", boundary_receipt)
+        write_json(root / "console-boundary-receipt.json", boundary_receipt)
         if not flush_ok:
             raise RuntimeError("Console transcript flush failed before durable convergence")
         if provider_response_evidence is None:
@@ -933,7 +912,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "assistant_event_count": len(first_events),
             "transcript_converged_exactly_once": len(first_events) == 1,
         }
-        _write_json(root / "provider-response-binding-receipt.json", binding)
+        write_json(root / "provider-response-binding-receipt.json", binding)
 
         if provider in CAN_RESUME:
             resume_marker = f"LH_{provider.upper()}_RESUME_{uuid4().hex}"
@@ -967,7 +946,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 raise RuntimeError("second Console turn did not preserve the native provider thread")
             dispatch["resume_run_id"] = resume.get("run_id")
             dispatch["native_thread_resumed"] = True
-            _write_json(root / "adapter-dispatch-receipt.json", dispatch)
+            write_json(root / "adapter-dispatch-receipt.json", dispatch)
 
         interrupt_marker = f"LH_{provider.upper()}_INTERRUPT_{uuid4().hex}"
         interrupt_message = f"Use the shell tool to run `sleep 8`, then reply with exactly {interrupt_marker} and nothing else."
@@ -1100,7 +1079,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 "reason": "unsupported" if refused else "unexpected_dispatch",
                 "normal_turn_completed": normal_completed,
             }
-        _write_json(root / "interrupt-contract-receipt.json", interrupt_receipt)
+        write_json(root / "interrupt-contract-receipt.json", interrupt_receipt)
 
         naturally_dead = _wait_owned_processes_dead(claims)
         cleanup = {
@@ -1111,7 +1090,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 not (_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id"))) for claim in claims
             ),
         }
-        _write_json(root / "cleanup-receipt.json", cleanup)
+        write_json(root / "cleanup-receipt.json", cleanup)
         cleanup_written = True
         observation = _observation_from_receipts(
             dispatch=dispatch,
@@ -1129,7 +1108,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "scenario_id": _scenario_id(provider),
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "pass" if assertion else "fail",
             "assertions": {ASSERTION_ID: assertion},
             "provider_binary": binary_receipt,
@@ -1151,7 +1130,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     not (_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id"))) for claim in claims
                 ),
             }
-            _write_json(root / "cleanup-receipt.json", cleanup)
+            write_json(root / "cleanup-receipt.json", cleanup)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1207,13 +1186,13 @@ def main(argv: list[str] | None = None) -> int:
             "scenario_id": _scenario_id(args.provider),
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "failure_code": "provider_console_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
-    _write_json(root / "result.json", result)
+    write_json(root / "result.json", result)
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1
 

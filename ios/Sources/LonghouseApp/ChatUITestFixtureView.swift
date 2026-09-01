@@ -29,12 +29,26 @@ struct ChatUITestFixtureView: View {
         self.fixtureName = fixtureName
         self.client = client
         _probe = State(initialValue: ChatUITestProbe(path: UITestHooks.chatFixtureProbePath))
+        // Every non-benchmark fixture shares one session ID, and the transcript
+        // cache is durable. Left on the production store, whichever fixture ran
+        // last becomes the next one's opening transcript — including across
+        // runs, so a suite passes or fails depending on what the simulator
+        // still had on disk. Give each launch its own store instead; a fixture
+        // that never had a cache (no realtime stream) keeps having none.
         _viewModel = StateObject(
             wrappedValue: SessionViewModel(
                 apiFactory: { _ in client },
                 streamFactory: { _, _, _, _ in client.streamSource() },
-                enableRealtime: fixture.usesRealtimeStream
+                enableRealtime: fixture.usesRealtimeStream,
+                snapshotStore: fixture.usesRealtimeStream ? Self.isolatedSnapshotStore() : nil
             )
+        )
+    }
+
+    private static func isolatedSnapshotStore() -> TranscriptSnapshotStore {
+        TranscriptSnapshotStore(
+            directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("lh-ui-fixture-cache-\(UUID().uuidString)", isDirectory: true)
         )
     }
 
@@ -340,9 +354,6 @@ private struct TimelineOpenFixtureSession: Identifiable {
             timelineAnchorAt: "2026-07-17T12:00:00Z",
             userMessages: index,
             toolCalls: index * 2,
-            liveControlAvailable: true,
-            hostReattachAvailable: false,
-            replyToLiveSessionAvailable: true,
             runtimeDisplay: runtime,
             timelineCard: card
         )
@@ -1128,26 +1139,11 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             homeLabel: "MacBook",
             originLabel: "UI test",
             capabilities: SessionCapabilities(
-                liveControlAvailable: true,
-                hostReattachAvailable: false,
-                replyToLiveSessionAvailable: true,
                 canQueueNextInput: true,
                 canSteerActiveTurn: false,
-                displayLabel: "Send",
-                displayDetail: nil,
-                displayTone: "success",
-                inputMode: "live",
                 defaultInputIntent: "auto",
-                composerEnabled: true,
                 composerPlaceholder: composerPlaceholder,
-                composerDisabledReason: nil,
-                sendDisabledReason: nil,
-                turnState: "idle",
-                canStartTurn: true,
-                startTurnBlockedBy: nil,
-                canInterruptActiveTurn: false,
-                attachImages: false,
-                stalenessReason: nil
+                attachImages: false
             ),
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "live",

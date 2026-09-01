@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_release_identity as identity_bridge
+from zerg.qa import provider_release_identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa import qualification_request
 from zerg.qa.codex_auth import CodexAuthError
@@ -56,7 +57,7 @@ def _redact(value: str, secret: str, managed_package_root: str | None = None) ->
         value = value.replace(secret, "[CODEX_API_KEY]")
     if managed_package_root:
         value = value.replace(managed_package_root, "[CODEX_MANAGED_PACKAGE_ROOT]")
-    return identity_bridge._redact_text(value)  # noqa: SLF001
+    return provider_release_identity.redact_text(value)
 
 
 def _managed_package_resources() -> tuple[str, Path, str] | None:
@@ -71,7 +72,7 @@ def _managed_package_resources() -> tuple[str, Path, str] | None:
         raise identity_bridge.RequestError(f"{MANAGED_PACKAGE_ROOT_ENV} must contain executable official codex-resources/bwrap")
     try:
         helper.resolve(strict=True).relative_to(path.resolve(strict=True))
-        helper_identity = identity_bridge._sha256_file(helper)  # noqa: SLF001
+        helper_identity = provider_release_identity.sha256_file(helper)
     except (OSError, ValueError) as exc:
         raise identity_bridge.RequestError("official Codex sandbox helper cannot be resolved inside package root") from exc
     return raw, helper, helper_identity
@@ -304,7 +305,7 @@ def emit_proof_bundle(
     if contract is None:
         raise identity_bridge.RequestError("Codex managed-provider contract is missing")
     raw_bytes = (json.dumps(observation, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
-    raw_digest = identity_bridge._sha256(raw_bytes)  # noqa: SLF001
+    raw_digest = provider_release_identity.sha256(raw_bytes)
     execution = {
         **execution,
         "invocation_id": request["invocation_id"],
@@ -314,18 +315,18 @@ def emit_proof_bundle(
         "runner_git_sha": runner_sha,
     }
     output_root.mkdir(parents=True, exist_ok=True)
-    identity_bridge._atomic_json(output_root / "request.json", request)  # noqa: SLF001
-    identity_bridge._atomic_json(output_root / "raw-evidence.json", observation)  # noqa: SLF001
+    provider_release_identity.atomic_json(output_root / "request.json", request)
+    provider_release_identity.atomic_json(output_root / "raw-evidence.json", observation)
     semantic_observation = semantic._refresh_native_source_digests(  # noqa: SLF001
         observation,
         artifact_root=output_root.parent,
     )
     semantic_path = output_root / "semantic-evidence" / "semantic-observation.json"
     semantic_path.parent.mkdir(parents=True, exist_ok=True)
-    identity_bridge._atomic_json(semantic_path, semantic_observation)  # noqa: SLF001
-    execution["semantic_evidence_digest"] = identity_bridge._sha256_file(semantic_path)  # noqa: SLF001
-    identity_bridge._atomic_json(output_root / "execution-summary.json", execution)  # noqa: SLF001
-    oracle_digest = identity_bridge._sha256(Path(__file__).read_bytes())  # noqa: SLF001
+    provider_release_identity.atomic_json(semantic_path, semantic_observation)
+    execution["semantic_evidence_digest"] = provider_release_identity.sha256_file(semantic_path)
+    provider_release_identity.atomic_json(output_root / "execution-summary.json", execution)
+    oracle_digest = provider_release_identity.sha256(Path(__file__).read_bytes())
     store = ProviderCapabilityProofStore(output_root / "proof-store")
     records: list[ProviderCapabilityProofRecord] = []
     for assertion_id in ASSERTIONS:
@@ -354,7 +355,7 @@ def emit_proof_bundle(
         "outcomes": serialized_outcomes,
         "complete": set(outcomes) == set(ASSERTIONS),
     }
-    identity_bridge._atomic_json(output_root / "coverage-manifest.json", coverage)  # noqa: SLF001
+    provider_release_identity.atomic_json(output_root / "coverage-manifest.json", coverage)
     bundle = {
         "artifact_kind": "provider_capability_proof_bundle",
         "schema_version": 2,
@@ -517,7 +518,7 @@ def run_codex_real_tool_command(
     if sandbox_helper_evidence is not None and managed_package_resources is not None:
         _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
         try:
-            vendored_bwrap_post_identity = identity_bridge._sha256_file(vendored_bwrap)  # noqa: SLF001
+            vendored_bwrap_post_identity = provider_release_identity.sha256_file(vendored_bwrap)
         except OSError:
             vendored_bwrap_post_identity = None
         sandbox_helper_evidence["vendored_bwrap_post_identity"] = vendored_bwrap_post_identity
@@ -554,8 +555,8 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     model = os.environ.get("CODEX_MODEL") or None
     repo_root = Path(__file__).resolve().parents[3]
     binary, actual_identity, runner_sha = identity_bridge._preflight(request, output_root, repo_root)  # noqa: SLF001
-    generated_at = identity_bridge._now()  # noqa: SLF001
-    pre_execution_identity = identity_bridge._sha256_file(binary)  # noqa: SLF001
+    generated_at = provider_release_identity.now()
+    pre_execution_identity = provider_release_identity.sha256_file(binary)
     if pre_execution_identity != actual_identity:
         raise identity_bridge.RequestError("provider executable changed before execution")
 
@@ -574,7 +575,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     if not api_key:
         outcomes = {assertion: AssertionOutcome.BLOCKED for assertion in ASSERTIONS}
         try:
-            blocked_post_identity = identity_bridge._sha256_file(binary)  # noqa: SLF001
+            blocked_post_identity = provider_release_identity.sha256_file(binary)
         except OSError:
             blocked_post_identity = None
         base_observation["post_execution_identity"] = blocked_post_identity
@@ -745,7 +746,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         if sandbox_helper_evidence is not None:
             _, vendored_bwrap, vendored_bwrap_identity = managed_package_resources
             try:
-                vendored_bwrap_post_identity = identity_bridge._sha256_file(vendored_bwrap)  # noqa: SLF001
+                vendored_bwrap_post_identity = provider_release_identity.sha256_file(vendored_bwrap)
             except OSError:
                 vendored_bwrap_post_identity = None
             sandbox_helper_evidence["vendored_bwrap_post_identity"] = vendored_bwrap_post_identity
@@ -795,7 +796,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         }
 
     try:
-        post_execution_identity = identity_bridge._sha256_file(binary)  # noqa: SLF001
+        post_execution_identity = provider_release_identity.sha256_file(binary)
     except OSError:
         post_execution_identity = None
     if post_execution_identity != pre_execution_identity:

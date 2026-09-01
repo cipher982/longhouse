@@ -214,21 +214,21 @@ def _install_common_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, co
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("LONGHOUSE_OPENCODE_QUALIFICATION_MODEL", "deepseek/deepseek-v4-flash")
-    monkeypatch.setattr(m, "_isolated_provider_home", lambda: home)
-    monkeypatch.setattr(m, "_start_transcript_shipper", lambda *a, **k: _FakeShipper())
-    monkeypatch.setattr(m, "_launch_command", lambda *a, **k: ["longhouse", "opencode"])
+    monkeypatch.setattr(m, "isolated_provider_home", lambda: home)
+    monkeypatch.setattr(m, "start_transcript_shipper", lambda *a, **k: _FakeShipper())
+    monkeypatch.setattr(m, "launch_command", lambda *a, **k: ["longhouse", "opencode"])
     monkeypatch.setattr(m, "PtyProcess", _FakeLaunchedProcess)
     monkeypatch.setattr(
         m,
-        "_wait_state",
+        "wait_state",
         lambda *a, **k: {"session_id": "sess-1", "provider_session_id": "psess-1", "pid": 4242, "opencode_pid": 4242},
     )
-    monkeypatch.setattr(m, "_wait_opencode_tui_ready", lambda *a, **k: None)
-    monkeypatch.setattr(m, "_wait_session_tail", lambda *a, **k: {})
-    monkeypatch.setattr(m, "_assistant_event_digests", lambda *a, **k: set())
+    monkeypatch.setattr(m, "wait_opencode_tui_ready", lambda *a, **k: None)
+    monkeypatch.setattr(m, "wait_session_tail", lambda *a, **k: {})
+    monkeypatch.setattr(m, "assistant_event_digests", lambda *a, **k: set())
     monkeypatch.setattr(
         m,
-        "_wait_assistant_response_after_marker",
+        "wait_assistant_response_after_marker",
         lambda *a, **k: (
             {},
             {
@@ -241,8 +241,8 @@ def _install_common_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, co
     )
     monkeypatch.setattr(m, "_wait_terminal_growth", lambda *a, **k: 1.0)
     monkeypatch.setattr(m, "_wait_terminal_quiescence", lambda *a, **k: 2.0)
-    monkeypatch.setattr(m, "_stop", lambda *a, **k: {"dead": True, "clean": True, "provider_process_dead": True})
-    monkeypatch.setattr(m, "_qualification_secrets", lambda *a, **k: ())
+    monkeypatch.setattr(m, "stop_session", lambda *a, **k: {"dead": True, "clean": True, "provider_process_dead": True})
+    monkeypatch.setattr(m, "qualification_secrets", lambda *a, **k: ())
 
     class _Completed:
         stdout = "1.2.3\n"
@@ -309,7 +309,7 @@ def test_run_turn_boundary_quiescent_writes_a_typed_failure_on_exception(tmp_pat
     def _explode(*_a: object, **_k: object) -> None:
         raise RuntimeError("opencode Helm process is no longer live")
 
-    monkeypatch.setattr(m, "_wait_state", _explode)
+    monkeypatch.setattr(m, "wait_state", _explode)
     args = _args(tmp_path)
 
     result = m.run_turn_boundary_quiescent(args)

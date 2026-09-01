@@ -12,12 +12,13 @@ import pytest
 from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result as profile
 from zerg.qa import provider_qualification
+from zerg.qa import provider_release_identity
 
 
 @pytest.fixture(autouse=True)
 def _stable_runner_checkout(monkeypatch) -> None:
-    monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: "test-sha")
-    monkeypatch.setattr(codex_release_identity, "_git_dirty", lambda _root: False)
+    monkeypatch.setattr(provider_release_identity, "git_sha", lambda _root: "test-sha")
+    monkeypatch.setattr(provider_release_identity, "git_dirty", lambda _root: False)
     monkeypatch.delenv(profile.MANAGED_PACKAGE_ROOT_ENV, raising=False)
 
 

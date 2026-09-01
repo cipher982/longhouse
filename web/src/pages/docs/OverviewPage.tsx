@@ -27,10 +27,11 @@ export default function OverviewPage() {
 
       <h2>What Longhouse Does</h2>
       <p>
-        Longhouse puts Claude Code, Codex CLI, Antigravity CLI, and OpenCode sessions into one
-        searchable timeline. Bare provider runs land as unmanaged history.
-        When you launch a session through Longhouse, it becomes managed, so you
-        can message, tail, or continue it later from the browser, CLI, or API.
+        Longhouse puts Claude Code, Codex CLI, Cursor Agent, OpenCode, Pi Agent,
+        and Antigravity CLI sessions into one searchable timeline. Bare provider
+        runs land as unmanaged history. When you launch a session through
+        Longhouse, it becomes managed, so you can send to it, tail it, or
+        continue it later from the browser, CLI, or API.
       </p>
       <div className="docs-callout">
         <p>
@@ -64,9 +65,10 @@ export default function OverviewPage() {
 
       <h2>How It Runs</h2>
       <p>
-        Longhouse is a single binary that runs a FastAPI server backed by SQLite.
-        Your data stays on your machine. There are no external services to
-        configure for the self-hosted path.
+        The Runtime Host is a FastAPI server backed by SQLite, and a Rust
+        Machine Agent runs on each machine where you work. Your data stays on
+        your machines. There are no external services to configure for the
+        self-hosted path.
       </p>
       <p>
         It works on your laptop for quick lookups. It shines on a machine that
@@ -98,7 +100,7 @@ export default function OverviewPage() {
         </Link>
         <Link to="/docs/integrations" className="docs-overview-card">
           <h3>Integrations</h3>
-          <p>Claude Code, Codex CLI, Antigravity CLI, OpenCode, and more.</p>
+          <p>The six CLI agents Longhouse launches, and what each can do.</p>
         </Link>
         <Link to="/docs/configuration" className="docs-overview-card">
           <h3>Configuration</h3>

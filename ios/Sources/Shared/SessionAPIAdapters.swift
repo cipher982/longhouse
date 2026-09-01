@@ -46,26 +46,11 @@ private func timelineCardTitle(for session: APISessionResponse) -> String {
 extension APISessionCapabilitiesResponse {
     var sessionCapabilities: SessionCapabilities {
         SessionCapabilities(
-            liveControlAvailable: liveControlAvailable ?? false,
-            hostReattachAvailable: hostReattachAvailable ?? false,
-            replyToLiveSessionAvailable: replyToLiveSessionAvailable ?? false,
             canQueueNextInput: canQueueNextInput,
             canSteerActiveTurn: canSteerActiveTurn,
-            displayLabel: displayLabel,
-            displayDetail: displayDetail,
-            displayTone: displayTone,
-            inputMode: inputMode,
             defaultInputIntent: defaultInputIntent,
-            composerEnabled: composerEnabled,
             composerPlaceholder: composerPlaceholder,
-            composerDisabledReason: composerDisabledReason,
-            sendDisabledReason: sendDisabledReason,
-            turnState: turnState,
-            canStartTurn: canStartTurn,
-            startTurnBlockedBy: startTurnBlockedBy,
-            canInterruptActiveTurn: canInterruptActiveTurn,
-            attachImages: attachImages,
-            stalenessReason: stalenessReason
+            attachImages: attachImages
         )
     }
 }
@@ -153,12 +138,6 @@ extension APISessionRuntimeDisplayResponse {
     }
 }
 
-extension APISessionPauseQuestionOptionResponse {
-    var sessionPauseQuestionOption: SessionPauseQuestionOption {
-        SessionPauseQuestionOption(label: label, description: description, value: value)
-    }
-}
-
 extension APISessionPauseQuestionResponse {
     var sessionPauseQuestion: SessionPauseQuestion {
         SessionPauseQuestion(
@@ -166,7 +145,7 @@ extension APISessionPauseQuestionResponse {
             header: header,
             question: question,
             multiSelect: multiSelect ?? false,
-            options: (options ?? []).map(\.sessionPauseQuestionOption)
+            options: options ?? []
         )
     }
 }
@@ -215,23 +194,11 @@ extension APISessionTranscriptPreviewResponse {
     }
 }
 
-extension APITimelineBadgePresentationResponse {
-    var timelineBadgePresentation: TimelineBadgePresentation {
-        TimelineBadgePresentation(label: label, tone: tone)
-    }
-}
-
-extension APITimelineStatusPresentationResponse {
-    var timelineStatusPresentation: TimelineStatusPresentation {
-        TimelineStatusPresentation(label: label, tone: tone, seenAt: seenAt, seenAtPrefix: seenAtPrefix)
-    }
-}
-
 extension APITimelineCardPresentationResponse {
     var timelineCardPresentation: TimelineCardPresentation {
         TimelineCardPresentation(
-            ownership: ownership.timelineBadgePresentation,
-            status: status.timelineStatusPresentation,
+            ownership: ownership,
+            status: status,
             borderTone: borderTone ?? "inactive"
         )
     }
@@ -286,7 +253,7 @@ extension APIEventResponse {
             isHeadBranch: isHeadBranch ?? true,
             inputOrigin: inputOrigin?.sessionInputOrigin,
             eventOrigin: eventOrigin,
-            mediaRefs: mediaRefs?.map(\.sessionEventMediaRef) ?? []
+            mediaRefs: mediaRefs ?? []
         )
     }
 }
@@ -382,23 +349,6 @@ private extension JSONValue {
         case .array, .object, .null: nil
         default: sessionEventIdentifier
         }
-    }
-}
-
-extension APIEventMediaRefResponse {
-    var sessionEventMediaRef: SessionEventMediaRef {
-        SessionEventMediaRef(
-            sha256: sha256,
-            mediaState: mediaState,
-            mimeType: mimeType,
-            byteSize: byteSize,
-            blobUrl: blobUrl,
-            thumbUrl: thumbUrl,
-            sourcePath: sourcePath,
-            sourceOffset: sourceOffset,
-            jsonPointer: jsonPointer,
-            originalKind: originalKind
-        )
     }
 }
 
@@ -530,9 +480,7 @@ extension APISessionInputResponse {
             inputId: inputId,
             liveInputId: liveInputId,
             clientRequestId: clientRequestId,
-            turn: turn.map {
-                ConsoleTurnReceipt(turnId: $0.turnId, runId: $0.runId, state: $0.state)
-            },
+            turn: turn,
             intent: SessionInputIntent(rawValue: intent) ?? .auto,
             queued: (queued ?? []).map(\.queuedInputSummary)
         )
@@ -556,27 +504,6 @@ extension APISessionLoopModeResponse {
             sessionId: sessionId,
             loopMode: SessionLoopMode(rawValue: loopMode.rawValue) ?? .assist
         )
-    }
-}
-
-extension APISessionTurnResponse {
-    var sessionTurn: SessionTurn {
-        SessionTurn(
-            id: id,
-            sessionId: sessionId,
-            sessionInputId: sessionInputId,
-            state: state,
-            terminalPhase: terminalPhase,
-            errorCode: errorCode,
-            userSubmittedAt: userSubmittedAt,
-            terminalAt: terminalAt
-        )
-    }
-}
-
-extension APISessionTurnsListResponse {
-    var sessionTurnsResponse: SessionTurnsResponse {
-        SessionTurnsResponse(turns: turns.map(\.sessionTurn), total: total)
     }
 }
 
@@ -611,9 +538,6 @@ private extension APISessionResponse {
             timelineAnchorAt: projectedTimelineAnchorAt ?? timelineAnchorAt,
             userMessages: userMessages,
             toolCalls: toolCalls,
-            liveControlAvailable: capabilities.liveControlAvailable,
-            hostReattachAvailable: capabilities.hostReattachAvailable,
-            replyToLiveSessionAvailable: capabilities.replyToLiveSessionAvailable,
             runtimeDisplay: runtimeDisplay.sessionRuntimeDisplay,
             timelineCard: timelineCard.timelineCardPresentation,
             stateFacts: sessionState.sessionStateFacts

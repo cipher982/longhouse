@@ -9,13 +9,14 @@ from pathlib import Path
 import pytest
 
 from zerg.qa import codex_release_identity as bridge
+from zerg.qa import provider_release_identity
 from zerg.services.provider_capability_proof import proof_record_from_mapping
 
 
 @pytest.fixture(autouse=True)
 def _stable_runner_checkout(monkeypatch) -> None:
-    monkeypatch.setattr(bridge, "_git_sha", lambda _root: "test-sha")
-    monkeypatch.setattr(bridge, "_git_dirty", lambda _root: False)
+    monkeypatch.setattr(provider_release_identity, "git_sha", lambda _root: "test-sha")
+    monkeypatch.setattr(provider_release_identity, "git_dirty", lambda _root: False)
 
 
 def _fake(tmp_path: Path, body: str) -> tuple[Path, str]:

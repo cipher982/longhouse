@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tracemalloc
 from dataclasses import replace
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from zerg.storage_v2.raw_objects import RawObjectValidationError
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import read_raw_object
 from zerg.storage_v2.raw_objects import seal_raw_object
+from zerg.storage_v2.raw_objects import validate_raw_object_spec
 
 
 def _spec(*, records: tuple[RawRecord, ...] | None = None) -> RawObjectSpec:
@@ -130,3 +132,58 @@ def test_legacy_normalized_event_provenance_round_trips(tmp_path):
     sealed = seal_raw_object(tmp_path, spec)
     decoded = read_raw_object(tmp_path, sealed.object_path, expected_object_hash=sealed.object_hash)
     assert decoded.spec.provenance_kind == "legacy_normalized_event"
+
+
+def test_record_ordinal_span_is_bounded_by_the_record_count_not_by_u64():
+    """A declared ordinal span must never be materialized.
+
+    `range_end` is only bounded by u64, so an envelope declaring a huge span
+    with one record used to allocate `list(range(start, end))` before it could
+    notice the mismatch: 439 MB at a span of 10 million, and an out-of-memory
+    kill at the u64 ceiling. Validation runs before the envelope-id integrity
+    check, so any caller holding a device token could repeat it.
+    """
+
+    spec = replace(
+        _spec(),
+        range_kind="record_ordinal",
+        range_start=0,
+        range_end=10_000_000,
+        records=(RawRecord(source_position=0, data=b"one-row"),),
+    )
+
+    tracemalloc.start()
+    try:
+        with pytest.raises(RawObjectValidationError, match="cover the declared range"):
+            validate_raw_object_spec(spec)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 1024 * 1024
+
+
+def test_record_ordinal_positions_must_match_the_declared_range_exactly():
+    base = replace(_spec(), range_kind="record_ordinal", range_start=41, range_end=43)
+
+    with pytest.raises(RawObjectValidationError, match="cover the declared range"):
+        validate_raw_object_spec(
+            replace(
+                base,
+                records=(
+                    RawRecord(source_position=41, data=b"a"),
+                    RawRecord(source_position=99, data=b"b"),
+                ),
+            )
+        )
+    with pytest.raises(RawObjectValidationError, match="cover the declared range"):
+        validate_raw_object_spec(replace(base, records=(RawRecord(source_position=41, data=b"a"),)))
+    validate_raw_object_spec(
+        replace(
+            base,
+            records=(
+                RawRecord(source_position=41, data=b"a"),
+                RawRecord(source_position=42, data=b"b"),
+            ),
+        )
+    )

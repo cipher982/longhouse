@@ -12,7 +12,6 @@ import type {
   SessionCapabilities,
   SessionPauseRequest,
   SessionRuntimeDisplay,
-  AgentSessionTurn,
 } from "../../services/api/agents";
 import { makeSessionStateFacts } from "../../test/sessionState";
 import { TestRouter } from "../../test/test-utils";
@@ -291,37 +290,12 @@ function renderSessionDetailPage() {
   );
 }
 
-function makeTurn(overrides: Partial<AgentSessionTurn> = {}): AgentSessionTurn {
-  return {
-    id: 1,
-    session_id: "session-codex",
-    request_id: "req-1",
-    state: "active",
-    terminal_phase: null,
-    error_code: null,
-    user_event_id: null,
-    durable_assistant_event_id: null,
-    baseline_event_id: null,
-    baseline_observation_cursor: null,
-    user_submitted_at: "2026-03-22T22:03:45Z",
-    send_accepted_at: "2026-03-22T22:03:46Z",
-    active_phase_observed_at: "2026-03-22T22:03:47Z",
-    terminal_at: null,
-    durable_at: null,
-    created_at: "2026-03-22T22:03:45Z",
-    updated_at: "2026-03-22T22:03:47Z",
-    ...overrides,
-  };
-}
-
 function mockWorkspaceState({
   session,
   model,
-  turns = [],
 }: {
   session: AgentSession;
   model: ReturnType<typeof buildTimelineModel>;
-  turns?: AgentSessionTurn[];
 }) {
   workspaceMocks.useSessionWorkspace.mockImplementation(() => {
     const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
@@ -329,9 +303,6 @@ function mockWorkspaceState({
       session,
       sessionLoading: false,
       sessionError: null,
-      turns,
-      turnsLoading: false,
-      turnsError: null,
       threadSessions: [session],
       currentThreadSession: session,
       headThreadSession: session,
@@ -976,9 +947,6 @@ describe("SessionDetailPage", () => {
         session,
         sessionLoading: false,
         sessionError: null,
-        turns: [makeTurn({ session_id: session.id })],
-        turnsLoading: false,
-        turnsError: null,
         threadSessions: [session],
         currentThreadSession: session,
         headThreadSession: session,
@@ -1063,9 +1031,6 @@ describe("SessionDetailPage", () => {
         session,
         sessionLoading: false,
         sessionError: null,
-        turns: [],
-        turnsLoading: false,
-        turnsError: null,
         threadSessions: [session],
         currentThreadSession: session,
         headThreadSession: session,
@@ -1521,9 +1486,6 @@ describe("SessionDetailPage", () => {
         session,
         sessionLoading: false,
         sessionError: null,
-        turns: [],
-        turnsLoading: false,
-        turnsError: null,
         threadSessions: [session],
         currentThreadSession: session,
         headThreadSession: session,
@@ -1633,9 +1595,6 @@ describe("SessionDetailPage", () => {
         session,
         sessionLoading: false,
         sessionError: null,
-        turns: [],
-        turnsLoading: false,
-        turnsError: null,
         threadSessions: [session],
         currentThreadSession: session,
         headThreadSession: session,

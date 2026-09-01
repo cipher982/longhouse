@@ -28,8 +28,8 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.request_db import no_request_db
 from zerg.main import api_app
-from zerg.routers.agents_sessions import _session_detail_db
 from zerg.services.worklog_day_export import WORKLOG_DAY_MESSAGE_SQL
 
 DEVICE_ID = "worklog-day"
@@ -52,7 +52,7 @@ def _make_client(tmp_path):
         return SimpleNamespace(device_id="worklog-day", id="token-1", owner_id=1)
 
     api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[_session_detail_db] = override_db
+    api_app.dependency_overrides[no_request_db] = override_db
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     return TestClient(api_app), factory
 
@@ -165,7 +165,7 @@ def test_worklog_day_export_drops_test_sessions_by_default(live_catalog, live_ca
 
 def test_worklog_day_live_catalog_uses_search_projection_without_cold_fallback(tmp_path, monkeypatch):
     client, _factory = _make_client(tmp_path)
-    api_app.dependency_overrides.pop(_session_detail_db)
+    api_app.dependency_overrides.pop(no_request_db)
 
     class FakeCatalog:
         async def call(self, method, params):

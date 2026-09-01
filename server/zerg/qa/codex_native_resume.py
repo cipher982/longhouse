@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -17,18 +16,20 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import codex_provider_release_canary as bridge_canary
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import TranscriptShipper
-from zerg.qa.provider_native_resume import _qualification_secrets
-from zerg.qa.provider_native_resume import _redact_state_for_evidence
-from zerg.qa.provider_native_resume import _start_transcript_shipper
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import TranscriptShipper
+from zerg.qa.live_session_toolkit import qualification_secrets
+from zerg.qa.live_session_toolkit import redact_state_for_evidence
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.live_session_toolkit import write_json
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.provider_resume_oracles import native_resume_assertions
 from zerg.qa.resume_assurance import ProducerRegistration
 
@@ -91,16 +92,6 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _write_json(path: Path, payload: object) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
 def _write_resume_contract_snapshot(
     *,
     isolation_root: Path,
@@ -130,15 +121,15 @@ def _write_resume_contract_snapshot(
     contract_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     snapshot = dict(state)
     snapshot["session_id"] = session_id
-    _write_json(state_path, snapshot)
-    _write_json(
+    write_json(state_path, snapshot)
+    write_json(
         contract_path,
         {
             "schema_version": 2,
             "session_id": session_id,
             "provider": "codex",
             "launch_mode": "detached_ui",
-            "created_at": _now(),
+            "created_at": now(),
             "provider_binary": {
                 "path": str(provider_binary),
                 "source": "staged_release",
@@ -179,29 +170,9 @@ def _redact_process_command(command: str) -> str:
     )
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
-
-
 def _finalize_result_manifest(root: Path, result: dict[str, Any]) -> None:
-    result["artifact_manifest"] = _artifact_manifest(root)
-    _write_json(root / "result.json", result)
+    result["artifact_manifest"] = artifact_manifest(root)
+    write_json(root / "result.json", result)
 
 
 class _RuntimeHostHTTPError(RuntimeError):
@@ -291,7 +262,7 @@ def _validate_resume_intent(
     if not identity_valid:
         raise RuntimeError("provider-neutral Resume intent did not match the exact Codex session, cwd, and native selector")
     return {
-        "requested_at": _now(),
+        "requested_at": now(),
         "intent": intent,
         "identity_valid": identity_valid,
     }
@@ -582,7 +553,7 @@ def _record_post_stop_ship_receipt(
 ) -> dict[str, Any]:
     receipt = shipper.flush("post-stop")
     transition["post_stop_transcript_ship"] = receipt
-    _write_json(root / "post-stop-transcript-ship-receipt.json", receipt)
+    write_json(root / "post-stop-transcript-ship-receipt.json", receipt)
     return receipt
 
 
@@ -598,10 +569,10 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=False)
     provider_receipt = {
         "path": str(args.codex_bin),
-        "sha256": _sha256(args.codex_bin),
+        "sha256": sha256_file(args.codex_bin),
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
     }
-    _write_json(root / "provider-binary-receipt.json", provider_receipt)
+    write_json(root / "provider-binary-receipt.json", provider_receipt)
 
     isolation_root: Path | None = None
     session_id = ""
@@ -620,7 +591,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         # the root allocation explicit and reuse it for both processes.
         isolation_root = Path(tempfile.mkdtemp(prefix="lhx-codex-", dir="/tmp"))
         shipper_environment = bridge_canary._provider_runtime_environment(os.environ, isolation_root)
-        shipper = _start_transcript_shipper(
+        shipper = start_transcript_shipper(
             "codex",
             args,
             home=Path(shipper_environment["HOME"]),
@@ -628,7 +599,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             evidence_root=root,
             longhouse_home=isolation_root / "longhouse",
         )
-        _write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
+        write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
         initial_summary, _, isolation_root = _start_initial_bridge(
             args,
             evidence_root=root,
@@ -644,10 +615,10 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
         seed_marker = f"LONGHOUSE_CODEX_RESUME_SEED_{uuid.uuid4().hex}"
         _send_marker(args, isolation_root, session_id, seed_marker)
         initial_state, initial_thread_path = _wait_for_marker(initial_state_file, seed_marker, timeout=args.live_send_timeout_secs)
-        _write_json(root / "initial-bridge-state.json", _redact_state_for_evidence(initial_state))
+        write_json(root / "initial-bridge-state.json", redact_state_for_evidence(initial_state))
         shutil.copy2(initial_thread_path, root / "initial-transcript.jsonl")
         initial_ship_receipt = shipper.flush("initial")
-        _write_json(root / "initial-transcript-ship-receipt.json", initial_ship_receipt)
+        write_json(root / "initial-transcript-ship-receipt.json", initial_ship_receipt)
         _require_transcript_ship(initial_ship_receipt, label="initial")
         old_pids = {int(value) for value in (initial_state.get("pid"), initial_state.get("app_server_pid")) if value}
 
@@ -669,8 +640,8 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             # Publish the equivalent snapshot before flushing so the real
             # Machine Agent scanner can observe it in this cold-resume window.
             _record_post_stop_ship_receipt(root, process_transition, shipper)
-        _write_json(root / "process-transition-receipt.json", process_transition)
-        _write_json(
+        write_json(root / "process-transition-receipt.json", process_transition)
+        write_json(
             root / "resume-contract-receipt.json",
             {
                 "status": "pass",
@@ -680,7 +651,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             },
         )
         stale_input_receipt = _attempt_stale_input(args, isolation_root, session_id)
-        _write_json(root / "stale-input-receipt.json", stale_input_receipt)
+        write_json(root / "stale-input-receipt.json", stale_input_receipt)
         if stale_input_receipt["rejected"] is not True:
             raise RuntimeError("input addressed to the terminated Resume generation was accepted")
 
@@ -720,7 +691,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
                 "native_selector_valid": native_resume_command,
             }
         )
-        _write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
+        write_json(root / "resume-intent-receipt.json", resume_intent_receipt)
         subscribed_state: dict[str, Any] | None = None
 
         def subscribed() -> bool:
@@ -747,11 +718,11 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             str(stale_input_receipt["marker"]),
         )
         stale_input_receipt["assistant_marker_observed_after_resume"] = stale_generation_dispatched
-        _write_json(root / "stale-input-receipt.json", stale_input_receipt)
-        _write_json(root / "resumed-bridge-state.json", _redact_state_for_evidence(resumed_state))
-        _write_json(root / "post-resume-send.json", send_summary)
+        write_json(root / "stale-input-receipt.json", stale_input_receipt)
+        write_json(root / "resumed-bridge-state.json", redact_state_for_evidence(resumed_state))
+        write_json(root / "post-resume-send.json", send_summary)
         post_resume_ship_receipt = shipper.flush("post-resume")
-        _write_json(root / "post-resume-transcript-ship-receipt.json", post_resume_ship_receipt)
+        write_json(root / "post-resume-transcript-ship-receipt.json", post_resume_ship_receipt)
         _require_transcript_ship(post_resume_ship_receipt, label="post-resume")
         shutil.copy2(resumed_thread_path, root / "resumed-transcript.jsonl")
         concurrent_resume_receipt = _attempt_concurrent_resume(
@@ -765,7 +736,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             active_run_id=str(resumed_state.get("run_id") or ""),
             active_bridge_pid=int(resumed_state.get("pid") or 0),
         )
-        _write_json(root / "concurrent-resume-receipt.json", concurrent_resume_receipt)
+        write_json(root / "concurrent-resume-receipt.json", concurrent_resume_receipt)
 
         final_cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
         verification = final_cleanup.get("verification") or {}
@@ -782,13 +753,13 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
                 "orphan_count": orphan_count,
             }
         )
-        _write_json(root / "cleanup-receipt.json", final_cleanup)
+        write_json(root / "cleanup-receipt.json", final_cleanup)
         if shipper is not None:
-            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         _remove_resume_contract_snapshot(resume_contract_paths)
         redacted_secret_files = _redact_retained_secrets(
             root,
-            list(_qualification_secrets(os.environ, args.agents_token)),
+            list(qualification_secrets(os.environ, args.agents_token)),
         )
 
         observation = {
@@ -838,7 +809,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": REGISTRATION.scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "pass" if assertions["native_provider_resume_proven"] else "fail",
             "observation": observation,
             "assertions": assertions,
@@ -847,18 +818,18 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "provider_binary": provider_receipt,
             "seed_marker": seed_marker,
             "post_resume_marker": post_marker,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
         retained_result = result
-        _write_json(root / "result.json", result)
+        write_json(root / "result.json", result)
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         if shipper is not None:
-            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         _remove_resume_contract_snapshot(resume_contract_paths)
         redacted_secret_files = _redact_retained_secrets(
             root,
-            list(_qualification_secrets(os.environ, args.agents_token)),
+            list(qualification_secrets(os.environ, args.agents_token)),
         )
         failure = {
             "schema_version": 1,
@@ -869,7 +840,7 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             "scenario_id": REGISTRATION.scenario_id,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "failure_code": "direct_native_resume_failed",
             "error": f"{type(exc).__name__}: {exc}",
@@ -879,19 +850,19 @@ def run_native_resume(args: argparse.Namespace) -> dict[str, Any]:
             },
             "assertions": {"native_provider_resume_proven": False},
             "redacted_secret_files": redacted_secret_files,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
         retained_result = failure
-        _write_json(root / "result.json", failure)
+        write_json(root / "result.json", failure)
         return failure
     finally:
         if shipper is not None:
-            _write_json(root / "transcript-shipper-receipt.json", shipper.stop())
+            write_json(root / "transcript-shipper-receipt.json", shipper.stop())
         _remove_resume_contract_snapshot(resume_contract_paths)
         if session_id and isolation_root and not (final_cleanup.get("verification") or {}).get("verified"):
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (root / "cleanup-receipt.json").exists():
-                _write_json(root / "cleanup-receipt.json", cleanup)
+                write_json(root / "cleanup-receipt.json", cleanup)
         if retained_result is not None:
             # Failure cleanup happens in this finally block. Refresh the
             # exhaustive manifest after it, otherwise a real provider finding

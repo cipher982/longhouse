@@ -17,12 +17,8 @@ function getManagedLaunchSuggestion(provider: string): ManagedLaunchSuggestion |
 
 export function getSessionInteractionCapabilities({
   session,
-  isViewingHead = true,
-  headThreadSession = null,
 }: {
   session: AgentSession;
-  isViewingHead?: boolean;
-  headThreadSession?: Pick<AgentSession, "origin_label" | "environment"> | null;
 }): SessionInteractionCapabilities {
   const providerLabel = getProviderLabel(session.provider);
   if (!session.capabilities) {
@@ -45,11 +41,8 @@ export function getSessionInteractionCapabilities({
     : facts.control.actions.send_input;
   const liveControlAvailable = inputAction?.state === "available";
   const hostReattachAvailable = facts.control.actions.reattach.state === "available";
-  const canChatFromBrowser = liveControlAvailable;
   const isManagedLocalSession = facts.control.ownership === "owned";
-  const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
-  const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
 
   // A Console turn can be blocked while the machine channel is still connected
   // — `execution_target_missing` is exactly that — so connection alone does not
@@ -159,34 +152,6 @@ export function getSessionInteractionCapabilities({
     : isUnsupportedManagedSession
       ? `This managed ${providerLabel} session is read-only because no current control action is available.`
       : `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer it.`;
-  const unsupportedDescription = managedLaunchSuggestion
-    ? `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot send prompts into it.`
-    : isUnsupportedManagedSession
-      ? `This managed ${providerLabel} session is read-only because no current control action is available.`
-      : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot send prompts into it.`;
-  const unsupportedManagementDescription = managedLaunchSuggestion
-    ? `Longhouse imported this ${providerLabel} session.`
-    : `Longhouse imported this ${providerLabel} session.`;
-
-  // A `launch` fact only exists for a launch Longhouse itself initiated — the
-  // readiness row is written by the launch path — so its presence proves the
-  // session is Longhouse's even in the window before a control path claims
-  // ownership. Without this, a session Longhouse is in the middle of starting
-  // was labelled "Unmanaged" and described as imported.
-  const managedByLonghouse = isManagedLocalSession || launchInFlight || launchFailed;
-  const managementLabel = managedByLonghouse ? "Managed" : "Unmanaged";
-  const managementDescription = managedByLonghouse
-    ? liveControlAvailable
-      ? "Longhouse owns the control path for this session."
-      : launchInFlight
-        ? "Longhouse owns this session and is starting it now."
-        : launchFailed
-          ? "Longhouse owns this session. It never started."
-          : runEnded
-            ? "Longhouse owns this session. Its run has ended."
-            : "Longhouse owns this session, but control is currently offline."
-    : unsupportedManagementDescription;
-
   const submitLabel =
     mode === "managed_local"
       ? "Send"
@@ -203,46 +168,12 @@ export function getSessionInteractionCapabilities({
           ? "Ended"
           : rawAccessLabel || (mode === "managed_local_unavailable" ? "Control unavailable" : "Read only");
 
-  const capabilityVariant =
-    mode === "managed_local"
-      ? "success"
-      // An ended run is an ordinary resting state, not a degraded one, and so
-      // is a launch still in flight. Warning tone on either is what made a
-      // normal session look broken. A launch that actually failed keeps it —
-      // that one is a fault, and it is the user's to act on.
-      : mode === "managed_local_unavailable" && !runEnded && !launchInFlight
-        ? "warning"
-        : "neutral";
-
-  const capabilityDescription =
-    mode === "managed_local"
-      ? `Message this live ${providerLabel} session from Longhouse.`
-      : mode === "managed_local_unavailable"
-        ? controlUnavailableDescription
-        : unsupportedCapabilityDescription;
-
-  const title =
-    mode === "managed_local"
-      ? "Send to session"
-      : mode === "managed_local_unavailable"
-        ? controlUnavailableTitle
-        : "Search and inspect this session";
-
-  const description =
-    mode === "managed_local"
-      ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
-      : mode === "managed_local_unavailable"
-        ? controlUnavailableDescription
-        : unsupportedDescription;
-
   const serverPlaceholder = session.capabilities.composer_placeholder?.trim();
   const placeholder =
     serverPlaceholder ||
     (mode === "managed_local"
       ? `Send a message to the live ${providerLabel} session...`
       : "Type a message...");
-
-  const keyboardHint = undefined;
 
   const notice =
     mode === "managed_local_unavailable"
@@ -272,26 +203,13 @@ export function getSessionInteractionCapabilities({
     mode,
     providerLabel,
     sourceOriginLabel,
-    headOriginLabel,
     isManagedLocalSession,
-    isManagedLocalCodex,
-    liveControlAvailable,
     hostReattachAvailable,
-    canChatFromBrowser,
-    managementLabel,
-    managementDescription,
     managedLaunchSuggestion,
     capabilityLabel,
-    capabilityVariant,
-    capabilityDescription,
     composerDisabledReason,
-    sendDisabledReason: liveControlAvailable ? null : inputAction?.reason ?? null,
-    primaryActionLabel: mode === "managed_local" ? "Open live dock" : "Unavailable",
     submitLabel,
-    title,
-    description,
     placeholder,
-    keyboardHint,
     notice,
   };
 }

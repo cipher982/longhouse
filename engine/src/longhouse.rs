@@ -6,6 +6,8 @@
 
 #[path = "build_identity.rs"]
 mod build_identity;
+#[path = "codex_config.rs"]
+mod codex_config;
 #[path = "managed_identity.rs"]
 mod managed_identity;
 #[path = "managed_identity_contract.rs"]
@@ -632,10 +634,15 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         entries.push(json!({"hooks": [{"type": "command", "command": lifecycle_command, "async": false, "timeout": 5}]}));
     }
     std::fs::create_dir_all(&claude_dir)?;
-    std::fs::write(
+    // `~/.claude/settings.json` is the user's own file and we only ever merge
+    // our hook entries into whatever is already there. Commit by rename so a
+    // crash or a full disk mid-write leaves the previous file intact instead
+    // of a truncated one.
+    write_json_atomic(
         &settings_path,
-        format!("{}\n", serde_json::to_string_pretty(&settings)?),
-    )?;
+        &format!("{}\n", serde_json::to_string_pretty(&settings)?),
+    )
+    .with_context(|| format!("write {}", settings_path.display()))?;
     println!(
         "Configured native Claude hooks in {}",
         settings_path.display()
@@ -643,13 +650,35 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Replace a file's contents by writing a sibling temp file and renaming over
+/// the target, so an interrupted write cannot leave a half-written file behind.
+fn write_json_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("path has no parent"))?;
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("settings"),
+        Uuid::new_v4()
+    ));
+    std::fs::write(&temporary, contents)?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Quote a path for Claude's shell-invoked command hook without changing the
 /// command's argument boundary when the install location contains whitespace.
+///
+/// An embedded single quote uses the POSIX idiom: close the quoted run, emit a
+/// backslash-escaped quote, reopen. This used to emit `'\"'\"'`, which leaves
+/// the shell inside an unterminated quote and mangles the path besides.
 fn shell_quote_path(path: &Path) -> String {
-    format!(
-        "'{}'",
-        path.display().to_string().replace('\'', "'\\\"'\\\"'")
-    )
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
 fn native_local_health(args: LocalHealthArgs) -> anyhow::Result<()> {
@@ -1487,8 +1516,12 @@ fn resolve_claude_provider_session_id(
 
 fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
     let mut cwd = std::fs::canonicalize(&args.cwd)?;
-    configure_claude_hooks(args.claude_dir.clone())?;
+    // Resolve the machine's runtime URL and device token first. Configuring
+    // hooks edits the user's own `~/.claude/settings.json`, and pointing it at
+    // Longhouse before we know this machine is even authenticated leaves that
+    // file changed by a command that then refused to launch anything.
     let (url, token, machine_name) = resolve_codex_config(args.url, args.token)?;
+    configure_claude_hooks(args.claude_dir.clone())?;
     let binary = resolve_provider_binary(
         args.claude_bin
             .or_else(|| std::env::var("LONGHOUSE_CLAUDE_BIN").ok()),
@@ -3267,9 +3300,12 @@ fn build_codex_tui_command(
     if let Some(thread_id) = resume_thread_id {
         command.args(["resume", thread_id]);
     }
-    command.args(["-c", "check_for_update_on_startup=false"]);
+    command.args(["-c", codex_config::DISABLE_UPDATE_CHECK]);
     if let Some(effort) = effort {
-        command.args(["-c", &format!("model_reasoning_effort={effort}")]);
+        command.args([
+            "-c",
+            &codex_config::string_override("model_reasoning_effort", effort),
+        ]);
     }
     if let Some(model) = model {
         command.args(["--model", model]);
@@ -5074,11 +5110,8 @@ mod tests {
         let mut client = connect_to_callback(port);
         let mut head = b"POST /connected HTTP/1.1\r\n".to_vec();
         head.extend(
-            std::iter::repeat_n(
-                b"X-Filler: pad\r\n".to_vec(),
-                CALLBACK_MAX_HEAD_BYTES / 8,
-            )
-            .flatten(),
+            std::iter::repeat_n(b"X-Filler: pad\r\n".to_vec(), CALLBACK_MAX_HEAD_BYTES / 8)
+                .flatten(),
         );
         // The listener refuses partway through, so the write end may break.
         client.write_all(&head).ok();
@@ -5511,6 +5544,47 @@ mod tests {
         assert!(!temp.path().join(".claude.json").exists());
     }
 
+    /// `~/.claude/settings.json` belongs to the user. Configuring hooks may
+    /// only add our own entries; every other key, including a hook event we
+    /// don't manage, has to survive untouched.
+    #[test]
+    fn claude_configure_preserves_the_users_own_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            serde_json::to_vec_pretty(&json!({
+                "model": "opus",
+                "permissions": {"allow": ["Bash(git status)"]},
+                "hooks": {
+                    "SessionEnd": [{"hooks": [{"type": "command", "command": "my-own-script"}]}]
+                },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let engine = temp.path().join("longhouse engine");
+        std::fs::write(&engine, "").unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_ENGINE_BIN",
+            Some(engine.display().to_string()),
+            || configure_claude_hooks(Some(claude_dir.clone())).unwrap(),
+        );
+
+        let settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(claude_dir.join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(settings["model"], "opus");
+        assert_eq!(settings["permissions"]["allow"][0], "Bash(git status)");
+        assert!(settings["hooks"]["SessionEnd"]
+            .to_string()
+            .contains("my-own-script"));
+        assert!(settings["hooks"]["SessionStart"]
+            .to_string()
+            .contains("claude-lifecycle-hook"));
+    }
+
     #[test]
     fn claude_mcp_config_is_private_scoped_and_ephemeral() {
         let temp = tempfile::tempdir().unwrap();
@@ -5635,6 +5709,29 @@ mod tests {
         assert_eq!(
             shell_quote_path(Path::new("/Applications/Longhouse Engine/bin")),
             "'/Applications/Longhouse Engine/bin'"
+        );
+    }
+
+    #[test]
+    fn shell_quoting_survives_a_single_quote_in_the_path() {
+        let quoted = shell_quote_path(Path::new("/Users/dave's mac/bin/longhouse-engine"));
+        assert_eq!(quoted, "'/Users/dave'\\''s mac/bin/longhouse-engine'");
+
+        // The only claim that matters is that a shell reading this back gets
+        // the original path, and that the quoting is balanced.
+        let echoed = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("printf %s {quoted}"))
+            .output()
+            .expect("running /bin/sh");
+        assert!(
+            echoed.status.success(),
+            "sh rejected the quoting: {}",
+            String::from_utf8_lossy(&echoed.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&echoed.stdout),
+            "/Users/dave's mac/bin/longhouse-engine"
         );
     }
 }

@@ -4,6 +4,8 @@ import asyncio
 import json
 import os
 from dataclasses import replace
+from datetime import UTC
+from datetime import datetime
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -23,6 +25,8 @@ from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import read_raw_object
 from zerg.storage_v2.raw_objects import seal_raw_object
+from zerg.storage_v2.render_objects import MAX_ORDER_TIME_US
+from zerg.storage_v2.render_objects import MIN_ORDER_TIME_US
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
 from zerg.storage_v2.render_objects import RenderRecord
@@ -1058,3 +1062,32 @@ async def test_identical_user_reads_share_one_inflight_decode(tmp_path, monkeypa
         release.set()
         await asyncio.gather(*reads, return_exceptions=True)
         await pool.close()
+
+
+@pytest.mark.parametrize("order_time_us", [MIN_ORDER_TIME_US - 1, MAX_ORDER_TIME_US + 1])
+def test_seal_rejects_order_time_the_read_path_cannot_express(tmp_path, order_time_us):
+    """Seal-time bounds must match read-time bounds.
+
+    The read path turns `order_time_us` back into an aware UTC datetime, which
+    only spans years 1..9999. Accepting the whole i64 at seal time minted
+    objects whose events raised on read, and one such row used to 503 the whole
+    detail page.
+    """
+
+    spec = _spec()
+    poisoned = replace(spec, records=(replace(spec.records[0], order_time_us=order_time_us),))
+
+    with pytest.raises(RenderObjectValidationError, match="representable timestamp range"):
+        seal_render_object(tmp_path, poisoned)
+
+
+@pytest.mark.parametrize("order_time_us", [MIN_ORDER_TIME_US, MAX_ORDER_TIME_US])
+def test_seal_accepts_the_full_representable_order_time_range(tmp_path, order_time_us):
+    spec = _spec()
+    edge = replace(spec, records=(replace(spec.records[0], order_time_us=order_time_us),))
+
+    sealed = seal_render_object(tmp_path, edge)
+
+    assert sealed.event_count == 1
+    seconds, microseconds = divmod(order_time_us, 1_000_000)
+    datetime.fromtimestamp(seconds, tz=UTC).replace(microsecond=microseconds)

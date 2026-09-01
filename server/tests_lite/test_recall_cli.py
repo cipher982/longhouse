@@ -79,7 +79,7 @@ def test_recall_readable_output_is_a_compact_browseable_index(monkeypatch):
     assert "g55 · codex" in result.output
     assert "assistant · 42 events" in result.output
     assert "https://longhouse.test/timeline/11111111-1111-4111-8111-111111111111" in result.output
-    assert "longhouse recall-context rr1_" in result.output
+    assert "longhouse-server recall-context rr1_" in result.output
     assert client.params == {
         "query": "IMEI",
         "since_days": 14,

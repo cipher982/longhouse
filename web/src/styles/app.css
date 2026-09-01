@@ -10,13 +10,7 @@
 
 /* System (formerly legacy) */
 @import url("./css/forms.css") layer(system);
-@import url("./css/automations.css") layer(system);
-@import url("./css/toast.css") layer(system);
-@import url("./css/status.css") layer(system);
-@import url("./css/ops.css") layer(system);
-@import url("./css/modal.css") layer(system);
 @import url("./css/particle.css") layer(system);
-@import url("./css/components/disclosure.css") layer(system);
 
 /* Navigation */
 @import url("./css/nav.css") layer(navigation);
@@ -29,7 +23,6 @@
 @import url("./profile-admin.css");
 @import url("./admin-ops.css");
 @import url("./observability.css");
-@import url("./settings.css");
 @import url("./marketing-mode.css");
 @import url("./page-shell.css");
 @import url("./blog.css");

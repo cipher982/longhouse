@@ -64,14 +64,21 @@ def _rows() -> list[dict[str, object]]:
             isinstance(capabilities, dict)
             and "session.turn.start" in capabilities
         )
+        supports = provider.get("machine_control_supports") or []
+        turn_interrupt = f"{name}.turn_interrupt" in supports
         rows.append(
             {
                 "id": name,
-                # launchAndSend folds launch_local + send_input; interrupt folds
-                # interrupt + terminate. Both folds are the landing matrix's,
-                # kept here so the fold is applied once rather than restated.
-                "launchAndSend": bool(provider["launch_local"]) and bool(provider["send_input"]),
-                "interrupt": bool(provider["interrupt"]) and bool(provider["terminate"]),
+                # The landing matrix asks a user's question -- can Longhouse
+                # start work here, and can I stop it -- so both folds admit the
+                # Console lane, not just the live one. Pi is the case that
+                # forces it: no live send_input and no terminate, but
+                # `longhouse pi` ships and its Console turns start and
+                # interrupt. Folding only the live flags reported it as having
+                # no control path at all.
+                "launchAndSend": bool(provider["launch_local"])
+                and (bool(provider["send_input"]) or bool(provider["turn_start"])),
+                "interrupt": (bool(provider["interrupt"]) and bool(provider["terminate"])) or turn_interrupt,
                 "steerMidTurn": bool(provider["steer_active_turn"]),
                 "resume": bool(provider["can_resume"]),
                 # The low-level turn_start flag describes adapter inventory.

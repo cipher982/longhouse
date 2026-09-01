@@ -33,16 +33,15 @@ import json
 import os
 import subprocess
 import time
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 
 from zerg.qa.codex_auth import login_with_api_key
-from zerg.qa.provider_native_resume import RUNTIME_AGENTS_TOKEN_ENV
-from zerg.qa.provider_native_resume import RUNTIME_API_URL_ENV
-from zerg.qa.provider_native_resume import TranscriptShipper
-from zerg.qa.provider_native_resume import _isolated_provider_home
-from zerg.qa.provider_native_resume import _start_transcript_shipper
+from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
+from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import TranscriptShipper
+from zerg.qa.live_session_toolkit import isolated_provider_home
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
 
 SCENARIO_ID = "console_served_state"
@@ -94,10 +93,6 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
@@ -141,7 +136,7 @@ def _failure_result(
         "scenario_id": SCENARIO_ID,
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
-        "generated_at": _now(),
+        "generated_at": now(),
         "status": "fail",
         "failure_code": "console_served_state_failed",
         "observation": {
@@ -298,7 +293,7 @@ def run_console_served_state(
         "scenario_id": SCENARIO_ID,
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
-        "generated_at": _now(),
+        "generated_at": now(),
         "status": "pass" if all(assertions.values()) else "fail",
         "observation": report,
         "assertions": assertions,
@@ -356,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not api_url or not token:
             raise RuntimeError(f"{RUNTIME_API_URL_ENV} and {RUNTIME_AGENTS_TOKEN_ENV} are required")
-        home = _isolated_provider_home()
+        home = isolated_provider_home()
         workspace = home / "c" / "w"
         engine_evidence = home / "c" / "e"
         longhouse_home = home / "c" / "lh"
@@ -407,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(root / "provider-auth-receipt.json", auth_receipt)
         args.api_url = api_url
         args.agents_token = token
-        shipper = _start_transcript_shipper(
+        shipper = start_transcript_shipper(
             provider,
             args,
             home=home,

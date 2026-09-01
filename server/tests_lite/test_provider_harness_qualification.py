@@ -13,7 +13,6 @@ from tests_lite._provider_harness_test_helpers import install_fake_engine
 from zerg.qa import antigravity_hook_qualification
 from zerg.qa import claude_real_print_qualification
 from zerg.qa import codex_helm_interrupt
-from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_server_qualification
@@ -26,8 +25,8 @@ from zerg.qa.provider_factory_model import LIVE_TOKEN_HARNESS_SCENARIO
 
 @pytest.fixture(autouse=True)
 def _stable_runner_checkout(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(codex_release_identity, "_git_sha", lambda _root: "test-sha")
-    monkeypatch.setattr(codex_release_identity, "_git_dirty", lambda _root: False)
+    monkeypatch.setattr(provider_release_identity, "git_sha", lambda _root: "test-sha")
+    monkeypatch.setattr(provider_release_identity, "git_dirty", lambda _root: False)
     monkeypatch.setattr(provider_release_identity, "git_sha", lambda _root: "test-sha")
     monkeypatch.setattr(provider_release_identity, "git_dirty", lambda _root: False)
     engine = install_fake_engine(tmp_path / "longhouse-engine")

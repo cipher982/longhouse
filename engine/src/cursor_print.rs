@@ -1,8 +1,7 @@
 //! Cursor Console turns through stock `cursor-agent --print`.
 
-use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -15,12 +14,12 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
+use crate::console_adapter::{claim_process_liveness, read_growth, stderr_tail, ClaimLiveness};
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use uuid::Uuid;
 
 pub const CURSOR_PRINT_ADAPTER: &str = "cursor_print";
-const STDERR_TAIL_LINES: usize = 40;
 const RESUME_CONTEXT_MAX_CHARS: usize = 48_000;
 
 #[derive(Clone, Debug)]
@@ -145,6 +144,9 @@ pub async fn start_cursor_print_turn(
     }
     args.push("--force".to_string());
     args.push("--approve-mcps".to_string());
+    // End of options, so a message that opens with `--` reaches the agent as
+    // text instead of being parsed as flags.
+    args.push("--".to_string());
     args.push(provider_prompt);
     let argv = std::iter::once(config.cursor_bin.clone())
         .chain(args.iter().cloned())
@@ -244,6 +246,9 @@ pub async fn recover_cursor_print_turns(
     local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
+    // One coherent inventory for the pass; `None` means `ps` was unreadable,
+    // which must leave claims alone rather than settle them.
+    let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
     for claim in registry.list_nonterminal()? {
         if claim.adapter.as_deref() != Some(CURSOR_PRINT_ADAPTER) || claim.state != "spawned" {
@@ -284,14 +289,21 @@ pub async fn recover_cursor_print_turns(
             local_db_path: local_db_path.clone(),
             runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
-        if claim_process_is_live(&claim) {
-            let lock = acquire_conversation_lock(&cursor_managed_root()?, &provider_thread_id)?;
-            tokio::spawn(async move {
-                monitor_recovered_claim(claim, stdout_path, stderr_path, sink, lock).await;
-            });
-            recovered += 1;
-        } else {
-            settle_recovered_dead_claim(&claim, &stdout_path, &stderr_path, &sink).await;
+        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+            ClaimLiveness::Live => {
+                let lock = acquire_conversation_lock(&cursor_managed_root()?, &provider_thread_id)?;
+                tokio::spawn(async move {
+                    monitor_recovered_claim(claim, stdout_path, stderr_path, sink, lock).await;
+                });
+                recovered += 1;
+            }
+            ClaimLiveness::Gone => {
+                settle_recovered_dead_claim(&claim, &stdout_path, &stderr_path, &sink).await;
+            }
+            ClaimLiveness::Unknown => tracing::warn!(
+                run_id = %claim.run_id,
+                "Process inventory unavailable; leaving Cursor Console turn claim for a later scan"
+            ),
         }
     }
     Ok(recovered)
@@ -473,7 +485,7 @@ async fn monitor_recovered_claim(
                 persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
             }
         }
-        if !claim_process_is_live(&claim) {
+        if claim_process_liveness(&claim) == ClaimLiveness::Gone {
             let cancel_requested = crate::turn_claims::default_registry()
                 .and_then(|registry| registry.read(&claim.run_id))
                 .ok()
@@ -544,44 +556,7 @@ fn persist_projection_checkpoint(run_id: &str, read_offset: u64, pending_len: us
 }
 
 async fn cleanup_process_group(process_group_id: Option<i32>) {
-    let Some(pgid) = process_group_id else {
-        return;
-    };
-    let outcome =
-        crate::process_group::shutdown_group(pgid, crate::process_group::DEFAULT_GRACE).await;
-    if !outcome.is_gone() {
-        eprintln!("[cursor-print] process group {pgid} survived SIGKILL and was left running");
-    }
-}
-
-fn claim_process_is_live(claim: &crate::turn_claims::TurnClaim) -> bool {
-    claim
-        .pid
-        .zip(claim.process_start_time.as_deref())
-        .and_then(|(pid, expected)| {
-            crate::process_identity::collect_process_facts_by_pid()
-                .get(&pid)
-                .map(|fact| fact.lstart == expected)
-        })
-        .unwrap_or(false)
-}
-
-fn read_growth(path: &Path, offset: &mut u64, pending: &mut Vec<u8>) -> Result<Vec<Vec<u8>>> {
-    let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(*offset))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    *offset += bytes.len() as u64;
-    pending.extend(bytes);
-    let mut lines = Vec::new();
-    while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
-        let mut line = pending.drain(..=index).collect::<Vec<_>>();
-        line.pop();
-        if !line.is_empty() {
-            lines.push(line);
-        }
-    }
-    Ok(lines)
+    crate::console_adapter::cleanup_process_group("cursor-print", process_group_id).await;
 }
 
 fn terminal_state_from_event(event: &Value) -> Option<String> {
@@ -1131,18 +1106,6 @@ fn set_private_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn stderr_tail(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let mut lines = text
-        .lines()
-        .rev()
-        .take(STDERR_TAIL_LINES)
-        .collect::<VecDeque<_>>();
-    lines.make_contiguous().reverse();
-    let value = lines.into_iter().collect::<Vec<_>>().join("\n");
-    (!value.is_empty()).then_some(value)
-}
-
 fn normalized_optional(value: &Option<String>) -> Option<String> {
     value
         .as_deref()
@@ -1228,6 +1191,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn successful_cursor_exit_reaps_owned_helper_group() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {
@@ -1405,6 +1369,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an authenticated stock cursor-agent and spends provider tokens"]
     async fn installed_cursor_completes_and_resumes_through_production_console_adapter() {
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {

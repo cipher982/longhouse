@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_resume_oracles import ASSERTIONS_BY_SCENARIO
 from zerg.qa.resume_assurance import ProducerRegistration
 
@@ -48,31 +47,11 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     temporary.replace(path)
-
-
-def _sha256(path: Path) -> str:
-    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-
-
-def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def run_generic_resume(*, provider: str, scenario_id: str, root: Path) -> dict[str, Any]:
@@ -113,12 +92,12 @@ def run_generic_resume(*, provider: str, scenario_id: str, root: Path) -> dict[s
         "scenario_id": scenario_id,
         "scenario_revision": int(result.get("scenario_revision") or 1),
         "evidence_class": "hermetic",
-        "generated_at": _now(),
+        "generated_at": now(),
         "status": result.get("status"),
         "failure_code": result.get("failure_code"),
         "observation": observation,
         "assertions": assertions,
-        "artifact_manifest": _artifact_manifest(root),
+        "artifact_manifest": artifact_manifest(root),
     }
     _write_json(root / "result.json", output)
     return output
@@ -163,11 +142,11 @@ def main(argv: list[str] | None = None) -> int:
             "scenario_id": args.scenario_id,
             "scenario_revision": 1,
             "evidence_class": "hermetic",
-            "generated_at": _now(),
+            "generated_at": now(),
             "status": "fail",
             "failure_code": "generic_resume_execution_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "artifact_manifest": _artifact_manifest(args.evidence_root),
+            "artifact_manifest": artifact_manifest(args.evidence_root),
         }
         _write_json(args.evidence_root / "result.json", result)
         return 1

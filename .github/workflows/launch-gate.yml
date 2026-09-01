@@ -1,5 +1,10 @@
 name: Launch Gate
 
+# The one ring for install and onboarding. It used to be three workflows
+# (Launch Gate, Installer Validation Ring, Runner Onboarding Validation Ring)
+# on three crons within an hour of each other, running the same native
+# installer smoke twice and the same fresh-clone onboarding funnel twice.
+
 on:
   push:
     tags-ignore:
@@ -7,8 +12,6 @@ on:
     paths:
       - '.github/workflows/launch-gate.yml'
       - '.github/workflows/local-runtime-release.yml'
-      - '.github/workflows/test-install.yml'
-      - '.github/workflows/runner-onboarding-validation.yml'
       - 'server/pyproject.toml'
       - 'server/zerg/cli/connect.py'
       - 'server/zerg/cli/codex.py'
@@ -17,22 +20,30 @@ on:
       - 'server/zerg/cli/serve.py'
       - 'server/zerg/services/local_runtime_installer.py'
       - 'server/zerg/services/runtime_artifacts.py'
+      - 'server/zerg/routers/runners.py'
+      - 'server/zerg/routers/templates/install.sh'
+      - 'web/src/components/AddRunnerModal.tsx'
+      - 'web/src/components/chat/RunnerSetupCard.tsx'
+      - 'web/src/lib/runnerInstallCommands.ts'
+      - 'web/src/pages/RunnersPage.tsx'
+      - 'desktop/LonghouseMenuBarHarness/**'
       - 'e2e/**'
+      - 'engine/**'
+      - 'runner/**'
+      - 'swift/**'
       - 'scripts/install.sh'
-      - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/ci/native-installer-smoke.sh'
       - 'scripts/ci/runtime-artifact-smoke.py'
-      - 'scripts/qa/qa-oss.sh'
       - 'scripts/ops/run-onboarding-funnel.sh'
+      - 'scripts/qa/qa-oss.sh'
+      - 'scripts/qa/test-local-runtime-packaging.sh'
+      - 'scripts/resolve-swift-product-path.sh'
       - 'Makefile'
       - 'README.md'
-  release:
-    types: [published]
   pull_request:
     paths:
       - '.github/workflows/launch-gate.yml'
       - '.github/workflows/local-runtime-release.yml'
-      - '.github/workflows/test-install.yml'
-      - '.github/workflows/runner-onboarding-validation.yml'
       - 'server/pyproject.toml'
       - 'server/zerg/cli/connect.py'
       - 'server/zerg/cli/codex.py'
@@ -41,20 +52,78 @@ on:
       - 'server/zerg/cli/serve.py'
       - 'server/zerg/services/local_runtime_installer.py'
       - 'server/zerg/services/runtime_artifacts.py'
+      - 'server/zerg/routers/runners.py'
+      - 'server/zerg/routers/templates/install.sh'
+      - 'web/src/components/AddRunnerModal.tsx'
+      - 'web/src/components/chat/RunnerSetupCard.tsx'
+      - 'web/src/lib/runnerInstallCommands.ts'
+      - 'web/src/pages/RunnersPage.tsx'
+      - 'desktop/LonghouseMenuBarHarness/**'
       - 'e2e/**'
+      - 'engine/**'
+      - 'runner/**'
+      - 'swift/**'
       - 'scripts/install.sh'
-      - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/ci/native-installer-smoke.sh'
       - 'scripts/ci/runtime-artifact-smoke.py'
-      - 'scripts/qa/qa-oss.sh'
       - 'scripts/ops/run-onboarding-funnel.sh'
+      - 'scripts/qa/qa-oss.sh'
+      - 'scripts/qa/test-local-runtime-packaging.sh'
+      - 'scripts/resolve-swift-product-path.sh'
       - 'Makefile'
       - 'README.md'
+  release:
+    types: [published]
   schedule:
-    - cron: '23 9 * * *'
-  workflow_dispatch: {}
+    - cron: '17 8 * * *'
+  workflow_dispatch:
+    inputs:
+      run_public_canary:
+        description: 'Also run the published installer canary against the default branch'
+        required: false
+        default: false
+        type: boolean
+      run_extended_hosted_matrix:
+        description: 'Run the extra hosted ARM/macOS onboarding jobs'
+        required: false
+        default: true
+        type: boolean
+      run_cube_self_hosted:
+        description: 'Run cube self-hosted Linux x64 smoke'
+        required: false
+        default: true
+        type: boolean
+      run_linux_x64:
+        description: 'Run Linux x64 self-hosted smoke'
+        required: false
+        default: false
+        type: boolean
+      linux_x64_runner_label:
+        description: 'Optional label for a Linux x64 self-hosted runner'
+        required: false
+        default: ''
+        type: string
+      run_macos_self_hosted:
+        description: 'Run macOS arm64 self-hosted smoke'
+        required: false
+        default: false
+        type: boolean
+      macos_runner_label:
+        description: 'Label for the macOS arm64 self-hosted runner'
+        required: false
+        default: ''
+        type: string
+
+env:
+  PIP_INDEX_URL: https://pypi.org/simple
+  PIP_EXTRA_INDEX_URL: ""
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
 jobs:
-  installer-first-run:
+  installer-smoke:
+    # Scheduled runs get the public canary below instead: building the pair
+    # locally proves nothing new once a release is out.
+    if: ${{ github.event_name != 'schedule' }}
     strategy:
       fail-fast: false
       matrix:
@@ -175,15 +244,210 @@ jobs:
           fi
           ./scripts/ci/native-installer-smoke.sh
 
-      - name: Upload browser verification artifacts
+  installer-public-canary:
+    # Installs what the world actually gets: the latest published release,
+    # against the default branch, with no locally built pair.
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_public_canary) }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell_path: /bin/bash
+          - os: macos-latest
+            shell_path: /bin/zsh
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    name: "launch-gate--public-canary--${{ matrix.os }}"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Run public installer smoke
+        run: |
+          chmod +x scripts/ci/native-installer-smoke.sh
+          release_json="$(gh release view --json tagName)"
+          release_tag="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tagName"])' <<< "$release_json")"
+          export LONGHOUSE_NATIVE_SMOKE_REMOTE=1
+          export LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
+          export LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION="${release_tag#v}"
+          ./scripts/ci/native-installer-smoke.sh
+
+  runtime-packaging-macos:
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    name: "launch-gate--runtime-packaging--macos-latest"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Run canonical macOS app packaging smoke
+        run: make test-runtime-packaging-macos
+
+      - name: Upload packaging artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: runtime-packaging-macos
+          if-no-files-found: ignore
+          path: artifacts/runtime-packaging
+
+  onboarding-browsers:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            project: all
+            browsers: 'chromium firefox webkit'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    name: "launch-gate--onboarding--${{ matrix.os }}--${{ matrix.project }}"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.2.20'
+
+      - name: Restore Playwright browser cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
+      - name: Install Playwright browsers
+        run: |
+          (cd e2e && bun install --silent)
+          ./scripts/ci/install-playwright.sh ${{ matrix.browsers }}
+
+      - name: Run onboarding browser ring
+        run: |
+          if [[ "${{ matrix.project }}" == "all" ]]; then
+            make test-e2e-onboarding
+          else
+            make test-e2e-onboarding PROJECT=${{ matrix.project }}
+          fi
+
+      - name: Upload onboarding artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: installer-browser-verify-${{ matrix.os }}
+          name: onboarding-artifacts-${{ matrix.os }}-${{ matrix.project }}
           if-no-files-found: ignore
-          path: /tmp/installer-browser-verify-failure.png
+          path: |
+            e2e/test-results
+            e2e/playwright-report
+            qa-oss-server.log
+
+  onboarding-browsers-extended:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_extended_hosted_matrix) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04-arm
+            project: onboarding-chromium
+            browsers: 'chromium'
+          - os: macos-latest
+            project: onboarding-webkit
+            browsers: 'chromium firefox webkit'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    name: "launch-gate--onboarding--${{ matrix.os }}--${{ matrix.project }}"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.2.20'
+
+      - name: Restore Playwright browser cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
+      - name: Install Playwright browsers
+        run: |
+          (cd e2e && bun install --silent)
+          ./scripts/ci/install-playwright.sh ${{ matrix.browsers }}
+
+      - name: Run onboarding browser ring
+        run: make test-e2e-onboarding PROJECT=${{ matrix.project }}
+
+      - name: Upload onboarding artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: onboarding-artifacts-${{ matrix.os }}-${{ matrix.project }}
+          if-no-files-found: ignore
+          path: |
+            e2e/test-results
+            e2e/playwright-report
+            qa-oss-server.log
 
   onboarding-funnel:
+    # `make onboarding-funnel` always git-clones the repo into the README
+    # contract's workdir, so this is the fresh-clone first-user path. Launch
+    # Gate and the onboarding ring each used to run it; once is enough.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: "launch-gate--onboarding-funnel"
@@ -212,25 +476,202 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Verify make available
-        run: command -v make
+      - name: Restore Playwright browser cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Install Playwright browsers
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
+      - name: Install Playwright Chromium shell
         run: |
           (cd e2e && bun install --silent)
-          ./scripts/ci/install-playwright.sh chromium
+          # The README onboarding contract runs the onboarding-chromium project only.
+          LONGHOUSE_PLAYWRIGHT_ONLY_SHELL=1 ./scripts/ci/install-playwright.sh chromium
 
-      # The installer matrix above already runs the first-run smoke on Linux
-      # and macOS. Keep this job focused on its distinct browser funnel.
-      - name: Run onboarding funnel
+      - name: Run fresh-clone onboarding funnel
         run: make onboarding-funnel
 
-      - name: Upload onboarding artifacts
+      - name: Upload onboarding funnel artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: launch-gate-onboarding-artifacts
+          name: onboarding-funnel-artifacts
           if-no-files-found: ignore
           path: |
             /tmp/longhouse-onboarding/e2e/test-results
             /tmp/longhouse-onboarding/e2e/playwright-report
+            /tmp/longhouse-onboarding/onboarding-diagnostics
+
+  self-hosted-cube-linux-x64:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted) }}
+    runs-on: cube
+    timeout-minutes: 30
+    name: "launch-gate--self-hosted-onboarding--linux-x64--cube"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.2.20'
+
+      - name: Restore Playwright browser cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
+      - name: Install Playwright Chromium shell
+        run: |
+          (cd e2e && bun install --silent)
+          # This lane runs the onboarding-chromium project only.
+          LONGHOUSE_PLAYWRIGHT_ONLY_SHELL=1 ./scripts/ci/install-playwright.sh chromium
+
+      - name: Run onboarding smoke on cube
+        run: make test-e2e-onboarding PROJECT=onboarding-chromium
+
+      - name: Upload self-hosted cube Linux x64 artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: onboarding-self-hosted-cube-linux-x64
+          if-no-files-found: ignore
+          path: |
+            e2e/test-results
+            e2e/playwright-report
+            qa-oss-server.log
+
+  self-hosted-linux-x64:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_linux_x64 && inputs.linux_x64_runner_label != '' }}
+    runs-on: ${{ inputs.linux_x64_runner_label }}
+    timeout-minutes: 30
+    name: "launch-gate--self-hosted-onboarding--linux-x64--${{ inputs.linux_x64_runner_label }}"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.2.20'
+
+      - name: Restore Playwright browser cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            launch-gate-playwright-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
+      - name: Install Playwright Chromium shell
+        run: |
+          (cd e2e && bun install --silent)
+          # This lane runs the onboarding-chromium project only.
+          LONGHOUSE_PLAYWRIGHT_ONLY_SHELL=1 ./scripts/ci/install-playwright.sh chromium
+
+      - name: Run onboarding smoke on Linux x64
+        run: make test-e2e-onboarding PROJECT=onboarding-chromium
+
+      - name: Upload self-hosted Linux x64 artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: onboarding-self-hosted-linux-x64
+          if-no-files-found: ignore
+          path: |
+            e2e/test-results
+            e2e/playwright-report
+            qa-oss-server.log
+
+  self-hosted-macos-arm64:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_macos_self_hosted && inputs.macos_runner_label != '' }}
+    runs-on: ${{ inputs.macos_runner_label }}
+    timeout-minutes: 30
+    name: "launch-gate--self-hosted-onboarding--macos-arm64--${{ inputs.macos_runner_label }}"
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install Playwright browsers
+        run: |
+          cd e2e
+          bun install --silent
+          bunx playwright install chromium firefox webkit
+
+      - name: Run onboarding smoke on macOS arm64
+        run: make test-e2e-onboarding PROJECT=onboarding-webkit
+
+      - name: Upload self-hosted macOS ARM64 artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: onboarding-self-hosted-macos-arm64
+          if-no-files-found: ignore
+          path: |
+            e2e/test-results
+            e2e/playwright-report
+            qa-oss-server.log

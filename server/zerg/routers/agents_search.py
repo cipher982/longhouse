@@ -29,6 +29,7 @@ from pydantic import model_validator
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.database import catalog_db_dependency
+from zerg.dependencies.agents_auth import owner_id_from_caller
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.services.catalog_read_gateway import CatalogReadError
@@ -328,15 +329,7 @@ class _DenseRecallResult:
 
 
 def _catalog_owner_id(auth: object) -> int:
-    owner_id = getattr(auth, "owner_id", None)
-    if owner_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "owner_required",
-                "message": "Storage-v2 search requires an owner-bound device token.",
-            },
-        )
+    owner_id = owner_id_from_caller(auth)
     return int(owner_id)
 
 

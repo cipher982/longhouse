@@ -11,12 +11,14 @@ mod codex_app_server_canary;
 mod codex_attachments;
 mod codex_bridge;
 mod codex_bridge_ownership;
+mod codex_config;
 mod codex_exec;
 mod codex_source;
 mod codex_teardown;
 mod codex_ws_relay;
 mod commands;
 mod config;
+mod console_adapter;
 mod console_prompt;
 mod control_channel;
 mod cursor_helm_control;
@@ -47,6 +49,7 @@ mod managed_opencode_scan;
 mod managed_phase_contract;
 mod managed_process_janitor;
 mod managed_resume_scan;
+mod managed_scan;
 mod managed_terminal;
 mod media_redaction;
 mod media_upload;
@@ -991,9 +994,6 @@ enum CodexBridgeCommands {
         codex_bin: String,
 
         #[arg(long)]
-        session_source: Option<String>,
-
-        #[arg(long)]
         approval_policy: Option<String>,
 
         #[arg(long)]
@@ -1087,9 +1087,6 @@ enum CodexBridgeCommands {
 
         #[arg(long, default_value = "codex")]
         codex_bin: String,
-
-        #[arg(long)]
-        session_source: Option<String>,
 
         #[arg(long)]
         approval_policy: Option<String>,
@@ -2129,7 +2126,6 @@ fn main() -> anyhow::Result<()> {
                     cwd,
                     url,
                     codex_bin,
-                    session_source: _,
                     approval_policy,
                     sandbox,
                     model,
@@ -2206,7 +2202,6 @@ fn main() -> anyhow::Result<()> {
                     cwd,
                     url,
                     codex_bin,
-                    session_source,
                     approval_policy,
                     sandbox,
                     model,
@@ -2236,7 +2231,6 @@ fn main() -> anyhow::Result<()> {
                         api_url: url,
                         api_token: token,
                         codex_bin,
-                        session_source,
                         approval_policy,
                         sandbox,
                         model,

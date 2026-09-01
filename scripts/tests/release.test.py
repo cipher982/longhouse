@@ -30,7 +30,6 @@ def test_pre_release_gate_precedes_github_release_and_skips_only_release_evidenc
         '"CI"',
         '"Deploy and Verify"',
         '"Launch Gate"',
-        '"Installer Validation Ring"',
     ):
         assert f"--required-workflow {workflow}" in gate
     assert '--required-workflow "Hosted Live QA"' not in gate

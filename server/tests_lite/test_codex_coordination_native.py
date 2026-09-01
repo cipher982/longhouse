@@ -454,7 +454,7 @@ def test_run_directed_input_pass_path(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
     monkeypatch.setattr(
         m,
-        "_start_transcript_shipper",
+        "start_transcript_shipper",
         lambda *_a, **_k: type("FakeShipper", (), {"stop": lambda self: {"status": "pass"}})(),
     )
     monkeypatch.setattr(m, "_issue_coordination_token", fake_issue_token)
@@ -523,7 +523,7 @@ def test_run_directed_input_fails_closed_when_receipt_never_links(tmp_path: Path
     monkeypatch.setattr(m.bridge_canary, "_stop_bridge", lambda *_a, **_k: _stopped_cleanup())
     monkeypatch.setattr(
         m,
-        "_start_transcript_shipper",
+        "start_transcript_shipper",
         lambda *_a, **_k: type("FakeShipper", (), {"stop": lambda self: {"status": "pass"}})(),
     )
     monkeypatch.setattr(m, "_issue_coordination_token", lambda _args, session_id: f"token-for-{session_id}")

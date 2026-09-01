@@ -349,11 +349,24 @@ def verify_shell_path() -> list[str]:
     return warnings
 
 
+def _runtime_host_command() -> list[str]:
+    """argv prefix for re-invoking this Runtime Host CLI.
+
+    `longhouse` is the native device facade and has no `serve` or `ship` --
+    those are Runtime Host verbs published only as `longhouse-server`, which
+    is the console script running this code.
+    """
+    console_script = shutil.which("longhouse-server")
+    if console_script:
+        return [console_script]
+    return [sys.executable, "-m", "zerg.cli.main"]
+
+
 def _run_initial_import(api_url: str) -> tuple[bool, str]:
     """Run a one-shot import so existing sessions become visible immediately."""
     try:
         result = subprocess.run(
-            ["longhouse", "ship", "--url", api_url],
+            [*_runtime_host_command(), "ship", "--url", api_url],
             capture_output=True,
             text=True,
         )
@@ -363,7 +376,7 @@ def _run_initial_import(api_url: str) -> tuple[bool, str]:
     if result.returncode == 0:
         return True, ""
 
-    detail = (result.stderr or "").strip() or (result.stdout or "").strip() or "longhouse ship exited non-zero"
+    detail = (result.stderr or "").strip() or (result.stdout or "").strip() or "longhouse-server ship exited non-zero"
     return False, detail
 
 
@@ -522,7 +535,7 @@ def onboard(
 
                 try:
                     subprocess.run(
-                        ["longhouse", "serve", "--daemon", "--host", host, "--port", str(port)],
+                        [*_runtime_host_command(), "serve", "--daemon", "--host", host, "--port", str(port)],
                         check=True,
                         capture_output=True,
                     )
@@ -535,7 +548,7 @@ def onboard(
                         typer.echo(f"         Check logs: {_get_longhouse_home() / 'server.log'}")
                 except subprocess.CalledProcessError as e:
                     typer.secho(f"  [ERROR] Failed to start local runtime: {e}", fg=typer.colors.RED)
-                    typer.echo("         Try starting manually: longhouse serve")
+                    typer.echo("         Try starting manually: longhouse-server serve")
 
         server_healthy = no_server or _check_server_health(host, port)
 
@@ -572,14 +585,14 @@ def onboard(
                     )
             except Exception as e:
                 typer.secho(f"  [WARN] Could not install machine agent: {e}", fg=typer.colors.YELLOW)
-                typer.echo("         Run manually: longhouse connect --install")
+                typer.echo("         Run manually: longhouse machine repair --repair-service")
         else:
             typer.secho(
                 "  [--] Background machine-agent install is not available in this environment",
                 fg=typer.colors.YELLOW,
             )
-            typer.echo("       Use: longhouse connect")
-            typer.echo("       Or import once with: longhouse ship")
+            typer.echo("       Use: longhouse machine repair --repair-service")
+            typer.echo("       Or import once with: longhouse-server ship")
 
         if has_any_cli and server_healthy:
             typer.echo("  Importing your existing sessions now...")
@@ -590,10 +603,10 @@ def onboard(
                 typer.secho("  [WARN] Initial import failed", fg=typer.colors.YELLOW)
                 if detail:
                     typer.echo(f"         {detail}")
-                typer.echo("         Retry with: longhouse ship")
+                typer.echo("         Retry with: longhouse-server ship")
         elif not has_any_cli:
             typer.echo("  No supported CLI found yet, so Longhouse skipped the initial import.")
-            typer.echo("  Install Claude Code, Codex CLI, or Antigravity CLI later, then run: longhouse ship")
+            typer.echo("  Install Claude Code, Codex CLI, or Antigravity CLI later, then run: longhouse-server ship")
         else:
             typer.echo("  Skipping initial import (local runtime not running)")
 
@@ -660,15 +673,14 @@ def onboard(
         typer.echo(f"  Install one of {installable}, then start a Longhouse session")
     typer.echo("")
     typer.echo("Repair tools (only if you need them later):")
-    typer.echo("  longhouse doctor            Diagnose local setup issues")
-    typer.echo("  longhouse machine repair    Repair a configured machine agent, desktop app, and automatic imports")
-    typer.echo("  longhouse connect --install First install or force reinstall the local runtime")
+    typer.echo("  longhouse local-health           Diagnose local setup issues")
+    typer.echo("  longhouse machine repair         Repair a configured machine agent, desktop app, and automatic imports")
     typer.echo("")
     typer.echo("Advanced:")
-    typer.echo("  longhouse ship              Import existing sessions once")
-    typer.echo("  longhouse serve --demo      Start a safe preview instead of importing real work")
-    typer.echo("  longhouse status            Show local health")
-    typer.echo("  longhouse serve --stop      Stop local runtime")
+    typer.echo("  longhouse-server ship            Import existing sessions once")
+    typer.echo("  longhouse-server serve --demo    Start a safe preview instead of importing real work")
+    typer.echo("  longhouse-server status          Show local health")
+    typer.echo("  longhouse-server serve --stop    Stop local runtime")
     typer.echo("")
 
 

@@ -4,9 +4,10 @@ This file used to describe an architecture the Runtime Host no longer runs. It
 configured two SQLAlchemy ``WriteSerializer`` instances, wrote ``LiveHeartbeatStamp``
 and ``LiveRuntimeState`` through the live one, and finished by draining
 ``LiveArchiveOutbox`` into the archive database. ``lifespan`` configures neither
-serializer once ``live_catalog_enabled()`` is true, and ``drain_live_archive_outbox``
-has no caller left in ``zerg`` at all. Those rows are still real; catalogd owns
-them now, and the API process reaches them over a Unix socket.
+serializer once ``live_catalog_enabled()`` is true, and the outbox drain has since
+been deleted outright -- ``LiveArchiveOutbox`` is a receipt table now, not a queue.
+Those rows are still real; catalogd owns them, and the API process reaches them
+over a Unix socket.
 
 The subject survives the move, because the writer it was about survives it. A
 catalog has exactly one writer thread and a bounded pool of interactive read

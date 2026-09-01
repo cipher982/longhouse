@@ -14,58 +14,59 @@ import pytest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.qa import antigravity_resume_policy
 from zerg.qa import codex_native_resume
+from zerg.qa import live_session_toolkit
 from zerg.qa import provider_native_resume
 from zerg.qa.codex_native_resume import _redact_process_command
 from zerg.qa.codex_native_resume import _validate_resume_intent
-from zerg.qa.codex_native_resume import _write_json as write_codex_json
+from zerg.qa.live_session_toolkit import write_json as write_codex_json
 from zerg.qa.codex_native_resume import _write_resume_contract_snapshot
 from zerg.qa.provider_native_resume import SPECS
-from zerg.qa.provider_native_resume import RuntimeHostRegistrationTransient
-from zerg.qa.provider_native_resume import TranscriptShipper
-from zerg.qa.provider_native_resume import _accept_claude_development_channel_prompt
-from zerg.qa.provider_native_resume import _accept_claude_permission_prompt
-from zerg.qa.provider_native_resume import _accept_cursor_workspace_trust
-from zerg.qa.provider_native_resume import _bound_terminal_recordings
+from zerg.qa.live_session_toolkit import RuntimeHostRegistrationTransient
+from zerg.qa.live_session_toolkit import TranscriptShipper
+from zerg.qa.live_session_toolkit import _accept_claude_development_channel_prompt
+from zerg.qa.live_session_toolkit import _accept_claude_permission_prompt
+from zerg.qa.live_session_toolkit import _accept_cursor_workspace_trust
+from zerg.qa.live_session_toolkit import bound_terminal_recordings
 from zerg.qa.provider_native_resume import _claude_input_prompt_visible
-from zerg.qa.provider_native_resume import _cleanup_processes
+from zerg.qa.live_session_toolkit import cleanup_processes
 from zerg.qa.provider_native_resume import _command_from_resume_intent
-from zerg.qa.provider_native_resume import _control_send
+from zerg.qa.live_session_toolkit import _control_send
 from zerg.qa.provider_native_resume import _cursor_bootstrap_correlation
-from zerg.qa.provider_native_resume import _cursor_bootstrap_prompt
-from zerg.qa.provider_native_resume import _cursor_hook_event_observation
+from zerg.qa.live_session_toolkit import cursor_bootstrap_prompt
+from zerg.qa.live_session_toolkit import _cursor_hook_event_observation
 from zerg.qa.provider_native_resume import _cursor_idle_then_flush
-from zerg.qa.provider_native_resume import _cursor_idle_timeout_observation
+from zerg.qa.live_session_toolkit import _cursor_idle_timeout_observation
 from zerg.qa.provider_native_resume import _cursor_initial_send_then_flush
-from zerg.qa.provider_native_resume import _cursor_interrupt_to_idle
-from zerg.qa.provider_native_resume import _cursor_projection_diagnostics
-from zerg.qa.provider_native_resume import _cursor_tui_input_ready
+from zerg.qa.live_session_toolkit import _cursor_interrupt_to_idle
+from zerg.qa.live_session_toolkit import _cursor_projection_diagnostics
+from zerg.qa.live_session_toolkit import _cursor_tui_input_ready
 from zerg.qa.provider_native_resume import _finalize_result_payload
-from zerg.qa.provider_native_resume import _initialize_cursor_workspace
-from zerg.qa.provider_native_resume import _isolated_provider_home
+from zerg.qa.live_session_toolkit import initialize_cursor_workspace
+from zerg.qa.live_session_toolkit import isolated_provider_home
 from zerg.qa.provider_native_resume import _isolated_qualification_environment
-from zerg.qa.provider_native_resume import _launch_command
-from zerg.qa.provider_native_resume import _opencode_tui_is_connected
+from zerg.qa.live_session_toolkit import launch_command
+from zerg.qa.live_session_toolkit import _opencode_tui_is_connected
 from zerg.qa.provider_native_resume import _post_resume_response_correlated
-from zerg.qa.provider_native_resume import _provider_process_pid
-from zerg.qa.provider_native_resume import _provision_transcript_roots
-from zerg.qa.provider_native_resume import _raise_known_registration_transient
+from zerg.qa.live_session_toolkit import provider_process_pid
+from zerg.qa.live_session_toolkit import _provision_transcript_roots
+from zerg.qa.live_session_toolkit import _raise_known_registration_transient
 from zerg.qa.provider_native_resume import _refresh_failure_result_manifest
 from zerg.qa.provider_native_resume import _resume_intent_timeout
 from zerg.qa.provider_native_resume import _resume_marker
 from zerg.qa.provider_native_resume import _resume_marker_prompt
 from zerg.qa.provider_native_resume import _send_initial_seed
-from zerg.qa.provider_native_resume import _start_transcript_shipper
-from zerg.qa.provider_native_resume import _state_candidates
-from zerg.qa.provider_native_resume import _wait_assistant_response_after_marker
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.live_session_toolkit import state_candidates
+from zerg.qa.live_session_toolkit import wait_assistant_response_after_marker
 from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_bootstrap_hook_sequence
 from zerg.qa.provider_native_resume import _wait_cursor_hook_sequence
-from zerg.qa.provider_native_resume import _wait_cursor_idle
+from zerg.qa.live_session_toolkit import _wait_cursor_idle
 from zerg.qa.provider_native_resume import _wait_cursor_initial_idle
-from zerg.qa.provider_native_resume import _wait_cursor_tui_ready
-from zerg.qa.provider_native_resume import _wait_session_tail
-from zerg.qa.provider_native_resume import _wait_state
-from zerg.qa.provider_native_resume import _write_best_effort_json
+from zerg.qa.live_session_toolkit import wait_cursor_tui_ready
+from zerg.qa.live_session_toolkit import wait_session_tail
+from zerg.qa.live_session_toolkit import wait_state
+from zerg.qa.live_session_toolkit import _write_best_effort_json
 from zerg.qa.provider_native_resume import registration_for
 
 
@@ -147,8 +148,8 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
 
 
 def test_cursor_resume_bootstrap_uses_a_unique_marker() -> None:
-    assert _cursor_bootstrap_prompt() == "Reply with exactly READY"
-    assert _cursor_bootstrap_prompt("LH_CURSOR_BOOTSTRAP_abc123") == ("Reply with exactly LH_CURSOR_BOOTSTRAP_abc123")
+    assert cursor_bootstrap_prompt() == "Reply with exactly READY"
+    assert cursor_bootstrap_prompt("LH_CURSOR_BOOTSTRAP_abc123") == ("Reply with exactly LH_CURSOR_BOOTSTRAP_abc123")
 
 
 def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> None:
@@ -179,7 +180,7 @@ def test_cursor_qualification_workspace_has_project_identity(tmp_path: Path, mon
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
     monkeypatch.setenv("GIT_TEMPLATE_DIR", str(template))
 
-    _initialize_cursor_workspace(workspace)
+    initialize_cursor_workspace(workspace)
 
     assert (workspace / ".git").is_dir()
     assert not (workspace / ".git" / "hooks" / "pre-commit").exists()
@@ -218,13 +219,13 @@ def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
 
     monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.Popen", FakeProcess)
     monkeypatch.setattr(
-        "zerg.qa.provider_native_resume._api_json",
+        "zerg.qa.live_session_toolkit._api_json",
         lambda *_args, **_kwargs: {"machine_id": "sauron-clifford"},
     )
     monkeypatch.setattr("zerg.qa.provider_native_resume.os.killpg", lambda *_args: None)
-    monkeypatch.setattr("zerg.qa.provider_native_resume._wait_process_group_dead", lambda _pid: True)
+    monkeypatch.setattr("zerg.qa.live_session_toolkit.wait_process_group_dead", lambda _pid: True)
 
-    shipper = _start_transcript_shipper(
+    shipper = start_transcript_shipper(
         "codex",
         args,
         home=home,
@@ -300,11 +301,11 @@ def test_transcript_shipper_flush_reuses_enrolled_db_and_restarts_daemon(
 
     monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.Popen", FakeProcess)
     monkeypatch.setattr(
-        "zerg.qa.provider_native_resume._api_json",
+        "zerg.qa.live_session_toolkit._api_json",
         lambda *_args, **_kwargs: {"machine_id": "sauron-clifford"},
     )
     monkeypatch.setattr("zerg.qa.provider_native_resume.os.killpg", lambda *_args: None)
-    monkeypatch.setattr("zerg.qa.provider_native_resume._wait_process_group_dead", lambda _pid: True)
+    monkeypatch.setattr("zerg.qa.live_session_toolkit.wait_process_group_dead", lambda _pid: True)
 
     class Completed:
         returncode = 0
@@ -318,7 +319,7 @@ def test_transcript_shipper_flush_reuses_enrolled_db_and_restarts_daemon(
         return Completed()
 
     monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fake_run)
-    shipper = _start_transcript_shipper(
+    shipper = start_transcript_shipper(
         "codex",
         args,
         home=home,
@@ -362,7 +363,7 @@ def test_transcript_shipper_retries_a_quarantined_source_epoch_once(
         return next(responses)
 
     monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fake_run)
-    shipper = provider_native_resume.TranscriptShipper(
+    shipper = live_session_toolkit.TranscriptShipper(
         process=SimpleNamespace(poll=lambda: 0),
         log_stream=None,
         receipt={},
@@ -417,7 +418,7 @@ def test_transcript_shipper_retries_storage_lane_backpressure_once(
 
     monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fake_run)
     monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
-    shipper = provider_native_resume.TranscriptShipper(
+    shipper = live_session_toolkit.TranscriptShipper(
         process=SimpleNamespace(poll=lambda: 0),
         log_stream=None,
         receipt={},
@@ -667,7 +668,7 @@ def test_transcript_shipper_retries_mixed_backpressure_then_lineage_reconciliati
         lambda *_args, **_kwargs: next(responses),
     )
     monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
-    shipper = provider_native_resume.TranscriptShipper(
+    shipper = live_session_toolkit.TranscriptShipper(
         process=SimpleNamespace(poll=lambda: 0),
         log_stream=None,
         receipt={},
@@ -802,7 +803,7 @@ def test_transcript_shipper_caps_storage_lane_backpressure_delay(
         lambda *_args, **_kwargs: next(responses),
     )
     monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", sleeps.append)
-    shipper = provider_native_resume.TranscriptShipper(
+    shipper = live_session_toolkit.TranscriptShipper(
         process=SimpleNamespace(poll=lambda: 0),
         log_stream=None,
         receipt={},
@@ -840,7 +841,7 @@ def test_transcript_shipper_does_not_retry_untyped_ship_failure(
 
     monkeypatch.setattr("zerg.qa.provider_native_resume.subprocess.run", fake_run)
     monkeypatch.setattr("zerg.qa.provider_native_resume.time.sleep", lambda _seconds: pytest.fail("unexpected retry"))
-    shipper = provider_native_resume.TranscriptShipper(
+    shipper = live_session_toolkit.TranscriptShipper(
         process=SimpleNamespace(poll=lambda: 0),
         log_stream=None,
         receipt={},
@@ -872,35 +873,33 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise provider_native_resume._RuntimeHostHTTPError(404, "session not found")
+            raise live_session_toolkit._RuntimeHostHTTPError(404, "session not found")
         return next(responses)
 
-    monkeypatch.setattr(provider_native_resume, "_api_json", projected_tail)
+    monkeypatch.setattr(live_session_toolkit, "_api_json", projected_tail)
     monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
 
-    assert _wait_session_tail("https://runtime.example", "device-token", "session-1") == {
+    assert wait_session_tail("https://runtime.example", "device-token", "session-1") == {
         "session_id": "session-1",
         "messages": [],
     }
     assert calls == 2
 
-    auth_error = provider_native_resume._RuntimeHostHTTPError(401, "unauthorized")
-    monkeypatch.setattr(provider_native_resume, "_api_json", lambda *_args, **_kwargs: (_ for _ in ()).throw(auth_error))
-    with pytest.raises(provider_native_resume._RuntimeHostHTTPError):
-        _wait_session_tail("https://runtime.example", "device-token", "session-1")
+    auth_error = live_session_toolkit._RuntimeHostHTTPError(401, "unauthorized")
+    monkeypatch.setattr(live_session_toolkit, "_api_json", lambda *_args, **_kwargs: (_ for _ in ()).throw(auth_error))
+    with pytest.raises(live_session_toolkit._RuntimeHostHTTPError):
+        wait_session_tail("https://runtime.example", "device-token", "session-1")
 
     with pytest.raises(RuntimeError, match="did not project session"):
-        _wait_session_tail("https://runtime.example", "device-token", "session-1", timeout=0)
+        wait_session_tail("https://runtime.example", "device-token", "session-1", timeout=0)
 
-    missing = provider_native_resume._RuntimeHostHTTPError(404, "session not found")
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_api_json",
+    missing = live_session_toolkit._RuntimeHostHTTPError(404, "session not found")
+    monkeypatch.setattr(live_session_toolkit, "_api_json",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(missing),
     )
 
     assert (
-        _wait_session_tail(
+        wait_session_tail(
             "https://runtime.example",
             "device-token",
             "session-1",
@@ -972,7 +971,7 @@ def test_cursor_tui_readiness_handles_a_late_workspace_gate(tmp_path: Path) -> N
             return b""
 
     process = FakeProcess()
-    _wait_cursor_tui_ready(process, recording, timeout=2)  # type: ignore[arg-type]
+    wait_cursor_tui_ready(process, recording, timeout=2)  # type: ignore[arg-type]
 
     assert process.sent == ["a"]
 
@@ -1013,7 +1012,7 @@ def test_cursor_readiness_waits_for_completed_turn_redraw(tmp_path: Path) -> Non
             return b""
 
     process = FakeProcess()
-    _wait_cursor_tui_ready(process, recording, timeout=3)  # type: ignore[arg-type]
+    wait_cursor_tui_ready(process, recording, timeout=3)  # type: ignore[arg-type]
 
     assert process.drains >= 3
 
@@ -1370,8 +1369,8 @@ def test_cursor_idle_then_flush_records_idle_before_ship() -> None:
         order.append("idle")
         return {"phase": "idle", "generation_id": "generation-1"}
 
-    original = provider_native_resume._wait_cursor_idle
-    provider_native_resume._wait_cursor_idle = fake_idle
+    original = live_session_toolkit._wait_cursor_idle
+    live_session_toolkit._wait_cursor_idle = fake_idle
     try:
         receipt = _cursor_idle_then_flush(
             {"session_id": "session-1"},
@@ -1381,7 +1380,7 @@ def test_cursor_idle_then_flush_records_idle_before_ship() -> None:
             expected_generation_id="generation-1",
         )
     finally:
-        provider_native_resume._wait_cursor_idle = original
+        live_session_toolkit._wait_cursor_idle = original
 
     assert receipt["status"] == "pass"
     assert order == ["idle", "flush:post-resume"]
@@ -1409,7 +1408,7 @@ def test_cursor_projection_diagnostics_capture_marker_and_binding_state(tmp_path
         encoding="utf-8",
     )
 
-    payload = provider_native_resume._cursor_projection_diagnostics(
+    payload = live_session_toolkit._cursor_projection_diagnostics(
         environment={
             "HOME": str(home),
             "CURSOR_HOME": str(home / ".cursor"),
@@ -1482,7 +1481,7 @@ def test_cursor_projection_diagnostics_capture_source_epoch_lineage(tmp_path: Pa
     finally:
         connection.close()
 
-    payload = provider_native_resume._cursor_projection_diagnostics(
+    payload = live_session_toolkit._cursor_projection_diagnostics(
         environment={"HOME": str(tmp_path / "home")},
         state={"session_id": "session-1", "provider_session_id": "conversation-1"},
         marker="LH_CURSOR_POST_test",
@@ -1512,7 +1511,7 @@ def test_cursor_projection_diagnostics_hashes_untrusted_block_detail(tmp_path: P
     finally:
         connection.close()
 
-    payload = provider_native_resume._cursor_projection_diagnostics(
+    payload = live_session_toolkit._cursor_projection_diagnostics(
         environment={"HOME": str(tmp_path / "home")},
         state={"session_id": "session-1", "provider_session_id": "conversation-1"},
         marker="LH_CURSOR_POST_test",
@@ -1570,7 +1569,7 @@ def test_cursor_projection_diagnostics_are_non_authoritative_on_capture_or_write
     shipper.engine_environment = {}
     shipper.db_path = tmp_path / "engine.db"
     monkeypatch.setattr(
-        provider_native_resume,
+        live_session_toolkit,
         "_cursor_projection_diagnostics",
         lambda **_kwargs: (_ for _ in ()).throw(OSError("read race")),
     )
@@ -1585,9 +1584,7 @@ def test_cursor_projection_diagnostics_are_non_authoritative_on_capture_or_write
     assert payload["schema"] == "cursor_projection_diagnostics_unavailable.v1"
     assert payload["status"] == "unavailable"
 
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_write_json",
+    monkeypatch.setattr(live_session_toolkit, "write_json",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
     assert shipper.capture_cursor_projection_diagnostics(
@@ -1675,7 +1672,7 @@ def test_cursor_bootstrap_hook_sequence_accepts_bound_marker_inside_provider_res
                             "session_id": "cursor-thread-1",
                             "conversation_id": "cursor-thread-1",
                             "generation_id": "generation-1",
-                            "prompt": _cursor_bootstrap_prompt(marker) + "\n",
+                            "prompt": cursor_bootstrap_prompt(marker) + "\n",
                         },
                     }
                 ),
@@ -1746,7 +1743,7 @@ def test_cursor_hook_sequence_rejects_response_before_prompt(tmp_path: Path) -> 
                             "session_id": "cursor-thread-1",
                             "conversation_id": "cursor-thread-1",
                             "generation_id": "generation-1",
-                            "prompt": _cursor_bootstrap_prompt(marker),
+                            "prompt": cursor_bootstrap_prompt(marker),
                         },
                     }
                 ),
@@ -1839,7 +1836,7 @@ def test_cursor_bootstrap_hook_sequence_rejects_unbound_response(tmp_path: Path,
         "session_id": "cursor-thread-1",
         "conversation_id": "cursor-thread-1",
         "generation_id": "generation-1",
-        "prompt": _cursor_bootstrap_prompt(marker),
+        "prompt": cursor_bootstrap_prompt(marker),
     }
     after_payload = {
         "session_id": "cursor-thread-1",
@@ -1907,7 +1904,7 @@ def test_cursor_bootstrap_hook_sequence_rejects_multiple_matching_generations(tm
                     "session_id": "cursor-thread-1",
                     "conversation_id": "cursor-thread-1",
                     "generation_id": generation,
-                    "prompt": _cursor_bootstrap_prompt(marker),
+                    "prompt": cursor_bootstrap_prompt(marker),
                 },
             }
         )
@@ -1989,7 +1986,7 @@ def test_claude_resume_probe_follows_native_channel_state_root(tmp_path: Path) -
     state.parent.mkdir(parents=True)
     state.write_text("{}")
 
-    assert state in _state_candidates(SPECS["claude"], tmp_path)
+    assert state in state_candidates(SPECS["claude"], tmp_path)
 
 
 def test_claude_profile_bootstrap_accepts_observed_main_tui_as_completion(
@@ -2019,16 +2016,14 @@ def test_claude_profile_bootstrap_accepts_observed_main_tui_as_completion(
             pass
 
     moments = iter((0.0, 0.0, 2.0))
-    monkeypatch.setattr(provider_native_resume, "PtyProcess", FakePtyProcess)
+    monkeypatch.setattr(live_session_toolkit, "PtyProcess", FakePtyProcess)
     monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: next(moments))
     monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_terminal_text",
+    monkeypatch.setattr(live_session_toolkit, "_terminal_text",
         lambda _recording: "Claude Code v2.1.221  Longhouse qualification bootstrap  Welcome back!",
     )
 
-    result = provider_native_resume._prepare_claude_profile(
+    result = live_session_toolkit.prepare_claude_profile(
         binary=tmp_path / "claude",
         home=tmp_path / "home",
         workspace=tmp_path,
@@ -2054,7 +2049,7 @@ def test_native_resume_rejects_normal_provider_home(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("LONGHOUSE_QUALIFICATION_HOME", "/root")
 
     with pytest.raises(RuntimeError, match="isolated provider HOME"):
-        _isolated_provider_home()
+        isolated_provider_home()
 
 
 def test_native_resume_requires_the_factory_sandbox_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2065,7 +2060,7 @@ def test_native_resume_requires_the_factory_sandbox_marker(tmp_path: Path, monke
     monkeypatch.delenv("LONGHOUSE_QUALIFICATION_HOME", raising=False)
 
     with pytest.raises(RuntimeError, match="qualification sandbox"):
-        _isolated_provider_home()
+        isolated_provider_home()
 
 
 def test_native_resume_accepts_disposable_provider_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2075,7 +2070,7 @@ def test_native_resume_accepts_disposable_provider_home(tmp_path: Path, monkeypa
     monkeypatch.setenv("LONGHOUSE_QUALIFICATION_SANDBOX", "provider-qualification-bwrap-v3")
     monkeypatch.setenv("LONGHOUSE_QUALIFICATION_HOME", str(home))
 
-    assert _isolated_provider_home() == home
+    assert isolated_provider_home() == home
 
 
 def test_codex_native_resume_tui_uses_the_bridge_provider_home(
@@ -2286,12 +2281,12 @@ def test_shipped_facade_receives_provider_native_resume_selector(tmp_path: Path)
         ("cursor", "--resume-session"),
         ("opencode", "--resume-session"),
     ):
-        command = _launch_command(SPECS[provider], args, session_id)
+        command = launch_command(SPECS[provider], args, session_id)
         assert command[:2] == [str(args.longhouse_cli), provider]
         assert command[command.index(selector) + 1] == session_id
         assert command[command.index(SPECS[provider].binary_flag) + 1] == str(args.provider_bin)
 
-        secure_command = _launch_command(SPECS[provider], args, session_id, use_credential_files=True)
+        secure_command = launch_command(SPECS[provider], args, session_id, use_credential_files=True)
         assert args.agents_token not in secure_command
         assert secure_command[secure_command.index(selector) + 1] == session_id
 
@@ -2301,7 +2296,7 @@ def test_cursor_resume_commands_pin_the_factory_model(tmp_path: Path, monkeypatc
     session_id = "11111111-1111-4111-8111-111111111111"
     monkeypatch.setenv("CURSOR_MODEL", "cursor-grok-4.5-high")
 
-    command = _launch_command(SPECS["cursor"], args, session_id)
+    command = launch_command(SPECS["cursor"], args, session_id)
     assert command[-3:] == ["--", "--model", "cursor-grok-4.5-high"]
 
     intent = {
@@ -2334,7 +2329,7 @@ def test_opencode_resume_commands_pin_the_factory_model(tmp_path: Path, monkeypa
     session_id = "11111111-1111-4111-8111-111111111111"
     monkeypatch.setenv("LONGHOUSE_OPENCODE_MODEL", "openrouter/deepseek/deepseek-v4-flash")
 
-    command = _launch_command(SPECS["opencode"], args, session_id)
+    command = launch_command(SPECS["opencode"], args, session_id)
 
     assert command[command.index("--model") + 1] == "openrouter/deepseek/deepseek-v4-flash"
 
@@ -2396,13 +2391,13 @@ def test_provider_process_identity_comes_from_exact_provider_state() -> None:
     }
 
     for provider, state in states.items():
-        assert _provider_process_pid(SPECS[provider], state) == next(iter(state.values()))
+        assert provider_process_pid(SPECS[provider], state) == next(iter(state.values()))
 
 
 @pytest.mark.parametrize("invalid", [None, 0, -1, True, "101"])
 def test_provider_process_identity_rejects_missing_or_invalid_pid(invalid: object) -> None:
     with pytest.raises(RuntimeError, match="positive claude_pid"):
-        _provider_process_pid(SPECS["claude"], {"claude_pid": invalid})
+        provider_process_pid(SPECS["claude"], {"claude_pid": invalid})
 
 
 def test_wait_state_ignores_claude_contract_without_provider_pid(tmp_path: Path) -> None:
@@ -2435,7 +2430,7 @@ def test_wait_state_ignores_claude_contract_without_provider_pid(tmp_path: Path)
         )
     )
 
-    state = _wait_state(SPECS["claude"], home, timeout=0.1)
+    state = wait_state(SPECS["claude"], home, timeout=0.1)
 
     assert state["state_path"] == str(native)
     assert state["claude_pid"] == 123
@@ -2472,13 +2467,13 @@ def test_wait_state_excludes_existing_state_paths(tmp_path: Path) -> None:
         )
     )
 
-    state = _wait_state(SPECS["cursor"], home, timeout=0.1, exclude_paths={stale})
+    state = wait_state(SPECS["cursor"], home, timeout=0.1, exclude_paths={stale})
 
     assert state["state_path"] == str(fresh)
     assert state["session_id"] == "22222222-2222-4222-8222-222222222222"
 
     with pytest.raises(RuntimeError, match="state did not expose"):
-        _wait_state(
+        wait_state(
             SPECS["cursor"],
             home,
             timeout=0.01,
@@ -2563,9 +2558,9 @@ def test_claude_development_channel_prompt_selects_local_development_once(tmp_pa
 
 
 def test_provider_state_evidence_redacts_nested_secrets() -> None:
-    from zerg.qa.provider_native_resume import _redact_state_for_evidence
+    from zerg.qa.live_session_toolkit import redact_state_for_evidence
 
-    state = _redact_state_for_evidence(
+    state = redact_state_for_evidence(
         {
             "session_id": "session-1",
             "auth_token": "bridge-secret",
@@ -2612,9 +2607,7 @@ def test_cursor_initial_seed_bootstraps_through_the_provider_pty(tmp_path: Path)
 
 def test_cursor_initial_idle_uses_qualification_live_send_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_wait_cursor_idle",
+    monkeypatch.setattr(live_session_toolkit, "_wait_cursor_idle",
         lambda state, environment, **kwargs: calls.append(kwargs) or {"phase": "idle"},
     )
     args = _args(tmp_path)
@@ -2643,7 +2636,7 @@ def test_initial_seed_routing_uses_bootstrap_mode_for_every_provider(tmp_path: P
         calls.append(bool(kwargs["initial"]))
         return {"method": "test", "returncode": 0}
 
-    monkeypatch.setattr(provider_native_resume, "_control_send", fake_control_send)
+    monkeypatch.setattr(live_session_toolkit, "_control_send", fake_control_send)
     args = _args(tmp_path)
     for spec in (SPECS["cursor"], SPECS["claude"]):
         _send_initial_seed(spec, args, {"session_id": "session-1"}, object(), "seed")  # type: ignore[arg-type]
@@ -2729,7 +2722,7 @@ def test_cursor_hook_sequence_waits_for_pending_claim_promotion(tmp_path: Path, 
                             "session_id": "cursor-thread-1",
                             "conversation_id": "cursor-thread-1",
                             "generation_id": "generation-1",
-                            "prompt": _cursor_bootstrap_prompt(marker),
+                            "prompt": cursor_bootstrap_prompt(marker),
                         },
                     }
                 ),
@@ -2847,21 +2840,17 @@ def test_cursor_clean_stop_waits_for_provider_idle_before_exit(tmp_path: Path, m
         def kill_group(_signal: int) -> None:
             raise AssertionError("idle clean stop must not need a fallback signal")
 
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_wait_cursor_idle",
+    monkeypatch.setattr(live_session_toolkit, "_wait_cursor_idle",
         lambda state, environment, **kwargs: calls.append(("idle", kwargs)) or {"phase": "idle"},
     )
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_control_send",
+    monkeypatch.setattr(live_session_toolkit, "_control_send",
         lambda spec, args, state, process, text, **kwargs: calls.append(("send", text)) or {"returncode": 0},
     )
-    monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
-    monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
-    monkeypatch.setattr(provider_native_resume, "_signal_pid_if_alive", lambda *_args: False)
+    monkeypatch.setattr(live_session_toolkit, "wait_process_group_dead", lambda _pid: True)
+    monkeypatch.setattr(live_session_toolkit, "wait_pid_dead", lambda _pid: True)
+    monkeypatch.setattr(live_session_toolkit, "_signal_pid_if_alive", lambda *_args: False)
 
-    receipt = provider_native_resume._stop(
+    receipt = live_session_toolkit.stop_session(
         SPECS["cursor"],
         args,
         {"session_id": "session-1", "cursor_pid": 202},
@@ -2903,22 +2892,20 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
         calls.append(("idle", kwargs))
         raise RuntimeError("provider remained active")
 
-    monkeypatch.setattr(provider_native_resume, "_wait_cursor_idle", fake_idle)
+    monkeypatch.setattr(live_session_toolkit, "_wait_cursor_idle", fake_idle)
     monkeypatch.setattr(
-        provider_native_resume,
+        live_session_toolkit,
         "_cursor_interrupt_to_idle",
         lambda *_args, **kwargs: calls.append(("interrupt", kwargs)) or {"method": "cursor_ctrl_c_recovery"},
     )
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_control_send",
+    monkeypatch.setattr(live_session_toolkit, "_control_send",
         lambda spec, args, state, process, text, **kwargs: calls.append(("send", text)) or {"returncode": 0},
     )
-    monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
-    monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
-    monkeypatch.setattr(provider_native_resume, "_signal_pid_if_alive", lambda *_args: False)
+    monkeypatch.setattr(live_session_toolkit, "wait_process_group_dead", lambda _pid: True)
+    monkeypatch.setattr(live_session_toolkit, "wait_pid_dead", lambda _pid: True)
+    monkeypatch.setattr(live_session_toolkit, "_signal_pid_if_alive", lambda *_args: False)
 
-    receipt = provider_native_resume._stop(
+    receipt = live_session_toolkit.stop_session(
         SPECS["cursor"],
         args,
         {"session_id": "session-1", "cursor_pid": 202},
@@ -2946,7 +2933,7 @@ def test_cursor_clean_stop_recovers_stranded_generation_before_exit(tmp_path: Pa
     assert calls[0][1]["diagnostic_path"] != calls[1][1]["diagnostic_path"]
     assert calls[2] == ("send", "/exit")
 
-    provider_native_resume._stop(
+    live_session_toolkit.stop_session(
         SPECS["cursor"],
         args,
         {"session_id": "session-1", "cursor_pid": 202},
@@ -2984,11 +2971,11 @@ def test_cursor_forced_stop_keeps_short_shutdown_wait(tmp_path: Path, monkeypatc
         def kill_group(signal_number: int) -> None:
             kill_signals.append(signal_number)
 
-    monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
-    monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
-    monkeypatch.setattr(provider_native_resume, "_signal_pid_if_alive", lambda *_args: False)
+    monkeypatch.setattr(live_session_toolkit, "wait_process_group_dead", lambda _pid: True)
+    monkeypatch.setattr(live_session_toolkit, "wait_pid_dead", lambda _pid: True)
+    monkeypatch.setattr(live_session_toolkit, "_signal_pid_if_alive", lambda *_args: False)
 
-    receipt = provider_native_resume._stop(
+    receipt = live_session_toolkit.stop_session(
         SPECS["cursor"],
         args,
         {"session_id": "session-1", "cursor_pid": 202},
@@ -3085,12 +3072,10 @@ def test_cursor_interrupt_recovery_handles_error_stop_and_late_response(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_wait_cursor_idle",
+    monkeypatch.setattr(live_session_toolkit, "_wait_cursor_idle",
         lambda *_args, **_kwargs: {"phase": "idle", "generation_id": "generation-1"},
     )
-    monkeypatch.setattr(provider_native_resume, "_wait_cursor_tui_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(live_session_toolkit, "wait_cursor_tui_ready", lambda *_args, **_kwargs: None)
 
     class FakeProcess:
         recording = tmp_path / "terminal"
@@ -3237,12 +3222,10 @@ def test_cursor_interrupt_recovery_records_late_normal_completion(tmp_path: Path
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_wait_cursor_idle",
+    monkeypatch.setattr(live_session_toolkit, "_wait_cursor_idle",
         lambda *_args, **_kwargs: {"phase": "idle", "generation_id": "generation-1"},
     )
-    monkeypatch.setattr(provider_native_resume, "_wait_cursor_tui_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(live_session_toolkit, "wait_cursor_tui_ready", lambda *_args, **_kwargs: None)
 
     class FakeProcess:
         recording = tmp_path / "terminal"
@@ -3325,14 +3308,14 @@ def test_response_correlation_returns_measured_facts_for_strict_provider(
             {"role": "assistant", "content": f"Reply exactly {marker} and nothing else."},
         ]
     }
-    monkeypatch.setattr(provider_native_resume, "_api_json", lambda *_args, **_kwargs: tail)
+    monkeypatch.setattr(live_session_toolkit, "_api_json", lambda *_args, **_kwargs: tail)
 
-    observed_tail, correlation = _wait_assistant_response_after_marker(
+    observed_tail, correlation = wait_assistant_response_after_marker(
         "https://runtime.example",
         "token",
         "session-1",
         marker,
-        prior_assistant_event_digests=provider_native_resume._assistant_event_digests(
+        prior_assistant_event_digests=live_session_toolkit.assistant_event_digests(
             {"events": [{"role": "assistant", "content": "prior"}]}
         ),
         require_assistant_marker=True,
@@ -3360,12 +3343,12 @@ def test_strict_response_correlation_rejects_unrelated_assistant_event(
             {"role": "assistant", "content": "unrelated response"},
         ]
     }
-    monkeypatch.setattr(provider_native_resume, "_api_json", lambda *_args, **_kwargs: tail)
+    monkeypatch.setattr(live_session_toolkit, "_api_json", lambda *_args, **_kwargs: tail)
     ticks = iter((0.0, 0.0, 2.0))
     monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
 
-    _observed_tail, correlation = _wait_assistant_response_after_marker(
+    _observed_tail, correlation = wait_assistant_response_after_marker(
         "https://runtime.example",
         "token",
         "session-1",
@@ -3385,16 +3368,14 @@ def test_strict_response_correlation_rejects_unrelated_assistant_event(
 def test_claude_response_correlation_returns_false_facts_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_api_json",
+    monkeypatch.setattr(live_session_toolkit, "_api_json",
         lambda *_args, **_kwargs: {"events": [{"role": "user", "content": "MARKER"}]},
     )
     ticks = iter((0.0, 0.0, 2.0))
     monkeypatch.setattr(provider_native_resume.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
 
-    _tail, correlation = _wait_assistant_response_after_marker(
+    _tail, correlation = wait_assistant_response_after_marker(
         "https://runtime.example",
         "token",
         "session-1",
@@ -3438,11 +3419,11 @@ def test_claude_clean_stop_requires_zero_exit(
         def kill_group(_signal: int) -> None:
             raise AssertionError("clean stop must not need a fallback signal")
 
-    monkeypatch.setattr(provider_native_resume, "_wait_process_group_dead", lambda _pid: True)
-    monkeypatch.setattr(provider_native_resume, "_wait_pid_dead", lambda _pid: True)
-    monkeypatch.setattr(provider_native_resume, "_signal_pid_if_alive", lambda *_args: False)
+    monkeypatch.setattr(live_session_toolkit, "wait_process_group_dead", lambda _pid: True)
+    monkeypatch.setattr(live_session_toolkit, "wait_pid_dead", lambda _pid: True)
+    monkeypatch.setattr(live_session_toolkit, "_signal_pid_if_alive", lambda *_args: False)
 
-    receipt = provider_native_resume._stop(
+    receipt = live_session_toolkit.stop_session(
         SPECS["claude"],
         _args(tmp_path),
         {"session_id": "session-1", "claude_pid": 202},
@@ -3462,7 +3443,7 @@ def test_codex_concurrent_lock_error_is_a_refusal_even_if_state_identity_races()
 
 
 def test_cleanup_retains_failed_pid_identity_as_unverified_receipt() -> None:
-    receipt = _cleanup_processes(SPECS["claude"], (), [{"session_id": "session-without-provider-pid"}])
+    receipt = cleanup_processes(SPECS["claude"], (), [{"session_id": "session-without-provider-pid"}])
 
     assert receipt["verified"] is False
     assert receipt["orphan_count"] == 1
@@ -3497,7 +3478,7 @@ def test_terminal_recordings_keep_bounded_head_and_tail_with_receipt(tmp_path: P
     recording = evidence / "native-resume.tty"
     recording.write_bytes(source)
 
-    _bound_terminal_recordings(
+    bound_terminal_recordings(
         evidence,
         provider="opencode",
         states=[
@@ -3528,7 +3509,7 @@ def test_terminal_recordings_can_bound_nested_product_diagnostics_without_checkp
     recording = evidence / "terminal.raw"
     recording.write_bytes(source)
 
-    _bound_terminal_recordings(
+    bound_terminal_recordings(
         evidence,
         provider="cursor-turn-boundary",
         states=[],
@@ -3596,7 +3577,7 @@ def test_final_result_write_failure_removes_stale_green_evidence(
             }
         )
     )
-    original_write_json = provider_native_resume._write_json
+    original_write_json = live_session_toolkit.write_json
     write_calls = 0
 
     def fail_second_write(path: Path, payload: object) -> None:
@@ -3606,7 +3587,7 @@ def test_final_result_write_failure_removes_stale_green_evidence(
             raise OSError("final result filesystem race")
         original_write_json(path, payload)
 
-    monkeypatch.setattr(provider_native_resume, "_write_json", fail_second_write)
+    monkeypatch.setattr(live_session_toolkit, "write_json", fail_second_write)
 
     finalized = _finalize_result_payload(
         evidence,
@@ -3687,14 +3668,12 @@ def test_run_native_resume_refreshes_failure_manifest_after_finally_cleanup(
             raise OSError("cleanup receipt raced with process exit")
         return {"verified": cleanup_calls > 1, "cleanup_generation": cleanup_calls}
 
-    monkeypatch.setattr(provider_native_resume, "_isolated_provider_home", lambda: home)
-    monkeypatch.setattr(provider_native_resume, "_launch_command", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(provider_native_resume, "PtyProcess", FakeProcess)
-    monkeypatch.setattr(provider_native_resume, "_start_transcript_shipper", fake_start_shipper)
-    monkeypatch.setattr(provider_native_resume, "_wait_opencode_tui_ready", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_wait_state",
+    monkeypatch.setattr(live_session_toolkit, "isolated_provider_home", lambda: home)
+    monkeypatch.setattr(live_session_toolkit, "launch_command", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(live_session_toolkit, "PtyProcess", FakeProcess)
+    monkeypatch.setattr(live_session_toolkit, "start_transcript_shipper", fake_start_shipper)
+    monkeypatch.setattr(live_session_toolkit, "wait_opencode_tui_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(live_session_toolkit, "wait_state",
         lambda *_args, **_kwargs: {
             "session_id": "session-1",
             "run_id": "run-1",
@@ -3703,18 +3682,16 @@ def test_run_native_resume_refreshes_failure_manifest_after_finally_cleanup(
             "claude_pid": 101,
         },
     )
-    monkeypatch.setattr(provider_native_resume, "_provider_process_pid", lambda *_args: 101)
-    monkeypatch.setattr(provider_native_resume, "_wait_session_tail", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(provider_native_resume, "_assistant_event_digests", lambda *_args: set())
-    monkeypatch.setattr(provider_native_resume, "_control_send", lambda *_args, **_kwargs: {"returncode": 0})
-    monkeypatch.setattr(
-        provider_native_resume,
-        "_wait_assistant_response_after_marker",
+    monkeypatch.setattr(live_session_toolkit, "provider_process_pid", lambda *_args: 101)
+    monkeypatch.setattr(live_session_toolkit, "wait_session_tail", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(live_session_toolkit, "assistant_event_digests", lambda *_args: set())
+    monkeypatch.setattr(live_session_toolkit, "_control_send", lambda *_args, **_kwargs: {"returncode": 0})
+    monkeypatch.setattr(live_session_toolkit, "wait_assistant_response_after_marker",
         lambda *_args, **_kwargs: ({}, {"marker_observed_in_transcript": False, "new_assistant_events": 0}),
     )
-    monkeypatch.setattr(provider_native_resume, "_cleanup_processes", fake_cleanup)
+    monkeypatch.setattr(live_session_toolkit, "cleanup_processes", fake_cleanup)
     monkeypatch.setattr(provider_native_resume, "_close_recordings", lambda *_args: None)
-    monkeypatch.setattr(provider_native_resume, "_secret_scan", lambda *_args: [])
+    monkeypatch.setattr(live_session_toolkit, "secret_scan", lambda *_args: [])
 
     result = provider_native_resume.run_native_resume("opencode", args)
 

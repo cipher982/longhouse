@@ -83,7 +83,7 @@ def load_factory_assurance_title_binding(
     runtime_environment = str(env.get("ENVIRONMENT") or "").strip()
     if not _enabled(mode) or runtime_environment != FACTORY_ASSURANCE_ENVIRONMENT:
         raise ValueError(
-            "factory assurance title binding requires explicit assurance mode " f"and ENVIRONMENT={FACTORY_ASSURANCE_ENVIRONMENT}"
+            f"factory assurance title binding requires explicit assurance mode and ENVIRONMENT={FACTORY_ASSURANCE_ENVIRONMENT}"
         )
     if not base_url or not token_path:
         raise ValueError("factory assurance title binding requires a base URL and token file")

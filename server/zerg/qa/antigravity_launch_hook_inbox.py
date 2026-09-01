@@ -39,18 +39,18 @@ avoid repeating.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
-from datetime import UTC
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from zerg.qa import antigravity_hook_qualification
 from zerg.qa import provider_release_semantic_oracles as semantic_oracles
 from zerg.qa.antigravity_hook_qualification import _NO_TOKEN_REQUIRED_CANARIES
+from zerg.qa.provider_release_identity import artifact_manifest
+from zerg.qa.provider_release_identity import now
+from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.services.provider_capability_proof import AssertionOutcome
 
@@ -101,35 +101,11 @@ REGISTRATION = ProducerRegistration(
 )
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     temporary.replace(path)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
-
-
-def _artifact_manifest(root: Path) -> list[dict[str, Any]]:
-    return [
-        {
-            "path": path.relative_to(root).as_posix(),
-            "size": path.stat().st_size,
-            "sha256": _sha256(path),
-        }
-        for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != "result.json"
-    ]
 
 
 def _base_result(*, status: str, execution_variant: str | None) -> dict[str, Any]:
@@ -144,7 +120,7 @@ def _base_result(*, status: str, execution_variant: str | None) -> dict[str, Any
         "scenario_id": SCENARIO_ID,
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_no_token",
-        "generated_at": _now(),
+        "generated_at": now(),
         "status": status,
         "execution_variant": execution_variant,
     }
@@ -168,7 +144,7 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
     binary = args.provider_bin.resolve()
     provider_receipt = {
         "path": str(binary),
-        "sha256": _sha256(binary),
+        "sha256": sha256_file(binary),
     }
     _write_json(root / "provider-binary-receipt.json", provider_receipt)
 
@@ -227,7 +203,7 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
             "observation": observation,
             "assertions": {ASSERTION_ID: passed},
             "provider_binary": provider_receipt,
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
         _write_json(root / "result.json", result)
         return result
@@ -237,7 +213,7 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
             "failure_code": "antigravity_launch_hook_inbox_failed",
             "error": f"{type(exc).__name__}: {exc}",
             "assertions": {ASSERTION_ID: False},
-            "artifact_manifest": _artifact_manifest(root),
+            "artifact_manifest": artifact_manifest(root),
         }
         _write_json(root / "result.json", failure)
         return failure

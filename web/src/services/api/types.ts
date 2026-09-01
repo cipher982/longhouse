@@ -4,18 +4,6 @@ type Schemas = components["schemas"];
 
 export type SessionLockInfo = Schemas["SessionLockInfo"];
 
-export type TokenBreakdown = Schemas["TokenBreakdown"];
-export type UsageLimit = Schemas["UsageLimit"];
-export type UserUsageResponse = Schemas["UserUsageResponse"];
-export type PeriodUsage = Schemas["PeriodUsage"];
-export type UserUsageSummary = Schemas["UserUsageSummary"];
-export type AdminUserRow = Schemas["AdminUserRow"];
-export type AdminUsersResponse = Schemas["AdminUsersResponse"];
-export type DailyBreakdown = Schemas["DailyBreakdown"];
-export type TopAutomationUsage = Schemas["TopAutomationUsage"];
-export type AdminUserDetailResponse = Schemas["AdminUserDetailResponse"];
-export type OpsSummary = Schemas["OpsSummary"];
-export type OpsTopAutomation = Schemas["OpsTopAutomation"];
 export type MachineHealthItemResponse = Schemas["MachineHealthItemResponse"];
 export type MachineHealthListResponse = Schemas["MachineHealthListResponse"];
 export type MachineHealthStatusCountsResponse = Schemas["MachineHealthStatusCountsResponse"];

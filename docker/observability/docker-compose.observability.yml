@@ -4,8 +4,8 @@
 # runtime now exports (write-serializer/WAL state + per-device heartbeat
 # state). Grafana renders the unified dashboard.
 #
-# This is intentionally NOT part of docker/docker-compose.dev.yml so `make dev`
-# stays lean. Bring it up with `make observability-up`.
+# This is opt-in and separate from `make dev`, which stays lean. Bring it up
+# with `make observability-up`.
 #
 # The runtime gates /metrics. Set LONGHOUSE_METRICS_TOKEN in the runtime env and
 # in this stack's environment (.env or shell) so Prometheus can authenticate.

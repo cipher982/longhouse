@@ -22,7 +22,7 @@ export function getNavItems(role?: string | null): NavItem[] {
     items.push({ label: "Health", href: "/health", testId: "global-health-tab" });
   }
   if (role === "ADMIN") {
-    items.push({ label: "Admin", href: "/admin", testId: "global-admin-tab" });
+    items.push({ label: "Admin", href: "/admin/provider-capabilities", testId: "global-admin-tab" });
   }
   return items;
 }

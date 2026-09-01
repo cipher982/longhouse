@@ -38,18 +38,24 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # Providers whose Machine Agent emits managed-control lease snapshots in the
 # heartbeat, so the server reconciler observes channel readiness and promotes
 # the launcher's birth connection detached -> attached once the bridge is up.
-# Engine truth: codex, claude, and opencode leases are shipped (see
-# engine/src/daemon.rs payload.managed_sessions = leases_from_observations
-# (codex) + leases_from_claude_channel_observations (claude) +
-# leases_from_opencode_server_observations (opencode)). For these, the launcher
-# births the connection ``detached`` so liveness reflects an observed ready
-# channel, not a birth-time assertion — important for OpenCode, where the server
-# bridge can fail to start AFTER the API session is created, and a birth-time
-# ``attached`` would briefly claim live control with no server. Antigravity has
-# no control lease observer. Its typed hook readiness is still
-# shadow evidence, so launch alone never grants send. That promotion now
-# exists: managed_control_state raises can_send_input from the engine's hook
-# readiness evidence, per session, and drops it again when the hook goes quiet.
+# Engine truth (engine/src/daemon.rs, payload.managed_sessions):
+# leases_from_observations (codex) + leases_from_claude_channel_observations
+# (claude) + leases_from_opencode_server_observations (opencode) +
+# leases_from_cursor_helm_observations (cursor). For these, the launcher births
+# the connection ``detached`` so liveness reflects an observed ready channel,
+# not a birth-time assertion — important for OpenCode, where the server bridge
+# can fail to start AFTER the API session is created, and a birth-time
+# ``attached`` would briefly claim live control with no server.
+#
+# Antigravity also ships leases now (leases_from_antigravity_observations), but
+# it is not listed here: its birth state is already decided by the stronger
+# readiness predicate below, which additionally withholds send. Listing it
+# would say the same thing twice and hide which rule is load-bearing.
+#
+# Pi is absent because it has no control lease and needs none: it is a Console
+# one-shot with no live-control capabilities to promote (its contract advertises
+# only pi.turn_start / pi.turn_interrupt), so the born connection carries zeros
+# for send/interrupt/terminate whatever its state.
 _HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor"})
 
 
@@ -390,9 +396,10 @@ def materialize_managed_local_launch_plan_sync(
     # on (run_id, control_plane) keeps promotion on this same row.
     #
     # Antigravity launch proves only that the binary was dispatched. It does
-    # not prove the hook inbox can receive input, so Phase 2 keeps that
-    # connection detached and send-disabled while typed readiness runs in
-    # shadow mode. A later reducer cutover may promote it from fresh hook proof.
+    # not prove the hook inbox can receive input, so that connection is born
+    # detached and send-disabled; managed_control_state raises can_send_input
+    # from the engine's per-session hook readiness evidence and drops it again
+    # when the hook goes quiet.
     #
     # ``device_id`` is stamped to ``source_name`` (== the device-token id the
     # heartbeat reconciler uses) so both promotion and

@@ -374,14 +374,14 @@ def serve(
     ``--domain``) auth is REQUIRED unless you pass ``--allow-public-no-auth``.
 
     Examples:
-        longhouse serve                                     # SQLite on localhost:8080
-        longhouse serve --demo                              # Start with sample data
-        longhouse serve --demo-fresh                        # Rebuild demo data on start
-        longhouse serve --daemon                            # Run in background
-        longhouse serve --stop                              # Stop background server
-        longhouse serve --host 0.0.0.0 --port 80            # Public bind (auth required)
-        longhouse serve --host 0.0.0.0 --domain my.host.com # LAN + public domain
-        longhouse serve --reload                            # Dev mode with auto-reload
+        longhouse-server serve                                     # SQLite on localhost:8080
+        longhouse-server serve --demo                              # Start with sample data
+        longhouse-server serve --demo-fresh                        # Rebuild demo data on start
+        longhouse-server serve --daemon                            # Run in background
+        longhouse-server serve --stop                              # Stop background server
+        longhouse-server serve --host 0.0.0.0 --port 80            # Public bind (auth required)
+        longhouse-server serve --host 0.0.0.0 --domain my.host.com # LAN + public domain
+        longhouse-server serve --reload                            # Dev mode with auto-reload
     """
     import uvicorn
 
@@ -421,7 +421,7 @@ def serve(
                 f"Server already running (PID {existing_pid})",
                 fg=typer.colors.YELLOW,
             )
-            typer.echo("Use 'longhouse serve --stop' to stop it first")
+            typer.echo("Use 'longhouse-server serve --stop' to stop it first")
             raise typer.Exit(code=1)
 
     # Load the repo .env first so the gate evaluates the SAME auth inputs the
@@ -543,7 +543,7 @@ def serve(
         sock.close()
     except OSError as e:
         typer.secho(f"ERROR: Port {port} is already in use.", fg=typer.colors.RED)
-        typer.echo(f"  Try: longhouse serve --port {port + 1}")
+        typer.echo(f"  Try: longhouse-server serve --port {port + 1}")
         typer.echo(f"  Or find what's using it: lsof -i :{port}")
         raise typer.Exit(code=1) from e
 
@@ -599,22 +599,22 @@ def serve(
     typer.echo("")
 
     typer.echo("  To connect this machine:")
-    typer.secho(f"    longhouse connect --url http://127.0.0.1:{port}", fg=typer.colors.BRIGHT_BLACK)
+    typer.secho(f"    longhouse auth --url http://127.0.0.1:{port}", fg=typer.colors.BRIGHT_BLACK)
     if public_url and public_url.startswith("https://"):
         typer.echo("  To connect from any machine (via your domain):")
-        typer.secho(f"    longhouse connect --url {public_url}", fg=typer.colors.BRIGHT_BLACK)
+        typer.secho(f"    longhouse auth --url {public_url}", fg=typer.colors.BRIGHT_BLACK)
     typer.echo("")
 
     # Plaintext http:// is only accepted for loopback (normalize_zerg_url is the
-    # same rule connect enforces): device tokens ride as a plain header and
-    # transcripts stream over the same socket, so a LAN or public http:// URL
-    # ships every secret in a transcript in the clear.
+    # same rule the native `longhouse auth` enforces): device tokens ride as a
+    # plain header and transcripts stream over the same socket, so a LAN or
+    # public http:// URL ships every secret in a transcript in the clear.
     if _host_is_public(host) or (public_url and normalize_zerg_url(public_url) is None):
         typer.secho("  This port is reachable off this machine, but Longhouse only accepts", fg=typer.colors.YELLOW)
         typer.secho("  plaintext http:// over loopback — device tokens and transcripts must", fg=typer.colors.YELLOW)
         typer.secho("  not cross a network unencrypted. Put TLS in front (Caddy, nginx, or", fg=typer.colors.YELLOW)
         typer.secho("  `tailscale serve`) and connect other machines with:", fg=typer.colors.YELLOW)
-        typer.secho("    longhouse connect --url https://<your-domain>", fg=typer.colors.BRIGHT_BLACK)
+        typer.secho("    longhouse auth --url https://<your-domain>", fg=typer.colors.BRIGHT_BLACK)
         typer.echo("")
 
     try:

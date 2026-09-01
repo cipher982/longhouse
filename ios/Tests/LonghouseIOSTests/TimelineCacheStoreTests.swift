@@ -238,9 +238,6 @@ struct TimelineCacheStoreTests {
             timelineAnchorAt: "2026-05-21T10:00:00Z",
             userMessages: 2,
             toolCalls: 1,
-            liveControlAvailable: true,
-            hostReattachAvailable: true,
-            replyToLiveSessionAvailable: true,
             runtimeDisplay: SessionRuntimeDisplay.widgetPlaceholder(state: "idle", phase: "Idle", tone: "idle"),
             timelineCard: nil
         )

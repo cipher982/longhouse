@@ -47,7 +47,6 @@ WORKFLOW_DISPATCH_FILES = {
     "CI": "contract-first-ci.yml",
     "Deploy and Verify": "deploy-and-verify.yml",
     "Launch Gate": "launch-gate.yml",
-    "Installer Validation Ring": "test-install.yml",
     "Hosted Live QA": "hosted-live-qa.yml",
     "Local Runtime Binary Release": "local-runtime-release.yml",
 }

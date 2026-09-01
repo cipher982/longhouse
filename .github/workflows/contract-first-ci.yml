@@ -184,14 +184,8 @@ jobs:
     - name: Run Python Backend Tests
       run: make test
 
-    - name: Run Install-Runner Tests
-      run: make test-install-runner
-
     - name: Run Hosted-Instance Helper Tests
       run: make test-hosted-instance
-
-    - name: Run Web Runtime Entrypoint Tests
-      run: make test-web-entrypoint
 
     - name: Run iOS simulator helper tests
       run: make test-ios-helper

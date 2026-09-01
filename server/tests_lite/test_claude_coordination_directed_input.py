@@ -97,7 +97,7 @@ def _install_session_and_api_fakes(
         return session, session_id, f"provider-{session_id}"
 
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
     monkeypatch.setattr(m, "launch_claude_session", lambda **k: fake_launch(**k))
     monkeypatch.setattr(
         m,
@@ -229,7 +229,7 @@ def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(t
     args = _args(tmp_path, variant)
     fake_shipper = _FakeShipper()
     monkeypatch.setattr(m, "start_machine_and_shipper", lambda *_a, **_k: (fake_shipper, {"HOME": "/tmp"}))
-    monkeypatch.setattr(m, "_prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
+    monkeypatch.setattr(m, "prepare_claude_profile", lambda **_k: {"status": "pass", "has_completed_onboarding": True})
 
     def _boom(**_k: object) -> object:
         raise RuntimeError("longhouse claude exited before channel readiness")

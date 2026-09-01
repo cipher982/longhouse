@@ -13,12 +13,8 @@ import {
 } from "@tanstack/react-query";
 import {
   fetchAgentSessions,
-  fetchAgentSession,
-  fetchAgentSessionThread,
   fetchAgentSessionProjection,
   fetchAgentSessionWorkspace,
-  fetchAgentSessionTurns,
-  fetchAgentSessionEvents,
   fetchAgentSessionSummaries,
   fetchAgentSessionPreview,
   fetchAgentFilters,
@@ -26,12 +22,8 @@ import {
   fetchRecallContext,
   type AgentSessionFilters,
   type TimelineSessionsListResponse,
-  type AgentSession,
-  type AgentSessionThreadResponse,
   type AgentSessionProjectionResponse,
   type AgentSessionWorkspaceResponse,
-  type AgentSessionTurnsListResponse,
-  type AgentEventsListResponse,
   type AgentSessionSummaryFilters,
   type AgentSessionSummaryListResponse,
   type AgentSessionPreview,
@@ -62,55 +54,6 @@ export function useAgentSessions(
     staleTime: 30_000,
     gcTime: 5 * 60_000,
     placeholderData: keepPreviousData,
-  });
-}
-
-/**
- * Hook to fetch a single session by ID.
- */
-export function useAgentSession(sessionId: string | null) {
-  return useAgentSessionWithOptions(sessionId);
-}
-
-type AgentSessionQueryOptions = Pick<
-  UseQueryOptions<AgentSession>,
-  "enabled" | "refetchInterval"
->;
-
-export function useAgentSessionWithOptions(
-  sessionId: string | null,
-  options: AgentSessionQueryOptions = {},
-) {
-  return useQuery<AgentSession>({
-    queryKey: ["agent-session", sessionId],
-    queryFn: () => fetchAgentSession(sessionId!),
-    enabled: options.enabled ?? !!sessionId,
-    refetchInterval: options.refetchInterval,
-    staleTime: 30_000,
-    gcTime: 5 * 60_000,
-  });
-}
-
-export function useAgentSessionThread(sessionId: string | null) {
-  return useAgentSessionThreadWithOptions(sessionId);
-}
-
-type AgentSessionThreadQueryOptions = Pick<
-  UseQueryOptions<AgentSessionThreadResponse>,
-  "enabled" | "refetchInterval"
->;
-
-export function useAgentSessionThreadWithOptions(
-  sessionId: string | null,
-  options: AgentSessionThreadQueryOptions = {},
-) {
-  return useQuery<AgentSessionThreadResponse>({
-    queryKey: ["agent-session-thread", sessionId],
-    queryFn: () => fetchAgentSessionThread(sessionId!),
-    enabled: options.enabled ?? !!sessionId,
-    refetchInterval: options.refetchInterval,
-    staleTime: 30_000,
-    gcTime: 5 * 60_000,
   });
 }
 
@@ -145,42 +88,6 @@ export function useAgentSessionWorkspace(
         branch_mode,
         shared_by,
         share_token,
-      }),
-    enabled: enabled ?? !!sessionId,
-    refetchInterval,
-    staleTime: 10_000,
-    gcTime: 5 * 60_000,
-  });
-}
-
-type AgentSessionTurnsQueryOptions = Pick<
-  UseQueryOptions<AgentSessionTurnsListResponse>,
-  "enabled" | "refetchInterval"
->;
-
-export function useAgentSessionTurns(
-  sessionId: string | null,
-  options: AgentSessionTurnsQueryOptions & {
-    limit?: number;
-    offset?: number;
-    order?: "asc" | "desc";
-  } = {},
-) {
-  const {
-    limit = 10,
-    offset = 0,
-    order = "desc",
-    enabled,
-    refetchInterval,
-  } = options;
-
-  return useQuery<AgentSessionTurnsListResponse>({
-    queryKey: ["agent-session-turns", sessionId, { limit, offset, order }],
-    queryFn: () =>
-      fetchAgentSessionTurns(sessionId!, {
-        limit,
-        offset,
-        order,
       }),
     enabled: enabled ?? !!sessionId,
     refetchInterval,
@@ -247,53 +154,6 @@ export function useAgentSessionProjectionInfinite(
       ? { pages: [initialPage], pageParams: [{ anchor: "tail" }] }
       : undefined,
     refetchInterval,
-    staleTime: 10_000,
-    gcTime: 5 * 60_000,
-  });
-}
-
-/**
- * Hook to fetch events for a session.
- */
-export function useAgentSessionEvents(
-  sessionId: string | null,
-  options: { roles?: string; limit?: number; offset?: number; branch_mode?: "head" | "all" } = {}
-) {
-  return useQuery<AgentEventsListResponse>({
-    queryKey: ["agent-session-events", sessionId, options],
-    queryFn: () => fetchAgentSessionEvents(sessionId!, options),
-    enabled: !!sessionId,
-    staleTime: 10_000,
-    gcTime: 5 * 60_000,
-  });
-}
-
-/**
- * Hook to fetch paginated events for a session.
- *
- * Uses offset pagination under the hood and flattens pages in the caller.
- */
-export function useAgentSessionEventsInfinite(
-  sessionId: string | null,
-  options: { roles?: string; limit?: number; enabled?: boolean; branch_mode?: "head" | "all" } = {}
-) {
-  const { roles, limit = 1000, enabled = true, branch_mode = "head" } = options;
-
-  return useInfiniteQuery<AgentEventsListResponse>({
-    queryKey: ["agent-session-events-infinite", sessionId, { roles, limit, branch_mode }],
-    queryFn: ({ pageParam = 0 }) =>
-      fetchAgentSessionEvents(sessionId!, {
-        roles,
-        limit,
-        offset: Number(pageParam),
-        branch_mode,
-      }),
-    initialPageParam: 0,
-    getNextPageParam: (lastPage, pages) => {
-      const loaded = pages.reduce((sum, page) => sum + page.events.length, 0);
-      return loaded < lastPage.total ? loaded : undefined;
-    },
-    enabled: !!sessionId && enabled,
     staleTime: 10_000,
     gcTime: 5 * 60_000,
   });
