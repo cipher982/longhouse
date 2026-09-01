@@ -71,6 +71,9 @@ NOW = datetime.now(timezone.utc)
 PARENT_ID = UUID("aaaaaaaa-1111-4111-8111-111111111111")
 HATCH_ID = UUID("bbbbbbbb-2222-4222-8222-222222222222")
 PROVIDER_CHILD_ID = UUID("cccccccc-3333-4333-8333-333333333333")
+# Durable, machine-observable proof namespace. Classification reads the cwd a
+# session actually ran in; it does not read the prompt.
+PROOF_CANARY_CWD = "/Users/davidrose/.longhouse/canaries/provider-live/opencode/20260605T164518Z/workspace"
 
 
 def _session_factory(tmp_path, name: str = "hatch-automation-origin.db"):
@@ -97,6 +100,7 @@ def _root_payload(
     session_id: UUID = PARENT_ID,
     provider_session_id: str | None = None,
     text: str = "Parent user task",
+    cwd: str = "/Users/davidrose/git/zerg/longhouse",
 ) -> SessionIngest:
     return SessionIngest(
         id=session_id,
@@ -104,7 +108,7 @@ def _root_payload(
         environment="production",
         project="longhouse",
         device_id="cinder",
-        cwd="/Users/davidrose/git/zerg/longhouse",
+        cwd=cwd,
         started_at=NOW - timedelta(minutes=5),
         provider_session_id=provider_session_id or f"ses_parent_{session_id.hex[:8]}",
         events=[
@@ -159,11 +163,18 @@ def _hatch_payload(
 
 
 def test_visibility_reconcile_evaluates_all_rows_and_preserves_raw_facts(tmp_path):
+    """Reconciliation re-derives the hidden bit and leaves raw provenance alone.
+
+    The hidden evidence here is the provider-live canary cwd the session ran
+    in — a durable namespace fact, not a phrase in its first message. The row
+    is then bent into the shape a legacy import leaves behind (visible, human
+    launch provenance, no origin) so reconcile has something to repair.
+    """
+
     SessionLocal = _session_factory(tmp_path, "visibility-reconcile.db")
-    prompt = "Hatch execution contract:\nThis is a single bounded, non-interactive run. A human is waiting for a useful answer."
     with SessionLocal() as db:
         store = AgentsStore(db)
-        store.ingest_session(_root_payload(text=prompt))
+        store.ingest_session(_root_payload(cwd=PROOF_CANARY_CWD))
         session = db.get(AgentSession, PARENT_ID)
         session.hidden_from_default_timeline = 0
         session.launch_actor = "user"
@@ -277,27 +288,36 @@ def test_hatch_automation_ingest_persists_sticky_hidden_origin_and_edge(tmp_path
         assert card.hidden_from_default_timeline == 1
 
 
-def test_hatch_execution_contract_ingest_recovers_missing_origin_metadata(tmp_path):
-    SessionLocal = _session_factory(tmp_path, name="hatch-contract-origin.db")
-    contract = "Hatch execution contract:\nThis is a single bounded, non-interactive run. A human is waiting for a useful answer."
+def test_reingest_from_proof_cwd_recovers_missing_origin_metadata(tmp_path):
+    """A later ingest that reveals proof scratch repairs origin on an imported row.
+
+    Nothing about the prompt participates: the first import arrives with no
+    origin and an ordinary workspace, and only the second ingest — which
+    reports the canary cwd the run actually used — supplies the evidence that
+    classifies it.
+    """
+
+    SessionLocal = _session_factory(tmp_path, name="proof-cwd-origin.db")
     with SessionLocal() as db:
         store = AgentsStore(db)
         initial_payload = _root_payload(
             session_id=HATCH_ID,
-            provider_session_id="cursor-hatch-contract",
+            provider_session_id="cursor-proof-cwd",
             text="ordinary imported session",
         ).model_copy(update={"provider": "cursor", "origin_kind": None})
         store.ingest_session(initial_payload)
-        contract_event = initial_payload.events[0].model_copy(update={"content_text": contract})
-        store.ingest_session(initial_payload.model_copy(update={"events": [contract_event]}))
+        assert db.get(AgentSession, HATCH_ID).origin_kind is None
+        assert db.get(AgentSession, HATCH_ID).hidden_from_default_timeline == 0
+
+        store.ingest_session(initial_payload.model_copy(update={"cwd": PROOF_CANARY_CWD}))
 
         session = db.get(AgentSession, HATCH_ID)
         card = db.get(TimelineCard, HATCH_ID)
-        assert session.origin_kind == "hatch_automation"
+        assert session.origin_kind == "test_or_canary"
         assert session.hidden_from_default_timeline == 1
         assert session.launch_actor == "automation"
-        assert session.launch_surface == "hatch"
-        assert card.origin_kind == "hatch_automation"
+        assert session.launch_surface == "test"
+        assert card.origin_kind == "test_or_canary"
         assert card.hidden_from_default_timeline == 1
 
 
@@ -596,15 +616,7 @@ def test_db_reconcile_visibility_cli_reports_every_session_without_mutation(tmp_
     initialize_database(engine)
     SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
     with SessionLocal() as db:
-        AgentsStore(db).ingest_session(
-            _root_payload(
-                session_id=HATCH_ID,
-                text=(
-                    "Hatch execution contract:\n"
-                    "This is a single bounded, non-interactive run. A human is waiting for a useful answer."
-                ),
-            )
-        )
+        AgentsStore(db).ingest_session(_root_payload(session_id=HATCH_ID, cwd=PROOF_CANARY_CWD))
         session = db.get(AgentSession, HATCH_ID)
         session.hidden_from_default_timeline = 0
         db.get(TimelineCard, HATCH_ID).hidden_from_default_timeline = 0

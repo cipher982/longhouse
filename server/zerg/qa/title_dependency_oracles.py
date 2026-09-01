@@ -519,7 +519,7 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[
     session_ids = [str(uuid4()) for _ in range(count)]
     unrelated_terminal_id = str(uuid4())
     row_local_empty_id = str(uuid4())
-    legacy_provider_proof_id = str(uuid4())
+    provider_proof_workspace_id = str(uuid4())
     with engine.begin() as connection:
         for index, session_id in enumerate(session_ids):
             connection.execute(
@@ -610,26 +610,25 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[
                 updated_at=observed,
             )
         )
-        # Legacy provider proofs predate typed launch provenance and commonly
-        # retain a transcript newline. They must be classified from their exact
-        # prompt shape before entering either the title scheduler or its health
-        # debt. This fixture makes Python/SQL normalization drift release-blocking.
+        # Provider proofs are recognized from their workspace namespace, never
+        # from prompt text, and must stay out of both the title scheduler and
+        # its health debt. This row carries an ordinary human prompt and no
+        # persisted hidden bit, so only the proof cwd can classify it, and its
+        # mixed-case path makes Python/SQL normalization drift release-blocking.
         connection.execute(
             insert(StorageSession).values(
-                session_id=legacy_provider_proof_id,
+                session_id=provider_proof_workspace_id,
                 tenant_id="factory-title-assurance",
                 owner_id="factory",
                 provider="claude",
                 environment="local",
                 machine_id="factory-title-machine",
                 project="longhouse-title-assurance",
-                cwd="/factory/historical-human-looking-workspace",
+                cwd="/tmp/provider-factory-Legacy-Title-Proof/workspace",
                 started_at=obligation_started,
                 last_activity_at=obligation_started,
                 user_messages=1,
-                first_user_message_preview=(
-                    "Reply with exactly LONGHOUSE_CLAUDE_PRINT_74694349fb694c97af560ac98572f989 and nothing else.\n"
-                ),
+                first_user_message_preview="Summarize the deployment plan for the release review",
                 semantic_projection_version=1,
                 title_attempt_count=0,
                 hidden_from_default_timeline=False,
@@ -639,7 +638,7 @@ def _seed_hidden_title_obligations(database_path: Path, *, count: int) -> tuple[
             )
         )
     engine.dispose()
-    return session_ids, unrelated_terminal_id, row_local_empty_id, legacy_provider_proof_id
+    return session_ids, unrelated_terminal_id, row_local_empty_id, provider_proof_workspace_id
 
 
 def _wait_for(predicate, *, timeout: float, description: str):
@@ -683,7 +682,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
     session_ids: list[str] = []
     unrelated_terminal_id = ""
     row_local_empty_id = ""
-    legacy_provider_proof_id = ""
+    provider_proof_workspace_id = ""
     snapshots: dict[str, Any] = {}
     with tempfile.TemporaryDirectory(prefix="title-assurance-", dir=evidence_root.parent) as temporary:
         root = Path(temporary)
@@ -691,11 +690,11 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
         token_file.write_text(unavailable_token, encoding="utf-8")
         token_file.chmod(0o600)
         runtime = _RuntimeHost(repo_root=repo_root, root=root, base_url=stub.base_url, token_file=token_file)
-        session_ids, unrelated_terminal_id, row_local_empty_id, legacy_provider_proof_id = _seed_hidden_title_obligations(
+        session_ids, unrelated_terminal_id, row_local_empty_id, provider_proof_workspace_id = _seed_hidden_title_obligations(
             runtime.database_path,
             count=8,
         )
-        all_fixture_ids = [*session_ids, unrelated_terminal_id, row_local_empty_id, legacy_provider_proof_id]
+        all_fixture_ids = [*session_ids, unrelated_terminal_id, row_local_empty_id, provider_proof_workspace_id]
 
         def fixture_rows(
             snapshot: dict[str, Any],
@@ -705,7 +704,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                 [by_id[session_id] for session_id in session_ids if session_id in by_id],
                 by_id.get(unrelated_terminal_id, {}),
                 by_id.get(row_local_empty_id, {}),
-                by_id.get(legacy_provider_proof_id, {}),
+                by_id.get(provider_proof_workspace_id, {}),
             )
 
         try:
@@ -713,7 +712,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
 
             def failed_snapshot():
                 snapshot = _catalog_snapshot(runtime.database_path, all_fixture_ids)
-                rows, unrelated, _row_local_empty, legacy_proof = fixture_rows(snapshot)
+                rows, unrelated, _row_local_empty, proof_workspace = fixture_rows(snapshot)
                 incidents = {row["title_dependency_incident_id"] for row in rows}
                 dependencies = snapshot["dependencies"]
                 failed = (
@@ -723,9 +722,9 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                     and dependencies
                     and dependencies[0]["failure_class"] == "availability"
                     and unrelated.get("title_dependency_incident_id") is None
-                    and legacy_proof.get("anchor_title") is None
-                    and legacy_proof.get("title_attempt_count") == 0
-                    and legacy_proof.get("title_dependency_incident_id") is None
+                    and proof_workspace.get("anchor_title") is None
+                    and proof_workspace.get("title_attempt_count") == 0
+                    and proof_workspace.get("title_dependency_incident_id") is None
                 )
                 return snapshot if failed else None
 
@@ -775,7 +774,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
 
             def recovered_snapshot():
                 snapshot = _catalog_snapshot(runtime.database_path, all_fixture_ids)
-                rows, unrelated, _row_local_empty, legacy_proof = fixture_rows(snapshot)
+                rows, unrelated, _row_local_empty, proof_workspace = fixture_rows(snapshot)
                 rows_by_id = {str(row["session_id"]): row for row in rows}
                 dependency_rows = snapshot["dependencies"]
                 recovered = (
@@ -791,9 +790,9 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                     and unrelated.get("anchor_title") is None
                     and unrelated.get("title_attempt_count") == 5
                     and unrelated.get("title_last_error") == "invalid_title_payload"
-                    and legacy_proof.get("anchor_title") is None
-                    and legacy_proof.get("title_attempt_count") == 0
-                    and legacy_proof.get("title_dependency_incident_id") is None
+                    and proof_workspace.get("anchor_title") is None
+                    and proof_workspace.get("title_attempt_count") == 0
+                    and proof_workspace.get("title_dependency_incident_id") is None
                 )
                 return snapshot if recovered else None
 
@@ -808,7 +807,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
 
             def row_local_empty_snapshot():
                 snapshot = _catalog_snapshot(runtime.database_path, all_fixture_ids)
-                _rows, _unrelated, empty_row, legacy_proof = fixture_rows(snapshot)
+                _rows, _unrelated, empty_row, proof_workspace = fixture_rows(snapshot)
                 dependency_rows = snapshot["dependencies"]
                 retry_value = empty_row.get("title_retry_at")
                 retry_at = datetime.fromisoformat(str(retry_value)) if retry_value else None
@@ -824,9 +823,9 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                     and dependency_rows
                     and dependency_rows[0]["state"] == "healthy"
                     and stub.state.receipt()["empty_response_count"] >= 1
-                    and legacy_proof.get("anchor_title") is None
-                    and legacy_proof.get("title_attempt_count") == 0
-                    and legacy_proof.get("title_dependency_incident_id") is None
+                    and proof_workspace.get("anchor_title") is None
+                    and proof_workspace.get("title_attempt_count") == 0
+                    and proof_workspace.get("title_dependency_incident_id") is None
                 ):
                     return None
                 health_payload, check = _product_health(runtime.api_url, None)
@@ -862,10 +861,10 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                 )
                 (evidence_root / "runtime-log-tail.txt").write_text(runtime_log, encoding="utf-8")
 
-    failed_rows, failed_unrelated, _failed_empty, failed_legacy_proof = fixture_rows(snapshots["failed"])
-    restarted_rows, _restarted_unrelated, _restarted_empty, restarted_legacy_proof = fixture_rows(snapshots["after_restart"])
-    recovered_rows, recovered_unrelated, _recovered_empty, recovered_legacy_proof = fixture_rows(snapshots["recovered"])
-    _isolated_rows, _isolated_unrelated, isolated_empty, isolated_legacy_proof = fixture_rows(snapshots["row_local_empty"]["catalog"])
+    failed_rows, failed_unrelated, _failed_empty, failed_proof_workspace = fixture_rows(snapshots["failed"])
+    restarted_rows, _restarted_unrelated, _restarted_empty, restarted_proof_workspace = fixture_rows(snapshots["after_restart"])
+    recovered_rows, recovered_unrelated, _recovered_empty, recovered_proof_workspace = fixture_rows(snapshots["recovered"])
+    _isolated_rows, _isolated_unrelated, isolated_empty, isolated_proof_workspace = fixture_rows(snapshots["row_local_empty"]["catalog"])
     isolated_retry_value = isolated_empty.get("title_retry_at")
     isolated_retry_at = datetime.fromisoformat(str(isolated_retry_value)) if isolated_retry_value else None
     if isolated_retry_at is not None and isolated_retry_at.tzinfo is None:
@@ -916,16 +915,16 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
             and recovered_unrelated.get("title_last_error") == "invalid_title_payload"
             and recovered_unrelated.get("title_dependency_incident_id") is None
         ),
-        "legacy_exact_provider_proof_excluded_from_title_debt": all(
+        "provider_proof_workspace_excluded_from_title_debt": all(
             row.get("anchor_title") is None
             and row.get("title_attempt_count") == 0
             and row.get("title_last_error") is None
             and row.get("title_dependency_incident_id") is None
             for row in (
-                failed_legacy_proof,
-                restarted_legacy_proof,
-                recovered_legacy_proof,
-                isolated_legacy_proof,
+                failed_proof_workspace,
+                restarted_proof_workspace,
+                recovered_proof_workspace,
+                isolated_proof_workspace,
             )
         ),
         "same_rows_recovered": {row["session_id"] for row in recovered_rows} == set(session_ids),
@@ -969,7 +968,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
                 "terminal_empty_response_reentered",
                 "row_local_empty_response_isolated",
                 "unrelated_terminal_debt_preserved",
-                "legacy_exact_provider_proof_excluded_from_title_debt",
+                "provider_proof_workspace_excluded_from_title_debt",
                 "same_rows_recovered",
                 "all_rows_titled",
                 "provider_shaped_503_observed",
@@ -989,7 +988,7 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
         {
             "fixture_obligations": session_ids,
             "unrelated_terminal_negative_control": unrelated_terminal_id,
-            "legacy_exact_provider_proof_negative_control": legacy_provider_proof_id,
+            "provider_proof_workspace_negative_control": provider_proof_workspace_id,
             "fixture_authored_before_catalogd_ownership": True,
             "storage_v2_writes": [],
             "storage_v2_reads": [],

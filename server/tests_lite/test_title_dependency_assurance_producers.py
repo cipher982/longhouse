@@ -144,9 +144,9 @@ def test_live_title_envelope_exercises_native_claude_semantic_projection():
     assert "typed_hidden_title_assurance_obligation" in LIVE_REGISTRATION.observed_activity
     assert "claude_semantic_path_consumed" in LIVE_REGISTRATION.observed_activity
     assert "runtime_host_title_provenance" in LIVE_REGISTRATION.observed_activity
-    assert RECOVERY_REGISTRATION.producer_revision == 8
-    assert RECOVERY_REGISTRATION.scenario_revision == 8
-    assert "legacy_exact_provider_proof_excluded_from_title_debt" in RECOVERY_REGISTRATION.observed_activity
+    assert RECOVERY_REGISTRATION.producer_revision == 9
+    assert RECOVERY_REGISTRATION.scenario_revision == 9
+    assert "provider_proof_workspace_excluded_from_title_debt" in RECOVERY_REGISTRATION.observed_activity
 
 
 def test_live_title_availability_incident_is_the_only_typed_transient_failure():
@@ -205,7 +205,7 @@ def test_hermetic_title_oracle_proves_incident_restart_and_recovery(tmp_path, mo
     assert observation["terminal_empty_response_reentered"] is True
     assert observation["row_local_empty_response_isolated"] is True
     assert observation["unrelated_terminal_debt_preserved"] is True
-    assert observation["legacy_exact_provider_proof_excluded_from_title_debt"] is True
+    assert observation["provider_proof_workspace_excluded_from_title_debt"] is True
     assert observation["provider_shaped_503_observed"] is True
     assert observation["model_concurrency_bounded"] is True
     assert observation["scheduled_worker_creation_bounded"] is True

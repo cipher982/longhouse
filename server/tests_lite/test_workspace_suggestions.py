@@ -352,10 +352,24 @@ def test_only_typed_human_visible_root_sessions_contribute_to_rank(tmp_path):
         days_ago=0.1,
         launch_actor="human_shell",
     )
+    # A proof session stays out by declaring itself, not by what it typed: an
+    # explicit test/canary origin disqualifies the row even though the launch
+    # actor is human.
     _seed_session(
         SessionLocal,
         device_id="cinder",
-        cwd="/Users/d/marker-proof",
+        cwd="/Users/d/declared-canary",
+        days_ago=0.1,
+        launch_actor="human_shell",
+        origin_kind="test_or_canary",
+    )
+    # The other half of that rule: prompt text classifies nothing. A human
+    # session whose first message happens to be shaped like a proof marker is
+    # still a human workspace, so it ranks like one.
+    _seed_session(
+        SessionLocal,
+        device_id="cinder",
+        cwd="/Users/d/prompt-shaped-like-a-marker",
         days_ago=0.1,
         launch_actor="human_shell",
         first_user_message_preview="LONGHOUSE_CURSOR_NOREPLY_deadbeef",
@@ -364,7 +378,11 @@ def test_only_typed_human_visible_root_sessions_contribute_to_rank(tmp_path):
     with SessionLocal() as db:
         entries = build_workspace_suggestions(db, owner_id=OWNER_ID, device_id="cinder")
 
-    assert [entry.path for entry in entries] == ["/Users/d/git/zerg", "/Users/d/hidden-by-user"]
+    assert [entry.path for entry in entries] == [
+        "/Users/d/git/zerg",
+        "/Users/d/prompt-shaped-like-a-marker",
+        "/Users/d/hidden-by-user",
+    ]
     assert entries[0].session_count == 2
     assert entries[0].score == 170
     assert entries[0].label == "zerg (main)"
@@ -384,7 +402,6 @@ def test_projection_preserves_user_curated_workspace_but_rejects_system_policy()
             git_branch=None,
             last_activity_at=now,
             started_at=now,
-            first_user_message_preview=None,
             origin_kind=None,
             hidden_from_default_timeline=system_hidden,
             user_hidden_from_timeline=user_hidden,
@@ -539,7 +556,6 @@ def _ingested_facts(
         git_branch="main",
         last_activity_at=now,
         started_at=now,
-        first_user_message_preview=None,
         origin_kind=origin_kind,
         hidden_from_default_timeline=system_hidden,
         user_hidden_from_timeline=False,

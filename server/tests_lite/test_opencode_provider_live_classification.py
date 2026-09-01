@@ -30,7 +30,16 @@ def _make_store(tmp_path):
     return AgentsStore(db), db
 
 
-def _ingest_payload(session_id, *, environment: str, cwd: str, device_id: str = "shipper-cinder") -> SessionIngest:
+def _ingest_payload(
+    session_id,
+    *,
+    environment: str,
+    cwd: str,
+    device_id: str = "shipper-cinder",
+    origin_kind: str | None = None,
+    launch_actor: str | None = None,
+    launch_surface: str | None = None,
+) -> SessionIngest:
     return SessionIngest(
         id=session_id,
         provider="opencode",
@@ -40,6 +49,9 @@ def _ingest_payload(session_id, *, environment: str, cwd: str, device_id: str = 
         cwd=cwd,
         started_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
         provider_session_id="ses_provider_live",
+        origin_kind=origin_kind,
+        launch_actor=launch_actor,
+        launch_surface=launch_surface,
     )
 
 
@@ -81,7 +93,14 @@ def test_opencode_provider_live_canary_classifies_new_session_as_test(tmp_path):
     assert card.environment == "test"
 
 
-def test_provider_noreply_marker_classifies_session_as_test(tmp_path):
+def test_noreply_marker_text_alone_does_not_classify_session_as_test(tmp_path):
+    """Prompt text is not a declaration.
+
+    A harness keeps itself off the user timeline by declaring a test launch
+    surface on ingest; writing a marker into the first user message does not.
+    The preview is still kept verbatim — the text is content, not a signal.
+    """
+
     store, db = _make_store(tmp_path)
     session_id = uuid4()
     payload = _ingest_payload(session_id, environment="cinder", cwd="/Users/davidrose/git/workspace")
@@ -93,9 +112,14 @@ def test_provider_noreply_marker_classifies_session_as_test(tmp_path):
     card = db.get(TimelineCard, session_id)
     assert session is not None
     assert card is not None
-    assert session.environment == "test"
-    assert card.environment == "test"
+    assert session.environment == "cinder"
+    assert card.environment == "cinder"
+    assert session.origin_kind is None
     assert session.first_user_message_preview == "LONGHOUSE_OPENCODE_NOREPLY_abc123"
+
+    visible, visible_total = store.list_sessions(include_test=False, hide_autonomous=False)
+    assert visible_total == 1
+    assert [item.id for item in visible] == [session_id]
 
 
 def test_provider_factory_machine_classifies_user_repo_as_test(tmp_path):
@@ -121,11 +145,25 @@ def test_provider_factory_machine_classifies_user_repo_as_test(tmp_path):
     assert card.hidden_from_default_timeline == 1
 
 
-def test_provider_reply_exact_marker_sets_hidden_canary_origin(tmp_path):
+def test_declared_canary_origin_sets_hidden_canary_origin(tmp_path):
+    """A canary that declares itself stays off the user timeline.
+
+    The declaration travels on the ingest payload (origin_kind plus launch
+    provenance); the workspace is an ordinary user repo and the prompt is
+    ordinary user text, so the declaration is the only thing doing the work.
+    """
+
     store, db = _make_store(tmp_path)
     session_id = uuid4()
-    payload = _ingest_payload(session_id, environment="cinder", cwd="/Users/davidrose/git/workspace")
-    payload.events = [_user_event("Reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_abc123456789 and nothing else.")]
+    payload = _ingest_payload(
+        session_id,
+        environment="cinder",
+        cwd="/Users/davidrose/git/workspace",
+        origin_kind="test_or_canary",
+        launch_actor="automation",
+        launch_surface="test",
+    )
+    payload.events = [_user_event("Run the resume seed check.")]
 
     store.ingest_session(payload, synchronous_projections=False, incremental_session_counts=True)
 
@@ -133,7 +171,6 @@ def test_provider_reply_exact_marker_sets_hidden_canary_origin(tmp_path):
     card = db.get(TimelineCard, session_id)
     assert session is not None
     assert card is not None
-    assert session.environment == "test"
     assert session.origin_kind == "test_or_canary"
     assert session.hidden_from_default_timeline == 1
     assert session.launch_actor == "automation"
@@ -141,8 +178,19 @@ def test_provider_reply_exact_marker_sets_hidden_canary_origin(tmp_path):
     assert card.origin_kind == "test_or_canary"
     assert card.hidden_from_default_timeline == 1
 
+    visible, visible_total = store.list_sessions(include_test=False, hide_autonomous=False)
+    assert visible_total == 0
+    assert visible == []
 
-def test_provider_reply_exact_marker_hides_without_reclassifying_console_origin(tmp_path):
+
+def test_declared_automation_actor_hides_without_reclassifying_console_origin(tmp_path):
+    """Automation provenance hides a console run without rewriting its origin.
+
+    Console sessions Longhouse dispatched for a proof still belong to the
+    console origin; the automation launch actor is what keeps them out of the
+    default timeline.
+    """
+
     store, db = _make_store(tmp_path)
     session_id = uuid4()
     db.add(
@@ -159,8 +207,14 @@ def test_provider_reply_exact_marker_hides_without_reclassifying_console_origin(
         )
     )
     db.commit()
-    payload = _ingest_payload(session_id, environment="production", cwd="/Users/davidrose/git/workspace")
-    payload.events = [_user_event("Reply exactly WARM_IDLE_OK.")]
+    payload = _ingest_payload(
+        session_id,
+        environment="production",
+        cwd="/Users/davidrose/git/workspace",
+        launch_actor="automation",
+        launch_surface="test",
+    )
+    payload.events = [_user_event("Confirm the warm idle path.")]
 
     store.ingest_session(payload, synchronous_projections=False, incremental_session_counts=True)
 
@@ -168,7 +222,12 @@ def test_provider_reply_exact_marker_hides_without_reclassifying_console_origin(
     assert session is not None
     assert session.environment == "production"
     assert session.origin_kind == "console"
-    assert session.hidden_from_default_timeline == 1
+    assert session.launch_actor == "automation"
+    assert session.launch_surface == "test"
+
+    visible, visible_total = store.list_sessions(include_test=False, hide_autonomous=False)
+    assert visible_total == 0
+    assert visible == []
 
 
 def test_malformed_reply_exact_marker_remains_ordinary_user_text(tmp_path):
@@ -188,12 +247,23 @@ def test_malformed_reply_exact_marker_remains_ordinary_user_text(tmp_path):
     assert [item.id for item in visible] == [session_id]
 
 
-def test_historical_reply_exact_marker_is_hidden_by_listing_clause(tmp_path):
+def test_historical_factory_rows_are_hidden_by_listing_evidence_clause(tmp_path):
+    """Rows written before classification existed are still hidden on read.
+
+    Historical sessions carry no stored origin/hidden bits, so the listing
+    clause re-derives the decision from durable evidence — here the
+    provider-factory machine id the row was ingested with.
+    """
+
     store, db = _make_store(tmp_path)
     session_id = uuid4()
-    marker = "Reply exactly LONGHOUSE_OPENCODE_RESUME_SEED_94afb881e8684faca669fefd44ec40 and nothing else."
-    payload = _ingest_payload(session_id, environment="cinder", cwd="/Users/davidrose/git/workspace")
-    payload.events = [_user_event(marker)]
+    payload = _ingest_payload(
+        session_id,
+        environment="cinder",
+        cwd="/Users/davidrose/git/user-repo",
+        device_id="provider-factory-resume",
+    )
+    payload.events = [_user_event("Check the resume seed.")]
 
     store.ingest_session(payload, synchronous_projections=False, incremental_session_counts=True)
 
@@ -203,34 +273,13 @@ def test_historical_reply_exact_marker_is_hidden_by_listing_clause(tmp_path):
     assert card is not None
     session.environment = "cinder"
     session.origin_kind = None
+    session.launch_actor = None
+    session.launch_surface = None
     session.hidden_from_default_timeline = 0
     card.environment = "cinder"
     card.origin_kind = None
-    card.hidden_from_default_timeline = 0
-    db.commit()
-
-    visible, visible_total = store.list_sessions(include_test=False, hide_autonomous=False)
-    assert visible_total == 0
-    assert visible == []
-
-
-def test_historical_bare_reply_exact_marker_is_hidden_by_listing_clause(tmp_path):
-    store, db = _make_store(tmp_path)
-    session_id = uuid4()
-    payload = _ingest_payload(session_id, environment="cinder", cwd="/Users/davidrose/git/workspace")
-    payload.events = [_user_event("Reply exactly WARM_IDLE_OK.")]
-
-    store.ingest_session(payload, synchronous_projections=False, incremental_session_counts=True)
-
-    session = db.get(AgentSession, session_id)
-    card = db.get(TimelineCard, session_id)
-    assert session is not None
-    assert card is not None
-    session.environment = "cinder"
-    session.origin_kind = None
-    session.hidden_from_default_timeline = 0
-    card.environment = "cinder"
-    card.origin_kind = None
+    card.launch_actor = None
+    card.launch_surface = None
     card.hidden_from_default_timeline = 0
     db.commit()
 
@@ -252,16 +301,23 @@ def test_normal_user_text_about_proof_is_not_classified_as_test(tmp_path):
     assert session.environment == "cinder"
 
 
-def test_provider_proof_sessions_are_hidden_by_default_but_visible_with_include_test(tmp_path):
+def test_declared_test_environment_is_hidden_by_default_but_visible_with_include_test(tmp_path):
+    """A declared test-scope session is hidden by default and revealed on request.
+
+    Unlike automation/canary evidence, a plain test-scope declaration is the
+    one hidden reason an explicit test-scope read discounts, so include_test
+    alone brings the row back without also leaking automation traffic.
+    """
+
     store, db = _make_store(tmp_path)
     session_id = uuid4()
-    payload = _ingest_payload(session_id, environment="cinder", cwd="/Users/davidrose/git/workspace")
-    payload.events = [_user_event("LONGHOUSE_OPENCODE_NOREPLY_hidden")]
+    payload = _ingest_payload(session_id, environment="test", cwd="/Users/davidrose/git/workspace")
+    payload.events = [_user_event("Exercise the opencode proof path.")]
 
     store.ingest_session(payload, synchronous_projections=False, incremental_session_counts=True)
 
     visible, visible_total = store.list_sessions(include_test=False, hide_autonomous=False)
-    with_test, with_test_total = store.list_sessions(include_test=True, hide_autonomous=False, include_automation=True)
+    with_test, with_test_total = store.list_sessions(include_test=True, hide_autonomous=False)
 
     assert visible_total == 0
     assert visible == []
@@ -304,9 +360,8 @@ def test_cursor_product_e2e_default_workspace_is_classified_as_proof_traffic():
 
     Its old default workspace (/tmp/longhouse-cursor-product-e2e) matched none
     of the proof signals, so fourteen canary runs landed at the top of a real
-    dogfood timeline. The prompts cannot carry the `_NOREPLY_` marker instead:
-    that pattern is anchored at the start of the first user message and these
-    prompts open with "Reply with exactly ...".
+    dogfood timeline. Prompt text carries no classification weight, so the
+    harness has to run inside the provider-live canary namespace.
     """
     from pathlib import Path
 
@@ -315,10 +370,4 @@ def test_cursor_product_e2e_default_workspace_is_classified_as_proof_traffic():
 
     default_workspace = build_arg_parser().get_default("workspace")
     assert isinstance(default_workspace, Path)
-    assert (
-        classify_provider_proof_environment(
-            cwd=str(default_workspace),
-            first_user_text="Reply with exactly LONGHOUSE_CURSOR_PRODUCT_ONE_deadbeef",
-        )
-        == "test"
-    )
+    assert classify_provider_proof_environment(cwd=str(default_workspace)) == "test"

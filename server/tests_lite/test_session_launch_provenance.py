@@ -18,6 +18,7 @@ from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
 from zerg.services.managed_local_launcher import materialize_managed_local_launch_plan_sync
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from zerg.services.session_launch_provenance import HUMAN_LAUNCH_ACTORS
 
 
 def _make_db(tmp_path):
@@ -91,10 +92,14 @@ def test_hidden_origin_drops_inherited_human_launch_provenance(tmp_path):
 
     with SessionLocal() as db:
         session = db.get(AgentSession, session_id)
+        # The declared origin_kind is the whole signal: the event text is
+        # ordinary prose, and nothing inspects it.
         assert session.origin_kind == "hatch_automation"
         assert session.hidden_from_default_timeline == 1
-        assert session.launch_actor is None
-        assert session.launch_surface is None
+        # The inherited human stamp must not survive a hidden automation
+        # origin; the row is relabelled with the launch it actually had.
+        assert session.launch_actor not in HUMAN_LAUNCH_ACTORS
+        assert (session.launch_actor, session.launch_surface) == ("automation", "hatch")
 
 
 def test_sidechain_drops_inherited_human_launch_provenance(tmp_path):
@@ -158,8 +163,10 @@ def test_late_hidden_origin_clears_prior_human_launch_provenance(tmp_path):
         session = db.get(AgentSession, session_id)
         assert session.origin_kind == "hatch_automation"
         assert session.hidden_from_default_timeline == 1
-        assert session.launch_actor is None
-        assert session.launch_surface is None
+        # A hidden origin arriving after a human-stamped ingest clears the
+        # earlier human provenance and stamps the automation launch instead.
+        assert session.launch_actor not in HUMAN_LAUNCH_ACTORS
+        assert (session.launch_actor, session.launch_surface) == ("automation", "hatch")
 
 
 def test_ingest_launch_provenance_is_fill_only(tmp_path):
