@@ -31,6 +31,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-legacy-nouns
 .PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
+.PHONY: test-provider-contract
 # ---------------------------------------------------------------------------
 # Help
 # ---------------------------------------------------------------------------
@@ -86,6 +87,9 @@ test: ## Backend unit tests (tests_lite/, ~10s)
 test-backend-single: ## Focused backend test file/node (TEST=tests_lite/test_file.py)
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@cd server && LONGHOUSE_TEST_TARGET="$(TEST)" ./run_backend_tests_lite.sh
+
+test-provider-contract: ## @internal Exact-SHA ordinary-CI provider contract assertions
+	@cd server && uv run --extra dev pytest -q tests_lite/test_provider_resume_factory.py
 
 test-storage-v2-b2: ## Disposable real-B2 Phase 3 object/restore proof (requires scoped env)
 	@cd server && LONGHOUSE_B2_REAL_PROOF=1 uv run --extra dev pytest -q tests_lite/test_storage_v2_object_store.py tests_lite/test_catalogd_backup_restore.py

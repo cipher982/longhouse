@@ -196,6 +196,33 @@ jobs:
     - name: Run iOS simulator helper tests
       run: make test-ios-helper
 
+  provider-contract-tests:
+    # Always run: Loop 2 accepts an exact Longhouse SHA only after this job
+    # proves the source-only provider assertions that do not belong in the
+    # provider-launch factory matrix.
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    name: "Provider contract tests"
+
+    steps:
+    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      with:
+        fetch-depth: 1
+
+    - name: Set up Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      with:
+        python-version: '3.12'
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+    - name: Ensure make available
+      run: ./scripts/ci/ensure-make.sh
+
+    - name: Run exact-SHA provider contract assertions
+      run: make test-provider-contract
+
   engine-tests:
     timeout-minutes: 45
     needs: changes
