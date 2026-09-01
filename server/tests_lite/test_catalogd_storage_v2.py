@@ -1976,8 +1976,26 @@ async def test_storage_session_delete_fences_replay_retires_manifests_and_queues
     client = CatalogClient(socket_path)
     try:
         raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
-        raw.update(render_state="ready", render_manifest=_render_manifest(generation_id), projectors=["search-v2"])
+        media_hash = "e" * 64
+        raw.update(
+            render_state="ready",
+            render_manifest=_render_manifest(generation_id),
+            projectors=["search-v2"],
+            media_refs=[
+                {
+                    "media_hash": media_hash,
+                    "source_position": 0,
+                    "ref_key": "missing:0",
+                    "availability": "missing",
+                }
+            ],
+        )
         committed = await client.call("storage.raw_object.commit.v2", raw)
+        visible_media = await client.call(
+            "storage.media.read.v2",
+            {"media_hash": media_hash, "session_id": str(session_id), "owner_id": "42", "limit": 10},
+        )
+        assert visible_media["found"] is True
         deletion_id = str(uuid4())
         deleted = await client.call(
             "storage.session.delete.v2",
@@ -2001,6 +2019,12 @@ async def test_storage_session_delete_fences_replay_retires_manifests_and_queues
             },
         )
         assert replay["changed"] is False and replay["exact_replay"] is True
+
+        deleted_media = await client.call(
+            "storage.media.read.v2",
+            {"media_hash": media_hash, "session_id": str(session_id), "owner_id": "42", "limit": 10},
+        )
+        assert deleted_media["found"] is False
 
         session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
         assert session["deleted"] is True
@@ -2485,7 +2509,7 @@ async def test_source_epoch_replacement_retires_only_superseded_membership(daemo
             "storage.media.read.v2",
             {"media_hash": missing_hash, "session_id": str(session_id), "owner_id": "42", "limit": 10},
         )
-        assert media["refs"][0]["state"] == "retired"
+        assert media["found"] is False
         with pytest.raises(CatalogRemoteError) as stale_retry:
             await client.call("storage.raw_object.commit.v2", old)
         assert stale_retry.value.code == "source_epoch_conflict"

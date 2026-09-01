@@ -10418,6 +10418,7 @@ class CatalogStore:
                 select(refs.c.id)
                 .where(
                     refs.c.media_hash == media_hash,
+                    refs.c.state == "active",
                     refs.c.session_id.in_(owned_session_ids),
                     *([refs.c.session_id == str(session_id)] if session_id is not None else []),
                 )
@@ -10438,6 +10439,7 @@ class CatalogStore:
                 }
             statement = select(refs).where(
                 refs.c.media_hash == media_hash,
+                refs.c.state == "active",
                 refs.c.session_id.in_(owned_session_ids),
             )
             if session_id is not None:
