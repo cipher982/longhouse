@@ -257,6 +257,31 @@ def _seed_session(
     )
 
 
+def test_batch_session_read_filters_every_fact_by_owner(tmp_path):
+    database_path = tmp_path / "owner-batch.db"
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    owned_id = str(uuid4())
+    other_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            LiveUser.__table__.insert(),
+            [
+                {"id": 1, "email": "owner@example.com", "role": "USER", "is_active": True},
+                {"id": 2, "email": "other@example.com", "role": "USER", "is_active": True},
+            ],
+        )
+        _seed_session(connection, session_id=owned_id, device_id="owned", now=now, owner_id="1")
+        _seed_session(connection, session_id=other_id, device_id="other", now=now, owner_id="2")
+
+    try:
+        result = CatalogStore(engine).read_sessions(session_ids=[owned_id, other_id], owner_id=1)
+        assert [facts["catalog"]["session_id"] for facts in result["facts"]] == [owned_id]
+    finally:
+        engine.dispose()
+
+
 def _reducer_fact(*, family: str, session_id: str, now: datetime) -> ReducerFact:
     run_id = session_id
     connection_id = f"connection-{session_id}"

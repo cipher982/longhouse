@@ -110,8 +110,11 @@ def shadow_session_state_health(*, owner_id: int) -> dict[str, Any]:
     return _call("session.shadow_state.health.v2", {"owner_id": owner_id})
 
 
-def session_batch_snapshot(session_ids: list[str]) -> dict[str, Any]:
-    return _call("session.read.batch.v2", {"session_ids": session_ids})
+def session_batch_snapshot(session_ids: list[str], *, owner_id: int | None = None) -> dict[str, Any]:
+    params: dict[str, Any] = {"session_ids": session_ids}
+    if owner_id is not None:
+        params["owner_id"] = owner_id
+    return _call("session.read.batch.v2", params)
 
 
 def active_session_ids(*, limit: int, days_back: int, observed_at: str) -> dict[str, Any]:

@@ -27,6 +27,7 @@ from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.routers import agents_media
 
 
 def _setup_app(tmp_path, monkeypatch):
@@ -45,9 +46,18 @@ def _setup_app(tmp_path, monkeypatch):
             db.close()
 
     api_app.dependency_overrides[get_db] = _override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: None
+    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=1)
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     api_app.dependency_overrides[get_current_browser_route_user] = lambda: SimpleNamespace(id=1)
+    monkeypatch.setattr(
+        agents_media,
+        "session_batch_snapshot",
+        lambda session_ids, *, owner_id: {
+            "facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids]
+            if owner_id == 1
+            else []
+        },
+    )
 
     def _cleanup():
         api_app.dependency_overrides.pop(get_db, None)
@@ -76,11 +86,21 @@ def test_media_claim_upload_claim_and_fetch(tmp_path, monkeypatch):
     client = TestClient(api_app)
     payload = b"\x89PNG\r\nlonghouse-media"
     digest = hashlib.sha256(payload).hexdigest()
+    session_id = uuid4()
 
     try:
         claim = client.post(
             "/agents/media/claims",
-            json={"items": [{"sha256": digest, "mime_type": "image/png", "byte_size": len(payload)}]},
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(session_id),
+                    }
+                ]
+            },
         )
         assert claim.status_code == 200, claim.text
         assert claim.json() == {"needed": [digest], "present": [], "rejected": []}
@@ -326,6 +346,15 @@ def test_browser_media_read_requires_visible_device_owner(tmp_path, monkeypatch)
         )
         assert claim.status_code == 200, claim.text
 
+        monkeypatch.setattr(
+            agents_media,
+            "session_batch_snapshot",
+            lambda session_ids, *, owner_id: {
+                "facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids]
+                if owner_id == 2
+                else []
+            },
+        )
         denied = client.get(f"/media/{digest}/blob")
         assert denied.status_code == 404, denied.text
 

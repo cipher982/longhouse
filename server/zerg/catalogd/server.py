@@ -2234,15 +2234,18 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_ids"}:
-            return self._error(request, "invalid_request", "session.read.batch.v2 requires session_ids")
+        if set(request.params) not in ({"session_ids"}, {"session_ids", "owner_id"}):
+            return self._error(request, "invalid_request", "session.read.batch.v2 has invalid parameters")
         session_ids = request.params["session_ids"]
         if not isinstance(session_ids, list) or not 1 <= len(session_ids) <= 20:
             return self._error(request, "invalid_request", "session_ids must contain 1 to 20 UUIDs")
         if len(set(session_ids)) != len(session_ids) or any(not _is_canonical_uuid(value) for value in session_ids):
             return self._error(request, "invalid_request", "session_ids must be unique canonical UUIDs")
+        owner_id = request.params.get("owner_id")
+        if owner_id is not None and (type(owner_id) is not int or owner_id <= 0):
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
         assert self._store is not None
-        result = await self._run_read_store(self._store.read_sessions, session_ids=session_ids)
+        result = await self._run_read_store(self._store.read_sessions, session_ids=session_ids, owner_id=owner_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _update_session_preferences(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -5495,9 +5495,19 @@ class CatalogStore:
                 "sessions": sessions,
             }
 
-    def read_sessions(self, *, session_ids: list[str]) -> dict[str, Any]:
+    def read_sessions(self, *, session_ids: list[str], owner_id: int | None = None) -> dict[str, Any]:
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
+            if owner_id is not None:
+                session_ids = [
+                    session_id
+                    for session_id in session_ids
+                    if self._session_explicitly_belongs_to_owner(
+                        connection,
+                        session_id=session_id,
+                        owner_id=owner_id,
+                    )
+                ]
             facts = _assemble_session_facts(
                 connection,
                 session_ids=session_ids,
