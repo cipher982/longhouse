@@ -26,8 +26,8 @@ describe("cohort journey helpers", () => {
       session("closed", 2, { ended_at: day(2) }),
       session("cold", 45),
       session("large", 10, { user_messages: 120, assistant_messages: 120, tool_calls: 30 }),
-      session("random-a", 12),
-      session("random-b", 15),
+      session("random-a", 12, { user_messages: 1 }),
+      session("random-b", 15, { assistant_messages: 1 }),
       session("ignored-test", 3, { environment: "test" }),
     ], NOW, "2026-07-20");
 
@@ -37,14 +37,26 @@ describe("cohort journey helpers", () => {
     expect(cohorts.older_projection?.id).toBe("large");
     expect(["random-a", "random-b"]).toContain(cohorts.random_readable?.id);
     expect(selectJourneyCohorts([
-      session("random-a", 12),
-      session("random-b", 15),
+      session("random-a", 12, { user_messages: 1 }),
+      session("random-b", 15, { assistant_messages: 1 }),
     ], NOW, "same-seed").random_readable?.id).toBe(
       selectJourneyCohorts([
-        session("random-a", 12),
-        session("random-b", 15),
+        session("random-a", 12, { user_messages: 1 }),
+        session("random-b", 15, { assistant_messages: 1 }),
       ], NOW, "same-seed").random_readable?.id,
     );
+  });
+
+  test("random readable cohort excludes inventory rows with no entries", () => {
+    const cohorts = selectJourneyCohorts([
+      session("recent", 1),
+      session("closed", 2, { ended_at: day(2) }),
+      session("cold", 45),
+      session("empty-random", 12),
+      session("readable-random", 15, { tool_calls: 1 }),
+    ], NOW, "seed");
+
+    expect(cohorts.random_readable?.id).toBe("readable-random");
   });
 
   test("does not misclassify sessions outside the controlled 90-day cold window", () => {

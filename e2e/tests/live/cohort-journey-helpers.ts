@@ -98,7 +98,9 @@ export function selectJourneyCohorts(
     .sort((left, right) => estimatedEntries(right) - estimatedEntries(left))[0] ?? null;
 
   const used = new Set([activeRecent?.id, recentClosed?.id, cold?.id, pagination?.id].filter(Boolean));
-  const randomPool = sessions.filter((session) => !used.has(session.id));
+  const randomPool = sessions.filter(
+    (session) => !used.has(session.id) && estimatedEntries(session) > 0,
+  );
   const random = randomPool.length > 0 ? randomPool[seededIndex(randomSeed, randomPool.length)] : null;
 
   return {
