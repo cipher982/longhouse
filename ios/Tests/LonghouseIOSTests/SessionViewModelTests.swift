@@ -873,6 +873,146 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func submittedInputClearsOnceTheTailWindowScrollsPastTheSend() async throws {
+        // A long turn projects more items than the phone's tail window holds,
+        // so the durable echo of the send is behind the window by the time the
+        // phone looks. The server confirmed delivery and the turn has visibly
+        // moved on: the optimistic bubble must not stay pinned under it.
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let sentAt = Date()
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(outcome: .sent, inputId: nil, clientRequestId: nil, intent: .auto, queued: []),
+            afterSendWorkspace: { _ in
+                try makeAssistantWindow(startingEventId: 100, count: 50, firstTimestamp: sentAt.addingTimeInterval(20), total: 80)
+            }
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForSubmittedInputsToClear(model)
+
+        #expect(sent)
+        #expect(model.submittedInputs.isEmpty)
+    }
+
+    @Test
+    func submittedInputStaysWhileTheTailWindowStillCoversTheSend() async throws {
+        // Same shape, but the window is not full: everything since the send is
+        // visible and the echo simply has not arrived, so the bubble stays.
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let sentAt = Date()
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(outcome: .sent, inputId: nil, clientRequestId: nil, intent: .auto, queued: []),
+            afterSendWorkspace: { _ in
+                try makeAssistantWindow(startingEventId: 100, count: 20, firstTimestamp: sentAt.addingTimeInterval(20), total: 20)
+            }
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForWorkspaceRequestCount(api, atLeast: 2)
+
+        #expect(sent)
+        #expect(model.submittedInputs.count == 1)
+    }
+
+    /// A tail window holding only assistant events, one second apart from
+    /// `firstTimestamp`, with no user echo anywhere inside it.
+    nonisolated private func makeAssistantWindow(
+        startingEventId: Int,
+        count: Int,
+        firstTimestamp: Date,
+        total: Int
+    ) throws -> SessionWorkspaceResponse {
+        let formatter = ISO8601DateFormatter()
+        let items = try (0..<count).map { offset -> String in
+            let timestamp = try jsonString(formatter.string(from: firstTimestamp.addingTimeInterval(Double(offset))))
+            return """
+                  {
+                    "kind": "event",
+                    "session_id": "session-1",
+                    "timestamp": \(timestamp),
+                    "event": {
+                      "id": \(startingEventId + offset),
+                      "role": "assistant",
+                      "content_text": "step \(offset)",
+                      "timestamp": \(timestamp),
+                      "in_active_context": true,
+                      "is_head_branch": true
+                    }
+                  }
+            """
+        }
+        let stateFactsJSON = try jsonValueString(makeSessionStateFacts(activity: "executing", pendingInteractionKind: nil))
+        let json = """
+        {
+          "session": {
+            "id": "session-1",
+            "provider": "codex",
+            "project": "zerg",
+            "summary_title": "Workspace Session",
+            "user_state": "active",
+            "capabilities": {
+              "live_control_available": true,
+              "host_reattach_available": true,
+              "reply_to_live_session_available": true
+            },
+            "state_facts": \(stateFactsJSON),
+            "runtime_display": {
+              "truth_tier": "managed-local",
+              "signal_tier": "phase_signal",
+              "state": "executing",
+              "tone": "running",
+              "headline": "Working",
+              "detail": null,
+              "phase_label": "Working",
+              "compact_tool_label": null,
+              "is_live": true,
+              "is_executing": true,
+              "needs_attention": false,
+              "is_idle": false,
+              "is_stalled": false,
+              "is_managed_local_truth": true,
+              "has_signal": true,
+              "control_path": "managed",
+              "activity_recency": "live",
+              "lifecycle": "open",
+              "host_state": "online",
+              "terminal_reason": null
+            }
+          },
+          "thread": {
+            "root_session_id": "session-1",
+            "head_session_id": "session-1",
+            "sessions": []
+          },
+          "projection": {
+            "root_session_id": "session-1",
+            "focus_session_id": "session-1",
+            "head_session_id": "session-1",
+            "path_session_ids": ["session-1"],
+            "items": [
+        \(items.joined(separator: ",\n"))
+            ],
+            "total": \(total),
+            "page_offset": 0,
+            "branch_mode": "head",
+            "abandoned_events": 0
+          }
+        }
+        """.data(using: .utf8)!
+        return try JSONDecoder.snakeCase.decodeSessionFixture(SessionWorkspaceResponse.self, from: json)
+    }
+
+    @Test
     func repeatedPromptDoesNotReconcileAgainstEventVisibleBeforeSend() async throws {
         let now = Date()
         let before = try makeWorkspace(

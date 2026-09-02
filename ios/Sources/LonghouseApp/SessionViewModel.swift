@@ -140,6 +140,9 @@ final class SessionViewModel: ObservableObject {
         var shouldRefreshCachedTail = false
         if sessionChanged {
             openWaterfall = SessionOpenWaterfall(sessionId: sessionId)
+            if let api = apiFactory(appState.serverURL) {
+                ClientDiagnosticsReporter.shared.sink = { payload in await api.postClientDiagnostics(payload) }
+            }
             activeSessionId = sessionId
             activeServerURL = appState.serverURL
             isInitialLoading = true
@@ -279,6 +282,7 @@ final class SessionViewModel: ObservableObject {
     func stop() {
         openWaterfall?.mark("stop")
         openWaterfall = nil
+        ClientDiagnosticsReporter.shared.flush()
         pauseRealtime()
         activeSessionId = nil
         activeServerURL = nil
@@ -716,6 +720,10 @@ final class SessionViewModel: ObservableObject {
         // where we left off instead of cold. The server buffer is bounded
         // (~1000 msgs, process-local) with no gap signal, so this is a latency
         // optimization only — refreshTail() remains the correctness backstop.
+        openWaterfall?.mark(
+            "stream_start",
+            "since_seq=\(lastPubsubSeq ?? 0) known_fingerprint=\(lastWorkspaceRevisionFingerprint != nil)"
+        )
         let s = streamFactory(base, sessionId, lastPubsubSeq, lastWorkspaceRevisionFingerprint)
         stream = s
         streamTask = Task { [weak self] in
@@ -733,9 +741,11 @@ final class SessionViewModel: ObservableObject {
             streamConnected = true
             streamAuthRefreshAttempted = false
             openWaterfall?.mark("stream_connected")
-        case .disconnected:
+        case .disconnected(let error):
             streamConnected = false
-            openWaterfall?.mark("stream_disconnected")
+            openWaterfall?.mark("stream_disconnected", "error=\(error?.localizedDescription ?? "none")")
+        case .diagnostic(let stage, let detail):
+            openWaterfall?.mark(stage, detail)
         case .unauthorized:
             streamConnected = false
             openWaterfall?.mark("stream_unauthorized")
@@ -1001,6 +1011,7 @@ final class SessionViewModel: ObservableObject {
             saveCurrentCache()
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
         } catch {
+            openWaterfall?.mark("request_failed", "error=\(error)")
             throw error
         }
     }
@@ -1287,6 +1298,7 @@ final class SessionViewModel: ObservableObject {
 
     private func reconcileSubmittedInputs(with events: [SessionEvent]) {
         guard !submittedInputs.isEmpty else { return }
+        let pendingBefore = submittedInputs.count
         var matchedEventIds = Set<String>()
         submittedInputs.removeAll { input in
             guard input.phase == .sent
@@ -1328,8 +1340,32 @@ final class SessionViewModel: ObservableObject {
                 matchedEventIds.insert(matched.id)
                 return true
             }
-            return false
+            return Self.tailWindowScrolledPastSend(events: events, sentAt: input.createdAt, windowLimit: initialTailLimit)
         }
+        let userEvents = events.filter { $0.role == "user" && $0.isHeadBranch }
+        let newestUserEvent = userEvents.last.map { "\($0.timestamp) origin=\($0.inputOrigin != nil) text_chars=\($0.contentText?.count ?? -1)" } ?? "none"
+        let pendingSummary = submittedInputs
+            .map { "\($0.phase):\(Int(Date().timeIntervalSince($0.createdAt)))s:\($0.text.count)ch" }
+            .joined(separator: ",")
+        openWaterfall?.mark(
+            "reconcile_inputs",
+            "before=\(pendingBefore) after=\(submittedInputs.count) events=\(events.count) user_events=\(userEvents.count) newest_user=\(newestUserEvent) pending=[\(pendingSummary)]"
+        )
+    }
+
+    /// The durable echo of a send can only be matched while it sits inside
+    /// the tail window. A long turn (Codex routinely projects 60+ tool items)
+    /// pushes it into history before the phone ever sees it, and the
+    /// optimistic bubble then stays pinned under newer content forever. Once
+    /// the window is full and every head-branch event in it is newer than
+    /// the send, the echo is behind the window: the server already confirmed
+    /// delivery, and the turn has visibly moved on, so the bubble is resolved.
+    static func tailWindowScrolledPastSend(events: [SessionEvent], sentAt: Date, windowLimit: Int) -> Bool {
+        let headEvents = events.filter(\.isHeadBranch)
+        guard headEvents.count >= windowLimit else { return false }
+        let timestamps = headEvents.compactMap { LonghouseDateParser.parse($0.timestamp) }
+        guard timestamps.count == headEvents.count, let oldest = timestamps.min() else { return false }
+        return oldest.timeIntervalSince(sentAt) > 5
     }
 
     private func sendFailureMessage(for error: Error) -> String {

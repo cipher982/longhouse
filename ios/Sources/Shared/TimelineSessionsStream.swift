@@ -171,7 +171,7 @@ actor TimelineSessionsStream {
         var eventName = ""
         var dataBuffer = ""
 
-        for try await line in bytes.lines {
+        for try await line in SSELineReader.lines(from: bytes) {
             if Task.isCancelled { break }
             if line.isEmpty {
                 await dispatch(eventName: eventName, payload: dataBuffer)

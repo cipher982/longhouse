@@ -19,6 +19,23 @@ import OSLog
 /// iOS background rules: caller must stop() when scenePhase != .active.
 /// Background URLSession is not used; SSE over URLSession.shared is
 /// foreground-only by Apple's contract.
+/// Captures the transport one stream negotiated so the app can report whether
+/// the phone spoke h2 or h3 to the server. URLSession hands metrics over at
+/// task end, so the answer is read when the stream closes.
+private final class StreamTransportMetrics: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var protocolName: String?
+
+    var negotiatedProtocol: String? {
+        lock.withLock { protocolName }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        let name = metrics.transactionMetrics.last?.networkProtocolName
+        lock.withLock { protocolName = name }
+    }
+}
+
 actor SessionWorkspaceStream {
     struct Connected: Decodable, Sendable {
         let session_id: String
@@ -93,6 +110,10 @@ actor SessionWorkspaceStream {
         /// pointless. The actor stops its retry loop and hands control to the
         /// caller, which should refresh auth and start a new stream.
         case unauthorized
+        /// A transport fact worth recording (response headers, first byte,
+        /// stall, decode failure, negotiated protocol). Never counts as
+        /// liveness: only server frames reset the stale watchdog.
+        case diagnostic(stage: String, detail: String)
     }
 
     /// Thrown internally when the SSE response is 401 so the reconnect loop can
@@ -105,6 +126,10 @@ actor SessionWorkspaceStream {
     private let knownWorkspaceFingerprint: String?
     private let staleTimeoutSeconds: TimeInterval
     private var lastEventAt: Date = Date()
+    /// Per-connection transport counters, reported on stall and close so the
+    /// difference between "no frames" and "frames the parser dropped" is visible.
+    private var drainLineCount = 0
+    private var drainByteCount = 0
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "SessionStream")
     private var task: Task<Void, Never>?
     /// Reconnect cursor. The server sets the SSE `id:` field to the per-topic
@@ -182,6 +207,7 @@ actor SessionWorkspaceStream {
                         await self.emit(.unauthorized)
                         break
                     } catch {
+                        await self.note("stream_error", "error=\(error.localizedDescription) next_backoff_ms=\(backoffMs)")
                         await self.emit(.disconnected(error))
                     }
                     try? await Task.sleep(nanoseconds: backoffMs * 1_000_000)
@@ -207,6 +233,12 @@ actor SessionWorkspaceStream {
     private func emit(_ event: Event) {
         lastEventAt = Date()
         continuation?.yield(event)
+    }
+
+    /// Diagnostics bypass `emit` on purpose: they describe the transport and
+    /// must not read as server liveness to the stale watchdog.
+    private func note(_ stage: String, _ detail: String) {
+        continuation?.yield(.diagnostic(stage: stage, detail: detail))
     }
 
     private func staleSinceLastEvent() -> Bool {
@@ -255,7 +287,17 @@ actor SessionWorkspaceStream {
         defer { session.invalidateAndCancel() }
 
         logger.debug("workspace stream request started session=\(self.sessionId, privacy: .public) since_seq=\(self.lastEventId, privacy: .public) skip_initial=\(self.skipInitial, privacy: .public)")
-        let (bytes, response) = try await session.bytes(for: req)
+        let transport = StreamTransportMetrics()
+        let openedAt = Date()
+        drainLineCount = 0
+        drainByteCount = 0
+        defer {
+            note(
+                "stream_end",
+                "lines=\(drainLineCount) bytes=\(drainByteCount) protocol=\(transport.negotiatedProtocol ?? "unknown") open_s=\(Int(Date().timeIntervalSince(openedAt)))"
+            )
+        }
+        let (bytes, response) = try await session.bytes(for: req, delegate: transport)
         guard let http = response as? HTTPURLResponse else {
             logger.error("workspace stream bad response session=\(self.sessionId, privacy: .public)")
             throw URLError(.badServerResponse)
@@ -269,6 +311,10 @@ actor SessionWorkspaceStream {
             throw URLError(.badServerResponse)
         }
         logger.debug("workspace stream response connected session=\(self.sessionId, privacy: .public)")
+        note(
+            "stream_response",
+            "status=\(http.statusCode) encoding=\(http.value(forHTTPHeaderField: "Content-Encoding") ?? "identity") content_type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "none") ttfb_ms=\(Int(Date().timeIntervalSince(openedAt) * 1000))"
+        )
 
         lastEventAt = Date()
         let watchdog = Task { [weak self, staleTimeoutSeconds] in
@@ -291,8 +337,13 @@ actor SessionWorkspaceStream {
         var eventId: String? = nil
         var dataBuffer = ""
 
-        for try await line in bytes.lines {
+        for try await line in SSELineReader.lines(from: bytes) {
             if Task.isCancelled { break }
+            if drainLineCount == 0 {
+                note("stream_first_line", "elapsed_ms=\(Int(Date().timeIntervalSince(openedAt) * 1000))")
+            }
+            drainLineCount += 1
+            drainByteCount += line.utf8.count + 1
             if line.isEmpty {
                 await self.dispatch(eventName: eventName, eventId: eventId, payload: dataBuffer)
                 eventName = ""
@@ -327,6 +378,7 @@ actor SessionWorkspaceStream {
         logger.info(
             "workspace stream stale, forcing reconnect session=\(self.sessionId, privacy: .public) stale_after_s=\(self.staleTimeoutSeconds, privacy: .public)"
         )
+        note("stream_stale", "stale_after_s=\(Int(staleTimeoutSeconds)) lines=\(drainLineCount) bytes=\(drainByteCount)")
     }
 
     private func dispatch(eventName: String, eventId: String?, payload: String) async {
@@ -351,6 +403,7 @@ actor SessionWorkspaceStream {
                 logger.error(
                     "workspace stream decode failed session=\(self.sessionId, privacy: .public) error=\(error.localizedDescription, privacy: .public) payload=\(payload, privacy: .private(mask: .hash))"
                 )
+                note("stream_decode_failed", "event=workspace_changed bytes=\(payload.utf8.count) error=\(error)")
             }
         case "replay_gap":
             if let gap = try? JSONDecoder().decode(ReplayGap.self, from: data) {

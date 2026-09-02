@@ -140,6 +140,21 @@ extension SessionWorkspaceClient {
     }
 }
 
+/// One batch of app lifecycle marks bound for `/api/telemetry/client-diagnostics`.
+struct ClientDiagnosticsPayload: Encodable, Sendable {
+    struct Entry: Encodable, Sendable {
+        let at_ms: Int64
+        let stage: String
+        let detail: String?
+        let session_id: String?
+    }
+
+    let surface: String
+    let device_label: String?
+    let app_build: String?
+    let entries: [Entry]
+}
+
 protocol SessionWorkspaceClient: Sendable {
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse
     /// Workers this session spawned. Hidden from the timeline by design — a
@@ -169,11 +184,14 @@ protocol SessionWorkspaceClient: Sendable {
     func sessionResumeIntent(id: String) async throws -> SessionResumeIntent
     func createSessionBranch(id: String, message: String, clientRequestId: String) async throws -> SessionBranch
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
+    func postClientDiagnostics(_ payload: ClientDiagnosticsPayload) async
 }
 
 extension SessionWorkspaceClient {
     // Mocks/fixtures that never exercise acknowledgement inherit a no-op.
     func markSessionRead(id: String, readThrough: String) async throws {}
+
+    func postClientDiagnostics(_ payload: ClientDiagnosticsPayload) async {}
 
     func sessionResumeIntent(id: String) async throws -> SessionResumeIntent {
         throw LonghouseAPIError.requestFailed
@@ -800,6 +818,15 @@ struct LonghouseAPI: Sendable {
 
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/telemetry/client-render"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        guard let body = try? JSONEncoder().encode(payload) else { return }
+        request.httpBody = body
+        _ = try? await data(for: request)
+    }
+
+    func postClientDiagnostics(_ payload: ClientDiagnosticsPayload) async {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/telemetry/client-diagnostics"))
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         guard let body = try? JSONEncoder().encode(payload) else { return }

@@ -19,5 +19,8 @@ final class SessionOpenWaterfall {
         } else {
             logger.info("session open stage=\(stage, privacy: .public) session=\(self.sessionId, privacy: .public) elapsed_ms=\(elapsedMs, privacy: .public) \(detail, privacy: .public)")
         }
+        // The same marks, shipped: OSLog on a phone is unreadable without a
+        // cable and root, so the server keeps a copy beside its own log.
+        ClientDiagnosticsReporter.shared.record(stage: stage, detail: detail, sessionId: sessionId)
     }
 }

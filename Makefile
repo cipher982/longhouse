@@ -206,6 +206,15 @@ ios-marketing: ## Capture iOS marketing screenshots to /tmp/lh-shots/ (session-l
 	echo "Captures written to /tmp/lh-shots/"; \
 	ls -lh /tmp/lh-shots/
 
+phone-shot: ## Screenshot the paired iPhone into artifacts/phone/ (LABEL=name)
+	@scripts/ops/phone.sh shot $(or $(LABEL),screen)
+
+phone-deploy: ## Debug-build the iOS app and install+relaunch it on the paired iPhone
+	@scripts/ops/phone.sh deploy
+
+phone-logs: ## The phone's own diagnostics from the hosted tenant log (SINCE=30m SESSION=<id>)
+	@scripts/ops/phone.sh logs --since $(or $(SINCE),30m) $(if $(SESSION),--session $(SESSION),)
+
 test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit tests)
 	@cd web && bun run test -- --run src/components/session-workspace/__tests__/RenderTelemetryPanel.test.tsx src/pages/__tests__/SessionDetailPage.test.tsx
 	@python3 scripts/build/generate_build_identity.py
