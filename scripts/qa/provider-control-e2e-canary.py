@@ -1874,7 +1874,6 @@ def _install_antigravity_hook(args: argparse.Namespace, root: Path, config_dir: 
         path = _ensure_antigravity_runtime_plugin(
             config_dir=Path({str(config_dir)!r}),
             antigravity_cli_root=Path({str(root / "ag-cli")!r}),
-            engine_path="/usr/bin/true",
             global_hooks_path=Path({str(root / "hooks.json")!r}),
         )
         print(path)
@@ -2263,7 +2262,6 @@ def _install_unwatched_antigravity_hook(args: argparse.Namespace, home: Path, co
         path = _ensure_antigravity_runtime_plugin(
             config_dir=Path({str(config_dir)!r}),
             antigravity_cli_root=Path({str(gemini_dir / "antigravity-cli")!r}),
-            engine_path="/usr/bin/true",
             global_hooks_path=Path({str(gemini_dir / "config" / "hooks.json")!r}),
         )
         print(path)
