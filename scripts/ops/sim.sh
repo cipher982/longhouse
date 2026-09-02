@@ -54,6 +54,16 @@ resolve_udid() {
   printf '%s\n' "$destination" | sed -n 's/.*id=\([0-9A-Fa-f-]*\).*/\1/p'
 }
 
+ensure_project() {
+  [[ -d "$PROJECT" ]] && return
+  (
+    cd "$ROOT_DIR"
+    python3 scripts/build/generate_build_identity.py
+    bash scripts/build/stage_ios_build_identity.sh
+    xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness >/dev/null
+  )
+}
+
 require_udid() {
   UDID="$(resolve_udid)"
   [[ -n "$UDID" ]] || die "no iOS Simulator found; set SIM_UDID or install a runtime in Xcode"
@@ -80,6 +90,7 @@ built_app() {
 }
 
 cmd_boot() {
+  ensure_project
   require_udid
   xcrun simctl boot "$UDID" 2>/dev/null || true
   xcrun simctl bootstatus "$UDID" -b >/dev/null
@@ -93,6 +104,7 @@ cmd_shutdown() {
 }
 
 cmd_build() {
+  ensure_project
   require_udid
   mkdir -p "$DERIVED" "$OUT_DIR"
   local log
