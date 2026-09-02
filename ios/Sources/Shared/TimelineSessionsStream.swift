@@ -170,6 +170,8 @@ actor TimelineSessionsStream {
 
         var eventName = ""
         var dataBuffer = ""
+        // An empty `data:` line is a real line; see SessionWorkspaceStream.
+        var hasData = false
 
         for try await line in SSELineReader.lines(from: bytes) {
             if Task.isCancelled { break }
@@ -177,6 +179,7 @@ actor TimelineSessionsStream {
                 await dispatch(eventName: eventName, payload: dataBuffer)
                 eventName = ""
                 dataBuffer = ""
+                hasData = false
                 continue
             }
             if line.hasPrefix(":") { continue }
@@ -187,8 +190,9 @@ actor TimelineSessionsStream {
                 switch field {
                 case "event": eventName = value
                 case "data":
-                    if !dataBuffer.isEmpty { dataBuffer.append("\n") }
+                    if hasData { dataBuffer.append("\n") }
                     dataBuffer.append(value)
+                    hasData = true
                 default: break
                 }
             }

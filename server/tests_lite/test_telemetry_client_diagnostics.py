@@ -21,7 +21,6 @@ from zerg.routers.telemetry import beacon_router
 
 
 def _client() -> TestClient:
-    telemetry_mod._diagnostics.clear()
     telemetry_mod._buckets.clear()
     app = FastAPI()
     app.dependency_overrides[require_admin] = lambda: None
@@ -57,16 +56,6 @@ def test_batch_is_accepted_and_logged(caplog):
     assert "device=olive" in lines[1]
     assert "stage=stream_stale stale_after_s=45" in lines[1]
     assert "session=sess-1" in lines[1]
-
-
-def test_recent_filters_by_session_and_keeps_order():
-    c = _client()
-    assert c.post("/telemetry/client-diagnostics", json=_batch()).status_code == 200
-    rows = c.get("/telemetry/client-diagnostics/recent", params={"session_id": "sess-1"}).json()
-    assert [row["stage"] for row in rows] == ["stream_connected", "stream_stale"]
-    assert rows[0]["device_label"] == "olive"
-    assert rows[0]["app_build"] == "0.1.46-dev+abc1234"
-    assert c.get("/telemetry/client-diagnostics/recent", params={"limit": 1}).json()[0]["stage"] == "poll_tail"
 
 
 def test_rejects_oversized_batch():

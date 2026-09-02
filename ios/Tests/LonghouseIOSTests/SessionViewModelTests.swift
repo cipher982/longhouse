@@ -873,6 +873,32 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func shortViewportFillLoadsOnePageAndStopsWhenAPageAddsNothing() async throws {
+        // WebKit reports the document shorter than its viewport; the owner
+        // asks for history. One page per ask; a page that adds nothing stalls
+        // the fill at that loaded count instead of re-asking every render.
+        let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
+        let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
+        let sameOlder = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
+        let api = FakeSessionWorkspaceClient(workspaces: [tail, older, sameOlder, sameOlder])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
+        #expect(model.items.map(\.id) == ["user:1", "user:51"])
+        let afterFirstFill = await api.tailRequestCount()
+
+        // The next page is a duplicate: nothing added, so the fill stalls.
+        await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
+        #expect(await api.tailRequestCount() == afterFirstFill + 1)
+        await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
+        #expect(await api.tailRequestCount() == afterFirstFill + 1)
+        #expect(model.items.map(\.id) == ["user:1", "user:51"])
+    }
+
+    @Test
     func submittedInputClearsOnceTheTailWindowScrollsPastTheSend() async throws {
         // A long turn projects more items than the phone's tail window holds,
         // so the durable echo of the send is behind the window by the time the

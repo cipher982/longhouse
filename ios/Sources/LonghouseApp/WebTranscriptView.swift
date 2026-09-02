@@ -56,6 +56,9 @@ struct WebTranscriptView: UIViewRepresentable {
     let sourceRevision: Int?
     let sourceOperation: String?
     let onNearTop: (() -> Void)?
+    /// A render left the document shorter than the viewport; the owner can
+    /// load older history so the transcript reaches the composer.
+    let onNeedsMoreHistory: (() -> Void)?
     let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
     let onLifecycle: ((String) -> Void)?
     /// Tapping a worker row opens that child's transcript.
@@ -71,6 +74,7 @@ struct WebTranscriptView: UIViewRepresentable {
         sourceRevision: Int? = nil,
         sourceOperation: String? = nil,
         onNearTop: (() -> Void)? = nil,
+        onNeedsMoreHistory: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
         onLifecycle: ((String) -> Void)? = nil,
         onOpenSubagent: ((String) -> Void)? = nil
@@ -85,6 +89,7 @@ struct WebTranscriptView: UIViewRepresentable {
         self.sourceRevision = sourceRevision
         self.sourceOperation = sourceOperation
         self.onNearTop = onNearTop
+        self.onNeedsMoreHistory = onNeedsMoreHistory
         self.onDiagnostics = onDiagnostics
         self.onLifecycle = onLifecycle
     }
@@ -159,6 +164,7 @@ struct WebTranscriptView: UIViewRepresentable {
             to: webView,
             diagnosticsEnabled: WebTranscriptDiagnosticsFeature.isEnabled,
             onNearTop: onNearTop,
+            onNeedsMoreHistory: onNeedsMoreHistory,
             onDiagnostics: onDiagnostics,
             onLifecycle: onLifecycle
         )
@@ -849,6 +855,7 @@ struct WebTranscriptView: UIViewRepresentable {
         private var suppressNearTopUntil = Date.distantPast
         private var diagnosticsEnabled = WebTranscriptDiagnosticsFeature.isEnabled
         private var onNearTop: (() -> Void)?
+        private var onNeedsMoreHistory: (() -> Void)?
         private var onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
         private var onLifecycle: ((String) -> Void)?
         private var lastNearTopRequestAt = Date.distantPast
@@ -1009,11 +1016,12 @@ struct WebTranscriptView: UIViewRepresentable {
                 let target = self.shouldStickToBottom && !self.userScrollInProgress
                     ? maxOffset
                     : min(max(scrollView.contentOffset.y, minOffset), maxOffset)
-                ClientDiagnosticsReporter.shared.record(
-                    stage: "webkit_viewport",
-                    detail: "height=\(Int(previous))->\(Int(height)) content=\(Int(scrollView.contentSize.height)) offset=\(Int(scrollView.contentOffset.y)) target=\(Int(target)) max=\(Int(maxOffset)) inset_bottom=\(Int(insets.bottom)) stick=\(self.shouldStickToBottom) dragging=\(self.userScrollInProgress)",
-                    sessionId: nil
-                )
+                // The measurement the fill decision actually needs: a document
+                // that does not reach the bottom of its viewport wants older
+                // history, whatever its row count.
+                if scrollView.contentSize.height > 0, scrollView.contentSize.height <= scrollView.bounds.height {
+                    self.onNeedsMoreHistory?()
+                }
                 guard abs(scrollView.contentOffset.y - target) > 0.5 else { return }
                 scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: target), animated: false)
             }
@@ -1109,12 +1117,14 @@ struct WebTranscriptView: UIViewRepresentable {
             to webView: WKWebView,
             diagnosticsEnabled: Bool,
             onNearTop: (() -> Void)?,
+            onNeedsMoreHistory: (() -> Void)?,
             onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?,
             onLifecycle: ((String) -> Void)?
         ) {
             self.webView = webView
             self.diagnosticsEnabled = diagnosticsEnabled
             self.onNearTop = onNearTop
+        self.onNeedsMoreHistory = onNeedsMoreHistory
             self.onDiagnostics = onDiagnostics
             self.onLifecycle = onLifecycle
             guard contentIdentity != preparedIdentity else { return }
@@ -1124,6 +1134,7 @@ struct WebTranscriptView: UIViewRepresentable {
                 to: webView,
                 diagnosticsEnabled: diagnosticsEnabled,
                 onNearTop: onNearTop,
+                onNeedsMoreHistory: onNeedsMoreHistory,
                 onDiagnostics: onDiagnostics,
                 onLifecycle: onLifecycle
             )
@@ -1134,12 +1145,14 @@ struct WebTranscriptView: UIViewRepresentable {
             to webView: WKWebView,
             diagnosticsEnabled: Bool,
             onNearTop: (() -> Void)?,
+            onNeedsMoreHistory: (() -> Void)?,
             onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?,
             onLifecycle: ((String) -> Void)?
         ) {
             self.webView = webView
             self.diagnosticsEnabled = diagnosticsEnabled
             self.onNearTop = onNearTop
+        self.onNeedsMoreHistory = onNeedsMoreHistory
             self.onDiagnostics = onDiagnostics
             self.onLifecycle = onLifecycle
             if payload.base64 == lastPayload

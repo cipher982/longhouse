@@ -114,8 +114,11 @@ cmd_build() {
     python3 scripts/build/generate_build_identity.py
     bash scripts/build/stage_ios_build_identity.sh
     xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness >/dev/null
-    mkdir -p "$DERIVED"
-    xcodebuild \
+    mkdir -p "$DERIVED" "$OUT_DIR"
+    local log="$OUT_DIR/build-$(stamp).log"
+    # The build's exit status is the verdict; a filtered pipeline would hide
+    # a failure behind yesterday's still-present .app.
+    if ! xcodebuild \
       -project "$PROJECT" \
       -scheme Longhouse \
       -configuration Debug \
@@ -123,8 +126,11 @@ cmd_build() {
       -derivedDataPath "$DERIVED" \
       -allowProvisioningUpdates \
       DEVELOPMENT_TEAM="$team" \
-      build \
-      | grep -E "error:|warning: .*Longhouse|BUILD (SUCCEEDED|FAILED)" || true
+      build > "$log" 2>&1; then
+      grep -E "error:|BUILD FAILED" "$log" | head -20 >&2
+      die "build failed; full log at $log"
+    fi
+    grep -E "BUILD SUCCEEDED" "$log" >/dev/null || die "build produced no success marker; log at $log"
     test -d "$(built_app)" || die "build produced no app at $(built_app)"
   )
   printf '%s\n' "$(built_app)"

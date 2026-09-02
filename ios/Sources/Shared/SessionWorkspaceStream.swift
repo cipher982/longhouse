@@ -86,8 +86,6 @@ actor SessionWorkspaceStream {
         /// What woke the server: `ingest` (durable events landed), `runtime`
         /// (state facts), `transcript_preview`, `read_update`, `title_update`.
         var change_kind: String? = nil
-        /// Durable events an `ingest` wake carried; nil for other wakes.
-        var events_inserted: Int? = nil
         let thread_session_count: Int?
         let latest_event_emitted_at_ms: Int64?
         let server_fanout_at_ms: Int64?
@@ -115,9 +113,14 @@ actor SessionWorkspaceStream {
         /// pointless. The actor stops its retry loop and hands control to the
         /// caller, which should refresh auth and start a new stream.
         case unauthorized
+        /// A `workspace_changed` frame arrived but did not decode. The SSE
+        /// cursor has already moved past it, so a reconnect will never replay
+        /// it: the consumer must refresh from durable state or the change is
+        /// lost for good.
+        case decodeFailed(detail: String)
         /// A transport fact worth recording (response headers, first byte,
-        /// stall, decode failure, negotiated protocol). Never counts as
-        /// liveness: only server frames reset the stale watchdog.
+        /// stall, negotiated protocol). Never counts as liveness: only server
+        /// frames reset the stale watchdog.
         case diagnostic(stage: String, detail: String)
     }
 
@@ -341,6 +344,9 @@ actor SessionWorkspaceStream {
         var eventName = ""
         var eventId: String? = nil
         var dataBuffer = ""
+        // Tracked separately from emptiness: an empty `data:` line is a real
+        // line, and `data:` then `data:x` must dispatch "\nx", not "x".
+        var hasData = false
 
         for try await line in SSELineReader.lines(from: bytes) {
             if Task.isCancelled { break }
@@ -354,6 +360,7 @@ actor SessionWorkspaceStream {
                 eventName = ""
                 eventId = nil
                 dataBuffer = ""
+                hasData = false
                 continue
             }
             if line.hasPrefix(":") {
@@ -368,8 +375,9 @@ actor SessionWorkspaceStream {
                 case "event": eventName = value
                 case "id": eventId = value
                 case "data":
-                    if !dataBuffer.isEmpty { dataBuffer.append("\n") }
+                    if hasData { dataBuffer.append("\n") }
                     dataBuffer.append(value)
+                    hasData = true
                 default: break
                 }
             }
@@ -408,7 +416,7 @@ actor SessionWorkspaceStream {
                 logger.error(
                     "workspace stream decode failed session=\(self.sessionId, privacy: .public) error=\(error.localizedDescription, privacy: .public) payload=\(payload, privacy: .private(mask: .hash))"
                 )
-                note("stream_decode_failed", "event=workspace_changed bytes=\(payload.utf8.count) error=\(error)")
+                emit(.decodeFailed(detail: "event=workspace_changed bytes=\(payload.utf8.count) error=\(error)"))
             }
         case "replay_gap":
             if let gap = try? JSONDecoder().decode(ReplayGap.self, from: data) {

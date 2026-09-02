@@ -89,18 +89,23 @@ final class SessionViewModel: ObservableObject {
     private var tailSnapshotEventId: String?
     private var tailNextCursor: String?
     private var prefetchedOlderTail: SessionMobileTailResponse?
-    private var prefetchedOlderOffset: Int?
+    /// The cursor the stored older page was fetched with. Prefetch identity is
+    /// the cursor, not an offset: offsets are ignored by storage-v2 paging.
+    private var prefetchedOlderCursor: String?
     private var prefetchedOlderSnapshotEventId: String?
-    private var prefetchInFlightOffset: Int?
+    private var prefetchInFlightCursor: String?
     private var prefetchInFlightSnapshotEventId: String?
     private var prefetchInFlightToken: Int?
     private var nextPrefetchToken = 0
     private var isLoadingOlder = false
-    /// The loaded count at which the last autofill page added nothing. Stops
-    /// a server that answers "older" with the same window from being asked
-    /// again on every refresh; any real change to the loaded count re-arms it.
-    private var autofillStalledAtLoadedCount: Int?
-    private var autofillTask: Task<Void, Never>?
+    /// The loaded count at which the last short-viewport fill added nothing.
+    /// Stops a server that answers "older" with the same window from being
+    /// asked again on every render; any change to the loaded count re-arms it.
+    private var historyFillStalledAtLoadedCount: Int?
+    /// In-flight coalesced refresh for stream wakes, and whether another wake
+    /// landed while it ran.
+    private var realtimeRefreshTask: Task<Void, Never>?
+    private var realtimeRefreshPending = false
     private var openWaterfall: SessionOpenWaterfall?
     private let apiFactory: (String) -> SessionWorkspaceClient?
     private let streamFactory: (URL, String, Int?, String?) -> SessionWorkspaceStreamSource
@@ -161,15 +166,16 @@ final class SessionViewModel: ObservableObject {
             lastWorkspaceProjectionItems = []
             loadedProjectionItemCount = 0
             totalProjectionItemCount = 0
-            autofillStalledAtLoadedCount = nil
-            autofillTask?.cancel()
-            autofillTask = nil
+            historyFillStalledAtLoadedCount = nil
+            realtimeRefreshTask?.cancel()
+            realtimeRefreshTask = nil
+            realtimeRefreshPending = false
             tailSnapshotEventId = nil
             tailNextCursor = nil
             prefetchedOlderTail = nil
-            prefetchedOlderOffset = nil
+            prefetchedOlderCursor = nil
             prefetchedOlderSnapshotEventId = nil
-            prefetchInFlightOffset = nil
+            prefetchInFlightCursor = nil
             prefetchInFlightSnapshotEventId = nil
             prefetchInFlightToken = nil
             prefetchTask?.cancel()
@@ -255,12 +261,13 @@ final class SessionViewModel: ObservableObject {
         pollTask = nil
         prefetchTask?.cancel()
         prefetchTask = nil
-        autofillTask?.cancel()
-        autofillTask = nil
+        realtimeRefreshTask?.cancel()
+        realtimeRefreshTask = nil
+        realtimeRefreshPending = false
         realtimeRefreshRetryTask?.cancel()
         realtimeRefreshRetryTask = nil
         realtimeRefreshFailureCount = 0
-        prefetchInFlightOffset = nil
+        prefetchInFlightCursor = nil
         prefetchInFlightSnapshotEventId = nil
         prefetchInFlightToken = nil
         streamTask?.cancel()
@@ -279,9 +286,9 @@ final class SessionViewModel: ObservableObject {
         prefetchTask?.cancel()
         prefetchTask = nil
         prefetchedOlderTail = nil
-        prefetchedOlderOffset = nil
+        prefetchedOlderCursor = nil
         prefetchedOlderSnapshotEventId = nil
-        prefetchInFlightOffset = nil
+        prefetchInFlightCursor = nil
         prefetchInFlightSnapshotEventId = nil
         prefetchInFlightToken = nil
     }
@@ -754,6 +761,12 @@ final class SessionViewModel: ObservableObject {
         case .disconnected(let error):
             streamConnected = false
             openWaterfall?.mark("stream_disconnected", "error=\(error?.localizedDescription ?? "none")")
+        case .decodeFailed(let detail):
+            // The cursor is already past the frame; only durable state can
+            // recover whatever it carried.
+            openWaterfall?.mark("stream_decode_failed", detail)
+            guard let api = apiFactory(appState.serverURL) else { return }
+            requestRealtimeRefresh(api: api, sessionId: sessionId)
         case .diagnostic(let stage, let detail):
             openWaterfall?.mark(stage, detail)
         case .unauthorized:
@@ -767,7 +780,7 @@ final class SessionViewModel: ObservableObject {
                 lastPubsubSeq = gap.latest_seq > 0 ? gap.latest_seq : nil
             }
             guard let api = apiFactory(appState.serverURL) else { return }
-            await refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
+            requestRealtimeRefresh(api: api, sessionId: sessionId)
         case .heartbeat:
             break
         case .changed(let change):
@@ -803,7 +816,7 @@ final class SessionViewModel: ObservableObject {
                 }
             }
             guard let api = apiFactory(appState.serverURL) else { return }
-            await refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
+            requestRealtimeRefresh(api: api, sessionId: sessionId)
         }
     }
 
@@ -842,6 +855,26 @@ final class SessionViewModel: ObservableObject {
     private func pollTick(sessionId: String, appState: AppState) async {
         guard let api = apiFactory(appState.serverURL) else { return }
         try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+    }
+
+    /// One durable refresh per burst of wakes. A catalog commit fans out as
+    /// several frames within milliseconds; refreshing once per frame turned a
+    /// burst of N into N sequential tail reads and N WebKit renders. While a
+    /// refresh is in flight the newest wake only marks it dirty, and at most
+    /// one follow-up runs when it lands.
+    private func requestRealtimeRefresh(api: SessionWorkspaceClient, sessionId: String) {
+        if realtimeRefreshTask != nil {
+            realtimeRefreshPending = true
+            return
+        }
+        realtimeRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            repeat {
+                self.realtimeRefreshPending = false
+                await self.refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
+            } while self.realtimeRefreshPending && self.activeSessionId == sessionId && !Task.isCancelled
+            self.realtimeRefreshTask = nil
+        }
     }
 
     private func refreshTailAfterRealtimeWake(api: SessionWorkspaceClient, sessionId: String) async {
@@ -894,12 +927,20 @@ final class SessionViewModel: ObservableObject {
         await loadOlder(api: api, sessionId: sessionId)
     }
 
-    /// Fewer rendered rows than this after a tail refresh means the 50-item
-    /// window collapsed into grouped tool rows and short paragraphs that do
-    /// not reach the composer. Pull the next older page until the viewport
-    /// has something to show. Generous on purpose: a tall-rowed transcript
-    /// pays one extra speculative page, a sparse one gets its history.
-    static let minimumFilledRows = 14
+    /// WebKit measured the rendered transcript shorter than its viewport: a
+    /// 50-event window grouped down to a few rows. Pull one older page; the
+    /// next render measures again, so this repeats until the viewport fills,
+    /// history runs out, or a page adds nothing.
+    func fillHistoryForShortViewport(sessionId: String, appState: AppState) async {
+        guard activeSessionId == sessionId else { return }
+        guard historyFillStalledAtLoadedCount != loadedProjectionItemCount else { return }
+        guard let api = apiFactory(appState.serverURL) else { return }
+        let before = loadedProjectionItemCount
+        openWaterfall?.mark("history_fill", "loaded=\(before) total=\(totalProjectionItemCount)")
+        if await loadOlder(api: api, sessionId: sessionId) == 0, loadedProjectionItemCount == before {
+            historyFillStalledAtLoadedCount = before
+        }
+    }
 
     /// Returns how many projection items the older page added; zero when
     /// nothing was fetched, nothing was new, or the request failed.
@@ -913,12 +954,12 @@ final class SessionViewModel: ObservableObject {
         }
 
         if let prefetchedOlderTail,
-           prefetchedOlderOffset == loadedProjectionItemCount,
+           prefetchedOlderCursor == tailNextCursor,
            prefetchedOlderSnapshotEventId == tailSnapshotEventId {
             let before = loadedProjectionItemCount
             let added = applyOlderTail(prefetchedOlderTail)
             self.prefetchedOlderTail = nil
-            self.prefetchedOlderOffset = nil
+            self.prefetchedOlderCursor = nil
             self.prefetchedOlderSnapshotEventId = nil
             openWaterfall?.mark(
                 "older_applied",
@@ -1016,12 +1057,15 @@ final class SessionViewModel: ObservableObject {
             )
             self.lastWorkspaceEvents = mergedEvents
             self.lastWorkspaceProjectionItems = mergedProjectionItems
+            // Counted in projection items: an older page can carry action or
+            // seam rows without events, and counting events would shrink the
+            // loaded window on every refresh and re-fetch pages already shown.
             let refreshedLoadedCount = min(
                 tail.projection.total,
-                max(0, max(tail.projection.total - tail.projection.pageOffset, mergedEvents.count))
+                max(0, max(tail.projection.total - tail.projection.pageOffset, mergedProjectionItems.count))
             )
             self.loadedProjectionItemCount = refreshedLoadedCount
-            let keepPrefetchedOlderTail = prefetchedOlderOffset == refreshedLoadedCount
+            let keepPrefetchedOlderTail = prefetchedOlderCursor == tail.projection.nextCursor
                 && prefetchedOlderSnapshotEventId == tail.snapshotEventId
             self.totalProjectionItemCount = tail.projection.total
             self.tailSnapshotEventId = tail.snapshotEventId
@@ -1029,7 +1073,7 @@ final class SessionViewModel: ObservableObject {
             self.lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint
             if !keepPrefetchedOlderTail {
                 self.prefetchedOlderTail = nil
-                self.prefetchedOlderOffset = nil
+                self.prefetchedOlderCursor = nil
                 self.prefetchedOlderSnapshotEventId = nil
             }
             let builtItems = TimelineBuilder.build(
@@ -1053,31 +1097,6 @@ final class SessionViewModel: ObservableObject {
             )
             saveCurrentCache()
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
-            // Only a full window that grouped down to a few rows qualifies; a
-            // short session is short because it has no more history.
-            if mergedEvents.count >= initialTailLimit,
-               builtItems.count < Self.minimumFilledRows,
-               loadedProjectionItemCount < totalProjectionItemCount,
-               autofillStalledAtLoadedCount != loadedProjectionItemCount,
-               !isLoadingOlder {
-                openWaterfall?.mark(
-                    "autofill_older",
-                    "rows=\(builtItems.count) loaded=\(loadedProjectionItemCount) total=\(totalProjectionItemCount)"
-                )
-                // Detached on purpose: the refresh must not wait on history.
-                // The speculative prefetch is usually already on its way, so
-                // let it land and use that page rather than racing it.
-                let stalledAt = loadedProjectionItemCount
-                let prefetch = prefetchTask
-                autofillTask?.cancel()
-                autofillTask = Task { [weak self] in
-                    if let prefetch { await prefetch.value }
-                    guard let self, !Task.isCancelled, self.activeSessionId == sessionId else { return }
-                    if await self.loadOlder(api: api, sessionId: sessionId) == 0 {
-                        self.autofillStalledAtLoadedCount = stalledAt
-                    }
-                }
-            }
         } catch {
             openWaterfall?.mark("request_failed", "error=\(error)")
             throw error
@@ -1148,11 +1167,12 @@ final class SessionViewModel: ObservableObject {
         guard activeSessionId == sessionId else { return }
         guard loadedProjectionItemCount < totalProjectionItemCount else { return }
         guard !isLoadingOlder else { return }
+        let cursor = tailNextCursor
         let offset = loadedProjectionItemCount
         let snapshotEventId = tailSnapshotEventId
-        let hasStoredPrefetch = prefetchedOlderOffset == offset
+        let hasStoredPrefetch = prefetchedOlderCursor == cursor
             && prefetchedOlderSnapshotEventId == snapshotEventId
-        let hasInFlightPrefetch = prefetchInFlightOffset == offset
+        let hasInFlightPrefetch = prefetchInFlightCursor == cursor
             && prefetchInFlightSnapshotEventId == snapshotEventId
         guard !hasStoredPrefetch && !hasInFlightPrefetch else { return }
 
@@ -1160,14 +1180,14 @@ final class SessionViewModel: ObservableObject {
         prefetchTask = nil
         nextPrefetchToken += 1
         let prefetchToken = nextPrefetchToken
-        prefetchInFlightOffset = offset
+        prefetchInFlightCursor = cursor
         prefetchInFlightSnapshotEventId = snapshotEventId
         prefetchInFlightToken = prefetchToken
         prefetchTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 if self.prefetchInFlightToken == prefetchToken {
-                    self.prefetchInFlightOffset = nil
+                    self.prefetchInFlightCursor = nil
                     self.prefetchInFlightSnapshotEventId = nil
                     self.prefetchInFlightToken = nil
                     self.prefetchTask = nil
@@ -1177,19 +1197,19 @@ final class SessionViewModel: ObservableObject {
                 let tail = try await self.fetchOlderTail(api: api, sessionId: sessionId, offset: offset)
                 guard !Task.isCancelled,
                       self.activeSessionId == sessionId,
-                      self.loadedProjectionItemCount == offset,
+                      self.tailNextCursor == cursor,
                       self.tailSnapshotEventId == snapshotEventId
                 else { return }
                 self.prefetchedOlderTail = tail
-                self.prefetchedOlderOffset = offset
+                self.prefetchedOlderCursor = cursor
                 self.prefetchedOlderSnapshotEventId = snapshotEventId
             } catch {
                 guard !Task.isCancelled,
                       self.activeSessionId == sessionId,
-                      self.loadedProjectionItemCount == offset
+                      self.tailNextCursor == cursor
                 else { return }
                 self.prefetchedOlderTail = nil
-                self.prefetchedOlderOffset = nil
+                self.prefetchedOlderCursor = nil
                 self.prefetchedOlderSnapshotEventId = nil
             }
         }
@@ -1214,14 +1234,12 @@ final class SessionViewModel: ObservableObject {
         lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint ?? lastWorkspaceRevisionFingerprint
         let existingItemIds = Set(lastWorkspaceProjectionItems.map(\.id))
         let olderProjectionItems = tail.projection.items.filter { !existingItemIds.contains($0.id) }
-        if tail.projection.generationId != nil {
-            loadedProjectionItemCount = min(
-                totalProjectionItemCount,
-                loadedProjectionItemCount + olderProjectionItems.count
-            )
-        } else {
-            loadedProjectionItemCount = max(loadedProjectionItemCount, tail.projection.total - tail.projection.pageOffset)
-        }
+        // Paging is by cursor; the loaded count is simply what has been
+        // prepended, not a second offset coordinate derived from the page.
+        loadedProjectionItemCount = min(
+            totalProjectionItemCount,
+            loadedProjectionItemCount + olderProjectionItems.count
+        )
         if !olderProjectionItems.isEmpty {
             let existingEventIds = Set(lastWorkspaceEvents.map(\.id))
             let olderEvents = olderProjectionItems.compactMap(\.event).filter { !existingEventIds.contains($0.id) }
@@ -1291,9 +1309,9 @@ final class SessionViewModel: ObservableObject {
         lastPubsubSeq = snapshot.lastPubsubSeq
         lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
         prefetchedOlderTail = nil
-        prefetchedOlderOffset = nil
+        prefetchedOlderCursor = nil
         prefetchedOlderSnapshotEventId = nil
-        prefetchInFlightOffset = nil
+        prefetchInFlightCursor = nil
         prefetchInFlightSnapshotEventId = nil
         prefetchInFlightToken = nil
         items = TimelineBuilder.build(items: projectionItems)

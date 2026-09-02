@@ -232,6 +232,72 @@ struct SessionStreamResumeTests {
     }
 
     @Test
+    func undecodableFrameStillRefreshesDurableState() async throws {
+        // The SSE cursor has already moved past a frame that failed to
+        // decode; a reconnect will never replay it, so the only way its
+        // change reaches the screen is a durable refresh right now.
+        let before = try TestWorkspaceFactory.make(eventId: 10, content: "Before")
+        let after = try TestWorkspaceFactory.make(eventId: 11, content: "After")
+        let api = FakeStreamResumeClient(workspaces: [before, after])
+        let recorder = StreamFactoryRecorder()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
+            enableRealtime: true,
+            snapshotStore: Self.isolatedSnapshotStore()
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForItemIds(model, ["user:10"])
+        recorder.emitConnected()
+
+        recorder.emitDecodeFailed()
+        await waitForItemIds(model, ["user:11"])
+
+        #expect(model.items.map(\.id) == ["user:11"])
+        model.stop()
+    }
+
+    @Test
+    func burstOfWakesCoalescesIntoOneInFlightRefreshPlusOneFollowUp() async throws {
+        let before = try TestWorkspaceFactory.make(eventId: 10, content: "Before")
+        let api = FakeStreamResumeClient(workspaces: [before])
+        let recorder = StreamFactoryRecorder()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
+            enableRealtime: true,
+            snapshotStore: Self.isolatedSnapshotStore()
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForItemIds(model, ["user:10"])
+        recorder.emitConnected()
+        await api.delayTailResponses(nanoseconds: 150_000_000)
+        let baseline = await api.tailRequestCount()
+
+        // A catalog commit fans out as several frames within milliseconds.
+        for seq in 1...6 {
+            recorder.emitChanged(latestEventId: 10 + seq, pubsubSeq: 700 + seq)
+        }
+        try? await Task.sleep(nanoseconds: 700_000_000)
+
+        // One refresh was in flight when the burst arrived; the burst marked
+        // it dirty once, and exactly one follow-up ran when it landed.
+        let requests = await api.tailRequestCount() - baseline
+        #expect(requests >= 1 && requests <= 2, "expected 1-2 coalesced tail reads, got \(requests)")
+        model.stop()
+    }
+
+    @Test
     func healthyPreviewBurstRendersWithoutTailRequestAmplification() async throws {
         let workspace = try TestWorkspaceFactory.make(eventId: 10, content: "Before live preview")
         let api = FakeStreamResumeClient(workspaces: [workspace])
@@ -465,6 +531,11 @@ private final class StreamFactoryRecorder: Sendable {
         c?.yield(.unauthorized)
     }
 
+    func emitDecodeFailed() {
+        let c = state.withLock { $0.continuation }
+        c?.yield(.decodeFailed(detail: "event=workspace_changed error=test"))
+    }
+
     func emitReplayGap(latestSeq: Int) {
         let c = state.withLock { $0.continuation }
         c?.yield(.replayGap(SessionWorkspaceStream.ReplayGap(
@@ -532,6 +603,14 @@ private actor FakeStreamResumeClient: SessionWorkspaceClient {
 
     func tailRequestCount() -> Int { tailRequests }
 
+    private var tailDelayNanoseconds: UInt64 = 0
+
+    /// Hold every tail response for a while, so overlapping wakes are
+    /// observable instead of racing an instant fake.
+    func delayTailResponses(nanoseconds: UInt64) {
+        tailDelayNanoseconds = nanoseconds
+    }
+
     func failNextTailRequests(_ count: Int) {
         tailFailuresRemaining += max(0, count)
     }
@@ -552,6 +631,9 @@ private actor FakeStreamResumeClient: SessionWorkspaceClient {
         if tailFailuresRemaining > 0 {
             tailFailuresRemaining -= 1
             throw URLError(.cannotConnectToHost)
+        }
+        if tailDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: tailDelayNanoseconds)
         }
         let workspace = nextWorkspace()
         return SessionMobileTailResponse(

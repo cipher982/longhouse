@@ -282,6 +282,9 @@ struct SessionView: View {
                     onNearTop: {
                         Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
                     },
+                    onNeedsMoreHistory: {
+                        Task { await viewModel.fillHistoryForShortViewport(sessionId: sessionId, appState: appState) }
+                    },
                     onDiagnostics: { diagnostics in
                         onTranscriptDiagnostics?(diagnostics)
                         Task {

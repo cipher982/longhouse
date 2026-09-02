@@ -382,42 +382,21 @@ class ClientDiagnosticsBatch(BaseModel):
     entries: list[ClientDiagnosticEntry] = Field(..., max_length=200)
 
 
-@dataclass
-class _DiagnosticSample:
-    at_monotonic: float
-    surface: str
-    device_label: str | None
-    app_build: str | None
-    session_id: str | None
-    at_ms: int
-    stage: str
-    detail: str | None
-
-
-_diagnostics: deque[_DiagnosticSample] = deque(maxlen=4000)
 diag_logger = logging.getLogger("longhouse.client_diag")
 
 
 @beacon_router.post("/client-diagnostics", include_in_schema=False)
 async def client_diagnostics(batch: ClientDiagnosticsBatch, request: Request) -> dict:
-    """Accept a batch of client lifecycle marks. Same public/rate-limited posture as render beacons."""
+    """Accept a batch of client lifecycle marks. Same public/rate-limited posture as render beacons.
+
+    The log line is the whole sink: the operator tool greps the tenant log,
+    and a second in-process copy would die with the worker anyway.
+    """
     now_mono = time.monotonic()
     client_ip = request.client.host if request.client else "unknown"
     if not _take_token(client_ip, now_mono):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many beacons")
     for entry in batch.entries:
-        _diagnostics.append(
-            _DiagnosticSample(
-                at_monotonic=now_mono,
-                surface=batch.surface,
-                device_label=batch.device_label,
-                app_build=batch.app_build,
-                session_id=entry.session_id,
-                at_ms=entry.at_ms,
-                stage=entry.stage,
-                detail=entry.detail,
-            )
-        )
         diag_logger.info(
             "client_diag surface=%s device=%s build=%s session=%s at=%s stage=%s %s",
             batch.surface,
@@ -429,30 +408,6 @@ async def client_diagnostics(batch: ClientDiagnosticsBatch, request: Request) ->
             entry.detail or "",
         )
     return {"accepted": len(batch.entries)}
-
-
-@admin_router.get("/client-diagnostics/recent", include_in_schema=False)
-async def recent_client_diagnostics(session_id: str | None = None, limit: int = 200) -> list[dict]:
-    limit = max(1, min(limit, 2000))
-    rows: list[dict] = []
-    for sample in reversed(_diagnostics):
-        if session_id and sample.session_id != session_id:
-            continue
-        rows.append(
-            {
-                "surface": sample.surface,
-                "device_label": sample.device_label,
-                "app_build": sample.app_build,
-                "session_id": sample.session_id,
-                "at": datetime.fromtimestamp(sample.at_ms / 1000.0, tz=timezone.utc).isoformat(timespec="milliseconds"),
-                "stage": sample.stage,
-                "detail": sample.detail,
-            }
-        )
-        if len(rows) >= limit:
-            break
-    rows.reverse()
-    return rows
 
 
 @admin_router.get("/latency-summary", include_in_schema=False)
