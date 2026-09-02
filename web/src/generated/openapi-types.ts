@@ -7768,6 +7768,42 @@ export interface components {
             observed_at?: string | null;
         };
         /**
+         * SessionInputReceiptResponse
+         * @description A send Longhouse accepted for this session, and the durable event it became.
+         *
+         *     `event_id` is set once ingest links the receipt to the transcript entry the
+         *     provider wrote for it. A client that sent with `client_request_id` resolves
+         *     its optimistic row from this, whether or not that event is on the page it
+         *     has loaded.
+         */
+        SessionInputReceiptResponse: {
+            /**
+             * Client Request Id
+             * @description Client idempotency key supplied with the send
+             */
+            client_request_id?: string | null;
+            /**
+             * Intent
+             * @description auto|steer|queue
+             */
+            intent: string;
+            /**
+             * Status
+             * @description queued|delivering|delivered|cancelled|failed
+             */
+            status: string;
+            /**
+             * Created At
+             * @description When the send was accepted
+             */
+            created_at?: string | null;
+            /**
+             * Event Id
+             * @description Durable transcript event this send became, once linked
+             */
+            event_id?: string | null;
+        };
+        /**
          * SessionInputRequest
          * @description User input targeted at a managed session.
          */
@@ -8537,6 +8573,11 @@ export interface components {
             runtime_display: components["schemas"]["SessionRuntimeDisplayResponse"];
             /** @description Latest renderable transcript preview sourced from the event ledger. */
             transcript_preview?: components["schemas"]["SessionTranscriptPreviewResponse"] | null;
+            /**
+             * Input Receipts
+             * @description Recent sends Longhouse accepted for this session, with the durable event each became once linked.
+             */
+            input_receipts?: components["schemas"]["SessionInputReceiptResponse"][];
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
             /**

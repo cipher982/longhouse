@@ -43,6 +43,14 @@ struct APISessionControlResponse: Codable, Hashable, Sendable {
     let attachCommand: String?
 }
 
+struct APISessionInputReceiptResponse: Codable, Hashable, Sendable {
+    let clientRequestId: String?
+    let intent: String
+    let status: String
+    let createdAt: String?
+    let eventId: String?
+}
+
 enum APIActivityRecency: String, Codable, Hashable, Sendable, CaseIterable {
     case live = "live"
     case recent = "recent"
@@ -386,6 +394,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let sessionState: APISessionStateFacts
     let runtimeDisplay: APISessionRuntimeDisplayResponse
     let transcriptPreview: APISessionTranscriptPreviewResponse?
+    let inputReceipts: [APISessionInputReceiptResponse]?
     let timelineCard: APITimelineCardPresentationResponse
     let userState: String?
     let userHiddenFromTimeline: Bool?

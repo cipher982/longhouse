@@ -615,6 +615,19 @@ def _live_control_session_dto(session: Any) -> dict[str, Any]:
     }
 
 
+class _RowReceipt:
+    """Attribute access over a row mapping, so one DTO serves ORM rows and core rows."""
+
+    def __init__(self, row: Any) -> None:
+        self._row = row
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self._row[name]
+        except KeyError:
+            return None
+
+
 def _input_receipt_dto(receipt: Any) -> dict[str, Any]:
     return {
         "id": receipt.id,
@@ -626,6 +639,7 @@ def _input_receipt_dto(receipt: Any) -> dict[str, Any]:
         "status": receipt.status,
         "client_request_id": receipt.client_request_id,
         "archive_session_input_id": receipt.archive_session_input_id,
+        "durable_event_id": getattr(receipt, "durable_event_id", None),
         "delivery_request_id": receipt.delivery_request_id,
         "error_json": receipt.error_json,
         "created_at": _encode_datetime(receipt.created_at),
@@ -5026,6 +5040,85 @@ class CatalogStore:
                 "receipt": _input_receipt_dto(receipt) if receipt is not None else None,
                 "commit_seq": str(_current_commit_seq(connection)),
             }
+
+    def list_session_input_receipts(self, *, session_id: str, limit: int = 50) -> dict[str, Any]:
+        """The newest receipts for a session regardless of status, for provenance."""
+        table = LiveSessionInputReceipt.__table__
+        with _read_snapshot(self.engine) as connection:
+            rows = (
+                connection.execute(
+                    select(table)
+                    .where(table.c.session_id == session_id)
+                    .order_by(table.c.created_at.desc(), table.c.id.desc())
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            receipts = [_input_receipt_dto(_RowReceipt(row)) for row in rows]
+            return {"receipts": receipts, "commit_seq": str(_current_commit_seq(connection))}
+
+    def link_input_receipts_to_events(
+        self,
+        *,
+        session_id: str,
+        candidates: list[dict[str, Any]],
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Link delivered sends to the durable user events they became.
+
+        A provider writes the injected text into its own transcript with no
+        Longhouse identity attached, so the only honest link is text plus
+        time, done once here and persisted. Each receipt links to at most one
+        event: the earliest unlinked user event with the same normalized text
+        written after the send was accepted (minus a small clock allowance).
+        """
+        from zerg.services.session_input_links import normalize_input_text
+
+        table = LiveSessionInputReceipt.__table__
+        linked: list[dict[str, str]] = []
+        with _write_transaction(self.engine) as connection:
+            receipts = (
+                connection.execute(
+                    select(table)
+                    .where(
+                        table.c.session_id == session_id,
+                        table.c.durable_event_id.is_(None),
+                        table.c.status.in_(("delivered", "delivering")),
+                    )
+                    .order_by(table.c.created_at.asc(), table.c.id.asc())
+                )
+                .mappings()
+                .all()
+            )
+            if not receipts:
+                return {"linked": linked, "commit_seq": str(_current_commit_seq(connection))}
+            taken_event_ids: set[str] = set()
+            ordered_candidates = sorted(candidates, key=lambda item: (item["timestamp"], item["event_id"]))
+            for receipt in receipts:
+                receipt_text = normalize_input_text(receipt["text"])
+                created_at = receipt["created_at"]
+                if created_at is not None and created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=UTC)
+                for candidate in ordered_candidates:
+                    if candidate["event_id"] in taken_event_ids:
+                        continue
+                    if normalize_input_text(candidate["text"]) != receipt_text:
+                        continue
+                    if created_at is not None and candidate["timestamp"] < created_at - timedelta(seconds=5):
+                        continue
+                    taken_event_ids.add(candidate["event_id"])
+                    connection.execute(update(table).where(table.c.id == receipt["id"]).values(durable_event_id=candidate["event_id"]))
+                    linked.append(
+                        {
+                            "receipt_id": str(receipt["id"]),
+                            "client_request_id": receipt["client_request_id"],
+                            "durable_event_id": candidate["event_id"],
+                        }
+                    )
+                    break
+            commit_seq = _advance_commit_seq(connection, observed_at) if linked else _current_commit_seq(connection)
+            return {"linked": linked, "commit_seq": str(commit_seq)}
 
     def list_recent_input_receipts(self, *, session_id: str) -> dict[str, Any]:
         """Return bounded queued/delivering/recent-failed receipts for UI state."""

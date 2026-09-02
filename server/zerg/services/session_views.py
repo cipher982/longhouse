@@ -846,6 +846,22 @@ class SessionSharerResponse(UTCBaseModel):
     display_name: Optional[str] = Field(None, description="Display name (null falls back to email local on the client)")
 
 
+class SessionInputReceiptResponse(BaseModel):
+    """A send Longhouse accepted for this session, and the durable event it became.
+
+    `event_id` is set once ingest links the receipt to the transcript entry the
+    provider wrote for it. A client that sent with `client_request_id` resolves
+    its optimistic row from this, whether or not that event is on the page it
+    has loaded.
+    """
+
+    client_request_id: Optional[str] = Field(None, description="Client idempotency key supplied with the send")
+    intent: str = Field(..., description="auto|steer|queue")
+    status: str = Field(..., description="queued|delivering|delivered|cancelled|failed")
+    created_at: Optional[datetime] = Field(None, description="When the send was accepted")
+    event_id: Optional[str] = Field(None, description="Durable transcript event this send became, once linked")
+
+
 class SessionResponse(UTCBaseModel):
     """Response for a single session."""
 
@@ -944,6 +960,10 @@ class SessionResponse(UTCBaseModel):
     transcript_preview: Optional[SessionTranscriptPreviewResponse] = Field(
         None,
         description="Latest renderable transcript preview sourced from the event ledger.",
+    )
+    input_receipts: list[SessionInputReceiptResponse] = Field(
+        default_factory=list,
+        description="Recent sends Longhouse accepted for this session, with the durable event each became once linked.",
     )
     timeline_card: TimelineCardPresentationResponse = Field(
         ...,

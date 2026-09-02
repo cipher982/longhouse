@@ -790,6 +790,11 @@ class LiveSessionInputReceipt(LiveBase):
     status = Column(String(32), nullable=False, index=True)
     text = Column(Text, nullable=False)
     archive_session_input_id = Column(Integer, nullable=True, index=True)
+    # The durable transcript event this send became, linked at ingest by
+    # text and time. It is how a client resolves its optimistic bubble by
+    # identity instead of guessing, even when the echo is outside the page
+    # it has loaded.
+    durable_event_id = Column(String(128), nullable=True, index=True)
     control_command_id = Column(String(96), nullable=True, index=True)
     delivery_request_id = Column(String(64), nullable=True, index=True)
     # How many dispatch attempts this receipt has consumed.

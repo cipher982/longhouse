@@ -590,6 +590,10 @@ class CatalogDaemon:
             return await self._read_input_receipt(request)
         if request.method == "session.input.recent.list.v2":
             return await self._list_recent_input_receipts(request)
+        if request.method == "session.input.receipts.list.v2":
+            return await self._list_session_input_receipts(request)
+        if request.method == "session.input.link_events.v2":
+            return await self._link_input_receipts_to_events(request)
         if request.method == "session.input.cancel.v2":
             return await self._cancel_input_receipt(request)
         if request.method == "session.timeline.list.v2":
@@ -2096,6 +2100,51 @@ class CatalogDaemon:
         result = await self._run_read_store(
             self._store.list_recent_input_receipts,
             session_id=request.params["session_id"],
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_session_input_receipts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id"} or not _is_canonical_uuid(request.params.get("session_id")):
+            return self._error(request, "invalid_request", "session.input.receipts.list.v2 requires a canonical session_id")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.list_session_input_receipts,
+            session_id=request.params["session_id"],
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _link_input_receipts_to_events(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "candidates", "observed_at"}
+        if set(request.params) != expected or not _is_canonical_uuid(request.params.get("session_id")):
+            return self._error(request, "invalid_request", "session.input.link_events.v2 has invalid parameters")
+        raw_candidates = request.params.get("candidates")
+        if not isinstance(raw_candidates, list) or len(raw_candidates) > 1_000:
+            return self._error(request, "invalid_request", "candidates must be a bounded list")
+        candidates: list[dict[str, object]] = []
+        try:
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+            for item in raw_candidates:
+                if not isinstance(item, dict) or set(item) != {"event_id", "timestamp", "text"}:
+                    raise ValueError("each candidate needs event_id, timestamp, and text")
+                if not isinstance(item["event_id"], str) or not item["event_id"]:
+                    raise ValueError("candidate event_id must be a non-empty string")
+                if not isinstance(item["text"], str):
+                    raise ValueError("candidate text must be a string")
+                candidates.append(
+                    {
+                        "event_id": item["event_id"],
+                        "timestamp": _parse_datetime(item["timestamp"], "timestamp"),
+                        "text": item["text"],
+                    }
+                )
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.link_input_receipts_to_events,
+            session_id=request.params["session_id"],
+            candidates=candidates,
+            observed_at=observed_at,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

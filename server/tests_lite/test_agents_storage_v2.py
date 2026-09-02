@@ -1468,3 +1468,59 @@ async def test_storage_v2_unrepresentable_order_time_is_rejected_as_an_invalid_e
             {"envelope_ids": [payload["expected_envelope_id"]]},
         )
         assert existing["objects"][0]["exists"] is False
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_commit_links_delivered_send_receipt_to_its_user_event(monkeypatch):
+    """A Longhouse send resolves by identity once its echo is ingested.
+
+    The provider writes the injected text into its own transcript with no
+    Longhouse identity, so the commit path links the delivered receipt to the
+    user event it became, and the workspace projects that link so clients
+    never guess by text and time.
+    """
+    from zerg.services import session_input_links
+
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-input-link-") as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        session_id = uuid4()
+        payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4())
+        payload["session_id"] = str(session_id)
+        now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+        for offset, record in enumerate(payload["render"]["records"]):
+            record["order_time_us"] = now_us + offset
+        await stack.catalog.call(
+            "session.input.receipt.upsert.v2",
+            {
+                "receipt": {
+                    "owner_id": 1,
+                    "session_id": str(session_id),
+                    "provider": "codex",
+                    "text": "hello",
+                    "intent": "auto",
+                    "status": "delivered",
+                    "client_request_id": "ios-req-1",
+                    "delivery_request_id": None,
+                    "device_id": "cinder",
+                    "thread_id": None,
+                    "control_command_id": None,
+                    "archive_session_input_id": None,
+                    "enqueue_archive_projection": False,
+                    "error": None,
+                    "expires_at": None,
+                }
+            },
+        )
+
+        response = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+        assert response.status_code == 200, response.text
+
+        listed = await stack.catalog.call("session.input.receipts.list.v2", {"session_id": str(session_id)})
+        assert [(receipt["client_request_id"], receipt["durable_event_id"]) for receipt in listed["receipts"]] == [("ios-req-1", "user-1")]
+
+        projected = await session_input_links.session_input_receipts(stack.catalog, session_id)
+        assert [(receipt["client_request_id"], receipt["event_id"]) for receipt in projected] == [("ios-req-1", "user-1")]

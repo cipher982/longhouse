@@ -1200,6 +1200,12 @@ async def _commit_admitted_envelope(
                     "canonical_title_eligible": True,
                 }
             )
+        if committed.get("created") is True and render_manifest is not None:
+            from zerg.services.session_input_links import link_ingested_user_inputs
+
+            # Provenance for sends: the user events in this batch are the
+            # only chance to say which Longhouse receipt each one became.
+            await link_ingested_user_inputs(catalogd, spec.session_id, list(render_spec.records))
         # Wake clients whenever the commit changed what the read paths serve,
         # not when a message counter moved. An envelope of only system rows or
         # only excluded local-control rows still advances the session, and a
