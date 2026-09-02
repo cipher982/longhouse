@@ -23,6 +23,7 @@ State lives in artifacts/simlab/current/simlab.json; verdicts land beside it.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import re
@@ -31,6 +32,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -82,6 +84,68 @@ def record_timing(target: dict | list, phase: str, started: float, **details: st
     else:
         target.append(timing)
     log(f"phase {phase}={elapsed_s:.3f}s")
+
+
+class AppLogStream:
+    def __init__(self, state: dict) -> None:
+        self.process = subprocess.Popen(
+            [str(ROOT / "scripts/ops/sim.sh"), "logs", "--follow"],
+            env=sim_env(state),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            start_new_session=True,
+        )
+        self._lines: list[str] = []
+        self._lock = threading.Lock()
+        self._reader = threading.Thread(target=self._read, daemon=True)
+        self._reader.start()
+
+    def _read(self) -> None:
+        if self.process.stdout is None:
+            return
+        with self.process.stdout:
+            for line in self.process.stdout:
+                with self._lock:
+                    self._lines.append(line)
+
+    def text(self) -> str:
+        with self._lock:
+            return "".join(self._lines)
+
+    def stop(self) -> None:
+        if self.process.poll() is not None:
+            return
+        try:
+            os.killpg(self.process.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        try:
+            self.process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+_app_log_stream: AppLogStream | None = None
+
+
+def start_app_log_stream(state: dict) -> None:
+    global _app_log_stream
+    if _app_log_stream is not None and _app_log_stream.process.poll() is None:
+        return
+    _app_log_stream = AppLogStream(state)
+
+
+def stop_app_log_stream() -> None:
+    if _app_log_stream is not None:
+        _app_log_stream.stop()
+
+
+atexit.register(stop_app_log_stream)
 
 
 def free_port() -> int:
@@ -518,6 +582,8 @@ def sim(state: dict, deploy: bool) -> None:
         step_started = time.monotonic()
         subprocess.run([str(script), command, session_id] if command == "launch" else [str(script), command], env=sim_env(state), check=True)
         record_timing(state, phase, step_started)
+        if command == "boot":
+            start_app_log_stream(state)
     record_timing(state, "sim", started)
     state["sim_launched_at"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
@@ -531,13 +597,16 @@ MARK = re.compile(r"session open stage=(?P<stage>\S+) session=(?P<session>\S+) e
 
 
 def app_marks(state: dict, session_id: str, since: str) -> list[dict]:
-    out = subprocess.run(
-        [str(ROOT / "scripts/ops/sim.sh"), "logs", "--since", since],
-        env=sim_env(state),
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout
+    if _app_log_stream is not None and _app_log_stream.process.poll() is None:
+        out = _app_log_stream.text()
+    else:
+        out = subprocess.run(
+            [str(ROOT / "scripts/ops/sim.sh"), "logs", "--since", since],
+            env=sim_env(state),
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
     marks: list[dict] = []
     for line in out.splitlines():
         match = MARK.search(line)
@@ -545,6 +614,15 @@ def app_marks(state: dict, session_id: str, since: str) -> list[dict]:
             continue
         marks.append({"stage": match.group("stage"), "elapsed_ms": int(match.group("elapsed")), "detail": match.group("rest").strip()})
     return marks
+
+
+def wait_for_app_mark(state: dict, session_id: str, stage: str, count: int, timeout_s: float = 60) -> None:
+    wait_for(
+        f"{stage} app mark {count}",
+        lambda: sum(mark["stage"] == stage for mark in app_marks(state, session_id, "30s")) >= count,
+        timeout_s=timeout_s,
+        interval_s=0.25,
+    )
 
 
 def server_projection(state: dict, session_id: str) -> dict:
@@ -641,9 +719,9 @@ def cmd_verdict(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------
 
 
-def settle(state: dict, seconds: float, phase: str) -> None:
+def settle(state: dict, session_id: str, stage: str, count: int, phase: str) -> None:
     started = time.monotonic()
-    time.sleep(seconds)
+    wait_for_app_mark(state, session_id, stage, count)
     record_timing(state, phase, started)
     save_state(state)
 
@@ -651,30 +729,30 @@ def settle(state: dict, seconds: float, phase: str) -> None:
 def scenario_open_imported(state: dict, deploy: bool) -> dict:
     play(state, turns=2, cadence_ms=150, modes={"normal"}, session_id=None, append=False)
     sim(state, deploy)
-    settle(state, 20, "settle_open_imported")
+    settle(state, state["session_id"], "webkit_rendered", 1, "settle_open_imported")
     return verdict(state, "open-imported-session", "2m", False, None, 2)
 
 
 def scenario_live_turns(state: dict, deploy: bool) -> dict:
     play(state, turns=1, cadence_ms=150, modes={"normal"}, session_id=None, append=False)
     sim(state, deploy)
-    settle(state, 12, "settle_live_open")
+    settle(state, state["session_id"], "webkit_rendered", 1, "settle_live_open")
     play(state, turns=2, cadence_ms=300, modes={"normal"}, session_id=None, append=True)
-    settle(state, 12, "settle_live_turns")
+    settle(state, state["session_id"], "webkit_rendered", 2, "settle_live_turns")
     return verdict(state, "live-turns-into-open-session", "3m", True, None, 3)
 
 
 def scenario_escape_resend(state: dict, deploy: bool) -> dict:
     play(state, turns=2, cadence_ms=150, modes={"abandon-resend"}, session_id=None, append=False)
     sim(state, deploy)
-    settle(state, 20, "settle_escape_resend")
+    settle(state, state["session_id"], "webkit_rendered", 1, "settle_escape_resend")
     return verdict(state, "escape-and-resend", "2m", False, 1, 2)
 
 
 def scenario_hostile_transcript(state: dict, deploy: bool) -> dict:
     play(state, turns=2, cadence_ms=150, modes={"malformed", "split-lines", "delayed-first"}, session_id=None, append=False)
     sim(state, deploy)
-    settle(state, 20, "settle_hostile")
+    settle(state, state["session_id"], "webkit_rendered", 1, "settle_hostile")
     return verdict(state, "hostile-transcript", "2m", False, None, 2)
 
 
