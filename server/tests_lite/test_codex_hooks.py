@@ -328,6 +328,7 @@ def test_install_hooks_skips_codex_when_not_installed(tmp_path, monkeypatch):
 
 def test_install_hooks_refreshes_antigravity_when_configured(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("zerg.services.shipper.hooks.shutil.which", lambda _name: None)
     (tmp_path / ".gemini" / "config").mkdir(parents=True)
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
@@ -343,6 +344,33 @@ def test_install_hooks_refreshes_antigravity_when_configured(tmp_path, monkeypat
     content = hook.read_text()
     assert "bind --path" not in content
     assert "control_path" in content
+
+
+def test_install_hooks_installs_antigravity_plugin_when_binary_is_present(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr(
+        "zerg.services.shipper.hooks.shutil.which",
+        lambda name: "/opt/agy" if name == "agy" else None,
+    )
+    (tmp_path / ".claude").mkdir()
+    captured = {}
+
+    def fake_ensure(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / ".gemini" / "antigravity-cli" / "plugins" / "longhouse-runtime"
+
+    monkeypatch.setattr(
+        "zerg.services.antigravity_hook_inbox._ensure_antigravity_runtime_plugin",
+        fake_ensure,
+    )
+
+    install_hooks(
+        url="http://localhost:8080",
+        claude_dir=str(tmp_path / ".claude"),
+        engine_path="/usr/bin/longhouse-engine",
+    )
+
+    assert captured["antigravity_bin"] == "/opt/agy"
 
 
 def test_install_hooks_replaces_deprecated_claude_session_start_hook_with_unified_hook(tmp_path, monkeypatch):

@@ -805,10 +805,11 @@ def install_hooks(
     # as Claude, Codex, and Cursor. Do not create a new provider config on a
     # machine that has never installed Antigravity; refresh it when its config
     # root or binary is already present.
-    if (Path.home() / ".gemini").exists() or shutil.which("agy"):
+    antigravity_bin = shutil.which("agy")
+    if (Path.home() / ".gemini").exists() or antigravity_bin:
         from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
 
-        plugin_root = _ensure_antigravity_runtime_plugin()
+        plugin_root = _ensure_antigravity_runtime_plugin(antigravity_bin=antigravity_bin)
         actions.append(f"Configured Antigravity hooks in {plugin_root}")
 
     return actions
