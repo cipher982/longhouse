@@ -90,7 +90,6 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
       tool: runtimeDisplay?.compact_tool_label,
       sendAvailable: capabilities.reply_to_live_session_available === true,
     }),
-    loop_mode: "assist",
     ...overrides,
   };
 }

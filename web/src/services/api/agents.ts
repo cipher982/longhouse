@@ -78,7 +78,6 @@ export interface AgentSession {
   is_writable_head: boolean;
   control?: SessionControl | null;
   capabilities?: SessionCapabilities | null;
-  loop_mode: SessionLoopMode;
   user_state?: string;
   user_hidden_from_timeline?: boolean;
   execution_lifetime?: "one_shot" | "live_control" | null;
@@ -443,7 +442,6 @@ export type AgentSessionStatus =
 export type PresenceState = components["schemas"]["PresenceState"];
 
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
-export type SessionLoopMode = "assist" | "autopilot";
 export interface AgentEventInputOrigin {
   authored_via: "longhouse" | "terminal";
   session_input_id?: number | null;
@@ -1256,16 +1254,6 @@ export async function setSessionTimelineVisibility(
       body: JSON.stringify({ hidden }),
     },
   );
-}
-
-export async function setSessionLoopMode(
-  sessionId: string,
-  loopMode: SessionLoopMode,
-): Promise<{ session_id: string; loop_mode: SessionLoopMode }> {
-  return request(`${TIMELINE_SESSIONS_PREFIX}/${sessionId}/loop-mode`, {
-    method: "PATCH",
-    body: JSON.stringify({ loop_mode: loopMode }),
-  });
 }
 
 export interface SessionBranchRequest {

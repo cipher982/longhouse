@@ -24,7 +24,6 @@ import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
 import { SessionInfoDrawer } from "../components/session-workspace/SessionInfoDrawer";
-import { LoopModePill } from "../components/session-workspace/LoopModePill";
 import { RenderTelemetryPanel } from "../components/session-workspace/RenderTelemetryPanel";
 import { SessionPauseRequestPanel } from "../components/session-workspace/SessionPauseRequestPanel";
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
@@ -35,7 +34,6 @@ import {
 import { BranchSessionCard } from "../components/session-workspace/BranchSessionCard";
 import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
-import { useLoopModeChange } from "../hooks/useLoopModeChange";
 import { useWallClock } from "../hooks/useWallClock";
 import { isActivityExecuting, isActivityStalled } from "../lib/activityEvidence";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
@@ -128,8 +126,6 @@ function SessionDetailWorkspaceRoute({
   const handleBack = useCallback(() => {
     navigate(returnTo);
   }, [navigate, returnTo]);
-  const { effectiveLoopMode, loopModePending, handleLoopModeChange } =
-    useLoopModeChange(session);
   const queryClient = useQueryClient();
   const [confirmingArchive, setConfirmingArchive] = useState(false);
   const [hidingSession, setHidingSession] = useState(false);
@@ -244,10 +240,7 @@ function SessionDetailWorkspaceRoute({
   }
 
   const title = getSessionCardText(session, { titleMaxChars: 96 }).title;
-  const displaySession =
-    effectiveLoopMode === session.loop_mode
-      ? session
-      : { ...session, loop_mode: effectiveLoopMode };
+  const displaySession = session;
 
   // Shared-by pill render conditions. These depend on `displaySession`
   // (declared just above) and the current viewer.
@@ -290,7 +283,6 @@ function SessionDetailWorkspaceRoute({
     displaySession.home_label ||
     "host";
   const runtime = resolveSessionRuntimeState(displaySession);
-  const sessionEnded = Boolean(session && isSessionClosed(session));
   const resumeAvailable =
     isViewingHead &&
     branchSourceSession.session_state.control.actions.resume.state === "available";
@@ -454,13 +446,6 @@ function SessionDetailWorkspaceRoute({
     </div>
   );
 
-  // Proactive operator mode (Loop Mode: Assist/Autopilot) is frozen for launch
-  // per VISION ("proactive operator mode" under Frozen/removed). The Autopilot
-  // value is currently inert, so a visible toggle would imply behavior that does
-  // not exist. Keep the component + handlers wired but do not surface the pill
-  // until the capability ships and VISION changes. Demo mode may still show it.
-  const showLoopModePill =
-    config.demoMode && interaction.isManagedLocalSession && !sessionEnded;
 
   const handlePauseRequestResponse = async (body: PauseRequestResponseRequest) => {
     if (!activePauseRequest) return;
@@ -566,13 +551,6 @@ function SessionDetailWorkspaceRoute({
                     nowMs,
                   )}
                 />
-                {showLoopModePill ? (
-                  <LoopModePill
-                    currentMode={effectiveLoopMode}
-                    pending={loopModePending}
-                    onChange={handleLoopModeChange}
-                  />
-                ) : null}
               </div>
             </div>
           }

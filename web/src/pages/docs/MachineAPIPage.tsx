@@ -192,12 +192,6 @@ export default function MachineAPIPage() {
 # Actions: park|snooze|archive|resume`}
       </CodeBlock>
 
-      <h3>Set loop mode</h3>
-      <CodeBlock title="PATCH /api/agents/sessions/:id/loop-mode">
-        {`curl -X PATCH http://localhost:8080/api/agents/sessions/SESSION_ID/loop-mode \\
-  -H "Content-Type: application/json" \\
-  -d '{"loop_mode": "continuous"}'`}
-      </CodeBlock>
 
       <h3>Send presence signal</h3>
       <CodeBlock title="POST /api/agents/presence">

@@ -134,7 +134,6 @@ type AgentSession = {
   session_state: SessionStateFacts;
   runtime_display: Record<string, unknown>;
   timeline_card: Record<string, unknown>;
-  loop_mode: "manual" | "assist" | "autopilot";
   user_state?: string;
 };
 
@@ -372,7 +371,6 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     is_writable_head: true,
     control: null,
     capabilities: makeCapabilities(),
-    loop_mode: "manual",
     ...overrides,
   } as Omit<AgentSession, "session_state" | "runtime_display" | "timeline_card">;
   const state = overrides.session_state ?? canonicalState(session);

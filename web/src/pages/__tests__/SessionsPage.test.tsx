@@ -157,7 +157,6 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     session_state: makeSessionStateFacts({ access }),
     runtime_display: makeRuntimeDisplay(),
     timeline_card: makeTimelinePresentation(),
-    loop_mode: "assist",
     ...overrides,
   };
 }

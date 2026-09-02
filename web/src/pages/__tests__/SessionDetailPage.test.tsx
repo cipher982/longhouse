@@ -265,7 +265,6 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
       },
       border_tone: "running",
     },
-    loop_mode: "assist",
     ...overrides,
   };
 }
@@ -633,7 +632,6 @@ describe("SessionDetailPage", () => {
       confidence: "live",
       display_phase: "Running Bash",
       last_live_at: "2026-03-22T22:04:30Z",
-      loop_mode: "assist",
       capabilities: makeCapabilities({
         live_control_available: false,
         host_reattach_available: true,

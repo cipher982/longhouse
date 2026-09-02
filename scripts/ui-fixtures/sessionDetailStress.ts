@@ -22,7 +22,6 @@ type AgentSession = {
   summary: string | null;
   control?: JsonObject | null;
   capabilities?: JsonObject | null;
-  loop_mode: string;
 };
 
 type AgentEvent = {
@@ -194,7 +193,6 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
       host_reattach_available: false,
       reply_to_live_session_available: false,
     },
-    loop_mode: "assist",
     user_state: undefined,
     ...overrides,
   };
@@ -383,7 +381,6 @@ export function buildSessionDetailStressFixture(): {
       display_label: "Read only",
       display_tone: "neutral",
     },
-    loop_mode: "assist",
   });
 
   const session = makeSession({
@@ -497,7 +494,6 @@ export function buildSessionDetailStressFixture(): {
       display_detail: "Managed local Codex control path",
       display_tone: "success",
     },
-    loop_mode: "assist",
   });
 
   const rootEvents: AgentEvent[] = [
