@@ -198,6 +198,16 @@ def _claude_native_meta_record(raw: Mapping[str, Any] | None) -> bool:
     return not isinstance(message, Mapping) or message.get("role") in {None, "user"}
 
 
+_CLAUDE_IMAGE_PLACEHOLDER_RE = re.compile(
+    r"^\[Image: original \d+x\d+, displayed at \d+x\d+\. "
+    r"Multiply coordinates by \d+(?:\.\d+)? to map to original image\.\]$",
+)
+
+
+def _claude_native_image_placeholder(raw: Mapping[str, Any] | None, content: str) -> bool:
+    return _claude_native_meta_record(raw) and bool(_CLAUDE_IMAGE_PLACEHOLDER_RE.fullmatch(content.strip()))
+
+
 _CLAUDE_COMMAND_RECORD_RE = re.compile(
     r"^\s*<command-name>.*?</command-name>"
     r"(?:\s*<command-message>.*?</command-message>)?"
@@ -511,7 +521,16 @@ def classify_provider_interaction(
     claude_native_command = any(
         _claude_native_command_record(raw, value, sequence_context) for value in (text, raw_text, combined) if value
     )
-    if normalized_provider == "claude" and normalized_role == "user" and claude_native_command:
+    claude_native_image_placeholder = (
+        normalized_provider == "claude"
+        and normalized_role == "user"
+        and any(_claude_native_image_placeholder(raw, value) for value in (text, raw_text) if value)
+    )
+    if claude_native_image_placeholder:
+        kind = INTERACTION_PROVIDER_SYSTEM
+        changes_provider_state = False
+        starts_model_turn = False
+    elif normalized_provider == "claude" and normalized_role == "user" and claude_native_command:
         if "<local-command-stdout>" in combined:
             kind = INTERACTION_LOCAL_CONTROL_OUTPUT
             changes_provider_state = False

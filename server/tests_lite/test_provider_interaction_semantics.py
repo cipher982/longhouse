@@ -15,6 +15,7 @@ from zerg.services.managed_provider_contracts import all_managed_provider_contra
 from zerg.services.provider_interaction_semantics import INTERACTION_DURABLE_USER_MESSAGE
 from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL
 from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import interaction_context_key_parts
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
@@ -418,6 +419,18 @@ def test_claude_native_local_command_rows_are_not_user_or_title_events() -> None
     assert output_semantics["interaction_kind"] == INTERACTION_LOCAL_CONTROL_OUTPUT
     assert output_semantics["counts_as_user_message"] is False
     assert output_semantics["title_eligible"] is False
+
+
+def test_claude_is_meta_image_placeholder_is_not_a_user_event() -> None:
+    content = "[Image: original 1206x2622, displayed at 920x2000. Multiply coordinates by 1.31 to map to original image.]"
+    raw = {"type": "user", "isMeta": True, "message": {"role": "user", "content": content}}
+
+    semantics = classify_provider_interaction("claude", role="user", content_text=content, raw_json=raw)
+
+    assert semantics["interaction_kind"] == INTERACTION_PROVIDER_SYSTEM
+    assert semantics["counts_as_user_message"] is False
+    assert semantics["title_eligible"] is False
+    assert semantic_event_included("claude", role="user", content_text=content, raw_json=raw) is False
 
 
 def test_captured_claude_effort_jsonl_classifies_real_command_rows() -> None:
