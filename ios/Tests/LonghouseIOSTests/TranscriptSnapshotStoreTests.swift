@@ -59,8 +59,7 @@ struct TranscriptSnapshotStoreTests {
             "lifecycle": "open",
             "host_state": "unknown",
             "terminal_reason": null
-          },
-          "loop_mode": "assist"
+          }
         }
         """.data(using: .utf8)!
         return try! JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)

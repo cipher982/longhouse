@@ -92,8 +92,7 @@ struct SessionLiveActivityModelsTests {
             "lifecycle": "open",
             "host_state": "online",
             "terminal_reason": null
-          },
-          "loop_mode": "assist"
+          }
         }
         """.data(using: .utf8)!
 
@@ -157,8 +156,7 @@ struct SessionLiveActivityModelsTests {
             "lifecycle": "open",
             "host_state": "online",
             "terminal_reason": null
-          },
-          "loop_mode": "assist"
+          }
         }
         """.data(using: .utf8)!
 

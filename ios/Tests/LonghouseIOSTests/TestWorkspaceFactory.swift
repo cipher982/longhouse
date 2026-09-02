@@ -46,8 +46,7 @@ enum TestWorkspaceFactory {
               "lifecycle": "open",
               "host_state": "unknown",
               "terminal_reason": null
-            },
-            "loop_mode": "assist"
+            }
           },
           "thread": {
             "root_session_id": "session-1",

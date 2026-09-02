@@ -226,7 +226,6 @@ extension APISessionResponse {
             originLabel: originLabel,
             capabilities: capabilities.sessionCapabilities,
             runtimeDisplay: runtimeDisplay.sessionRuntimeDisplay,
-            loopMode: loopMode.flatMap { SessionLoopMode(rawValue: $0.rawValue) },
             stateFacts: DefaultUnknownSessionStateFacts(
                 wrappedValue: sessionState.sessionStateFacts
             ),
@@ -483,26 +482,6 @@ extension APISessionInputResponse {
             turn: turn,
             intent: SessionInputIntent(rawValue: intent) ?? .auto,
             queued: (queued ?? []).map(\.queuedInputSummary)
-        )
-    }
-}
-
-extension APISessionDraftReplyResponse {
-    var draftReplyResponse: DraftReplyResponse {
-        DraftReplyResponse(
-            draftText: draftText,
-            model: model,
-            generatedAt: generatedAt,
-            basedOnEventIds: basedOnEventIds
-        )
-    }
-}
-
-extension APISessionLoopModeResponse {
-    var loopModeResponse: LoopModeResponse {
-        LoopModeResponse(
-            sessionId: sessionId,
-            loopMode: SessionLoopMode(rawValue: loopMode.rawValue) ?? .assist
         )
     }
 }

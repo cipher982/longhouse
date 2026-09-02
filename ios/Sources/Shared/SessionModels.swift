@@ -856,20 +856,6 @@ enum TranscriptPreviewProjection {
     }
 }
 
-enum SessionLoopMode: String, Codable, Sendable, CaseIterable, Hashable {
-    case manual
-    case assist
-    case autopilot
-
-    var label: String {
-        switch self {
-        case .manual: return "Manual"
-        case .assist: return "Assist"
-        case .autopilot: return "Autopilot"
-        }
-    }
-}
-
 struct SessionDetail: Codable, Identifiable, Sendable {
     let id: String
     let title: String?
@@ -890,7 +876,6 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let originLabel: String?
     let capabilities: SessionCapabilities
     let runtimeDisplay: SessionRuntimeDisplay
-    let loopMode: SessionLoopMode?
     @DefaultUnknownSessionStateFacts var stateFacts: SessionStateFacts
     var transcriptPreview: SessionTranscriptPreview? = nil
 
@@ -905,10 +890,6 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return summary
         }
         return provider
-    }
-
-    var effectiveLoopMode: SessionLoopMode {
-        loopMode ?? .manual
     }
 
     var isClosed: Bool { stateFacts.dispositionState == "closed" }
@@ -1149,7 +1130,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var composerPlaceholder: String {
         guard let placeholder = capabilities.composerPlaceholder?.trimmingCharacters(in: .whitespacesAndNewlines),
               !placeholder.isEmpty else {
-            return "Reply"
+            return "Message"
         }
         return placeholder
     }
@@ -1208,7 +1189,6 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             originLabel: originLabel,
             capabilities: capabilities,
             runtimeDisplay: runtimeDisplay,
-            loopMode: loopMode,
             stateFacts: DefaultUnknownSessionStateFacts(wrappedValue: stateFacts),
             transcriptPreview: transcriptPreview
         )
@@ -1770,16 +1750,4 @@ enum JSONValue: Codable, Sendable, Hashable {
         case .object(let v): try c.encode(v)
         }
     }
-}
-
-struct DraftReplyResponse: Codable, Sendable {
-    let draftText: String
-    let model: String
-    let generatedAt: String
-    let basedOnEventIds: [Int]
-}
-
-struct LoopModeResponse: Codable, Sendable {
-    let sessionId: String
-    let loopMode: SessionLoopMode
 }

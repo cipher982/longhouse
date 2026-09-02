@@ -165,8 +165,6 @@ protocol SessionWorkspaceClient: Sendable {
         content: String?,
         message: String?
     ) async throws -> PauseRequestResponse
-    func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse
-    func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse
     func markSessionRead(id: String, readThrough: String) async throws
     func sessionResumeIntent(id: String) async throws -> SessionResumeIntent
     func createSessionBranch(id: String, message: String, clientRequestId: String) async throws -> SessionBranch
@@ -646,34 +644,6 @@ struct LonghouseAPI: Sendable {
                 "Longhouse returned an unexpected send response. Refreshing to check whether it landed."
             )
         }
-    }
-
-    func draftReply(id: String, maxChars: Int = 1200) async throws -> DraftReplyResponse {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/draft-reply"))
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["max_chars": maxChars])
-
-        let (data, httpResponse) = try await data(for: request)
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
-        }
-        return try JSONDecoder.snakeCase.decode(APISessionDraftReplyResponse.self, from: data).draftReplyResponse
-    }
-
-    func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/loop-mode"))
-        request.httpMethod = "PATCH"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["loop_mode": loopMode.rawValue])
-
-        let (data, httpResponse) = try await data(for: request)
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
-        }
-        return try JSONDecoder.snakeCase.decode(APISessionLoopModeResponse.self, from: data).loopModeResponse
     }
 
     /// Console unread acknowledgement: mark results seen up to the timestamp

@@ -577,13 +577,5 @@ private actor FakeStreamResumeClient: SessionWorkspaceClient {
         try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
     }
 
-    func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
-        DraftReplyResponse(draftText: "Draft", model: "test", generatedAt: "2026-05-02T20:00:00Z", basedOnEventIds: [])
-    }
-
-    func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse {
-        LoopModeResponse(sessionId: id, loopMode: loopMode)
-    }
-
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}
 }

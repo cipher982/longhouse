@@ -814,19 +814,6 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
     }
 
-    func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
-        DraftReplyResponse(
-            draftText: "Drafted fixture reply",
-            model: "ui-test",
-            generatedAt: ISO8601DateFormatter().string(from: Date()),
-            basedOnEventIds: []
-        )
-    }
-
-    func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse {
-        LoopModeResponse(sessionId: id, loopMode: loopMode)
-    }
-
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}
 
     nonisolated func streamSource() -> SessionWorkspaceStreamSource {
@@ -1167,7 +1154,6 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 hostState: "online",
                 terminalReason: nil
             ),
-            loopMode: .assist,
             stateFacts: DefaultUnknownSessionStateFacts(
                 wrappedValue: SessionStateFacts(
                     contractVersion: 1,

@@ -154,7 +154,6 @@ struct SessionModelsTests {
             "host_reattach_available": true,
             "reply_to_live_session_available": true
           },
-          "loop_mode": "assist",
           "session_state": {
             "state_contract_version": 1,
             "presentation_policy_version": 1,
@@ -431,8 +430,7 @@ struct SessionModelsTests {
               "lifecycle": "open",
               "host_state": "online",
               "terminal_reason": null
-            },
-            "loop_mode": "assist"
+            }
           },
           "thread": {
             "root_session_id": "session-root",
@@ -469,8 +467,7 @@ struct SessionModelsTests {
                   "lifecycle": "open",
                   "host_state": "online",
                   "terminal_reason": null
-                },
-                "loop_mode": "assist"
+                }
               }
             ]
           },
@@ -790,29 +787,11 @@ struct SessionModelsTests {
           ]
         }
         """.data(using: .utf8)!
-        let draftJSON = """
-        {
-          "draft_text": "Looks good.",
-          "model": "codex",
-          "generated_at": "2026-04-26T23:12:00Z",
-          "based_on_event_ids": [1, 2]
-        }
-        """.data(using: .utf8)!
-        let loopJSON = """
-        {
-          "session_id": "session-1",
-          "loop_mode": "autopilot"
-        }
-        """.data(using: .utf8)!
 
         let input = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionInputResponse.self, from: inputJSON).sessionInputResponse
-        let draft = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionDraftReplyResponse.self, from: draftJSON).draftReplyResponse
-        let loop = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionLoopModeResponse.self, from: loopJSON).loopModeResponse
 
         #expect(input.outcome == .queued)
         #expect(input.visibleFailedInputCount == 0)
-        #expect(draft.basedOnEventIds == [1, 2])
-        #expect(loop.loopMode == .autopilot)
     }
 
     @Test
@@ -858,7 +837,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionDetailDecodesLoopModeAndRuntimeState() throws {
+    func sessionDetailDecodesRuntimeState() throws {
         let json = """
         {
           "id": "session-1",
@@ -906,8 +885,7 @@ struct SessionModelsTests {
             "lifecycle": "open",
             "host_state": "online",
             "terminal_reason": null
-          },
-          "loop_mode": "assist"
+          }
         }
         """.data(using: .utf8)!
 
@@ -917,7 +895,6 @@ struct SessionModelsTests {
         )
         let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
 
-        #expect(detail.effectiveLoopMode == .assist)
         #expect(detail.canSendLive)
         #expect(detail.runtimeCapabilityLabel == "Live control")
         #expect(detail.runtimeCapabilityTone == "success")
@@ -1124,8 +1101,7 @@ struct SessionModelsTests {
             "lifecycle": "open",
             "host_state": "unknown",
             "terminal_reason": null
-          },
-          "loop_mode": "manual"
+          }
         }
         """.data(using: .utf8)!
 
@@ -1195,8 +1171,7 @@ struct SessionModelsTests {
             "lifecycle": "open",
             "host_state": "unknown",
             "terminal_reason": null
-          },
-          "loop_mode": "assist"
+          }
         }
         """.data(using: .utf8)!
 
@@ -1303,8 +1278,7 @@ struct SessionModelsTests {
             "lifecycle": "open",
             "host_state": "unknown",
             "terminal_reason": null
-          },
-          "loop_mode": "manual"
+          }
         }
         """.data(using: .utf8)!
 
@@ -1376,8 +1350,7 @@ struct SessionModelsTests {
             "lifecycle": "closed",
             "host_state": "online",
             "terminal_reason": "provider_signal"
-          },
-          "loop_mode": "manual"
+          }
         }
         """.data(using: .utf8)!
 
@@ -1451,8 +1424,7 @@ struct SessionModelsTests {
             "host_state": "online",
             "terminal_reason": null,
             "pause_request": null
-          },
-          "loop_mode": "manual"
+          }
         }
         """.data(using: .utf8)!
 
@@ -1745,8 +1717,7 @@ struct SessionModelsTests {
             "lifecycle": "open",
             "host_state": "online",
             "terminal_reason": "run_completed"
-          },
-          "loop_mode": "assist"
+          }
         }
         """.data(using: .utf8)!
 
@@ -1852,8 +1823,7 @@ struct SessionModelsTests {
             "lifecycle": "open",
             "host_state": "online",
             "terminal_reason": "run_completed"
-          },
-          "loop_mode": "assist"
+          }
         }
         """.data(using: .utf8)!
     }

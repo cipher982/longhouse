@@ -2,44 +2,112 @@ import SwiftUI
 
 // MARK: - Preview helpers
 
+/// Served session-state facts, camelCase because the preview decodes with a
+/// plain JSONDecoder. Every key the contract carries is present so a preview
+/// never renders the "unknown" fallback by accident.
+private func factsJSON(
+    mode: String = "helm",
+    disposition: String = "open",
+    runLifecycle: String? = "running",
+    activity: String,
+    tool: String? = nil,
+    observedAt: String? = nil,
+    validUntil: String? = nil,
+    controlConnection: String = "connected",
+    sendInput: String = "available",
+    primaryKey: String,
+    primaryLabel: String,
+    primaryTone: String,
+    access: (key: String, label: String, tone: String)? = nil,
+    pendingInteractionKind: String? = nil
+) -> String {
+    func q(_ value: String?) -> String { value.map { "\"\($0)\"" } ?? "null" }
+    let accessJSON = access.map {
+        "{ \"key\": \"\($0.key)\", \"label\": \"\($0.label)\", \"tone\": \"\($0.tone)\", \"observedAt\": null }"
+    } ?? "null"
+    return """
+    {
+      "contractVersion": 2,
+      "presentationPolicyVersion": 2,
+      "mode": "\(mode)",
+      "dispositionState": "\(disposition)",
+      "dispositionCloseReason": null,
+      "launchState": null,
+      "runLifecycle": \(q(runLifecycle)),
+      "activityState": "\(activity)",
+      "activityRawKind": null,
+      "activityTool": \(q(tool)),
+      "activitySource": null,
+      "activityObservedAt": \(q(observedAt)),
+      "activityValidUntil": \(q(validUntil)),
+      "controlOwnership": "owned",
+      "controlConnection": "\(controlConnection)",
+      "workingSet": "open",
+      "unread": false,
+      "lastResultAt": null,
+      "lastResultOutcome": null,
+      "startTurn": { "state": "unavailable", "reason": "not_console" },
+      "sendInput": { "state": "\(sendInput)", "reason": null },
+      "interrupt": { "state": "available", "reason": null },
+      "terminate": { "state": "unavailable", "reason": "unsupported" },
+      "reattach": { "state": "unavailable", "reason": "not_needed" },
+      "resume": { "state": "unavailable", "reason": "run_active" },
+      "branch": { "state": "unavailable", "reason": "run_active" },
+      "pendingInteractionKind": \(q(pendingInteractionKind)),
+      "transcriptConvergence": "current",
+      "primary": { "key": "\(primaryKey)", "label": "\(primaryLabel)", "tone": "\(primaryTone)", "observedAt": \(q(observedAt)) },
+      "access": \(accessJSON),
+      "transcript": null,
+      "commitSeq": null
+    }
+    """
+}
+
+private func isoDate(secondsAgo: TimeInterval) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: Date().addingTimeInterval(-secondsAgo))
+}
+
 private extension SessionDetail {
     static func mock(
         provider: String = "claude",
-        headline: String = "Idle",
-        runtimeDetail: String? = "Waiting for next prompt",
-        tone: String = "idle",
-        live: Bool = true,
+        project: String = "zerg",
+        homeLabel: String = "clifford",
         canSteer: Bool = false,
         canQueue: Bool = false,
-        loopMode: SessionLoopMode = .assist,
         executing: Bool = false,
-        stateFactsJSON: String? = nil
+        placeholder: String = "Message",
+        stateFactsJSON: String,
+        transcriptPreviewJSON: String? = nil
     ) -> SessionDetail {
         let json = """
         {
           "id": "preview-1",
           "provider": "\(provider)",
-          "project": "my-project",
+          "project": "\(project)",
           "cwd": "/Users/example/code",
           "gitBranch": "main",
-          "summary": "Working on iOS session view redesign",
-          "summaryTitle": "iOS session view redesign",
+          "summary": "Backup architecture restore",
+          "summaryTitle": "Backup Architecture Restore",
           "presenceState": "\(executing ? "running" : "idle")",
           "userState": "active",
+          "homeLabel": "\(homeLabel)",
           "capabilities": {
             "canQueueNextInput": \(canQueue),
-            "canSteerActiveTurn": \(canSteer)
+            "canSteerActiveTurn": \(canSteer),
+            "composerPlaceholder": "\(placeholder)"
           },
           "runtimeDisplay": {
             "truthTier": "managed-local",
             "signalTier": "phase_signal",
             "state": "\(executing ? "running" : "idle")",
-            "tone": "\(tone)",
-            "headline": "\(headline)",
-            "detail": \(runtimeDetail.map { "\"\($0)\"" } ?? "null"),
-            "phaseLabel": "\(headline)",
+            "tone": "\(executing ? "running" : "idle")",
+            "headline": "",
+            "detail": null,
+            "phaseLabel": "",
             "compactToolLabel": null,
-            "isLive": \(live),
+            "isLive": true,
             "isExecuting": \(executing),
             "needsAttention": false,
             "isIdle": \(!executing),
@@ -52,7 +120,7 @@ private extension SessionDetail {
             "hostState": "online",
             "terminalReason": null
           },
-          "loopMode": "\(loopMode.rawValue)"\(stateFactsJSON.map { ",\n          \"stateFacts\": \($0)" } ?? "")
+          "stateFacts": \(stateFactsJSON)\(transcriptPreviewJSON.map { ",\n          \"transcriptPreview\": \($0)" } ?? "")
         }
         """
         do {
@@ -60,154 +128,321 @@ private extension SessionDetail {
         } catch {
             print("--- [SessionDetail.mock decoding failure] ---")
             print(error)
-            print("JSON:")
             print(json)
-            print("---------------------------------------------")
             fatalError("Failed to decode SessionDetail mock: \(error)")
         }
     }
 }
 
-// MARK: - Preview chrome — dock + composer only
+private func toolPreviewJSON(tool: String, command: String, running: Bool = true) -> String {
+    """
+    {
+      "eventId": 4870,
+      "text": "\(command)",
+      "role": "assistant",
+      "toolName": "\(tool)",
+      "toolInputJSON": { "command": "\(command)" },
+      "toolOutputText": null,
+      "toolCallId": "call-1",
+      "toolCallState": "\(running ? "running" : "completed")",
+      "eventOrigin": "durable",
+      "timestamp": "\(isoDate(secondsAgo: 31))",
+      "isProvisional": false,
+      "isComplete": false,
+      "contentCursor": null,
+      "isStale": false,
+      "staleReason": null
+    }
+    """
+}
 
-private struct ComposerPreviewChrome: View {
+private func provisionalTextPreviewJSON(_ text: String) -> String {
+    """
+    {
+      "eventId": 4871,
+      "text": "\(text)",
+      "role": "assistant",
+      "toolName": null,
+      "toolInputJSON": null,
+      "toolOutputText": null,
+      "toolCallId": null,
+      "toolCallState": null,
+      "eventOrigin": "live_provisional",
+      "timestamp": "\(isoDate(secondsAgo: 1))",
+      "isProvisional": true,
+      "isComplete": false,
+      "contentCursor": "codex:preview:1",
+      "isStale": false,
+      "staleReason": null
+    }
+    """
+}
+
+/// A strip seeded with a realistic last twelve seconds. Offsets are seconds
+/// ago; the store keeps whatever falls inside its window.
+@MainActor
+private func seededActivity(_ pattern: [(TimeInterval, ActivityPulse.Kind)]) -> ActivityPulseStore {
+    let store = ActivityPulseStore()
+    let now = Date()
+    for (secondsAgo, kind) in pattern.sorted(by: { $0.0 > $1.0 }) {
+        store.record(kind, at: now.addingTimeInterval(-secondsAgo))
+    }
+    return store
+}
+
+@MainActor
+private func codexBurst() -> ActivityPulseStore {
+    var pattern: [(TimeInterval, ActivityPulse.Kind)] = [(11.4, .toolStart), (6.1, .toolResult), (5.2, .message), (0.4, .toolStart)]
+    var t: TimeInterval = 11.1
+    while t > 6.4 { pattern.append((t, .textDelta)); t -= Double.random(in: 0.12...0.38) }
+    t = 5.0
+    while t > 3.6 { pattern.append((t, .textDelta)); t -= Double.random(in: 0.09...0.24) }
+    return seededActivity(pattern)
+}
+
+@MainActor
+private func claudeSparse() -> ActivityPulseStore {
+    seededActivity([(10.8, .toolResult), (10.2, .message), (7.9, .toolStart), (2.4, .state)])
+}
+
+// MARK: - Preview chrome — the real bottom card over a fake transcript
+
+private struct SessionScreenPreview: View {
     let detail: SessionDetail
+    let activity: ActivityPulseStore
+    var transcript: [String] = [
+        "The restore has reached 9.2 GB and remains healthy.",
+        "Checksums so far match the manifest; continuing with the exact restore.",
+    ]
     @State private var text = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            navBar
-
-            // Fake chat content above
+        NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    assistantBubble("Hey, I just finished updating the repo structure. The results digest is now the canonical current-state readout.")
-                    userBubble("Thanks, can you also update the experiment journal?")
-                    assistantBubble("Sure! I've updated `experiment_journal.md` with the latest documentation policy and statistical reset. The current policy prioritizes bucketed results with confidence intervals.")
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(transcript, id: \.self) { line in
+                        Text(line).font(.body)
+                    }
                 }
-                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
             }
-
-            // The actual chrome we're designing
-            SessionRuntimeDock(detail: detail)
-            composerRow
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(alignment: .leading, spacing: 8) {
+                    SessionRuntimeDock(detail: detail, activity: activity)
+                    composerRow
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .strokeBorder(.white.opacity(0.10), lineWidth: 0.75)
+                        )
+                )
+                .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+            }
+            .navigationTitle(detail.displayTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .modifier(PreviewSubtitle(subtitle: detail.identitySubtitle))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {} label: { Label("Lock Screen Updates", systemImage: "bell") }
+                        Divider()
+                        Button {} label: { Label("Copy Link", systemImage: "link") }
+                        Button {} label: { Label("Open on Web", systemImage: "safari") }
+                    } label: {
+                        Label("Session actions", systemImage: "ellipsis").labelStyle(.iconOnly)
+                    }
+                }
+            }
         }
-    }
-
-    private var navBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "chevron.left")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
-            Text("Session")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            LoopModeButtons(
-                currentMode: detail.effectiveLoopMode,
-                disabled: false,
-                onChange: { _ in }
-            )
-            Image(systemName: "bell.fill")
-                .font(.body)
-                .foregroundStyle(Color.white.opacity(0.72))
-                .frame(width: 28, height: 28)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(.bar)
     }
 
     private var composerRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Menu {
-                Button {} label: {
-                    Label("Draft reply", systemImage: "sparkles")
-                }
-                Button {} label: {
-                    Label("Attach images", systemImage: "paperclip")
-                }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 32)
-            }
-            .accessibilityLabel("Message actions")
-
-            TextField("Reply", text: $text, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
+            Image(systemName: "plus")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+            TextField(detail.composerPlaceholder, text: $text, axis: .vertical)
                 .lineLimit(1...6)
-
-            Image(systemName: "arrow.up.circle.fill")
-                .font(.title2)
-                .foregroundStyle(text.isEmpty ? Color.secondary.opacity(0.3) : Color.accentColor)
-        }
-        .padding(12)
-        .background(.bar)
-    }
-
-    private func userBubble(_ msg: String) -> some View {
-        HStack {
-            Spacer(minLength: 48)
-            Text(msg)
-                .font(.callout)
-                .padding(10)
-                .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            Image(systemName: detail.canQueueNextInput && !detail.canSteerActiveTurn ? "clock.arrow.circlepath" : "arrow.up")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(Color(.systemGray))
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Color(.tertiarySystemFill)))
         }
     }
+}
 
-    private func assistantBubble(_ msg: String) -> some View {
-        Text(msg)
-            .font(.callout)
-            .padding(10)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-            .frame(maxWidth: .infinity, alignment: .leading)
+private struct PreviewSubtitle: ViewModifier {
+    let subtitle: String?
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), let subtitle {
+            content.navigationSubtitle(subtitle)
+        } else {
+            content
+        }
     }
 }
 
 // MARK: - Previews
 
-#Preview("Idle · Assist · Dark") {
-    ComposerPreviewChrome(detail: .mock())
-        .preferredColorScheme(.dark)
-}
-
-#Preview("Running · can steer + queue · Dark") {
-    ComposerPreviewChrome(detail: .mock(
-        headline: "Working",
-        runtimeDetail: "Using Shell",
-        tone: "running",
-        canSteer: true,
-        canQueue: true,
-        executing: true
-    ))
+#Preview("Working · Codex · strip busy · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "codex",
+            canSteer: true,
+            canQueue: true,
+            executing: true,
+            placeholder: "Steer this turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "shell",
+                observedAt: isoDate(secondsAgo: 31),
+                validUntil: isoDate(secondsAgo: -90),
+                primaryKey: "executing",
+                primaryLabel: "Using shell",
+                primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            ),
+            transcriptPreviewJSON: toolPreviewJSON(
+                tool: "shell",
+                command: "rsync -a --info=progress2 /vol/backups/exact /mnt/restore"
+            )
+        ),
+        activity: codexBurst()
+    )
     .preferredColorScheme(.dark)
 }
 
-#Preview("Launch setup · Dark") {
-    ComposerPreviewChrome(detail: .mock(
-        provider: "codex",
-        headline: "Launch dispatch",
-        runtimeDetail: "Waiting for the host",
-        tone: "running",
-        live: false,
-        canSteer: false,
-        canQueue: false,
-        executing: true
-    ))
+#Preview("Working · Claude · long tool · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "claude",
+            canSteer: false,
+            canQueue: true,
+            executing: true,
+            placeholder: "Queue for next turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "Bash",
+                observedAt: isoDate(secondsAgo: 72),
+                validUntil: isoDate(secondsAgo: -120),
+                primaryKey: "executing",
+                primaryLabel: "Using Bash",
+                primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            ),
+            transcriptPreviewJSON: toolPreviewJSON(
+                tool: "Bash",
+                command: "pg_restore --verbose --jobs=4 -d longhouse backups/2026-09-01.dump"
+            )
+        ),
+        activity: claudeSparse(),
+        transcript: ["Running the full restore now. This will take a while."]
+    )
     .preferredColorScheme(.dark)
 }
 
-#Preview("Idle · Autopilot · Dark") {
-    ComposerPreviewChrome(detail: .mock(loopMode: .autopilot))
-        .preferredColorScheme(.dark)
+#Preview("Thinking · Codex streaming · Light") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "codex",
+            canSteer: true,
+            canQueue: true,
+            executing: true,
+            placeholder: "Steer this turn",
+            stateFactsJSON: factsJSON(
+                activity: "thinking",
+                observedAt: isoDate(secondsAgo: 8),
+                validUntil: isoDate(secondsAgo: -60),
+                primaryKey: "thinking",
+                primaryLabel: "Thinking",
+                primaryTone: "thinking",
+                access: ("live_control", "Live control", "success")
+            ),
+            transcriptPreviewJSON: provisionalTextPreviewJSON(
+                "The manifest lists 4,930 objects.\\nComparing checksums for the last 60 now."
+            )
+        ),
+        activity: codexBurst()
+    )
+    .preferredColorScheme(.light)
 }
 
-#Preview("Idle · Off · Light") {
-    ComposerPreviewChrome(detail: .mock(loopMode: .manual))
-        .preferredColorScheme(.light)
+#Preview("Needs approval · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "claude",
+            executing: false,
+            stateFactsJSON: factsJSON(
+                activity: "blocked",
+                tool: "Bash",
+                observedAt: isoDate(secondsAgo: 140),
+                primaryKey: "needs_approval",
+                primaryLabel: "Needs approval",
+                primaryTone: "blocked",
+                access: ("live_control", "Live control", "success"),
+                pendingInteractionKind: "approval"
+            )
+        ),
+        activity: seededActivity([(9.5, .toolStart)]),
+        transcript: ["The cache is stale. I’ll clear it before rebuilding."]
+    )
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Idle · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "codex",
+            executing: false,
+            stateFactsJSON: factsJSON(
+                activity: "quiescent",
+                observedAt: isoDate(secondsAgo: 240),
+                primaryKey: "idle",
+                primaryLabel: "Idle",
+                primaryTone: "idle",
+                access: ("live_control", "Live control", "success")
+            )
+        ),
+        activity: ActivityPulseStore(),
+        transcript: ["Restore complete: 9.4 GB, 0 errors. Checksums match the manifest."]
+    )
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Control offline · chip · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "codex",
+            executing: false,
+            stateFactsJSON: factsJSON(
+                runLifecycle: "running",
+                activity: "unknown",
+                observedAt: isoDate(secondsAgo: 600),
+                controlConnection: "disconnected",
+                sendInput: "unavailable",
+                primaryKey: "activity_unknown",
+                primaryLabel: "Activity unknown",
+                primaryTone: "quiet",
+                access: ("control_offline", "Control offline", "warning")
+            )
+        ),
+        activity: ActivityPulseStore(),
+        transcript: ["Restore complete: 9.4 GB, 0 errors. Checksums match the manifest."]
+    )
+    .preferredColorScheme(.dark)
 }
 
 #Preview("Ended Helm · Resume command") {
@@ -246,102 +481,7 @@ private struct ComposerPreviewChrome: View {
     )
 }
 
-
-// MARK: - Session-state facts for capability-chip previews
-
-/// Minimal facts payload for the dock's capability chip. Console blockers are
-/// the interesting cases: the chip has to name what is in the way without
-/// borrowing Helm's control-lease vocabulary.
-private func consoleBlockedFactsJSON(
-    startTurnReason: String,
-    controlConnection: String,
-    accessKey: String,
-    accessLabel: String,
-    accessTone: String
-) -> String {
-    """
-    {
-      "contractVersion": 2,
-      "presentationPolicyVersion": 2,
-      "mode": "console",
-      "dispositionState": "open",
-      "dispositionCloseReason": null,
-      "launchState": null,
-      "runLifecycle": "ended",
-      "activityState": "unknown",
-      "activityRawKind": null,
-      "activityTool": null,
-      "activitySource": null,
-      "activityObservedAt": null,
-      "activityValidUntil": null,
-      "controlOwnership": "owned",
-      "controlConnection": "\(controlConnection)",
-      "workingSet": "history",
-      "unread": false,
-      "lastResultAt": null,
-      "lastResultOutcome": null,
-      "startTurn": { "state": "unavailable", "reason": "\(startTurnReason)" },
-      "sendInput": { "state": "unavailable", "reason": "use_start_turn" },
-      "interrupt": { "state": "unavailable", "reason": "no_active_turn" },
-      "terminate": { "state": "unavailable", "reason": "unsupported" },
-      "reattach": { "state": "unavailable", "reason": "not_helm" },
-      "resume": { "state": "unavailable", "reason": "not_helm" },
-      "branch": { "state": "unavailable", "reason": "not_helm" },
-      "pendingInteractionKind": null,
-      "transcriptConvergence": "current",
-      "primary": { "key": "ended", "label": "Ended", "tone": "closed", "observedAt": null },
-      "access": { "key": "\(accessKey)", "label": "\(accessLabel)", "tone": "\(accessTone)", "observedAt": null },
-      "transcript": null,
-      "commitSeq": null
-    }
-    """
-}
-
-#Preview("Console · no turn adapter · Dark") {
-    ZStack {
-        Color(.systemBackground).ignoresSafeArea()
-        SessionRuntimeDock(detail: .mock(
-            provider: "codex",
-            headline: "Ended",
-            runtimeDetail: nil,
-            tone: "closed",
-            live: false,
-            stateFactsJSON: consoleBlockedFactsJSON(
-                startTurnReason: "adapter_unavailable",
-                controlConnection: "degraded",
-                accessKey: "console_no_turn_path",
-                accessLabel: "Can't send",
-                accessTone: "inactive"
-            )
-        ))
-        .padding()
-    }
-    .preferredColorScheme(.dark)
-}
-
-#Preview("Console · machine offline · Dark") {
-    ZStack {
-        Color(.systemBackground).ignoresSafeArea()
-        SessionRuntimeDock(detail: .mock(
-            provider: "codex",
-            headline: "Ended",
-            runtimeDetail: nil,
-            tone: "closed",
-            live: false,
-            stateFactsJSON: consoleBlockedFactsJSON(
-                startTurnReason: "machine_offline",
-                controlConnection: "disconnected",
-                accessKey: "machine_offline",
-                accessLabel: "Machine offline",
-                accessTone: "degraded"
-            )
-        ))
-        .padding()
-    }
-    .preferredColorScheme(.dark)
-}
-
-// MARK: - Transcript load-state previews (M3: one shared overlay component)
+// MARK: - Transcript load-state previews (one shared overlay component)
 
 #Preview("Transcript · hard error · Dark") {
     ZStack {

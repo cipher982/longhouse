@@ -12,6 +12,7 @@ struct SessionView: View {
 
     @EnvironmentObject var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @StateObject private var viewModel = SessionViewModel()
     @StateObject private var liveActivityManager = SessionLiveActivityManager()
     @State private var composerText: String = ""
@@ -63,10 +64,10 @@ struct SessionView: View {
         }
         .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .modifier(SessionNavigationSubtitle(subtitle: viewModel.detail?.identitySubtitle))
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                loopModeToolbarButton
-                watchButton
+            ToolbarItem(placement: .topBarTrailing) {
+                overflowMenu
             }
         }
         .task(id: sessionId) {
@@ -180,8 +181,10 @@ struct SessionView: View {
         .padding(.bottom, 10)
     }
 
+    // One trailing glyph. The title keeps the bar; the once-per-session
+    // actions (Lock Screen updates, link) live behind it.
     @ViewBuilder
-    private var watchButton: some View {
+    private var overflowMenu: some View {
         if let detail = viewModel.detail {
             let isWatching = liveActivityManager.isWatching(sessionId: detail.id)
             Menu {
@@ -189,51 +192,43 @@ struct SessionView: View {
                     Task { await liveActivityManager.toggle(detail: detail, appState: appState) }
                 } label: {
                     Label(
-                        isWatching ? "Stop Lock Screen Updates" : "Start Lock Screen Updates",
-                        systemImage: isWatching ? "stop.circle" : "bell.badge"
+                        isWatching ? "Stop Lock Screen Updates" : "Lock Screen Updates",
+                        systemImage: isWatching ? "bell.slash" : "bell"
                     )
+                }
+                .disabled(liveActivityManager.isBusy)
+                Divider()
+                Button {
+                    UIPasteboard.general.url = sessionWebURL
+                } label: {
+                    Label("Copy Link", systemImage: "link")
+                }
+                Button {
+                    if let url = sessionWebURL { openURL(url) }
+                } label: {
+                    Label("Open on Web", systemImage: "safari")
                 }
             } label: {
                 if liveActivityManager.isBusy {
                     ProgressView().controlSize(.small)
                 } else {
-                    Label(
-                        isWatching ? "Updates On" : "Updates",
-                        systemImage: isWatching ? "bell.fill" : "bell"
-                    )
-                    .labelStyle(.iconOnly)
+                    Label("Session actions", systemImage: "ellipsis")
+                        .labelStyle(.iconOnly)
                 }
             }
-            .disabled(liveActivityManager.isBusy)
-            .accessibilityLabel(isWatching ? "Lock Screen updates on" : "Lock Screen updates")
-            .accessibilityHint("Opens Lock Screen update options")
+            .accessibilityLabel("Session actions")
+            .accessibilityIdentifier("session-overflow-menu")
         }
     }
 
-    @ViewBuilder
-    private var loopModeToolbarButton: some View {
-        if let detail = viewModel.detail {
-            if viewModel.isUpdatingLoopMode {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel("Updating loop mode")
-            } else {
-                LoopModeButtons(
-                    currentMode: detail.effectiveLoopMode,
-                    disabled: false,
-                    onChange: { mode in
-                        Task { await viewModel.setLoopMode(sessionId: sessionId, mode: mode, appState: appState) }
-                    }
-                )
-                .accessibilityIdentifier("session-loop-mode-controls")
-            }
-        }
+    private var sessionWebURL: URL? {
+        URL(string: appState.serverURL)?.appendingPathComponent("timeline/\(sessionId)")
     }
 
     @ViewBuilder
     private var runtimeDock: some View {
         if let detail = viewModel.detail {
-            SessionRuntimeDock(detail: detail)
+            SessionRuntimeDock(detail: detail, activity: viewModel.activity)
         }
     }
 
@@ -327,12 +322,6 @@ struct SessionView: View {
     private func composerField(detail: SessionDetail) -> some View {
         let pauseRequest = detail.activePauseRequest
         return VStack(alignment: .leading, spacing: 6) {
-            if let draftError = viewModel.draftErrorMessage {
-                Text(draftError)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
             if viewModel.failedInputCount > 0 {
                 Text(viewModel.failedInputCount == 1
                      ? "1 queued message failed to send."
@@ -384,12 +373,6 @@ struct SessionView: View {
                 .accessibilityIdentifier("session-chat-turn-ended")
             }
 
-            if let loopModeErrorMessage = viewModel.loopModeErrorMessage {
-                Text(loopModeErrorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
             if let pauseRequest {
                 SessionPauseRequestCard(
                     pauseRequest: pauseRequest,
@@ -419,7 +402,6 @@ struct SessionView: View {
                 let sendIsEnabled = detail.canSendLive
                     && composerHasContent
                     && !viewModel.isSending
-                    && !viewModel.isDrafting
                     && !attachmentStore.isProcessing
                     && !isLoadingPickerItems
                     && !attachmentSendBlocked
@@ -434,7 +416,6 @@ struct SessionView: View {
                         // field also avoids doing that system layout work while the
                         // transcript WebView is settling around the keyboard.
                         .autocorrectionDisabled(true)
-                        .disabled(viewModel.isDrafting)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -537,16 +518,8 @@ struct SessionView: View {
             && attachmentSlotsLeft > 0
             && !attachmentIsProcessing
             && !viewModel.isSending
-        let canDraft = detail.canSendLive && !composerHasText && !viewModel.isSending && !viewModel.isDrafting
 
         return Menu {
-            Button {
-                Task { await draft() }
-            } label: {
-                Label("Draft reply", systemImage: "sparkles")
-            }
-            .disabled(!canDraft)
-
             if detail.attachImagesEnabled {
                 Button {
                     isShowingPhotoPicker = true
@@ -558,7 +531,7 @@ struct SessionView: View {
             }
         } label: {
             Group {
-                if viewModel.isDrafting || attachmentIsProcessing {
+                if attachmentIsProcessing {
                     ProgressView().controlSize(.small)
                 } else {
                     Image(systemName: "plus")
@@ -772,9 +745,19 @@ struct SessionView: View {
         }
     }
 
-    private func draft() async {
-        guard let draft = await viewModel.draftReply(sessionId: sessionId, appState: appState) else { return }
-        composerText = draft
-        composerFocused = true
+}
+
+/// Identity under the title: provider · project · machine. The subtitle API
+/// is iOS 26; older systems keep the plain title rather than a hand-rolled
+/// principal item that fights the system bar.
+private struct SessionNavigationSubtitle: ViewModifier {
+    let subtitle: String?
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), let subtitle, !subtitle.isEmpty {
+            content.navigationSubtitle(subtitle)
+        } else {
+            content
+        }
     }
 }

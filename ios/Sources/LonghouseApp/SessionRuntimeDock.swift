@@ -1,51 +1,105 @@
 import SwiftUI
 
+/// The status row of the control card: activity strip, headline, counting
+/// elapsed time, and a mono tail line with the newest live text. Colour is
+/// signal — the strip and headline take the session tone, everything else is
+/// monochrome. The capability chip appears only when control is *not* live:
+/// an enabled composer is the proof of the healthy case, so naming it there
+/// was noise.
 struct SessionRuntimeDock: View {
     let detail: SessionDetail
+    @ObservedObject var activity: ActivityPulseStore
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
+    // A streaming provider refreshes the primary label's observed_at with
+    // every provisional delta. Anchor the counter on the earliest observation
+    // for the current label + tool so it counts up instead of resetting.
+    @State private var elapsedAnchor: ElapsedAnchor?
+
+    private struct ElapsedAnchor: Equatable {
+        let key: String
+        let start: Date
+    }
 
     var body: some View {
-        // One quiet monochrome status line. The state dot is the only color;
-        // headline/detail/capability are a flat type hierarchy. No background or
-        // divider — the fused control card owns the surface.
         Group {
             if detail.canDraftBeforeSendReady {
                 launchSetupLine
             } else {
-                standardLine
+                standardLines
             }
         }
         .padding(.horizontal, 4)
+        .onAppear { reanchorElapsed() }
+        .onChange(of: detail.activityStartedAt) { _, _ in reanchorElapsed() }
+        .onChange(of: elapsedAnchorKey) { _, _ in reanchorElapsed() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
     }
 
     private var style: RuntimeChromeStyle { RuntimeChromeStyle(detail: detail) }
 
-    private var standardLine: some View {
-        HStack(spacing: 7) {
-            indicator
-            Text(detail.runtimeHeadline)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-            if let runtimeDetail = detail.runtimeDetail, !typeSize.isAccessibilitySize {
-                Text("·").foregroundStyle(.tertiary)
-                Text(runtimeDetail)
-                    .font(.subheadline)
+    private var elapsedAnchorKey: String {
+        [detail.stateFacts.primary?.key ?? "", detail.stateFacts.activityTool ?? "", detail.stateFacts.activityState]
+            .joined(separator: ":")
+    }
+
+    private func reanchorElapsed() {
+        guard let observed = detail.activityStartedAt else {
+            if elapsedAnchor?.key != elapsedAnchorKey { elapsedAnchor = nil }
+            return
+        }
+        if let current = elapsedAnchor, current.key == elapsedAnchorKey {
+            if observed < current.start {
+                elapsedAnchor = ElapsedAnchor(key: current.key, start: observed)
+            }
+        } else {
+            elapsedAnchor = ElapsedAnchor(key: elapsedAnchorKey, start: observed)
+        }
+    }
+
+    private var elapsedStart: Date? {
+        if let anchor = elapsedAnchor, anchor.key == elapsedAnchorKey {
+            return anchor.start
+        }
+        return detail.activityStartedAt
+    }
+    private var tone: Color { style.dot.color }
+    private var isExecuting: Bool { detail.isSessionExecuting }
+
+    private var standardLines: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                ActivityStrip(store: activity, tone: tone, isLive: isExecuting)
+                Text(detail.runtimeHeadline)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(headlineColor)
+                    .lineLimit(1)
+                elapsed
+                if let runtimeDetail = detail.runtimeDetail, !typeSize.isAccessibilitySize {
+                    Text(runtimeDetail)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                capabilityChip
+            }
+            if let tail = detail.runtimeTailLine, !typeSize.isAccessibilitySize {
+                Text(tail)
+                    .font(.caption.monospaced())
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
+                    .truncationMode(.head)
+                    .padding(.leading, ActivityStrip.size.width + 8)
+                    .accessibilityIdentifier("session-runtime-tail")
             }
-            Spacer(minLength: 8)
-            capabilityPill
         }
     }
 
     private var launchSetupLine: some View {
-        HStack(spacing: 7) {
-            indicator
+        HStack(spacing: 8) {
+            ActivityStrip(store: activity, tone: RuntimeSignal.live.color, isLive: true)
             Text(detail.launchSetupStatusLabel)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
@@ -54,58 +108,75 @@ struct SessionRuntimeDock: View {
         }
     }
 
-    // State dot — color is the signal; motion (breathing ring) marks "live".
-    @ViewBuilder
-    private var indicator: some View {
-        let toneColor = style.dot.color
-        ZStack {
-            if detail.isSessionExecuting && !reduceMotion {
-                Circle().stroke(toneColor.opacity(0.35), lineWidth: 1.5)
-                    .frame(width: 13, height: 13)
-            }
-            Circle().fill(toneColor).frame(width: 7, height: 7)
+    private var headlineColor: Color {
+        switch style.dot {
+        case .attention: return TranscriptPalette.attention
+        case .live: return .primary
+        case .idle, .dormant: return .secondary
         }
-        .frame(width: 14, height: 14)
     }
 
-    // Capability as monochrome text with a small live-dot — never colored words.
-    // Absent when the contract emitted no access label: the primary label
-    // already carries the whole story there, and a fabricated chip beside it
-    // claims something the server declined to claim.
+    // Executing: a precise count that ticks once a second — the cheapest honest
+    // "still alive" there is. Otherwise a coarse age, and no ticking.
     @ViewBuilder
-    private var capabilityPill: some View {
-        if let capabilityLabel {
-            HStack(spacing: 4) {
-                if style.capability.showsLiveDot {
-                    Circle().fill(TranscriptPalette.live).frame(width: 5, height: 5)
+    private var elapsed: some View {
+        if let start = elapsedStart {
+            let evidenceLive = detail.stateFacts.activityEvidenceIsLive()
+            let ticking = isExecuting && evidenceLive
+            if ticking {
+                SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                    elapsedText(RuntimeElapsed.label(from: start, to: context.date, precise: true))
                 }
-                Text(capabilityLabel)
-                    .font(.caption2.weight(.medium))
-                    .lineLimit(1)
+            } else {
+                let end = (isExecuting ? detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) : nil) ?? Date()
+                elapsedText(RuntimeElapsed.label(from: start, to: end, precise: isExecuting))
             }
-            .foregroundStyle(style.capability.color)
         }
     }
 
-    private var capabilityLabel: String? {
-        guard let label = detail.runtimeCapabilityLabel else { return nil }
-        let livePrefix = "Live on "
-        if label.range(of: livePrefix, options: [.anchored, .caseInsensitive]) != nil {
-            let hostStart = label.index(label.startIndex, offsetBy: livePrefix.count)
-            let host = label[hostStart...].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !host.isEmpty {
-                return host
-            }
+    private func elapsedText(_ label: String) -> some View {
+        Text(label)
+            .font(.subheadline)
+            .monospacedDigit()
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .accessibilityIdentifier("session-runtime-elapsed")
+    }
+
+    // Absent while control is live. The server declines to emit a label when
+    // the primary already carries the story; the client declines to repeat
+    // "Live control" beside a composer that is plainly enabled.
+    @ViewBuilder
+    private var capabilityChip: some View {
+        if style.capability != .live, let label = detail.runtimeCapabilityLabel {
+            Text(label)
+                .font(.caption2.weight(.medium))
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .foregroundStyle(style.capability == .warning ? TranscriptPalette.attention : Color.secondary)
+                .background(
+                    Capsule(style: .continuous).fill(
+                        style.capability == .warning
+                            ? TranscriptPalette.attention.opacity(0.14)
+                            : Color(.quaternarySystemFill)
+                    )
+                )
+                .accessibilityIdentifier("session-runtime-capability")
         }
-        return label
     }
 
     private var accessibilityLabel: String {
         if detail.canDraftBeforeSendReady {
             return detail.launchSetupStatusLabel
         }
-        return [detail.runtimeHeadline, detail.runtimeDetail, capabilityLabel]
-            .compactMap { $0 }
-            .joined(separator: ", ")
+        var parts = [detail.runtimeHeadline]
+        if let start = elapsedStart {
+            parts.append(RuntimeElapsed.label(from: start, to: Date(), precise: isExecuting))
+        }
+        if let detailLabel = detail.runtimeDetail { parts.append(detailLabel) }
+        if style.capability != .live, let label = detail.runtimeCapabilityLabel { parts.append(label) }
+        if let tail = detail.runtimeTailLine { parts.append(tail) }
+        return parts.joined(separator: ", ")
     }
 }

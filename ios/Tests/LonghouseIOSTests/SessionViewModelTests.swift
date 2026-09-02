@@ -1198,8 +1198,7 @@ struct SessionViewModelTests {
             "lifecycle": "open",
             "host_state": "unknown",
             "terminal_reason": null\(pauseRequestField)
-          },
-          "loop_mode": "assist"\(transcriptPreviewField)
+          }\(transcriptPreviewField)
           },
           "thread": {
             "root_session_id": "session-1",
@@ -1567,14 +1566,6 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
                 expiresAt: nil
             )
         )
-    }
-
-    func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
-        DraftReplyResponse(draftText: "Draft", model: "test", generatedAt: "2026-05-02T20:00:00Z", basedOnEventIds: [])
-    }
-
-    func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse {
-        LoopModeResponse(sessionId: id, loopMode: loopMode)
     }
 
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {

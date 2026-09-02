@@ -38,11 +38,9 @@ final class SessionViewModel: ObservableObject {
     @Published var refreshErrorMessage: String?
     @Published var isInitialLoading = true
     @Published var isSending = false
-    @Published var isDrafting = false
-    @Published var isUpdatingLoopMode = false
     @Published var isRespondingToPauseRequest = false
-    @Published var draftErrorMessage: String?
-    @Published var loopModeErrorMessage: String?
+    /// Frames received on the workspace stream, for the dock's activity strip.
+    let activity = ActivityPulseStore()
     @Published var pauseResponseErrorMessage: String?
     @Published var resumeIntent: SessionResumeIntent?
     @Published var branchMessage: String = ""
@@ -177,6 +175,7 @@ final class SessionViewModel: ObservableObject {
             lastPubsubSeq = nil
             lastWorkspaceRevisionFingerprint = nil
             streamAuthRefreshAttempted = false
+            activity.reset()
             // Warm path: the in-process tier survives backgrounding while the
             // process lives. Cold path: the durable on-disk tier survives app
             // eviction, so a relaunch into a session renders instantly instead
@@ -308,7 +307,6 @@ final class SessionViewModel: ObservableObject {
             try await refreshTail(api: api, sessionId: sessionId)
             errorMessage = nil
             refreshErrorMessage = nil
-            loopModeErrorMessage = nil
         } catch LonghouseAPIError.notAuthenticated {
             if hasContent {
                 refreshErrorMessage = "Session expired. Pull to refresh."
@@ -412,7 +410,6 @@ final class SessionViewModel: ObservableObject {
             return false
         }
         isSending = true
-        draftErrorMessage = nil
         defer { isSending = false }
         do {
             let response: SessionInputResponse
@@ -513,25 +510,6 @@ final class SessionViewModel: ObservableObject {
         return queued
     }
 
-    func draftReply(sessionId: String, appState: AppState) async -> String? {
-        guard let api = apiFactory(appState.serverURL) else { return nil }
-        isDrafting = true
-        draftErrorMessage = nil
-        defer { isDrafting = false }
-        do {
-            let response = try await api.draftReply(id: sessionId, maxChars: 1200)
-            let draft = response.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !draft.isEmpty else {
-                draftErrorMessage = "No draft suggestion available yet."
-                return nil
-            }
-            return draft
-        } catch {
-            draftErrorMessage = "Draft unavailable: \(error.localizedDescription)"
-            return nil
-        }
-    }
-
     /// Read-on-open acknowledgement for Console results
     /// (console-unread-acknowledgement spec): acknowledge exactly the result
     /// this client rendered. Fire-and-forget; the server is a max-write no-op
@@ -552,19 +530,6 @@ final class SessionViewModel: ObservableObject {
         ) else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
         try? await api.markSessionRead(id: sessionId, readThrough: readThrough)
-    }
-
-    func setLoopMode(sessionId: String, mode: SessionLoopMode, appState: AppState) async {
-        guard let api = apiFactory(appState.serverURL) else { return }
-        isUpdatingLoopMode = true
-        loopModeErrorMessage = nil
-        defer { isUpdatingLoopMode = false }
-        do {
-            _ = try await api.setSessionLoopMode(id: sessionId, loopMode: mode)
-            try await refreshTail(api: api, sessionId: sessionId)
-        } catch {
-            loopModeErrorMessage = "Mode unavailable: \(error.localizedDescription)"
-        }
     }
 
     func respondToPauseRequest(
@@ -786,6 +751,7 @@ final class SessionViewModel: ObservableObject {
         case .heartbeat:
             break
         case .changed(let change):
+            activity.record(ActivityPulseStore.classify(change))
             // Push wake -> refetch the compact tail and emit render beacon.
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
             let clockSkewMs = Int(clamping: await stream?.clockSkewMs() ?? 0)
