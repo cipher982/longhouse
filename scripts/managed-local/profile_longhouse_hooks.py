@@ -6,8 +6,8 @@ temporary HOME-like sandbox so we can measure hook overhead without mutating
 the user's real outbox, transcript bindings, or engine state.
 
 It targets the exact question raised during managed-local debugging: how
-expensive is the local-only hook hot path, and what extra cost comes from the
-managed-session bind branch?
+expensive is the local-only hook hot path, including managed-session identity
+selection without any synchronous database work?
 
 Usage examples:
 
@@ -21,12 +21,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import statistics
 import subprocess
 import sys
 import tempfile
-import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,7 +72,6 @@ class ScenarioResult:
     exit_codes: list[int]
     http_requests: int
     outbox_files: int
-    engine_bind_count: int
 
 
 PROVIDER_DESCRIPTORS: dict[str, ProviderSpec] = {
@@ -112,8 +109,8 @@ SCENARIOS: tuple[ScenarioSpec, ...] = (
         hook_env={},
     ),
     ScenarioSpec(
-        name="managed_bind_outbox",
-        description="managed-session bind branch plus local outbox write",
+        name="managed_outbox",
+        description="managed-session identity plus local outbox write",
         hook_env={"LONGHOUSE_MANAGED_SESSION_ID": "managed-session-123"},
     ),
 )
@@ -172,15 +169,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _replace_engine_path(script_text: str, engine_path: Path) -> str:
-    return re.sub(
-        r'^([ \t]*)ENGINE="[^"]*"$',
-        lambda match: f'{match.group(1)}ENGINE="{engine_path}"',
-        script_text,
-        flags=re.MULTILINE,
-    )
-
-
 def _replace_home_bound_paths(script_text: str, sandbox_home: Path) -> str:
     real_home = str(Path.home())
     return script_text.replace(real_home, str(sandbox_home))
@@ -188,24 +176,7 @@ def _replace_home_bound_paths(script_text: str, sandbox_home: Path) -> str:
 
 def materialize_hook_script(*, source_path: Path, sandbox_home: Path, sandbox_root: Path, hook_name: str) -> Path:
     text = source_path.read_text(encoding="utf-8")
-    engine_dir = sandbox_root / "engine"
-    engine_dir.mkdir(parents=True, exist_ok=True)
-    engine_stub = engine_dir / "longhouse-engine"
-    engine_log = sandbox_root / "engine-bind.log"
-    engine_stub.write_text(
-        textwrap.dedent(
-            f"""\
-            #!/bin/bash
-            printf '%s\\n' "$*" >> "{engine_log}"
-            exit 0
-            """
-        ),
-        encoding="utf-8",
-    )
-    engine_stub.chmod(0o755)
-
     rewritten = _replace_home_bound_paths(text, sandbox_home)
-    rewritten = _replace_engine_path(rewritten, engine_stub)
 
     materialized_path = sandbox_root / hook_name
     materialized_path.write_text(rewritten, encoding="utf-8")
@@ -217,12 +188,6 @@ def _count_outbox_files(outbox_dir: Path) -> int:
     if not outbox_dir.exists():
         return 0
     return len([path for path in outbox_dir.iterdir() if path.is_file() and path.name.startswith("prs.")])
-
-
-def _count_engine_binds(engine_log_path: Path) -> int:
-    if not engine_log_path.exists():
-        return 0
-    return len([line for line in engine_log_path.read_text(encoding="utf-8").splitlines() if line.strip()])
 
 
 def _build_env(
@@ -238,7 +203,7 @@ def _build_env(
 
 def _payload_for_scenario(provider: ProviderSpec, scenario: ScenarioSpec) -> str:
     payload = dict(provider.input_payload)
-    if "managed_bind" in scenario.name:
+    if "managed" in scenario.name:
         payload["transcript_path"] = str(Path("/tmp") / f"{provider.name}-profile-transcript.jsonl")
     return json.dumps(payload)
 
@@ -286,8 +251,6 @@ def profile_provider_scenario(
             "HOME": str(sandbox_home),
         }
         outbox_dir = sandbox_home / ".longhouse" / "agent" / "outbox"
-        engine_log_path = sandbox_root / "engine-bind.log"
-
         samples: list[IterationSample] = []
         env = _build_env(base_env=base_env, scenario=scenario)
         for _ in range(iterations):
@@ -307,7 +270,6 @@ def profile_provider_scenario(
             exit_codes=[sample.exit_code for sample in samples],
             http_requests=0,
             outbox_files=_count_outbox_files(outbox_dir),
-            engine_bind_count=_count_engine_binds(engine_log_path),
         )
 
 
@@ -325,11 +287,10 @@ def format_human_table(results: Iterable[ScenarioResult]) -> str:
             f"{result.p95_ms:.1f}",
             str(result.http_requests),
             str(result.outbox_files),
-            str(result.engine_bind_count),
         )
         for result in results
     ]
-    headers = ("provider", "scenario", "mean_ms", "p50_ms", "p95_ms", "http", "outbox", "binds")
+    headers = ("provider", "scenario", "mean_ms", "p50_ms", "p95_ms", "http", "outbox")
     widths = [len(header) for header in headers]
     for row in rows:
         widths = [max(width, len(cell)) for width, cell in zip(widths, row)]

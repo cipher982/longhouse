@@ -2,16 +2,17 @@
 
 Installs provider hook scripts and injects hook configuration into
 ``~/.claude/settings.json`` and ``~/.codex/hooks.json`` so Longhouse can
-write presence and binding events locally without network calls in the hot
-path.
+write presence events locally without network calls or SQLite calls in the hot
+path. The daemon persists durable managed transcript bindings from those
+events.
 
 Claude hooks (via settings.json):
 
 - **longhouse-hook.sh** (SessionStart, Stop, UserPromptSubmit, PreToolUse,
   PostToolUse, PermissionRequest, Notification):
   Writes presence events to a local outbox directory
-  (``~/.longhouse/agent/outbox/``) as small JSON files (<2ms, no network) and
-  seeds session binding for the daemon.
+  (``~/.longhouse/agent/outbox/``) as small JSON files (<2ms, no network or
+  SQLite).
 
 Codex hooks (via hooks.json):
 
@@ -61,11 +62,11 @@ COORDINATION_BOOTSTRAP = (
 
 HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse unified Claude hook — presence/runtime outbox + session binding seed
+# Longhouse unified Claude hook — presence/runtime outbox
 # Installed by: longhouse connect --install
 # Registered on: SessionStart, Stop, UserPromptSubmit, PreToolUse,
 #                PostToolUse, PostToolUseFailure, PermissionRequest, Notification
-# All events: local-only outbox write + session binding seed.
+# All events: local-only outbox write. The daemon persists durable bindings.
 INPUT=$(cat)
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
@@ -167,14 +168,6 @@ if [[ -n "$STATE" ]] && [[ -n "$SESSION_ID" ]]; then
     '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider, transcript_path: $transcript, control_path: $control_path}
       + (if $provider_pid == "" then {} else {provider_pid: ($provider_pid | tonumber)} end)')
 
-  # Seed session binding so the daemon ships with the correct managed session ID.
-  # The daemon (longhouse-engine connect) handles all transcript shipping via its
-  # file watcher — hooks no longer ship directly.
-  ENGINE="__ENGINE_PATH__"
-  if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
-    "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" >/dev/null 2>&1 || true
-  fi
-
   write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
 
   # Claude's Notification/elicitation_dialog tells us the terminal is waiting,
@@ -204,11 +197,11 @@ exit 0
 
 CODEX_HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse Codex hook — presence outbox + session binding seed
+# Longhouse Codex hook — presence outbox
 # Installed by: longhouse connect --install
 # Registered on: UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest,
 #                Stop (via ~/.codex/hooks.json)
-# All events: local-only presence outbox write + session binding seed.
+# All events: local-only presence outbox write. The daemon persists durable bindings.
 INPUT=$(cat)
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
@@ -263,17 +256,15 @@ case "$EVENT" in
 esac
 
 if [[ -n "$STATE" ]] && [[ -n "$SID" ]]; then
+  CONTROL_PATH="unmanaged"
+  if [[ -n "$MANAGED_SESSION_ID" ]]; then
+    CONTROL_PATH="managed"
+  fi
   PAYLOAD=$(jq -n --arg sid "$SID" --arg st "$STATE" \\
         --arg tool "$TOOL" --arg cwd "$CWD" --arg provider "codex" \\
-        --arg transcript "$TRANSCRIPT" \\
-    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider, transcript_path: $transcript}')
+        --arg transcript "$TRANSCRIPT" --arg control_path "$CONTROL_PATH" \\
+    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider, transcript_path: $transcript, control_path: $control_path}')
   write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
-
-  # Seed session binding so the daemon ships with the correct managed session ID.
-  ENGINE="__ENGINE_PATH__"
-  if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
-    "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" --provider codex >/dev/null 2>&1 || true
-  fi
 fi
 
 exit 0
@@ -459,12 +450,12 @@ def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
     """Build hook entry dicts with resolved script paths.
 
     Returns (stop_entry, lifecycle_entry):
-    - stop_entry: unified script for Stop (sync, local write/bind — not a banner)
+    - stop_entry: unified script for Stop (sync, local outbox write — not a banner)
     - lifecycle_entry: unified script for SessionStart and other lifecycle hooks
     """
     hook_path = str(hooks_dir / "longhouse-hook.sh")
 
-    # Stop: sync — hook does local session binding and presence delivery setup.
+    # Stop: sync — hook only writes the local presence outbox.
     # The daemon handles transcript shipping via its file watcher.
     stop_entry = {
         "hooks": [
@@ -667,19 +658,12 @@ def install_hooks(
         except RuntimeError:
             engine_path = "longhouse-engine"  # last resort: rely on PATH
 
-    hook_script_content = (
-        HOOK_SCRIPT.replace(
-            "__LONGHOUSE_HOME__",
-            _shell_double_quote(str(longhouse_home)),
-        )
-        .replace(
-            "__HINDSIGHT_ROOT__",
-            _shell_double_quote(str(hindsight_root)),
-        )
-        .replace(
-            "__ENGINE_PATH__",
-            engine_path,
-        )
+    hook_script_content = HOOK_SCRIPT.replace(
+        "__LONGHOUSE_HOME__",
+        _shell_double_quote(str(longhouse_home)),
+    ).replace(
+        "__HINDSIGHT_ROOT__",
+        _shell_double_quote(str(hindsight_root)),
     )
     hook_script = hooks_dir / "longhouse-hook.sh"
     hook_script.write_text(hook_script_content)
@@ -854,9 +838,6 @@ def install_codex_hooks(
     hook_content = CODEX_HOOK_SCRIPT.replace(
         "__LONGHOUSE_HOME__",
         _shell_double_quote(str(longhouse_home)),
-    ).replace(
-        "__ENGINE_PATH__",
-        engine_path,
     )
 
     hook_script = hooks_dir / "longhouse-codex-hook.sh"

@@ -1,7 +1,8 @@
 //! Native, local-only Claude lifecycle hook.
 //!
 //! Claude invokes this once per hook event. It must stay small: parse stdin,
-//! enqueue a presence record, seed a managed transcript binding, and exit 0.
+//! enqueue a presence record, and exit 0. The daemon owns durable local
+//! projections such as managed transcript bindings.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -68,19 +69,12 @@ fn run_inner() -> anyhow::Result<()> {
     let cwd = string(&input, "cwd");
     let transcript_path = string(&input, "transcript_path");
     if event == "SessionStart" {
-        if let (Some(managed), Some(native)) =
-            (managed_session_id.as_deref(), provider_session_id.as_deref())
-        {
+        if let (Some(managed), Some(native)) = (
+            managed_session_id.as_deref(),
+            provider_session_id.as_deref(),
+        ) {
             let _ =
                 crate::claude_channel_server::update_managed_provider_session_id(managed, native);
-        }
-    }
-    if let (Some(managed), Some(transcript)) = (&managed_session_id, &transcript_path) {
-        if let Ok(conn) = crate::state::db::open_db(None) {
-            let binding = crate::state::session_binding::SessionBinding::new(&conn);
-            let path =
-                std::fs::canonicalize(transcript).unwrap_or_else(|_| PathBuf::from(transcript));
-            let _ = binding.bind(&path.to_string_lossy(), managed, "claude");
         }
     }
     let mut payload = json!({
@@ -117,7 +111,11 @@ fn run_inner() -> anyhow::Result<()> {
 /// it on every managed presence record lets the server re-bind the alias
 /// immediately (e.g. after an out-of-band `claude --resume` rotates the native
 /// id). Unmanaged payloads skip it: their `session_id` is already the native id.
-fn attach_provider_session_id(payload: &mut Value, managed: bool, provider_session_id: Option<&str>) {
+fn attach_provider_session_id(
+    payload: &mut Value,
+    managed: bool,
+    provider_session_id: Option<&str>,
+) {
     if !managed {
         return;
     }

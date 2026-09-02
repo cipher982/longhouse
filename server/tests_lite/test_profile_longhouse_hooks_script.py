@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from zerg.services.shipper.hooks import CODEX_HOOK_SCRIPT
 from zerg.services.shipper.hooks import HOOK_SCRIPT
@@ -22,10 +22,8 @@ def _load_script_module():
 def _write_hook(tmp_path: Path, name: str, text: str) -> Path:
     path = tmp_path / name
     real_home = Path.home()
-    rendered = (
-        text.replace("__ENGINE_PATH__", "/tmp/placeholder-engine")
-        .replace("__LONGHOUSE_HOME__", str(real_home / ".longhouse"))
-        .replace("__HINDSIGHT_ROOT__", str(real_home / ".claude" / "hindsight"))
+    rendered = text.replace("__LONGHOUSE_HOME__", str(real_home / ".longhouse")).replace(
+        "__HINDSIGHT_ROOT__", str(real_home / ".claude" / "hindsight")
     )
     path.write_text(rendered, encoding="utf-8")
     path.chmod(0o755)
@@ -48,7 +46,6 @@ def test_plain_outbox_scenario_creates_outbox_without_network(tmp_path):
     assert result.exit_codes == [0, 0]
     assert result.http_requests == 0
     assert result.outbox_files == 2
-    assert result.engine_bind_count == 0
 
 
 def test_managed_and_network_scenarios_hit_expected_branches(tmp_path):
@@ -59,7 +56,7 @@ def test_managed_and_network_scenarios_hit_expected_branches(tmp_path):
     managed_result = module.profile_provider_scenario(
         provider=module.PROVIDER_DESCRIPTORS["claude"],
         hook_source_path=claude_hook_path,
-        scenario=next(spec for spec in module.SCENARIOS if spec.name == "managed_bind_outbox"),
+        scenario=next(spec for spec in module.SCENARIOS if spec.name == "managed_outbox"),
         iterations=2,
     )
     network_result = module.profile_provider_scenario(
@@ -70,14 +67,12 @@ def test_managed_and_network_scenarios_hit_expected_branches(tmp_path):
     )
 
     assert managed_result.exit_codes == [0, 0]
-    assert managed_result.engine_bind_count == 2
     assert managed_result.outbox_files == 2
     assert managed_result.http_requests == 0
 
     assert network_result.exit_codes == [0, 0]
     assert network_result.http_requests == 0
     assert network_result.outbox_files == 2
-    assert network_result.engine_bind_count == 0
 
 
 def test_all_profiler_scenarios_are_local_only(tmp_path):

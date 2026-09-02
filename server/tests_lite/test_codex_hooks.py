@@ -24,11 +24,8 @@ def test_codex_hook_script_template_has_required_markers():
     assert 'LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"' in CODEX_HOOK_SCRIPT
     assert "prs." in CODEX_HOOK_SCRIPT, "must use prs.*.json outbox naming"
     assert ".tmp." in CODEX_HOOK_SCRIPT, "must use atomic tmp write pattern"
-    assert "__ENGINE_PATH__" in CODEX_HOOK_SCRIPT, "must have engine path placeholder"
-    # The template uses __ENGINE_PATH__ as a placeholder; the literal string
-    # "longhouse-engine" appears in comments but the actual command line must
-    # use the placeholder so install_codex_hooks can bake in the real path.
-    assert 'ENGINE="__ENGINE_PATH__"' in CODEX_HOOK_SCRIPT, "must use placeholder in the command variable"
+    assert "bind --path" not in CODEX_HOOK_SCRIPT, "binding is deferred to the daemon"
+    assert 'ENGINE="' not in CODEX_HOOK_SCRIPT, "the provider hook must not invoke the engine"
     assert "provider: $provider" in CODEX_HOOK_SCRIPT, "must include provider in presence payload"
     assert "tool_name: $tool" in CODEX_HOOK_SCRIPT, "must include tool names in presence payload"
     assert "transcript_path: $transcript" in CODEX_HOOK_SCRIPT, "must include transcript path in presence payload"
@@ -38,11 +35,10 @@ def test_codex_hook_script_has_managed_session_id_support():
     """Hook script must have explicit managed vs unmanaged session ID paths."""
     assert "LONGHOUSE_MANAGED_SESSION_ID" in CODEX_HOOK_SCRIPT, "must check for managed-session env"
     assert "CODEX_SESSION_ID" in CODEX_HOOK_SCRIPT, "must read Codex's native session ID"
-    # Managed path: uses launcher-injected managed session env for outbox and transcript ship.
-    assert "--session-id" in CODEX_HOOK_SCRIPT, "must pass --session-id override to engine for managed sessions"
     # No fallback pattern — two explicit paths
     assert "SID=" in CODEX_HOOK_SCRIPT, "must assign SID explicitly in each path"
     assert '--arg provider "codex"' in CODEX_HOOK_SCRIPT, "must stamp Codex presence events with provider=codex"
+    assert "control_path: $control_path" in CODEX_HOOK_SCRIPT
 
 
 def test_codex_hook_does_not_fetch_dynamic_startup_context():
@@ -131,7 +127,7 @@ def test_install_codex_hooks_creates_hook_script(tmp_path, monkeypatch):
     assert hook_script.stat().st_mode & stat.S_IXUSR
 
     content = hook_script.read_text()
-    assert "/usr/bin/longhouse-engine" in content
+    assert "bind --path" not in content
     assert str(tmp_path / ".longhouse") in content
     assert "hook_event_name" in content
 
@@ -424,7 +420,7 @@ def _run_codex_hook(tmp_path, hook_input: dict, env_overrides: dict[str, str]):
     engine.chmod(0o755)
 
     script = tmp_path / "longhouse-codex-hook.sh"
-    script.write_text(CODEX_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(longhouse_home)).replace("__ENGINE_PATH__", str(engine)))
+    script.write_text(CODEX_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(longhouse_home)))
     script.chmod(0o755)
 
     env = {k: v for k, v in os.environ.items() if not k.startswith("LONGHOUSE_")}
@@ -461,7 +457,8 @@ def test_codex_hook_adopts_the_managed_session_of_its_own_provider(tmp_path):
         {"LONGHOUSE_MANAGED_SESSION_ID": "managed-codex", "LONGHOUSE_MANAGED_PROVIDER": "codex"},
     )
     assert [row["session_id"] for row in rows] == ["managed-codex"]
-    assert argv == ["bind --path /tmp/rollout.jsonl --session-id managed-codex --provider codex"]
+    assert rows[0]["control_path"] == "managed"
+    assert argv == []
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="hook script requires jq")
@@ -475,6 +472,7 @@ def test_codex_hook_ignores_a_managed_session_owned_by_another_provider(tmp_path
         {"LONGHOUSE_MANAGED_SESSION_ID": "managed-cursor", "LONGHOUSE_MANAGED_PROVIDER": "cursor"},
     )
     assert [row["session_id"] for row in rows] == ["codex-native-session"]
+    assert rows[0]["control_path"] == "unmanaged"
     assert argv == []
 
 
@@ -488,4 +486,5 @@ def test_codex_hook_still_trusts_an_untagged_managed_session(tmp_path):
         {"LONGHOUSE_MANAGED_SESSION_ID": "managed-codex"},
     )
     assert [row["session_id"] for row in rows] == ["managed-codex"]
-    assert argv == ["bind --path /tmp/rollout.jsonl --session-id managed-codex --provider codex"]
+    assert rows[0]["control_path"] == "managed"
+    assert argv == []

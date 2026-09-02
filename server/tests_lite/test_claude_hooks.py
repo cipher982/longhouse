@@ -1,4 +1,4 @@
-"""Tests for Claude hook installation and session binding behavior."""
+"""Tests for Claude hook installation and provider-hook hot-path behavior."""
 
 import json
 import os
@@ -12,11 +12,10 @@ from zerg.services.shipper.hooks import HOOK_SCRIPT
 from zerg.services.shipper.hooks import _make_hook_entries
 
 
-def test_claude_hook_seeds_session_binding_on_stop():
-    """Hook seeds session_binding via engine bind instead of shipping directly."""
-    assert "__ENGINE_PATH__" in HOOK_SCRIPT
-    assert 'bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID"' in HOOK_SCRIPT
-    # No direct shipping — daemon handles it
+def test_claude_hook_does_not_touch_sqlite_on_the_provider_hot_path():
+    """The daemon owns durable binding writes after the hook exits."""
+    assert "bind --path" not in HOOK_SCRIPT
+    assert 'ENGINE="' not in HOOK_SCRIPT
     assert "ship --file" not in HOOK_SCRIPT
     assert "nohup" not in HOOK_SCRIPT
 
@@ -65,7 +64,7 @@ def test_claude_stop_hook_forces_sidechain_for_hindsight_workspace():
 
 
 def test_claude_stop_hook_entry_is_sync(tmp_path):
-    """Stop hook is now sync (no shipping, just outbox write + binding seed)."""
+    """Stop hook is sync because it only performs the local outbox write."""
     stop_entry, _lifecycle_entry = _make_hook_entries(tmp_path)
     hook = stop_entry["hooks"][0]
     assert hook["async"] is False
@@ -79,7 +78,6 @@ def _run_hook(tmp_path, event, *, managed_session_id=None):
     script.write_text(
         HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path / "lh"))
         .replace("__HINDSIGHT_ROOT__", str(tmp_path / "hindsight"))
-        .replace("__ENGINE_PATH__", "/bin/true")
     )
     script.chmod(0o755)
     env = os.environ.copy()

@@ -6,8 +6,10 @@
 //!
 //! The daemon drains the outbox on a short tick: reads all ready files,
 //! coalesces by session_id (latest state wins), returns local phase signals for
-//! transcript catch-up, POSTs to `/api/agents/presence`, and deletes files on
-//! success. Files are kept on failure and retried next tick.
+//! transcript catch-up, persists managed transcript bindings, POSTs to
+//! `/api/agents/presence`, and deletes files on success. Files are kept on
+//! failure and retried next tick. Durable local writes belong here rather than
+//! in the provider hook process, where SQLite contention can block the provider.
 //! Files older than `STALE_SECS` are deleted without posting (presence is ephemeral).
 
 use std::collections::HashMap;
@@ -331,6 +333,26 @@ fn collect_outbox_impl(
         let session_id = payload.session_id.trim().to_string();
         let phase = payload.state.trim().to_string();
         let transcript_path = normalize_transcript_path(payload.transcript_path.as_deref());
+
+        let managed_binding_required = payload.control_path.as_deref().map(str::trim)
+            == Some("managed")
+            && transcript_path.is_some();
+        if managed_binding_required && local_phase_conn.is_none() {
+            warn!(
+                session_id,
+                provider, "deferring managed transcript binding until local state DB is available"
+            );
+            continue;
+        }
+        if let Some(conn) = local_phase_conn.as_ref() {
+            if managed_binding_required
+                && !persist_managed_binding_for_payload(&payload, &provider, &session_id, conn)
+            {
+                // Do not add this file to posts. It remains in the outbox and
+                // will be retried on the next collector tick.
+                continue;
+            }
+        }
 
         result.signals.push(DrainedPresenceSignal {
             session_id: session_id.clone(),
@@ -691,6 +713,42 @@ fn unmanaged_binding_signal_for_payload(
         cwd: payload.cwd.clone(),
         observed_at,
     })
+}
+
+/// Persist the managed transcript identity after the hook has handed the event
+/// to the daemon. This is deliberately best-effort: the outbox file remains
+/// available for the next daemon tick if SQLite is contended, and the provider
+/// hook is never made to wait for this write.
+fn persist_managed_binding_for_payload(
+    payload: &PresenceOutboxPayload,
+    provider: &str,
+    session_id: &str,
+    conn: &rusqlite::Connection,
+) -> bool {
+    if payload.control_path.as_deref().map(str::trim) != Some("managed") {
+        return true;
+    }
+    let Some(transcript_path) = normalize_transcript_path(payload.transcript_path.as_deref())
+    else {
+        return true;
+    };
+    let canonical =
+        std::fs::canonicalize(&transcript_path).unwrap_or_else(|_| transcript_path.clone());
+    if let Err(err) = crate::state::session_binding::SessionBinding::new(conn).bind(
+        &canonical.to_string_lossy(),
+        session_id,
+        provider,
+    ) {
+        warn!(
+            path = %canonical.display(),
+            session_id,
+            provider,
+            error = %err,
+            "persisting managed transcript binding failed"
+        );
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]
@@ -1345,6 +1403,40 @@ mod tests {
             f.exists(),
             "presence file should remain until the POST/delete phase completes"
         );
+    }
+
+    #[test]
+    fn test_collect_outbox_persists_managed_transcript_binding_before_post() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let path = dir.path().join("prs.MANAGED.json");
+        let payload = serde_json::json!({
+            "session_id": "managed-session",
+            "state": "thinking",
+            "provider": "claude",
+            "control_path": "managed",
+            "transcript_path": transcript.path(),
+        });
+        fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+
+        let result = collect_outbox_with_local_state_result(dir.path(), Some(db.path()));
+
+        assert_eq!(result.posts.len(), 1);
+        let conn = crate::state::db::open_db(Some(db.path())).unwrap();
+        let row: (String, String, String) = conn
+            .query_row(
+                "SELECT path, session_id, provider FROM session_binding",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            PathBuf::from(row.0),
+            fs::canonicalize(transcript.path()).unwrap()
+        );
+        assert_eq!(row.1, "managed-session");
+        assert_eq!(row.2, "claude");
     }
 
     #[test]
