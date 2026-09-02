@@ -230,7 +230,8 @@ extension APISessionResponse {
                 wrappedValue: sessionState.sessionStateFacts
             ),
             transcriptPreview: transcriptPreview?.sessionTranscriptPreview,
-            deviceId: deviceId
+            deviceId: deviceId,
+            inputReceipts: inputReceipts?.map(\.sessionInputReceipt)
         )
     }
 }
@@ -349,6 +350,18 @@ private extension JSONValue {
         case .array, .object, .null: nil
         default: sessionEventIdentifier
         }
+    }
+}
+
+extension APISessionInputReceiptResponse {
+    var sessionInputReceipt: SessionInputReceipt {
+        SessionInputReceipt(
+            clientRequestId: clientRequestId,
+            intent: intent,
+            status: status,
+            createdAt: createdAt,
+            eventId: eventId
+        )
     }
 }
 

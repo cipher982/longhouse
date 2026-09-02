@@ -21,7 +21,6 @@ struct SubmittedInput: Identifiable, Sendable {
     var runId: String?
     var lastError: String?
     let createdAt: Date
-    let baselineEventIds: Set<String>
 
     init(
         id: String,
@@ -33,8 +32,7 @@ struct SubmittedInput: Identifiable, Sendable {
         turnId: String? = nil,
         runId: String? = nil,
         lastError: String?,
-        createdAt: Date,
-        baselineEventIds: Set<String> = []
+        createdAt: Date
     ) {
         self.id = id
         self.clientRequestId = clientRequestId
@@ -46,6 +44,5 @@ struct SubmittedInput: Identifiable, Sendable {
         self.runId = runId
         self.lastError = lastError
         self.createdAt = createdAt
-        self.baselineEventIds = baselineEventIds
     }
 }

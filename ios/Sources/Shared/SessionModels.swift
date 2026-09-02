@@ -880,6 +880,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var transcriptPreview: SessionTranscriptPreview? = nil
     /// Registered machine id the session runs on; the header's host name.
     var deviceId: String? = nil
+    /// Longhouse sends for this session, newest first, each carrying the durable
+    /// event it became once ingest linked it. Clients resolve optimistic rows by
+    /// this identity, whether or not that event is on the page they loaded.
+    var inputReceipts: [SessionInputReceipt]? = nil
 
     var displayTitle: String {
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
@@ -1193,7 +1197,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             runtimeDisplay: runtimeDisplay,
             stateFacts: DefaultUnknownSessionStateFacts(wrappedValue: stateFacts),
             transcriptPreview: transcriptPreview,
-            deviceId: deviceId
+            deviceId: deviceId,
+            inputReceipts: inputReceipts
         )
     }
 
@@ -1367,6 +1372,15 @@ enum SessionInputAuthoredVia: Codable, Hashable, Sendable {
             try container.encode(value)
         }
     }
+}
+
+struct SessionInputReceipt: Codable, Hashable, Sendable {
+    let clientRequestId: String?
+    let intent: String
+    let status: String
+    let createdAt: String?
+    /// The durable user event this send became, once ingest linked it.
+    let eventId: String?
 }
 
 struct SessionInputOrigin: Codable, Hashable, Sendable {

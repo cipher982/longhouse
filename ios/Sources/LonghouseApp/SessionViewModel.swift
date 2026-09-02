@@ -417,8 +417,7 @@ final class SessionViewModel: ObservableObject {
             phase: .submitting,
             serverInputId: nil,
             lastError: nil,
-            createdAt: Date(),
-            baselineEventIds: Set(lastWorkspaceEvents.map(\.id))
+            createdAt: Date()
         )
         submittedInputs.append(localInput)
         guard let api = apiFactory(appState.serverURL) else {
@@ -1392,73 +1391,58 @@ final class SessionViewModel: ObservableObject {
     private func reconcileSubmittedInputs(with events: [SessionEvent]) {
         guard !submittedInputs.isEmpty else { return }
         let pendingBefore = submittedInputs.count
-        var matchedEventIds = Set<String>()
-        submittedInputs.removeAll { input in
+        let resolved = Self.resolvedSubmittedInputIds(
+            submittedInputs: submittedInputs,
+            events: events,
+            receipts: detail?.inputReceipts ?? []
+        )
+        submittedInputs.removeAll { resolved.contains($0.id) }
+        let userEvents = events.filter { $0.role == "user" && $0.isHeadBranch }
+        let newestUserEvent = userEvents.last.map { "\($0.timestamp) origin=\($0.inputOrigin != nil) text_chars=\($0.contentText?.count ?? -1)" } ?? "none"
+        let pendingSummary = submittedInputs
+            .map { "\($0.phase):\(Int(Date().timeIntervalSince($0.createdAt)))s:\($0.text.count)ch" }
+            .joined(separator: ",")
+        let linkedReceipts = (detail?.inputReceipts ?? []).filter { $0.eventId != nil }.count
+        openWaterfall?.mark(
+            "reconcile_inputs",
+            "before=\(pendingBefore) after=\(submittedInputs.count) events=\(events.count) user_events=\(userEvents.count) linked_receipts=\(linkedReceipts) newest_user=\(newestUserEvent) pending=[\(pendingSummary)]"
+        )
+    }
+
+    /// An optimistic send row is resolved by identity only. The server links
+    /// each delivered receipt to the durable user event it became at ingest,
+    /// so the receipt says the echo exists even when a long turn has already
+    /// pushed that event out of the loaded tail. A loaded event stamped with
+    /// the same origin is the same fact seen from the page. Text and time
+    /// never decide: repeated identical prompts and abandoned drafts made
+    /// that guess wrong in both directions.
+    static func resolvedSubmittedInputIds(
+        submittedInputs: [SubmittedInput],
+        events: [SessionEvent],
+        receipts: [SessionInputReceipt]
+    ) -> Set<String> {
+        let linkedRequestIds = Set(receipts.compactMap { $0.eventId == nil ? nil : $0.clientRequestId })
+        var resolved = Set<String>()
+        for input in submittedInputs {
             guard input.phase == .sent
                 || input.phase == .queued
                 || input.phase == .submitting
                 || input.phase == .working
                 || input.phase == .couldNotConfirm
                 || input.phase == .failed
-            else { return false }
-            if let matched = events.first(where: { event in
+            else { continue }
+            if linkedRequestIds.contains(input.clientRequestId) {
+                resolved.insert(input.id)
+                continue
+            }
+            let echoed = events.contains { event in
                 guard event.role == "user", event.isHeadBranch, let origin = event.inputOrigin else { return false }
-                if let serverInputId = input.serverInputId,
-                   origin.sessionInputId == serverInputId {
-                    return true
-                }
+                if let serverInputId = input.serverInputId, origin.sessionInputId == serverInputId { return true }
                 return origin.clientRequestId == input.clientRequestId
-            }) {
-                matchedEventIds.insert(matched.id)
-                return true
             }
-
-            guard input.phase == .working || input.phase == .sent else { return false }
-            // Storage-v2 provider transcripts do not always retain the
-            // Longhouse input receipt. Fall back to a one-to-one exact-text
-            // match in a bounded time window so the durable user event can
-            // replace its optimistic bubble without collapsing repeated
-            // identical prompts.
-            if let matched = events.first(where: { event in
-                guard event.role == "user",
-                      event.isHeadBranch,
-                      !matchedEventIds.contains(event.id),
-                      !input.baselineEventIds.contains(event.id),
-                      event.contentText == input.text,
-                      let eventAt = LonghouseDateParser.parse(event.timestamp)
-                else { return false }
-                let delta = eventAt.timeIntervalSince(input.createdAt)
-                return delta >= -5 && delta <= 600
-            }) {
-                matchedEventIds.insert(matched.id)
-                return true
-            }
-            return Self.tailWindowScrolledPastSend(events: events, sentAt: input.createdAt, windowLimit: initialTailLimit)
+            if echoed { resolved.insert(input.id) }
         }
-        let userEvents = events.filter { $0.role == "user" && $0.isHeadBranch }
-        let newestUserEvent = userEvents.last.map { "\($0.timestamp) origin=\($0.inputOrigin != nil) text_chars=\($0.contentText?.count ?? -1)" } ?? "none"
-        let pendingSummary = submittedInputs
-            .map { "\($0.phase):\(Int(Date().timeIntervalSince($0.createdAt)))s:\($0.text.count)ch" }
-            .joined(separator: ",")
-        openWaterfall?.mark(
-            "reconcile_inputs",
-            "before=\(pendingBefore) after=\(submittedInputs.count) events=\(events.count) user_events=\(userEvents.count) newest_user=\(newestUserEvent) pending=[\(pendingSummary)]"
-        )
-    }
-
-    /// The durable echo of a send can only be matched while it sits inside
-    /// the tail window. A long turn (Codex routinely projects 60+ tool items)
-    /// pushes it into history before the phone ever sees it, and the
-    /// optimistic bubble then stays pinned under newer content forever. Once
-    /// the window is full and every head-branch event in it is newer than
-    /// the send, the echo is behind the window: the server already confirmed
-    /// delivery, and the turn has visibly moved on, so the bubble is resolved.
-    static func tailWindowScrolledPastSend(events: [SessionEvent], sentAt: Date, windowLimit: Int) -> Bool {
-        let headEvents = events.filter(\.isHeadBranch)
-        guard headEvents.count >= windowLimit else { return false }
-        let timestamps = headEvents.compactMap { LonghouseDateParser.parse($0.timestamp) }
-        guard timestamps.count == headEvents.count, let oldest = timestamps.min() else { return false }
-        return oldest.timeIntervalSince(sentAt) > 5
+        return resolved
     }
 
     private func sendFailureMessage(for error: Error) -> String {
