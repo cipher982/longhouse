@@ -74,6 +74,16 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
+def record_timing(target: dict | list, phase: str, started: float, **details: str) -> None:
+    elapsed_s = round(time.monotonic() - started, 3)
+    timing = {"phase": phase, "elapsed_s": elapsed_s, **details}
+    if isinstance(target, dict):
+        target.setdefault("timings", []).append(timing)
+    else:
+        target.append(timing)
+    log(f"phase {phase}={elapsed_s:.3f}s")
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -147,12 +157,16 @@ def build_binaries() -> None:
 
 
 def cmd_up(args: argparse.Namespace) -> None:
+    up_started = time.monotonic()
+    timings: list[dict] = []
     if STATE_FILE.exists():
         state = json.loads(STATE_FILE.read_text())
         if any(alive(pid) for pid in (state.get("server_pid", 0), state.get("engine_pid", 0))):
             die("a scratch run is still up; `simlab.py down` first")
     if args.build:
+        started = time.monotonic()
         build_binaries()
+        record_timing(timings, "build", started)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     # Short on purpose: the engine binds Unix sockets under the scratch home
     # and macOS caps socket paths at 104 bytes.
@@ -190,15 +204,20 @@ def cmd_up(args: argparse.Namespace) -> None:
         start_new_session=True,
     )
     log(f"runtime host starting on {base_url} (pid {server.pid})")
+    started = time.monotonic()
     wait_for("runtime host health", lambda: http("GET", f"{base_url}/api/health", timeout=2), timeout_s=90)
+    record_timing(timings, "server_readiness", started)
 
+    started = time.monotonic()
     token = http("POST", f"{base_url}/api/devices/tokens", {"name": "simlab", "device_id": DEVICE_ID})["token"]
     if not token.startswith("zdt_"):
         die(f"expected a device token, got {token[:8]}")
+    record_timing(timings, "token_mint", started)
 
     agent_env = {**os.environ, "HOME": str(home), "LONGHOUSE_HOME": str(home / ".longhouse"), "RUST_LOG": "info"}
     # `auth` records the machine identity the storage handshake later checks
     # against; the machine name must be the device id the token was minted for.
+    started = time.monotonic()
     subprocess.run(
         [str(built_binary("longhouse")), "auth", "--url", base_url],
         env={**agent_env, "LONGHOUSE_DEVICE_TOKEN": token},
@@ -206,7 +225,9 @@ def cmd_up(args: argparse.Namespace) -> None:
         capture_output=True,
         text=True,
     )
+    record_timing(timings, "engine_auth", started)
     engine_log = open(scratch / "engine.log", "w")
+    started = time.monotonic()
     engine = subprocess.Popen(
         [
             str(built_binary("longhouse-engine")),
@@ -234,6 +255,7 @@ def cmd_up(args: argparse.Namespace) -> None:
         "server_pid": server.pid,
         "engine_pid": engine.pid,
         "started_at": stamp,
+        "timings": timings,
     }
     save_state(state)
     wait_for(
@@ -241,6 +263,9 @@ def cmd_up(args: argparse.Namespace) -> None:
         lambda: "control/ws" in (scratch / "server.log").read_text() and "accepted" in (scratch / "server.log").read_text(),
         timeout_s=60,
     )
+    record_timing(state, "engine_attach", started)
+    record_timing(state, "up", up_started)
+    save_state(state)
     log("up")
     print(json.dumps({k: state[k] for k in ("base_url", "token", "scratch")}))
 
@@ -250,6 +275,7 @@ def cmd_down(_: argparse.Namespace) -> None:
         log("nothing to stop")
         return
     state = json.loads(STATE_FILE.read_text())
+    started = time.monotonic()
     for key in ("engine_pid", "server_pid"):
         pid = state.get(key, 0)
         if pid and alive(pid):
@@ -265,6 +291,8 @@ def cmd_down(_: argparse.Namespace) -> None:
                 os.killpg(pid, signal.SIGKILL)
             except OSError:
                 pass
+    record_timing(state, "down", started)
+    save_state(state)
     log(f"down; artifacts in {state.get('scratch')}")
 
 
@@ -437,7 +465,8 @@ def play(state: dict, turns: int, cadence_ms: int, modes: set[str], session_id: 
     transcript = Transcript(session_id, datetime.now(timezone.utc) - timedelta(seconds=5), last_uuid, prior_turns + 1)
     entries = synthetic_turns(transcript, turns, modes)
     log(f"playing {len(entries)} entries into {path.name} modes={sorted(modes)} cadence={cadence_ms}ms append={append}")
-    started = time.monotonic()
+    play_started = time.monotonic()
+    write_started = time.monotonic()
     with open(path, "a") as handle:
         for index, entry in enumerate(entries):
             line = entry if isinstance(entry, str) else json.dumps(entry, separators=(",", ":"))
@@ -447,12 +476,16 @@ def play(state: dict, turns: int, cadence_ms: int, modes: set[str], session_id: 
             if "burst" in modes and index < len(entries) - 1 and (index % 6) != 5:
                 continue
             time.sleep(cadence_s)
-    log(f"played in {time.monotonic() - started:.1f}s; waiting for the runtime host to know the session")
+    record_timing(state, "play_write", write_started, session_id=session_id)
+    log(f"played in {time.monotonic() - play_started:.1f}s; waiting for the runtime host to know the session")
+    ingest_started = time.monotonic()
     session = wait_for("session to be ingested", lambda: find_session(state, session_id), timeout_s=60)
+    record_timing(state, "ingest_wait", ingest_started, session_id=session_id)
     state["provider_session_id"] = session_id
     state["session_id"] = session["id"]
     state["transcript"] = str(path)
     state["played"] = {"turns": prior_turns + turns, "modes": sorted(modes), "cadence_ms": cadence_ms, "entries": len(entries)}
+    record_timing(state, "play", play_started, session_id=session_id)
     save_state(state)
     return {"session_id": session["id"], "provider_session_id": session_id, "title": session.get("title"), "entries": len(entries)}
 
@@ -476,11 +509,16 @@ def sim(state: dict, deploy: bool) -> None:
     if not session_id:
         die("no played session; run `simlab.py play` first")
     script = ROOT / "scripts/ops/sim.sh"
+    started = time.monotonic()
     if deploy:
-        subprocess.run([str(script), "deploy", session_id], env=sim_env(state), check=True)
+        steps = [("boot", "sim_boot"), ("build", "sim_build"), ("install", "sim_install"), ("launch", "sim_launch")]
     else:
-        subprocess.run([str(script), "boot"], env=sim_env(state), check=True)
-        subprocess.run([str(script), "launch", session_id], env=sim_env(state), check=True)
+        steps = [("boot", "sim_boot"), ("launch", "sim_launch")]
+    for command, phase in steps:
+        step_started = time.monotonic()
+        subprocess.run([str(script), command, session_id] if command == "launch" else [str(script), command], env=sim_env(state), check=True)
+        record_timing(state, phase, step_started)
+    record_timing(state, "sim", started)
     state["sim_launched_at"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
 
@@ -517,7 +555,10 @@ def verdict(state: dict, scenario: str, since: str, expect_frames: bool, expect_
     session_id = state.get("session_id")
     if not session_id:
         die("no played session; run `simlab.py play` first")
+    verdict_started = time.monotonic()
+    marks_started = time.monotonic()
     marks = app_marks(state, session_id, since)
+    record_timing(state, "verdict_app_logs", marks_started, scenario=scenario)
     stages = [m["stage"] for m in marks]
 
     def first(stage: str) -> int | None:
@@ -539,7 +580,9 @@ def verdict(state: dict, scenario: str, since: str, expect_frames: bool, expect_
 
     # Durable state is the verifier, not the screenshot: the server's own
     # head projection says what the app was given to render.
+    projection_started = time.monotonic()
     projection = server_projection(state, session_id)["projection"]
+    record_timing(state, "verdict_projection", projection_started, scenario=scenario)
     user_items = [
         item for item in projection.get("items", [])
         if (item.get("event") or {}).get("role") == "user" and isinstance((item.get("event") or {}).get("content_text"), str)
@@ -580,8 +623,10 @@ def verdict(state: dict, scenario: str, since: str, expect_frames: bool, expect_
         "evidence": evidence,
         "artifacts": {"scratch": state.get("scratch"), "transcript": state.get("transcript")},
     }
+    record_timing(state, "verdict", verdict_started, scenario=scenario)
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     (RUN_DIR / f"verdict-{scenario}.json").write_text(json.dumps(envelope, indent=2))
+    save_state(state)
     return envelope
 
 
@@ -596,37 +641,40 @@ def cmd_verdict(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------
 
 
-def settle(seconds: float) -> None:
+def settle(state: dict, seconds: float, phase: str) -> None:
+    started = time.monotonic()
     time.sleep(seconds)
+    record_timing(state, phase, started)
+    save_state(state)
 
 
 def scenario_open_imported(state: dict, deploy: bool) -> dict:
     play(state, turns=2, cadence_ms=150, modes={"normal"}, session_id=None, append=False)
     sim(state, deploy)
-    settle(20)
+    settle(state, 20, "settle_open_imported")
     return verdict(state, "open-imported-session", "2m", False, None, 2)
 
 
 def scenario_live_turns(state: dict, deploy: bool) -> dict:
     play(state, turns=1, cadence_ms=150, modes={"normal"}, session_id=None, append=False)
     sim(state, deploy)
-    settle(12)
+    settle(state, 12, "settle_live_open")
     play(state, turns=2, cadence_ms=300, modes={"normal"}, session_id=None, append=True)
-    settle(12)
+    settle(state, 12, "settle_live_turns")
     return verdict(state, "live-turns-into-open-session", "3m", True, None, 3)
 
 
 def scenario_escape_resend(state: dict, deploy: bool) -> dict:
     play(state, turns=2, cadence_ms=150, modes={"abandon-resend"}, session_id=None, append=False)
     sim(state, deploy)
-    settle(20)
+    settle(state, 20, "settle_escape_resend")
     return verdict(state, "escape-and-resend", "2m", False, 1, 2)
 
 
 def scenario_hostile_transcript(state: dict, deploy: bool) -> dict:
     play(state, turns=2, cadence_ms=150, modes={"malformed", "split-lines", "delayed-first"}, session_id=None, append=False)
     sim(state, deploy)
-    settle(20)
+    settle(state, 20, "settle_hostile")
     return verdict(state, "hostile-transcript", "2m", False, None, 2)
 
 
