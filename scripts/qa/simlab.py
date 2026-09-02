@@ -33,6 +33,7 @@ import socket
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -73,7 +74,22 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     RUN_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    temporary = tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=RUN_DIR,
+        prefix=".simlab-",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary_path = Path(temporary.name)
+    try:
+        with temporary:
+            temporary.write(json.dumps(state, indent=2))
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, STATE_FILE)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def record_timing(target: dict | list, phase: str, started: float, **details: str) -> None:
@@ -176,6 +192,24 @@ def wait_for(description: str, predicate, timeout_s: float, interval_s: float = 
             return result
         time.sleep(interval_s)
     die(f"timed out waiting for {description}")
+
+
+def appended_log_contains(path: Path, needle: str):
+    offset = 0
+    carry = ""
+
+    def predicate():
+        nonlocal offset, carry
+        if not path.exists():
+            return None
+        with path.open() as handle:
+            handle.seek(offset)
+            chunk = handle.read()
+            offset = handle.tell()
+        carry = (carry + chunk)[-len(needle) :]
+        return needle in chunk or needle in carry
+
+    return predicate
 
 
 def alive(pid: int) -> bool:
@@ -324,7 +358,7 @@ def cmd_up(args: argparse.Namespace) -> None:
     save_state(state)
     wait_for(
         "machine agent control channel",
-        lambda: "control/ws" in (scratch / "server.log").read_text() and "accepted" in (scratch / "server.log").read_text(),
+        appended_log_contains(scratch / "server.log", "control/ws accepted"),
         timeout_s=60,
     )
     record_timing(state, "engine_attach", started)
@@ -507,7 +541,7 @@ def transcript_tail(path: Path) -> tuple[str | None, int]:
 def find_session(state: dict, session_id: str) -> dict | None:
     # A locally shipped Claude session keeps its transcript uuid as the
     # Longhouse id; hosted imports carry it as provider_session_id instead.
-    listing = http("GET", f"{state['base_url']}/api/agents/sessions?limit=20&include_test=true", token=state["token"])
+    listing = http("GET", f"{state['base_url']}/api/agents/sessions?limit=100&include_test=true", token=state["token"])
     for session in listing.get("sessions", []):
         if session_id in (session.get("id"), session.get("provider_session_id")):
             return session
