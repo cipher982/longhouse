@@ -92,14 +92,20 @@ built_app() {
 cmd_boot() {
   ensure_project
   require_udid
-  xcrun simctl boot "$UDID" 2>/dev/null || true
+  local output
+  if ! output="$(xcrun simctl boot "$UDID" 2>&1)"; then
+    [[ "$output" == *"current state: Booted"* ]] || die "boot failed: $output"
+  fi
   xcrun simctl bootstatus "$UDID" -b >/dev/null
   echo "booted $UDID"
 }
 
 cmd_shutdown() {
   require_udid
-  xcrun simctl shutdown "$UDID" 2>/dev/null || true
+  local output
+  if ! output="$(xcrun simctl shutdown "$UDID" 2>&1)"; then
+    [[ "$output" == *"current state: Shutdown"* ]] || die "shutdown failed: $output"
+  fi
   echo "shut down $UDID"
 }
 
@@ -124,7 +130,7 @@ cmd_build() {
     -destination "platform=iOS Simulator,id=$UDID" \
     -derivedDataPath "$DERIVED" \
     build > "$log" 2>&1; then
-    grep -E "error:|BUILD FAILED" "$log" | head -20 >&2
+    grep -E "error:|BUILD FAILED" "$log" | head -20 >&2 || true
     die "build failed; full log at $log"
   fi
   test -d "$(built_app)" || die "build produced no app at $(built_app)"
@@ -219,8 +225,11 @@ cmd_logs() {
   if [[ "$follow" == "true" ]]; then
     exec xcrun simctl spawn "$UDID" log stream --info --debug --style compact --predicate "$predicate"
   fi
-  xcrun simctl spawn "$UDID" log show --info --debug --last "$since" --style compact --predicate "$predicate" \
-    | grep -vE "^Timestamp|^Filtering|^=+" || true
+  local output
+  if ! output="$(xcrun simctl spawn "$UDID" log show --info --debug --last "$since" --style compact --predicate "$predicate" 2>&1)"; then
+    die "logs failed: $output"
+  fi
+  printf '%s\n' "$output" | grep -vE "^Timestamp|^Filtering|^=+" || true
 }
 
 main() {
