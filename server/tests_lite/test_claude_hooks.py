@@ -76,8 +76,7 @@ def _run_hook(tmp_path, event, *, managed_session_id=None):
         pytest.skip("jq is required to execute Claude hook fixture")
     script = tmp_path / "longhouse-hook.sh"
     script.write_text(
-        HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path / "lh"))
-        .replace("__HINDSIGHT_ROOT__", str(tmp_path / "hindsight"))
+        HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path / "lh")).replace("__HINDSIGHT_ROOT__", str(tmp_path / "hindsight"))
     )
     script.chmod(0o755)
     env = os.environ.copy()
