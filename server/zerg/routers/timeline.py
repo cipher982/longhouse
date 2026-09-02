@@ -1032,6 +1032,16 @@ def _workspace_change_kind(payload: dict | None) -> str | None:
     return str(kind) if isinstance(kind, str) and kind else None
 
 
+def _workspace_events_inserted(payload: dict | None) -> int | None:
+    """How many durable events an ingest wake carried; None for other wakes."""
+    if not isinstance(payload, dict):
+        return None
+    candidate = payload.get("events_inserted")
+    if isinstance(candidate, bool) or not isinstance(candidate, int):
+        return None
+    return candidate if candidate >= 0 else None
+
+
 def _workspace_catalog_commit_seq(payload: dict | None) -> int | None:
     """Return the canonical catalog commit carried by a runtime wake, if any."""
     if not isinstance(payload, dict):
@@ -1215,6 +1225,7 @@ async def _session_workspace_stream(
                             {
                                 "session_id": str(session_id),
                                 "change_kind": _workspace_change_kind(consumed_payload),
+                                "events_inserted": _workspace_events_inserted(consumed_payload),
                                 "latest_event_id": _workspace_render_event_id(current_sig, consumed_preview_payload),
                                 "thread_session_count": current_sig[5],
                                 "detect_ms": round((monotonic() - wait_start) * 1000, 1) if wait_start else 0,
@@ -1291,6 +1302,7 @@ async def _session_workspace_stream(
                     {
                         "session_id": str(session_id),
                         "change_kind": _workspace_change_kind(consumed_payload),
+                        "events_inserted": _workspace_events_inserted(consumed_payload),
                         "latest_event_id": _workspace_render_event_id(current_sig, transcript_preview_payload),
                         "thread_session_count": current_sig[5],
                         "detect_ms": detect_ms,
