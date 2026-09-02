@@ -209,8 +209,6 @@ struct ClaudeLaunchArgs {
     project: Option<String>,
     #[arg(long)]
     name: Option<String>,
-    #[arg(long, default_value = "assist")]
-    loop_mode: String,
     #[arg(long)]
     url: Option<String>,
     #[arg(long)]
@@ -283,8 +281,6 @@ struct CodexLaunchArgs {
     project: Option<String>,
     #[arg(long)]
     name: Option<String>,
-    #[arg(long, default_value = "assist")]
-    loop_mode: String,
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     attach: bool,
     #[arg(long)]
@@ -331,8 +327,6 @@ struct OpencodeLaunchArgs {
     project: Option<String>,
     #[arg(long)]
     name: Option<String>,
-    #[arg(long, default_value = "assist")]
-    loop_mode: String,
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     attach: bool,
     #[arg(long)]
@@ -362,8 +356,6 @@ struct AntigravityLaunchArgs {
     project: Option<String>,
     #[arg(long)]
     name: Option<String>,
-    #[arg(long, default_value = "assist")]
-    loop_mode: String,
     #[arg(long)]
     url: Option<String>,
     #[arg(long)]
@@ -384,8 +376,6 @@ struct CursorLaunchArgs {
     project: Option<String>,
     #[arg(long)]
     name: Option<String>,
-    #[arg(long, default_value = "assist")]
-    loop_mode: String,
     #[arg(long)]
     url: Option<String>,
     #[arg(long)]
@@ -1069,8 +1059,7 @@ fn launch_managed_cursor(args: CursorLaunchArgs) -> anyhow::Result<()> {
     let mut command = Command::new(paired_engine_path()?);
     command
         .args(["cursor-helm", "launch", "--cwd"])
-        .arg(args.cwd)
-        .args(["--loop-mode", &args.loop_mode]);
+        .arg(args.cwd);
     if let Some(value) = args.permission_mode {
         command.args(["--permission-mode", &value]);
     }
@@ -1203,7 +1192,6 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         cwd: &cwd,
         project: args.project.as_deref(),
         display_name: args.name.as_deref(),
-        loop_mode: &args.loop_mode,
         machine_name: &machine_name,
         // The hook inbox has no remote-approval surface; agy settles its own
         // permissions and Longhouse routes no approval to it.
@@ -1548,7 +1536,6 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             cwd: &cwd,
             project: args.project.as_deref(),
             display_name: args.name.as_deref(),
-            loop_mode: &args.loop_mode,
             machine_name: &machine_name,
             permission_mode: target.permission_mode,
             provenance: ManagedLaunchProvenance::interactive_helm(),
@@ -1566,7 +1553,6 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             cwd: &cwd,
             project: args.project.as_deref(),
             display_name: args.name.as_deref(),
-            loop_mode: &args.loop_mode,
             machine_name: &machine_name,
             // Claude passes --dangerously-skip-permissions unless remote
             // approval was requested, so the flag and the wire value agree.
@@ -1899,7 +1885,6 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         cwd: &cwd,
         project: args.project.as_deref(),
         display_name: args.name.as_deref(),
-        loop_mode: &args.loop_mode,
         machine_name: &machine_name,
         // OpenCode has no remote-approval surface: control_channel rejects any
         // non-bypass permission mode for it outright.
@@ -2553,7 +2538,6 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
         cwd: &cwd,
         project: None,
         display_name: None,
-        loop_mode: "assist",
         machine_name: &machine_name,
         // Pi has no remote-approval surface: control_channel rejects any
         // non-bypass permission mode for it outright.
@@ -2670,7 +2654,6 @@ fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
         cwd: &cwd,
         project: args.project.as_deref(),
         display_name: args.name.as_deref(),
-        loop_mode: &args.loop_mode,
         machine_name: &machine_name,
         // Codex owns local approvals unless the explicit bypass flag is set.
         // This must not be reported as remote_approve: Longhouse has no Codex
@@ -2923,7 +2906,6 @@ fn launch_managed_codex_resume(
         cwd,
         project: args.project.as_deref(),
         display_name: args.name.as_deref(),
-        loop_mode: &args.loop_mode,
         machine_name,
         permission_mode: if target.bypass {
             PermissionMode::Bypass
@@ -5250,7 +5232,6 @@ mod tests {
                     cwd: cwd.clone(),
                     project: None,
                     name: None,
-                    loop_mode: "assist".to_string(),
                     attach: true,
                     no_attach: false,
                     url: None,

@@ -176,7 +176,6 @@ provider, session_id = sys.argv[1], sys.argv[2]
 payload = {
     "cwd": "/tmp",
     "provider": provider,
-    "loop_mode": "assist",
     "machine_name": "lifecycle-smoke-host",
     "permission_mode": "bypass",
 }

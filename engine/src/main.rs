@@ -912,8 +912,6 @@ enum CursorHelmCommands {
         project: Option<String>,
         #[arg(long)]
         name: Option<String>,
-        #[arg(long, default_value = "assist")]
-        loop_mode: String,
         #[arg(long)]
         url: Option<String>,
         #[arg(long)]
@@ -2008,7 +2006,6 @@ fn main() -> anyhow::Result<()> {
                     cwd,
                     project,
                     name,
-                    loop_mode,
                     url,
                     token,
                     resume_session,
@@ -2024,7 +2021,6 @@ fn main() -> anyhow::Result<()> {
                             cwd,
                             project,
                             name,
-                            loop_mode,
                             url,
                             token,
                             resume_session,

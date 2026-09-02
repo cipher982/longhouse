@@ -2470,7 +2470,7 @@
         "cursor.turn_start",
         "cursor.turn_interrupt"
       ],
-      "adapter_digest": "4d3fbf905a6d195c83589a4af02d6840a01ca3ddcc22626599fd8d6d02a55fda"
+      "adapter_digest": "9ecb5ff48874caaa26af6c9efd819ce65490a2f8ad8fbd0eef6304a9ddf2ee6f"
     },
     {
       "provider": "pi",
