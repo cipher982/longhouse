@@ -359,6 +359,102 @@ async def recent_client_render_beacons(
     return {"items": items}
 
 
+class ClientDiagnosticEntry(BaseModel):
+    """One client-side lifecycle mark: what the app did, when, for which session."""
+
+    at_ms: int = Field(..., description="Client wall-clock time of the mark, in ms epoch")
+    stage: str = Field(..., max_length=64)
+    detail: str | None = Field(None, max_length=512)
+    session_id: str | None = Field(None, max_length=128)
+
+
+class ClientDiagnosticsBatch(BaseModel):
+    """A batch of client lifecycle marks (stream connects, stalls, polls, reconciles).
+
+    The phone cannot be tailed like a server, so the app ships the marks it
+    already logs locally. They land as one log line each so the operator can
+    read the client's view of a session next to the server's.
+    """
+
+    surface: Literal["web", "ios"]
+    device_label: str | None = Field(None, max_length=64)
+    app_build: str | None = Field(None, max_length=64)
+    entries: list[ClientDiagnosticEntry] = Field(..., max_length=200)
+
+
+@dataclass
+class _DiagnosticSample:
+    at_monotonic: float
+    surface: str
+    device_label: str | None
+    app_build: str | None
+    session_id: str | None
+    at_ms: int
+    stage: str
+    detail: str | None
+
+
+_diagnostics: deque[_DiagnosticSample] = deque(maxlen=4000)
+diag_logger = logging.getLogger("longhouse.client_diag")
+
+
+@beacon_router.post("/client-diagnostics", include_in_schema=False)
+async def client_diagnostics(batch: ClientDiagnosticsBatch, request: Request) -> dict:
+    """Accept a batch of client lifecycle marks. Same public/rate-limited posture as render beacons."""
+    now_mono = time.monotonic()
+    client_ip = request.client.host if request.client else "unknown"
+    if not _take_token(client_ip, now_mono):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many beacons")
+    for entry in batch.entries:
+        _diagnostics.append(
+            _DiagnosticSample(
+                at_monotonic=now_mono,
+                surface=batch.surface,
+                device_label=batch.device_label,
+                app_build=batch.app_build,
+                session_id=entry.session_id,
+                at_ms=entry.at_ms,
+                stage=entry.stage,
+                detail=entry.detail,
+            )
+        )
+        diag_logger.info(
+            "client_diag surface=%s device=%s build=%s session=%s at=%s stage=%s %s",
+            batch.surface,
+            batch.device_label,
+            batch.app_build,
+            entry.session_id,
+            datetime.fromtimestamp(entry.at_ms / 1000.0, tz=timezone.utc).isoformat(timespec="milliseconds"),
+            entry.stage,
+            entry.detail or "",
+        )
+    return {"accepted": len(batch.entries)}
+
+
+@admin_router.get("/client-diagnostics/recent", include_in_schema=False)
+async def recent_client_diagnostics(session_id: str | None = None, limit: int = 200) -> list[dict]:
+    limit = max(1, min(limit, 2000))
+    rows: list[dict] = []
+    for sample in reversed(_diagnostics):
+        if session_id and sample.session_id != session_id:
+            continue
+        rows.append(
+            {
+                "surface": sample.surface,
+                "device_label": sample.device_label,
+                "app_build": sample.app_build,
+                "session_id": sample.session_id,
+                "at": datetime.fromtimestamp(sample.at_ms / 1000.0, tz=timezone.utc).isoformat(timespec="milliseconds"),
+                "stage": sample.stage,
+                "detail": sample.detail,
+            }
+        )
+        if len(rows) >= limit:
+            break
+    rows.reverse()
+    return rows
+
+
 @admin_router.get("/latency-summary", include_in_schema=False)
 async def latency_summary(window_s: int = 900) -> dict:
     """Return p50/p95/p99 end-to-end latency over the last window_s seconds, grouped by surface+managed."""
