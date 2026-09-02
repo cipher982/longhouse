@@ -23,6 +23,12 @@ Codex hooks (via hooks.json):
   Codex bridge owns initial presence and transcript binding; avoiding
   SessionStart also avoids stock Codex's visible post-compaction hook cards.
 
+Antigravity hooks (when Antigravity is installed):
+
+- **longhouse-antigravity-hook.sh**: local presence/inbox boundary. Managed
+  transcript binding is persisted by the daemon after the presence record is
+  published.
+
 Startup continuity injection (fetching recent project context on
 SessionStart) is not part of the default hook. See
 ``labs/startup-continuity/`` for the opt-in installer that adds it.
@@ -40,6 +46,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import stat
 import tempfile
 from pathlib import Path
@@ -793,6 +800,16 @@ def install_hooks(
     from zerg.services.cursor_hooks import install_cursor_hooks
 
     actions.extend(install_cursor_hooks(engine_path=engine_path))
+
+    # Keep the third-party Antigravity plugin in the same repair/install loop
+    # as Claude, Codex, and Cursor. Do not create a new provider config on a
+    # machine that has never installed Antigravity; refresh it when its config
+    # root or binary is already present.
+    if (Path.home() / ".gemini").exists() or shutil.which("agy"):
+        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
+
+        plugin_root = _ensure_antigravity_runtime_plugin()
+        actions.append(f"Configured Antigravity hooks in {plugin_root}")
 
     return actions
 

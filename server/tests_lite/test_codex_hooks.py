@@ -326,6 +326,25 @@ def test_install_hooks_skips_codex_when_not_installed(tmp_path, monkeypatch):
     assert not codex_hooks_json.exists()
 
 
+def test_install_hooks_refreshes_antigravity_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    (tmp_path / ".gemini" / "config").mkdir(parents=True)
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+
+    install_hooks(
+        url="http://localhost:8080",
+        claude_dir=str(claude_dir),
+        engine_path="/usr/bin/longhouse-engine",
+    )
+
+    hook = tmp_path / ".gemini" / "antigravity-cli" / "plugins" / "longhouse-runtime" / "longhouse-antigravity-hook.sh"
+    assert hook.is_file()
+    content = hook.read_text()
+    assert "bind --path" not in content
+    assert "control_path" in content
+
+
 def test_install_hooks_replaces_deprecated_claude_session_start_hook_with_unified_hook(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
