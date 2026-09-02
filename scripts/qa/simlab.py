@@ -103,10 +103,13 @@ def record_timing(target: dict | list, phase: str, started: float, **details: st
 
 
 class AppLogStream:
-    def __init__(self, state: dict) -> None:
+    def __init__(self, state: dict, udid: str | None = None) -> None:
+        environment = sim_env(state)
+        if udid:
+            environment["SIM_UDID"] = udid
         self.process = subprocess.Popen(
             [str(ROOT / "scripts/ops/sim.sh"), "logs", "--follow"],
-            env=sim_env(state),
+            env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -144,16 +147,17 @@ class AppLogStream:
                 os.killpg(self.process.pid, signal.SIGKILL)
             except OSError:
                 pass
+            self.process.wait()
 
 
 _app_log_stream: AppLogStream | None = None
 
 
-def start_app_log_stream(state: dict) -> None:
+def start_app_log_stream(state: dict, udid: str | None = None) -> None:
     global _app_log_stream
     if _app_log_stream is not None and _app_log_stream.process.poll() is None:
         return
-    _app_log_stream = AppLogStream(state)
+    _app_log_stream = AppLogStream(state, udid)
 
 
 def stop_app_log_stream() -> None:
@@ -614,10 +618,22 @@ def sim(state: dict, deploy: bool) -> None:
         steps = [("boot", "sim_boot"), ("launch", "sim_launch")]
     for command, phase in steps:
         step_started = time.monotonic()
-        subprocess.run([str(script), command, session_id] if command == "launch" else [str(script), command], env=sim_env(state), check=True)
+        command_args = [str(script), command, session_id] if command == "launch" else [str(script), command]
+        if command == "boot":
+            result = subprocess.run(command_args, env=sim_env(state), capture_output=True, text=True, check=True)
+            if result.stdout:
+                print(result.stdout, end="", flush=True)
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+            match = re.search(r"^booted\s+(\S+)", result.stdout, re.MULTILINE)
+            if not match:
+                die("sim boot did not report a device UDID")
+            udid = match.group(1)
+        else:
+            subprocess.run(command_args, env=sim_env(state), check=True)
         record_timing(state, phase, step_started)
         if command == "boot":
-            start_app_log_stream(state)
+            start_app_log_stream(state, udid)
     record_timing(state, "sim", started)
     state["sim_launched_at"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
