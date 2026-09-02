@@ -174,6 +174,13 @@ enum PushNotificationStore {
             UIApplication.shared.registerForRemoteNotifications()
             return true
         case .notDetermined:
+            #if DEBUG
+            // A headless simulator launch has nobody to answer the system
+            // prompt, and the prompt would sit over every capture.
+            if ProcessInfo.processInfo.environment[AppState.headlessServerURLEnvironmentKey] != nil {
+                return false
+            }
+            #endif
             do {
                 let granted = try await center.requestAuthorization(options: [.alert, .badge, .sound])
                 if granted {

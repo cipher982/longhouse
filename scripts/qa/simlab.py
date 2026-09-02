@@ -9,13 +9,15 @@ server projects and the iOS app in the Simulator receives real SSE frames.
 Nothing here mocks Longhouse.
 
     simlab.py up                      start server + engine in a scratch root
-    simlab.py play [--turns N] [--cadence-ms MS] [--mode MODE ...]
-                                      append a synthetic Claude session
+    simlab.py play [--turns N] [--cadence-ms MS] [--mode MODE ...] [--append]
+                                      append a synthetic Claude session (or more turns)
     simlab.py sim [--deploy]          launch the simulator app on the played session
-    simlab.py verdict [--since 3m]    verdict envelope from the app's own log
+    simlab.py verdict [--since 3m] [--expect-frames] [--expect-abandoned N]
+                                      verdict envelope from the app's log + server state
+    simlab.py run [SCENARIO ...]      the golden paths, end to end, with one verdict each
     simlab.py down                    stop server + engine (artifacts stay)
 
-State lives in artifacts/simlab/current/simlab.json.
+State lives in artifacts/simlab/current/simlab.json; verdicts land beside it.
 """
 
 from __future__ import annotations
@@ -116,6 +118,9 @@ def alive(pid: int) -> bool:
 
 
 def built_binary(name: str) -> Path:
+    """The newest built binary across profiles: a stale release build once
+    shipped a scenario without the feature under test."""
+    candidates: list[Path] = []
     for profile in ("release", "ci"):
         out = subprocess.run(
             [sys.executable, str(ROOT / "scripts/build/cargo.py"), "artifact", "--profile", profile, "--bin", name],
@@ -125,8 +130,20 @@ def built_binary(name: str) -> Path:
         )
         candidate = Path(out.stdout.strip())
         if out.returncode == 0 and candidate.is_file():
-            return candidate
-    die(f"no built {name}; run `make test-engine` once to build it")
+            candidates.append(candidate)
+    if not candidates:
+        die(f"no built {name}; run `simlab.py up --build`")
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def build_binaries() -> None:
+    log("building longhouse and longhouse-engine (ci profile)")
+    subprocess.run([sys.executable, str(ROOT / "scripts/build/generate_build_identity.py")], check=True, capture_output=True)
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/build/cargo.py"), "exec", "--", "build", "--manifest-path", str(ROOT / "engine/Cargo.toml"),
+         "--profile", "ci", "--bin", "longhouse", "--bin", "longhouse-engine"],
+        check=True,
+    )
 
 
 def cmd_up(args: argparse.Namespace) -> None:
@@ -134,6 +151,8 @@ def cmd_up(args: argparse.Namespace) -> None:
         state = json.loads(STATE_FILE.read_text())
         if any(alive(pid) for pid in (state.get("server_pid", 0), state.get("engine_pid", 0))):
             die("a scratch run is still up; `simlab.py down` first")
+    if args.build:
+        build_binaries()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     # Short on purpose: the engine binds Unix sockets under the scratch home
     # and macOS caps socket paths at 104 bytes.
@@ -257,10 +276,11 @@ def cmd_down(_: argparse.Namespace) -> None:
 class Transcript:
     """Builds Claude Code JSONL entries with correct parent links."""
 
-    def __init__(self, session_id: str, start: datetime) -> None:
+    def __init__(self, session_id: str, start: datetime, last_uuid: str | None = None, first_turn: int = 1) -> None:
         self.session_id = session_id
         self.clock = start
-        self.last_uuid: str | None = None
+        self.last_uuid = last_uuid
+        self.first_turn = first_turn
 
     def _base(self, kind: str, parent: str | None, seconds: float) -> dict:
         self.clock += timedelta(seconds=seconds)
@@ -323,22 +343,27 @@ class Transcript:
         return entry
 
 
+ABANDONED_TEXT = "This send was abandoned by an escape."
+RESENT_TEXT = "This is the resend after the escape, and it is the one that counts."
+
+
 def synthetic_turns(transcript: Transcript, turns: int, modes: set[str]) -> list[dict | str]:
     """Entries (or raw lines for malformed mode) for N user turns."""
     entries: list[dict | str] = []
-    for turn in range(1, turns + 1):
+    for offset in range(turns):
+        turn = transcript.first_turn + offset
         prompt = f"Turn {turn}: list the files in the project and summarise what changed."
-        if "abandon-resend" in modes and turn == 2:
+        if "abandon-resend" in modes and offset == turns - 1:
             anchor = transcript.last_uuid
-            entries.append(transcript.user(prompt, seconds=3.0))
+            entries.append(transcript.user(ABANDONED_TEXT, seconds=3.0))
             # Escape-and-resend: a sibling of the first send, same parent.
-            entries.append(transcript.user(prompt + " Also check the tests.", parent=anchor, seconds=14.0))
+            entries.append(transcript.user(RESENT_TEXT, parent=anchor, seconds=14.0))
         else:
             entries.append(transcript.user(prompt))
         entries.append(transcript.assistant_text(f"Looking at turn {turn} now. I'll list the tree first."))
         call, call_id = transcript.tool_call("Bash", {"command": "ls -la", "description": "List files"})
         entries.append(call)
-        if "malformed" in modes and turn == 1:
+        if "malformed" in modes and offset == 0:
             entries.append("{this is not json")
             entries.append(json.dumps({**transcript._base("mystery", transcript.last_uuid, 0.1), "message": {"role": "system"}}))
         entries.append(transcript.tool_result(call_id, "total 24\n-rw-r--r-- README.md\n-rw-r--r-- main.py\n"))
@@ -367,18 +392,51 @@ def write_line(handle, line: str, mode_split: bool, cadence_s: float) -> None:
     os.fsync(handle.fileno())
 
 
-def cmd_play(args: argparse.Namespace) -> None:
-    state = load_state()
-    modes = set(args.mode or ["normal"])
+def transcript_tail(path: Path) -> tuple[str | None, int]:
+    """Last chained uuid and number of user turns already in the file."""
+    last_uuid = None
+    turns = 0
+    if not path.exists():
+        return None, 0
+    for raw in path.read_text().splitlines():
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict) or "uuid" not in entry:
+            continue
+        last_uuid = entry["uuid"]
+        message = entry.get("message") or {}
+        if entry.get("type") == "user" and isinstance(message.get("content"), str):
+            turns += 1
+    return last_uuid, turns
+
+
+def find_session(state: dict, session_id: str) -> dict | None:
+    # A locally shipped Claude session keeps its transcript uuid as the
+    # Longhouse id; hosted imports carry it as provider_session_id instead.
+    listing = http("GET", f"{state['base_url']}/api/agents/sessions?limit=20&include_test=true", token=state["token"])
+    for session in listing.get("sessions", []):
+        if session_id in (session.get("id"), session.get("provider_session_id")):
+            return session
+    return None
+
+
+def play(state: dict, turns: int, cadence_ms: int, modes: set[str], session_id: str | None, append: bool) -> dict:
     unknown = modes - set(MODES)
     if unknown:
         die(f"unknown mode(s): {', '.join(sorted(unknown))}; choose from {', '.join(MODES)}")
-    session_id = args.session_id or str(uuid.uuid4())
+    if append and not session_id:
+        session_id = state.get("provider_session_id")
+        if not session_id:
+            die("--append needs a played session")
+    session_id = session_id or str(uuid.uuid4())
     path = Path(state["projects"]) / f"{session_id}.jsonl"
-    cadence_s = args.cadence_ms / 1000.0
-    transcript = Transcript(session_id, datetime.now(timezone.utc) - timedelta(seconds=5))
-    entries = synthetic_turns(transcript, args.turns, modes)
-    log(f"playing {len(entries)} entries into {path.name} modes={sorted(modes)} cadence={args.cadence_ms}ms")
+    cadence_s = cadence_ms / 1000.0
+    last_uuid, prior_turns = transcript_tail(path) if append else (None, 0)
+    transcript = Transcript(session_id, datetime.now(timezone.utc) - timedelta(seconds=5), last_uuid, prior_turns + 1)
+    entries = synthetic_turns(transcript, turns, modes)
+    log(f"playing {len(entries)} entries into {path.name} modes={sorted(modes)} cadence={cadence_ms}ms append={append}")
     started = time.monotonic()
     with open(path, "a") as handle:
         for index, entry in enumerate(entries):
@@ -389,25 +447,19 @@ def cmd_play(args: argparse.Namespace) -> None:
             if "burst" in modes and index < len(entries) - 1 and (index % 6) != 5:
                 continue
             time.sleep(cadence_s)
-    elapsed = time.monotonic() - started
-    log(f"played in {elapsed:.1f}s; waiting for the runtime host to know the session")
-
-    def find_session():
-        # A locally shipped Claude session keeps its transcript uuid as the
-        # Longhouse id; hosted imports carry it as provider_session_id instead.
-        listing = http("GET", f"{state['base_url']}/api/agents/sessions?limit=20&include_test=true", token=state["token"])
-        for session in listing.get("sessions", []):
-            if session_id in (session.get("id"), session.get("provider_session_id")):
-                return session
-        return None
-
-    session = wait_for("session to be ingested", find_session, timeout_s=60)
+    log(f"played in {time.monotonic() - started:.1f}s; waiting for the runtime host to know the session")
+    session = wait_for("session to be ingested", lambda: find_session(state, session_id), timeout_s=60)
     state["provider_session_id"] = session_id
     state["session_id"] = session["id"]
     state["transcript"] = str(path)
-    state["played"] = {"turns": args.turns, "modes": sorted(modes), "cadence_ms": args.cadence_ms, "entries": len(entries)}
+    state["played"] = {"turns": prior_turns + turns, "modes": sorted(modes), "cadence_ms": cadence_ms, "entries": len(entries)}
     save_state(state)
-    print(json.dumps({"session_id": session["id"], "provider_session_id": session_id, "title": session.get("title")}))
+    return {"session_id": session["id"], "provider_session_id": session_id, "title": session.get("title"), "entries": len(entries)}
+
+
+def cmd_play(args: argparse.Namespace) -> None:
+    state = load_state()
+    print(json.dumps(play(state, args.turns, args.cadence_ms, set(args.mode or ["normal"]), args.session_id, args.append)))
 
 
 # --------------------------------------------------------------------------
@@ -419,13 +471,12 @@ def sim_env(state: dict) -> dict:
     return {**os.environ, "SIM_SERVER_URL": state["base_url"], "SIM_AUTH_TOKEN": state["token"]}
 
 
-def cmd_sim(args: argparse.Namespace) -> None:
-    state = load_state()
+def sim(state: dict, deploy: bool) -> None:
     session_id = state.get("session_id")
     if not session_id:
         die("no played session; run `simlab.py play` first")
     script = ROOT / "scripts/ops/sim.sh"
-    if args.deploy:
+    if deploy:
         subprocess.run([str(script), "deploy", session_id], env=sim_env(state), check=True)
     else:
         subprocess.run([str(script), "boot"], env=sim_env(state), check=True)
@@ -434,16 +485,16 @@ def cmd_sim(args: argparse.Namespace) -> None:
     save_state(state)
 
 
+def cmd_sim(args: argparse.Namespace) -> None:
+    sim(load_state(), args.deploy)
+
+
 MARK = re.compile(r"session open stage=(?P<stage>\S+) session=(?P<session>\S+) elapsed_ms=(?P<elapsed>\d+)(?P<rest>.*)")
 
 
-def cmd_verdict(args: argparse.Namespace) -> None:
-    state = load_state()
-    session_id = state.get("session_id")
-    if not session_id:
-        die("no played session; run `simlab.py play` first")
+def app_marks(state: dict, session_id: str, since: str) -> list[dict]:
     out = subprocess.run(
-        [str(ROOT / "scripts/ops/sim.sh"), "logs", "--since", args.since],
+        [str(ROOT / "scripts/ops/sim.sh"), "logs", "--since", since],
         env=sim_env(state),
         capture_output=True,
         text=True,
@@ -455,6 +506,18 @@ def cmd_verdict(args: argparse.Namespace) -> None:
         if not match or match.group("session") != session_id:
             continue
         marks.append({"stage": match.group("stage"), "elapsed_ms": int(match.group("elapsed")), "detail": match.group("rest").strip()})
+    return marks
+
+
+def server_projection(state: dict, session_id: str) -> dict:
+    return http("GET", f"{state['base_url']}/api/agents/sessions/{session_id}/workspace", token=state["token"], timeout=20)
+
+
+def verdict(state: dict, scenario: str, since: str, expect_frames: bool, expect_abandoned: int | None, expect_user_turns: int | None) -> dict:
+    session_id = state.get("session_id")
+    if not session_id:
+        die("no played session; run `simlab.py play` first")
+    marks = app_marks(state, session_id, since)
     stages = [m["stage"] for m in marks]
 
     def first(stage: str) -> int | None:
@@ -471,8 +534,27 @@ def cmd_verdict(args: argparse.Namespace) -> None:
         {"id": "no_decode_failure", "status": "fail" if "stream_decode_failed" in stages else "pass"},
         {"id": "no_request_failure", "status": "fail" if "request_failed" in stages else "pass"},
     ]
-    if args.expect_frames:
+    if expect_frames:
         checks.append({"id": "live_frames_received", "status": "pass" if "stream_changed" in stages else "fail"})
+
+    # Durable state is the verifier, not the screenshot: the server's own
+    # head projection says what the app was given to render.
+    projection = server_projection(state, session_id)["projection"]
+    user_items = [
+        item for item in projection.get("items", [])
+        if (item.get("event") or {}).get("role") == "user" and isinstance((item.get("event") or {}).get("content_text"), str)
+        and not (item.get("event") or {}).get("tool_name")
+    ]
+    user_texts = [item["event"]["content_text"] for item in user_items]
+    if expect_abandoned is not None:
+        checks.append({"id": "abandoned_counted", "status": "pass" if projection.get("abandoned_events") == expect_abandoned else "fail",
+                       "detail": f"abandoned_events={projection.get('abandoned_events')}"})
+        checks.append({"id": "abandoned_hidden_from_head", "status": "fail" if ABANDONED_TEXT in user_texts else "pass"})
+        checks.append({"id": "resend_on_head", "status": "pass" if RESENT_TEXT in user_texts else "fail"})
+    if expect_user_turns is not None:
+        checks.append({"id": "user_turns_projected", "status": "pass" if len(user_texts) == expect_user_turns else "fail",
+                       "detail": f"user_items={len(user_texts)}"})
+
     metrics = {
         "first_render_ms": first("webkit_rendered"),
         "stream_connected_ms": first("stream_connected"),
@@ -480,6 +562,8 @@ def cmd_verdict(args: argparse.Namespace) -> None:
         "live_frames": stages.count("stream_changed"),
         "history_fills": stages.count("history_fill"),
         "marks": len(marks),
+        "projected_items": len(projection.get("items", [])),
+        "abandoned_events": projection.get("abandoned_events"),
     }
     status = "pass" if all(c["status"] == "pass" for c in checks) and marks else "fail"
     evidence = [
@@ -487,8 +571,8 @@ def cmd_verdict(args: argparse.Namespace) -> None:
         for m in marks
         if m["stage"] in {"stream_stale", "stream_decode_failed", "request_failed", "stream_error"}
     ]
-    verdict = {
-        "scenario": args.scenario,
+    envelope = {
+        "scenario": scenario,
         "session_id": session_id,
         "status": status,
         "checks": checks,
@@ -497,9 +581,95 @@ def cmd_verdict(args: argparse.Namespace) -> None:
         "artifacts": {"scratch": state.get("scratch"), "transcript": state.get("transcript")},
     }
     RUN_DIR.mkdir(parents=True, exist_ok=True)
-    (RUN_DIR / "verdict.json").write_text(json.dumps(verdict, indent=2))
-    print(json.dumps(verdict, indent=2))
-    sys.exit(0 if status == "pass" else 2)
+    (RUN_DIR / f"verdict-{scenario}.json").write_text(json.dumps(envelope, indent=2))
+    return envelope
+
+
+def cmd_verdict(args: argparse.Namespace) -> None:
+    envelope = verdict(load_state(), args.scenario, args.since, args.expect_frames, args.expect_abandoned, args.expect_user_turns)
+    print(json.dumps(envelope, indent=2))
+    sys.exit(0 if envelope["status"] == "pass" else 2)
+
+
+# --------------------------------------------------------------------------
+# run: the golden paths
+# --------------------------------------------------------------------------
+
+
+def settle(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def scenario_open_imported(state: dict, deploy: bool) -> dict:
+    play(state, turns=2, cadence_ms=150, modes={"normal"}, session_id=None, append=False)
+    sim(state, deploy)
+    settle(20)
+    return verdict(state, "open-imported-session", "2m", False, None, 2)
+
+
+def scenario_live_turns(state: dict, deploy: bool) -> dict:
+    play(state, turns=1, cadence_ms=150, modes={"normal"}, session_id=None, append=False)
+    sim(state, deploy)
+    settle(12)
+    play(state, turns=2, cadence_ms=300, modes={"normal"}, session_id=None, append=True)
+    settle(12)
+    return verdict(state, "live-turns-into-open-session", "3m", True, None, 3)
+
+
+def scenario_escape_resend(state: dict, deploy: bool) -> dict:
+    play(state, turns=2, cadence_ms=150, modes={"abandon-resend"}, session_id=None, append=False)
+    sim(state, deploy)
+    settle(20)
+    return verdict(state, "escape-and-resend", "2m", False, 1, 2)
+
+
+def scenario_hostile_transcript(state: dict, deploy: bool) -> dict:
+    play(state, turns=2, cadence_ms=150, modes={"malformed", "split-lines", "delayed-first"}, session_id=None, append=False)
+    sim(state, deploy)
+    settle(20)
+    return verdict(state, "hostile-transcript", "2m", False, None, 2)
+
+
+SCENARIOS = {
+    "open-imported-session": scenario_open_imported,
+    "live-turns-into-open-session": scenario_live_turns,
+    "escape-and-resend": scenario_escape_resend,
+    "hostile-transcript": scenario_hostile_transcript,
+}
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    state = load_state()
+    names = args.scenario or list(SCENARIOS)
+    unknown = set(names) - set(SCENARIOS)
+    if unknown:
+        die(f"unknown scenario(s): {', '.join(sorted(unknown))}; choose from {', '.join(SCENARIOS)}")
+    results = []
+    deploy = args.deploy
+    for name in names:
+        log(f"=== scenario {name}")
+        envelope = SCENARIOS[name](state, deploy)
+        deploy = False
+        results.append(envelope)
+        failed = [c["id"] for c in envelope["checks"] if c["status"] != "pass"]
+        log(f"=== {name}: {envelope['status']}" + (f" ({', '.join(failed)})" if failed else ""))
+    summary = {
+        "status": "pass" if all(r["status"] == "pass" for r in results) else "fail",
+        "scenarios": [
+            {
+                "scenario": r["scenario"],
+                "status": r["status"],
+                "failed_checks": [c["id"] for c in r["checks"] if c["status"] != "pass"],
+                "stream_connected_ms": r["metrics"].get("stream_connected_ms"),
+                "first_render_ms": r["metrics"].get("first_render_ms"),
+                "live_frames": r["metrics"].get("live_frames"),
+            }
+            for r in results
+        ],
+    }
+    (RUN_DIR / "summary.json").write_text(json.dumps(summary, indent=2))
+    print(json.dumps(summary, indent=2))
+    sys.exit(0 if summary["status"] == "pass" else 2)
 
 
 # --------------------------------------------------------------------------
@@ -511,26 +681,35 @@ def main() -> None:
 
     up = sub.add_parser("up", help="start a scratch runtime host and machine agent")
     up.add_argument("--port", type=int, default=0)
+    up.add_argument("--build", action="store_true", help="build the engine binaries from this checkout first")
     up.set_defaults(func=cmd_up)
 
     sub.add_parser("down", help="stop the scratch runtime host and machine agent").set_defaults(func=cmd_down)
 
-    play = sub.add_parser("play", help="append a synthetic Claude session at a controlled cadence")
-    play.add_argument("--turns", type=int, default=3)
-    play.add_argument("--cadence-ms", type=int, default=400)
-    play.add_argument("--session-id", default=None)
-    play.add_argument("--mode", action="append", choices=sorted(MODES), help="; ".join(f"{k}: {v}" for k, v in MODES.items()))
-    play.set_defaults(func=cmd_play)
+    play_parser = sub.add_parser("play", help="append a synthetic Claude session at a controlled cadence")
+    play_parser.add_argument("--turns", type=int, default=3)
+    play_parser.add_argument("--cadence-ms", type=int, default=400)
+    play_parser.add_argument("--session-id", default=None)
+    play_parser.add_argument("--append", action="store_true", help="add turns to the played session instead of a new one")
+    play_parser.add_argument("--mode", action="append", choices=sorted(MODES), help="; ".join(f"{k}: {v}" for k, v in MODES.items()))
+    play_parser.set_defaults(func=cmd_play)
 
-    sim = sub.add_parser("sim", help="launch the simulator app on the played session")
-    sim.add_argument("--deploy", action="store_true", help="build and install first")
-    sim.set_defaults(func=cmd_sim)
+    sim_parser = sub.add_parser("sim", help="launch the simulator app on the played session")
+    sim_parser.add_argument("--deploy", action="store_true", help="build and install first")
+    sim_parser.set_defaults(func=cmd_sim)
 
-    verdict = sub.add_parser("verdict", help="verdict envelope from the app's own lifecycle marks")
-    verdict.add_argument("--since", default="3m")
-    verdict.add_argument("--scenario", default="open-live-session")
-    verdict.add_argument("--expect-frames", action="store_true", help="require live stream frames after open")
-    verdict.set_defaults(func=cmd_verdict)
+    verdict_parser = sub.add_parser("verdict", help="verdict envelope from the app's own lifecycle marks and server state")
+    verdict_parser.add_argument("--since", default="3m")
+    verdict_parser.add_argument("--scenario", default="ad-hoc")
+    verdict_parser.add_argument("--expect-frames", action="store_true", help="require live stream frames after open")
+    verdict_parser.add_argument("--expect-abandoned", type=int, default=None, help="require this many abandoned events in the head projection")
+    verdict_parser.add_argument("--expect-user-turns", type=int, default=None, help="require this many user messages on the head projection")
+    verdict_parser.set_defaults(func=cmd_verdict)
+
+    run_parser = sub.add_parser("run", help="run golden-path scenarios end to end")
+    run_parser.add_argument("scenario", nargs="*", choices=sorted(SCENARIOS) + [], help="default: all")
+    run_parser.add_argument("--deploy", action="store_true", help="build and install the app before the first scenario")
+    run_parser.set_defaults(func=cmd_run)
 
     args = parser.parse_args()
     args.func(args)

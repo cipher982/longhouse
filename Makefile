@@ -224,6 +224,11 @@ sim-shot: ## Screenshot the simulator into artifacts/sim/ (LABEL=name)
 sim-logs: ## The app's OSLog from the simulator (SINCE=5m, FOLLOW=1 to stream)
 	@scripts/ops/sim.sh logs --since $(or $(SINCE),5m) $(if $(FOLLOW),--follow,)
 
+simlab-run: ## Golden paths through a scratch runtime, engine, and the simulator app (SCENARIOS="a b")
+	@python3 scripts/qa/simlab.py down >/dev/null 2>&1 || true
+	@python3 scripts/qa/simlab.py up --build >/dev/null
+	@python3 scripts/qa/simlab.py run --deploy $(SCENARIOS); STATUS=$$?; python3 scripts/qa/simlab.py down >/dev/null 2>&1; exit $$STATUS
+
 test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit tests)
 	@cd web && bun run test -- --run src/components/session-workspace/__tests__/RenderTelemetryPanel.test.tsx src/pages/__tests__/SessionDetailPage.test.tsx
 	@python3 scripts/build/generate_build_identity.py
