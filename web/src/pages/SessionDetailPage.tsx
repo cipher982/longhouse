@@ -2,9 +2,9 @@
  * SessionDetailPage - Single-column session workspace.
  *
  * Layout:
- * - Header: title, live status, info button, archive
+ * - Header: back, title + identity subtitle, Resume, overflow menu
  * - Body: transcript fills viewport
- * - Dock: slim runtime strip + composer (Loop Mode picker inline) sticky at bottom
+ * - Dock: runtime strip (activity strip, elapsed, tail) + composer sticky at bottom
  * - Drawer (overlay): session context (metadata, branches, summary, attach debug)
  * - Telemetry panel only renders with ?debug=telemetry
  */
@@ -55,6 +55,8 @@ import {
 import { ApiError, DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
+
+const GENERIC_HOME_LABELS = new Set(["On this Mac", "Hosted", "Moved to cloud", "This machine"]);
 
 function SessionDetailWorkspaceRoute({
   highlightEventId,
@@ -284,11 +286,12 @@ function SessionDetailWorkspaceRoute({
     displaySession.home_label ||
     "host";
   // Who and where, once, under the title. The host is only named when the
-  // server actually recorded one; a placeholder would claim a machine.
+  // server actually recorded a machine; home_label can be a phrase such as
+  // "On this Mac", and a placeholder would claim a machine.
+  const homeLabel = displaySession.home_label?.trim() || null;
   const identityHost =
     displaySession.control?.source_runner_name?.trim() ||
-    displaySession.home_label?.trim() ||
-    null;
+    (homeLabel && !GENERIC_HOME_LABELS.has(homeLabel) ? homeLabel : null);
   const identityLabel = [interaction.providerLabel, displaySession.project?.trim() || null, identityHost]
     .filter((part): part is string => Boolean(part))
     .join(" · ");

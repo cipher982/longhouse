@@ -169,11 +169,7 @@ export function getSessionInteractionCapabilities({
           : rawAccessLabel || (mode === "managed_local_unavailable" ? "Control unavailable" : "Read only");
 
   const serverPlaceholder = session.capabilities.composer_placeholder?.trim();
-  const placeholder =
-    serverPlaceholder ||
-    (mode === "managed_local"
-      ? `Send a message to the live ${providerLabel} session...`
-      : "Type a message...");
+  const placeholder = serverPlaceholder || "Message";
 
   const notice =
     mode === "managed_local_unavailable"

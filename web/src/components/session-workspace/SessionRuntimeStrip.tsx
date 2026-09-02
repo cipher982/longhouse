@@ -127,7 +127,7 @@ export function SessionRuntimeStrip({
   // for the current label+tool so it counts up instead of resetting.
   const primary = facts.presentation.primary ?? null;
   const observedAtMs = parseIsoMs(primary?.observed_at ?? facts.activity.observed_at);
-  const anchorKey = `${primary?.key ?? ""}:${facts.activity.tool ?? ""}:${facts.activity.state}`;
+  const anchorKey = `${session.id}:${primary?.key ?? ""}:${facts.activity.tool ?? ""}:${facts.activity.state}`;
   const anchorRef = useRef<{ key: string; startMs: number } | null>(null);
   if (observedAtMs !== null) {
     const current = anchorRef.current;

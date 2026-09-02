@@ -1409,7 +1409,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
             if "loop_mode" in session_cols:
                 conn.execute(text("ALTER TABLE sessions DROP COLUMN loop_mode"))
     except Exception:
-        logger.debug("loop mode cleanup skipped", exc_info=True)
+        # The column is inert with the model gone, so boot continues, but a
+        # failed drop is schema drift worth seeing rather than debug noise.
+        logger.warning("sessions.loop_mode drop failed; column remains", exc_info=True)
 
     # Daily-digest feature removed — drop User columns.
     try:

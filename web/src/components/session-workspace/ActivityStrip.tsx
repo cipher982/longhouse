@@ -64,6 +64,7 @@ export function ActivityStrip({
       styles.getPropertyValue("--activity-strip-state-color").trim() || barColor;
 
     let frameId = 0;
+    let expiryTimer = 0;
     let disposed = false;
 
     const draw = (): boolean => {
@@ -104,7 +105,13 @@ export function ActivityStrip({
     const wake = () => {
       if (disposed) return;
       if (reduceMotion) {
+        // No drift, so nothing would otherwise clear a bar once it leaves the
+        // window. One deferred repaint after the newest frame expires does it.
         draw();
+        window.clearTimeout(expiryTimer);
+        expiryTimer = window.setTimeout(() => {
+          if (!disposed) draw();
+        }, ACTIVITY_STRIP_WINDOW_MS + 50);
         return;
       }
       if (!frameId) {
@@ -117,6 +124,7 @@ export function ActivityStrip({
 
     return () => {
       disposed = true;
+      window.clearTimeout(expiryTimer);
       if (frameId) {
         window.cancelAnimationFrame(frameId);
         frameId = 0;

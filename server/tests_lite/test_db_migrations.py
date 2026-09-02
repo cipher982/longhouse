@@ -228,6 +228,37 @@ def test_startup_migration_adds_session_execution_home_columns(tmp_path):
     assert row == ("unmanaged_local", None, None, None, None)
 
 
+def test_startup_migration_drops_session_loop_mode(tmp_path):
+    """Loop mode left with the frozen operator loop; a legacy column goes with it."""
+    db_path = tmp_path / "loop_mode_drop.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE sessions (
+                id VARCHAR(36) PRIMARY KEY,
+                provider VARCHAR(50) NOT NULL,
+                started_at DATETIME NOT NULL,
+                loop_mode VARCHAR(32) NOT NULL DEFAULT 'assist'
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO sessions (id, provider, started_at, loop_mode) "
+            "VALUES ('00000000-0000-0000-0000-000000000301', 'claude', '2026-05-04 17:50:00', 'autopilot')"
+        )
+
+    _migrate_agents_columns(engine)
+
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
+        rows = conn.execute(text("SELECT id, provider FROM sessions")).fetchall()
+
+    assert "loop_mode" not in columns
+    assert rows == [("00000000-0000-0000-0000-000000000301", "claude")]
+
+
 def test_startup_migration_clears_progress_only_runtime_live_timestamps(tmp_path):
     db_path = tmp_path / "runtime_state_truth.db"
     engine = make_engine(f"sqlite:///{db_path}")

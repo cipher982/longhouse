@@ -229,7 +229,8 @@ extension APISessionResponse {
             stateFacts: DefaultUnknownSessionStateFacts(
                 wrappedValue: sessionState.sessionStateFacts
             ),
-            transcriptPreview: transcriptPreview?.sessionTranscriptPreview
+            transcriptPreview: transcriptPreview?.sessionTranscriptPreview,
+            deviceId: deviceId
         )
     }
 }

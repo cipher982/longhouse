@@ -99,7 +99,7 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(app.staticTexts["Longhouse"].waitForExistence(timeout: 5))
-        XCTAssertEqual(composer.value as? String, "Send a message to the live Codex session...")
+        XCTAssertEqual(composer.value as? String, "Steer this turn")
     }
 
     func testConsoleReplyReplacesOptimisticBubbleWithoutDuplicateWorkingRow() {

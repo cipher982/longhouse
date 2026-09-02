@@ -69,6 +69,13 @@ enum UITestHooks {
         ProcessInfo.processInfo.environment[timelineOpenFixtureEnvironmentKey] == "1"
     }
 
+    /// XCUITest waits for the app to go quiescent before every query, and a
+    /// continuously redrawing view never lets it. Fixture-driven runs hold
+    /// ambient motion still; the state they assert on does not depend on it.
+    static var holdsAmbientMotion: Bool {
+        chatFixtureName != nil || shouldUseTimelineOpenFixture || shouldUseLaunchSessionFixture
+    }
+
     static var shouldUseLaunchSessionFixture: Bool {
         ProcessInfo.processInfo.environment[launchSessionFixtureEnvironmentKey] == "1"
     }

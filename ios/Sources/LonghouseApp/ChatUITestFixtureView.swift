@@ -1102,8 +1102,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         // Marketing captures must not leak test-harness copy into the chrome.
         let isMarketing = title == titleForFixture("marketing")
         let composerPlaceholder = isMarketing
-            ? "Send a message to the live session…"
-            : "Send a message to the live Codex session..."
+            ? "Message"
+            : "Steer this turn"
         let idleDetail = isMarketing ? "Waiting for input" : "Waiting for UI test input"
         let available = SessionStateAction(state: "available", reason: nil)
         let unavailable = SessionStateAction(state: "unavailable", reason: "fixture_not_granted")

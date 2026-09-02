@@ -40,7 +40,7 @@ struct SessionRuntimeDock: View {
     private var style: RuntimeChromeStyle { RuntimeChromeStyle(detail: detail) }
 
     private var elapsedAnchorKey: String {
-        [detail.stateFacts.primary?.key ?? "", detail.stateFacts.activityTool ?? "", detail.stateFacts.activityState]
+        [detail.id, detail.stateFacts.primary?.key ?? "", detail.stateFacts.activityTool ?? "", detail.stateFacts.activityState]
             .joined(separator: ":")
     }
 
@@ -70,7 +70,7 @@ struct SessionRuntimeDock: View {
     private var standardLines: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                ActivityStrip(store: activity, tone: tone, isLive: isExecuting)
+                ActivityStrip(store: activity, tone: tone)
                 Text(detail.runtimeHeadline)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(headlineColor)
@@ -86,11 +86,13 @@ struct SessionRuntimeDock: View {
                 capabilityChip
             }
             if let tail = detail.runtimeTailLine, !typeSize.isAccessibilitySize {
+                // A command is identified by its start; streaming text by its
+                // end. Truncate whichever side carries less.
                 Text(tail)
                     .font(.caption.monospaced())
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
-                    .truncationMode(.head)
+                    .truncationMode(tail.hasPrefix("$ ") ? .tail : .head)
                     .padding(.leading, ActivityStrip.size.width + 8)
                     .accessibilityIdentifier("session-runtime-tail")
             }
@@ -99,7 +101,7 @@ struct SessionRuntimeDock: View {
 
     private var launchSetupLine: some View {
         HStack(spacing: 8) {
-            ActivityStrip(store: activity, tone: RuntimeSignal.live.color, isLive: true)
+            ActivityStrip(store: activity, tone: RuntimeSignal.live.color)
             Text(detail.launchSetupStatusLabel)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
@@ -124,8 +126,13 @@ struct SessionRuntimeDock: View {
             let evidenceLive = detail.stateFacts.activityEvidenceIsLive()
             let ticking = isExecuting && evidenceLive
             if ticking {
+                // The schedule outlives the facts that started it: once the
+                // evidence window passes with no new frame, the count freezes
+                // there instead of following the wall clock into a wedge.
+                let validUntil = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse)
                 SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
-                    elapsedText(RuntimeElapsed.label(from: start, to: context.date, precise: true))
+                    let end = validUntil.map { min($0, context.date) } ?? context.date
+                    elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true))
                 }
             } else {
                 let end = (isExecuting ? detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) : nil) ?? Date()
@@ -138,7 +145,7 @@ struct SessionRuntimeDock: View {
         Text(label)
             .font(.subheadline)
             .monospacedDigit()
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(isExecuting ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
             .lineLimit(1)
             .accessibilityIdentifier("session-runtime-elapsed")
     }

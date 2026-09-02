@@ -50,7 +50,7 @@ export function classifyWorkspaceChange(
   return preview.is_provisional ? "text_delta" : "message";
 }
 
-type ActivityListener = (frame: ActivityFrame) => void;
+type ActivityListener = (frame: ActivityFrame | null) => void;
 
 function monotonicNow(): number {
   return typeof performance !== "undefined" && typeof performance.now === "function"
@@ -91,7 +91,11 @@ export class SessionActivityFeed {
     return this.frames;
   }
 
+  /** Drops every frame and wakes subscribers so a strip repaints empty. */
   reset(): void {
     this.frames = [];
+    for (const listener of this.listeners) {
+      listener(null);
+    }
   }
 }

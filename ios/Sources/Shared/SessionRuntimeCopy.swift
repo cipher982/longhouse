@@ -13,10 +13,24 @@ extension SessionDetail {
         if let project = project?.trimmingCharacters(in: .whitespacesAndNewlines), !project.isEmpty {
             parts.append(project)
         }
-        if let host = (homeLabel ?? originLabel)?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty {
+        if let host = identityHost {
             parts.append(host)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The registered machine id first. `home_label` is sometimes a machine
+    /// name and sometimes a phrase such as "On this Mac"; identity names a
+    /// machine or nothing. (`originLabel` is the launch environment, not a host.)
+    private static let genericHomeLabels: Set<String> = ["On this Mac", "Hosted", "Moved to cloud", "This machine"]
+
+    var identityHost: String? {
+        for candidate in [deviceId, homeLabel] {
+            guard let value = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { continue }
+            if Self.genericHomeLabels.contains(value) { continue }
+            return value
+        }
+        return nil
     }
 
     /// When the current activity observation began. Executing sessions count

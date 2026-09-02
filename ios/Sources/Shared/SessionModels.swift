@@ -878,6 +878,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let runtimeDisplay: SessionRuntimeDisplay
     @DefaultUnknownSessionStateFacts var stateFacts: SessionStateFacts
     var transcriptPreview: SessionTranscriptPreview? = nil
+    /// Registered machine id the session runs on; the header's host name.
+    var deviceId: String? = nil
 
     var displayTitle: String {
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
@@ -1190,7 +1192,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             capabilities: capabilities,
             runtimeDisplay: runtimeDisplay,
             stateFacts: DefaultUnknownSessionStateFacts(wrappedValue: stateFacts),
-            transcriptPreview: transcriptPreview
+            transcriptPreview: transcriptPreview,
+            deviceId: deviceId
         )
     }
 
