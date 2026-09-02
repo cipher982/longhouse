@@ -11,6 +11,10 @@ struct TranscriptSnapshot: Codable, Sendable {
     var loadedProjectionItemCount: Int
     var totalProjectionItemCount: Int
     var tailSnapshotEventId: String?
+    /// Storage-v2 cursor for the page older than this tail. Without it a
+    /// restored session's first older-page fetch goes out cursor-less and
+    /// gets the latest window again. Optional so older caches still decode.
+    var tailNextCursor: String?
     /// Last realtime pubsub seq rendered, so a reopen can seed the SSE
     /// reconnect cursor instead of replaying cold.
     var lastPubsubSeq: Int?
@@ -26,6 +30,7 @@ struct TranscriptSnapshot: Codable, Sendable {
         loadedProjectionItemCount: Int,
         totalProjectionItemCount: Int,
         tailSnapshotEventId: String?,
+        tailNextCursor: String? = nil,
         lastPubsubSeq: Int? = nil,
         workspaceRevisionFingerprint: String? = nil,
         savedAt: Date = Date()
@@ -36,6 +41,7 @@ struct TranscriptSnapshot: Codable, Sendable {
         self.loadedProjectionItemCount = loadedProjectionItemCount
         self.totalProjectionItemCount = totalProjectionItemCount
         self.tailSnapshotEventId = tailSnapshotEventId
+        self.tailNextCursor = tailNextCursor
         self.lastPubsubSeq = lastPubsubSeq
         self.workspaceRevisionFingerprint = workspaceRevisionFingerprint
         self.savedAt = savedAt

@@ -895,10 +895,11 @@ final class SessionViewModel: ObservableObject {
     }
 
     /// Fewer rendered rows than this after a tail refresh means the 50-item
-    /// window collapsed into a handful of grouped tool rows and the transcript
-    /// would sit in the top third of the screen over a blank band. Pull the
-    /// next older page until the viewport has something to show.
-    static let minimumFilledRows = 8
+    /// window collapsed into grouped tool rows and short paragraphs that do
+    /// not reach the composer. Pull the next older page until the viewport
+    /// has something to show. Generous on purpose: a tall-rowed transcript
+    /// pays one extra speculative page, a sparse one gets its history.
+    static let minimumFilledRows = 14
 
     /// Returns how many projection items the older page added; zero when
     /// nothing was fetched, nothing was new, or the request failed.
@@ -906,15 +907,23 @@ final class SessionViewModel: ObservableObject {
     private func loadOlder(api: SessionWorkspaceClient, sessionId: String) async -> Int {
         guard activeSessionId == sessionId else { return 0 }
         guard loadedProjectionItemCount < totalProjectionItemCount else { return 0 }
-        guard !isLoadingOlder else { return 0 }
+        guard !isLoadingOlder else {
+            openWaterfall?.mark("older_skipped", "reason=in_flight loaded=\(loadedProjectionItemCount)")
+            return 0
+        }
 
         if let prefetchedOlderTail,
            prefetchedOlderOffset == loadedProjectionItemCount,
            prefetchedOlderSnapshotEventId == tailSnapshotEventId {
+            let before = loadedProjectionItemCount
             let added = applyOlderTail(prefetchedOlderTail)
             self.prefetchedOlderTail = nil
             self.prefetchedOlderOffset = nil
             self.prefetchedOlderSnapshotEventId = nil
+            openWaterfall?.mark(
+                "older_applied",
+                "source=prefetch page_items=\(prefetchedOlderTail.projection.items.count) added=\(added) loaded=\(before)->\(loadedProjectionItemCount) total=\(totalProjectionItemCount)"
+            )
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
             return added
         }
@@ -1278,7 +1287,7 @@ final class SessionViewModel: ObservableObject {
         loadedProjectionItemCount = snapshot.loadedProjectionItemCount
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId
-        tailNextCursor = nil
+        tailNextCursor = snapshot.tailNextCursor
         lastPubsubSeq = snapshot.lastPubsubSeq
         lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
         prefetchedOlderTail = nil
@@ -1328,6 +1337,7 @@ final class SessionViewModel: ObservableObject {
                 loadedProjectionItemCount: loadedProjectionItemCount,
                 totalProjectionItemCount: totalProjectionItemCount,
                 tailSnapshotEventId: tailSnapshotEventId,
+                tailNextCursor: tailNextCursor,
                 lastPubsubSeq: lastPubsubSeq,
                 workspaceRevisionFingerprint: lastWorkspaceRevisionFingerprint
             )
