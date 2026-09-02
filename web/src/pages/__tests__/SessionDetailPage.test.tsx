@@ -111,8 +111,8 @@ vi.mock("../../components/SessionChat", () => ({
 }));
 
 async function openInfoDrawer(user: ReturnType<typeof userEvent.setup>) {
-  const button = screen.getByTestId("session-info-button");
-  await user.click(button);
+  await user.click(screen.getByTestId("session-overflow-menu"));
+  await user.click(screen.getByTestId("session-info-button"));
 }
 
 function makeCapabilities(

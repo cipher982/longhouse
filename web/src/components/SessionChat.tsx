@@ -818,7 +818,7 @@ export function SessionChat({
                     autoResizeDockTextarea(e.target);
                   }}
                   onKeyDown={handleKeyDown}
-                  placeholder={composerPlaceholder || "Type a message..."}
+                  placeholder={composerPlaceholder || "Message"}
                   disabled={isSubmitting}
                   rows={1}
                 />
@@ -864,7 +864,7 @@ export function SessionChat({
                   value={draft}
                   onChange={(e) => handleDraftChange(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder={composerPlaceholder || "Type a message..."}
+                  placeholder={composerPlaceholder || "Message"}
                   disabled={isComposerDisabled || isSubmitting}
                   rows={2}
                   title={composerDisabledReason ?? undefined}

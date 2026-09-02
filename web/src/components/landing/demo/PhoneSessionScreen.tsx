@@ -217,7 +217,7 @@ export function PhoneSessionScreen({
           <textarea
             className="phone-session-input"
             value={composerText}
-            placeholder="Send a message to the live session…"
+            placeholder="Message"
             disabled={composerDisabled}
             onChange={(event) => onComposerChange?.(event.target.value)}
             aria-label="Message to live session"

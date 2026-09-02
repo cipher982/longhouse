@@ -8,6 +8,7 @@ import { useDocumentVisible } from "./useDocumentVisible";
 import { useOnlineEpoch } from "./useOnlineEpoch";
 import { emitRenderBeacon, emitStateRenderBeacon, recordServerClockSkew } from "../lib/renderBeacon";
 import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
+import { SessionActivityFeed, classifyWorkspaceChange } from "../lib/sessionActivityFeed";
 import {
   buildTimelineModel,
   getPreferredSelectionKey,
@@ -151,12 +152,20 @@ export function useSessionWorkspace(
   const pendingStateRenderBeaconRef = useRef<PendingStateRenderBeacon | null>(null);
   const [pendingRenderBeaconVersion, setPendingRenderBeaconVersion] = useState(0);
   const [pendingStateRenderBeaconVersion, setPendingStateRenderBeaconVersion] = useState(0);
+  // One frame per stream wake, kept out of React state on purpose: the
+  // activity strip subscribes directly and repaints its own canvas.
+  const activityFeedRef = useRef<SessionActivityFeed | null>(null);
+  if (activityFeedRef.current === null) {
+    activityFeedRef.current = new SessionActivityFeed();
+  }
+  const activityFeed = activityFeedRef.current;
 
   useEffect(() => {
     setStreamTranscriptPreview(undefined);
     pendingRenderBeaconRef.current = null;
     pendingStateRenderBeaconRef.current = null;
-  }, [sessionId]);
+    activityFeed.reset();
+  }, [sessionId, activityFeed]);
 
   const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
   const branchMode = showAbandonedBranches ? "all" : "head";
@@ -270,6 +279,7 @@ export function useSessionWorkspace(
         },
         onWorkspaceChanged: (data) => {
           recordServerClockSkew(data?.server_now_ms);
+          activityFeed.push(classifyWorkspaceChange(data));
           if (data.catalog_commit_seq != null && data.catalog_commit_seq > 0) {
             pendingStateRenderBeaconRef.current = {
               sessionId,
@@ -338,7 +348,7 @@ export function useSessionWorkspace(
       disposed = true;
       cleanup();
     };
-  }, [sessionId, documentVisible, workspaceReady, queryClient, onlineEpoch]);
+  }, [sessionId, documentVisible, workspaceReady, queryClient, onlineEpoch, activityFeed]);
   const rawSession = workspaceData?.session ?? null;
   const session = useMemo(
     () =>
@@ -711,5 +721,6 @@ export function useSessionWorkspace(
     selectKey,
     handleVisibleSelectionChange,
     registerTimelineList,
+    activityFeed,
   };
 }

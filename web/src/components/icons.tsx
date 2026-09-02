@@ -102,3 +102,13 @@ export function AlertTriangleIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function EllipsisIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

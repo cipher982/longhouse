@@ -20,10 +20,10 @@ import {
 } from "react-router-dom";
 import { toast } from "react-hot-toast";
 import { Button, EmptyState, Spinner } from "../components/ui";
-import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
 import { SessionInfoDrawer } from "../components/session-workspace/SessionInfoDrawer";
+import { SessionOverflowMenu } from "../components/session-workspace/SessionOverflowMenu";
 import { RenderTelemetryPanel } from "../components/session-workspace/RenderTelemetryPanel";
 import { SessionPauseRequestPanel } from "../components/session-workspace/SessionPauseRequestPanel";
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
@@ -100,6 +100,7 @@ function SessionDetailWorkspaceRoute({
     selectKey,
     handleVisibleSelectionChange,
     registerTimelineList,
+    activityFeed,
   } = workspace;
   const nowMs = useWallClock(Boolean(session && !isSessionClosed(session)));
 
@@ -282,6 +283,15 @@ function SessionDetailWorkspaceRoute({
     interaction.sourceOriginLabel ||
     displaySession.home_label ||
     "host";
+  // Who and where, once, under the title. The host is only named when the
+  // server actually recorded one; a placeholder would claim a machine.
+  const identityHost =
+    displaySession.control?.source_runner_name?.trim() ||
+    displaySession.home_label?.trim() ||
+    null;
+  const identityLabel = [interaction.providerLabel, displaySession.project?.trim() || null, identityHost]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
   const runtime = resolveSessionRuntimeState(displaySession);
   const resumeAvailable =
     isViewingHead &&
@@ -350,6 +360,15 @@ function SessionDetailWorkspaceRoute({
         <span className="session-workspace-header__name" title={title}>
           {title}
         </span>
+        {identityLabel ? (
+          <span
+            className="session-workspace-header__identity"
+            data-testid="session-identity"
+            title={identityLabel}
+          >
+            {identityLabel}
+          </span>
+        ) : null}
         {shouldShowSharedByPill ? (
           <span
             data-testid="session-shared-by-pill"
@@ -388,26 +407,6 @@ function SessionDetailWorkspaceRoute({
           {resumeLoading ? "Checking…" : `Resume on ${runtimeHostLabel}`}
         </Button>
       ) : null}
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setDrawerOpen(true)}
-        title="Session details"
-        aria-label="Session details"
-        data-testid="session-info-button"
-      >
-        Info
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => void handleTimelineVisibility()}
-        disabled={hidingSession}
-        title={session.user_hidden_from_timeline ? "Restore to timeline" : "Hide from timeline"}
-        aria-label={session.user_hidden_from_timeline ? "Restore to timeline" : "Hide from timeline"}
-      >
-        {hidingSession ? "Saving" : session.user_hidden_from_timeline ? "Restore" : "Hide"}
-      </Button>
       {confirmingArchive ? (
         <div className="session-detail-archive-confirm">
           <span className="session-detail-archive-confirm-label">Archive?</span>
@@ -427,25 +426,45 @@ function SessionDetailWorkspaceRoute({
           </Button>
         </div>
       ) : (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            if (config.demoMode) {
-              toast(DEMO_READ_ONLY_MESSAGE);
-              return;
-            }
-            setConfirmingArchive(true);
-          }}
-          title="Archive session"
-          aria-label="Archive session"
-        >
-          <TrashIcon width={13} height={13} />
-        </Button>
+        <SessionOverflowMenu
+          label="Session actions"
+          testId="session-overflow-menu"
+          items={[
+            {
+              key: "details",
+              label: "Session details",
+              testId: "session-info-button",
+              onSelect: () => setDrawerOpen(true),
+            },
+            {
+              key: "visibility",
+              label: hidingSession
+                ? "Saving…"
+                : session.user_hidden_from_timeline
+                  ? "Restore to timeline"
+                  : "Hide from timeline",
+              disabled: hidingSession,
+              testId: "session-visibility-button",
+              onSelect: () => void handleTimelineVisibility(),
+            },
+            {
+              key: "archive",
+              label: "Archive session…",
+              danger: true,
+              testId: "session-archive-button",
+              onSelect: () => {
+                if (config.demoMode) {
+                  toast(DEMO_READ_ONLY_MESSAGE);
+                  return;
+                }
+                setConfirmingArchive(true);
+              },
+            },
+          ]}
+        />
       )}
     </div>
   );
-
 
   const handlePauseRequestResponse = async (body: PauseRequestResponseRequest) => {
     if (!activePauseRequest) return;
@@ -513,6 +532,7 @@ function SessionDetailWorkspaceRoute({
                 startedLabel={sessionStartedLabel}
                 variant="bar"
                 testId="session-control-strip"
+                activityFeed={activityFeed ?? null}
               />
               <div className="session-control-dock__composer">
                 {activePauseRequest ? (
