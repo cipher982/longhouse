@@ -34,13 +34,9 @@ pub fn run() -> anyhow::Result<()> {
 /// "not mine" would silently unmanage live sessions across an upgrade. So this
 /// fails closed only on a contradiction, which is the case that caused harm.
 fn managed_claim_belongs_to_claude() -> bool {
-    match std::env::var("LONGHOUSE_MANAGED_PROVIDER") {
-        Ok(provider) => {
-            let provider = provider.trim();
-            provider.is_empty() || provider.eq_ignore_ascii_case("claude")
-        }
-        Err(_) => true,
-    }
+    crate::managed_identity::managed_claim_belongs_to(
+        crate::managed_identity_contract::ManagedProvider::Claude,
+    )
 }
 
 fn run_inner() -> anyhow::Result<()> {
@@ -55,10 +51,9 @@ fn run_inner() -> anyhow::Result<()> {
     let Some(state) = state_for_event(&event, &input) else {
         return Ok(());
     };
-    let managed_session_id = std::env::var("LONGHOUSE_MANAGED_SESSION_ID")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .filter(|_| managed_claim_belongs_to_claude());
+    let managed_session_id = crate::managed_identity::managed_session_id_for(
+        crate::managed_identity_contract::ManagedProvider::Claude,
+    );
     let provider_session_id = string(&input, "session_id");
     let session_id = managed_session_id
         .clone()

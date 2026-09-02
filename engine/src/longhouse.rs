@@ -600,6 +600,19 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
         !entry.contains("longhouse-permission-gate.py") && !entry.contains("claude-permission-gate")
     });
     let engine = shell_quote_path(&paired_engine_path()?);
+    let legacy_hook_dir = claude_dir.join("hooks");
+    for legacy_name in [
+        "longhouse-hook.sh",
+        "longhouse-permission-gate.py",
+        "longhouse-ship.sh",
+        "longhouse-presence.sh",
+        "longhouse-session-start.sh",
+    ] {
+        let path = legacy_hook_dir.join(legacy_name);
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
     pre_tool.push(json!({"hooks": [{"type": "command", "command": format!("{engine} claude-permission-gate"), "async": false, "timeout": 30}]}));
     let lifecycle_command = format!("{engine} claude-lifecycle-hook");
     for event in [
@@ -619,7 +632,11 @@ fn configure_claude_hooks(claude_dir: Option<PathBuf>) -> anyhow::Result<()> {
             .with_context(|| format!("Claude {event} hooks must be an array"))?;
         entries.retain(|entry| {
             let entry = entry.to_string();
-            !entry.contains("longhouse-hook.sh") && !entry.contains("claude-lifecycle-hook")
+            !entry.contains("longhouse-hook.sh")
+                && !entry.contains("longhouse-session-start.sh")
+                && !entry.contains("longhouse-presence.sh")
+                && !entry.contains("longhouse-ship.sh")
+                && !entry.contains("claude-lifecycle-hook")
         });
         entries.push(json!({"hooks": [{"type": "command", "command": lifecycle_command, "async": false, "timeout": 5}]}));
     }

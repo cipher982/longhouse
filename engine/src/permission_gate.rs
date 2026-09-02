@@ -127,26 +127,24 @@ pub(crate) fn remote_decision(
             return decision;
         }
 
-        // A provider hook owns the local wait, so it also owns cleanup after
+        // The provider hook owns the local wait, so it also owns cleanup after
         // any post-registration failure (timeout, malformed response, or
-        // transport loss). Keep that cleanup bounded and provider-specific:
-        // Claude's native gate has a server-side pause lifecycle, while
-        // Cursor's hook server uses request completion as its shutdown signal.
-        if provider.is_some() {
-            let mut expire = client
-                .post(format!(
-                    "{base_url}/api/agents/permission-requests/{pause_request_id}/expire"
-                ))
-                .json(&json!({
-                    "session_id": session_id,
-                    "reason": "Approval deadline expired before a human decision",
-                }))
-                .timeout(Duration::from_secs(2));
-            if !token.trim().is_empty() {
-                expire = expire.header("X-Agents-Token", token.trim());
-            }
-            let _ = expire.send().await;
+        // transport loss). Keep expiry bounded for every provider, including
+        // Claude's native gate, so no held interaction leaks if the hook exits
+        // before the Runtime Host's own expiry sweep.
+        let mut expire = client
+            .post(format!(
+                "{base_url}/api/agents/permission-requests/{pause_request_id}/expire"
+            ))
+            .json(&json!({
+                "session_id": session_id,
+                "reason": "Approval deadline expired before a human decision",
+            }))
+            .timeout(Duration::from_secs(2));
+        if !token.trim().is_empty() {
+            expire = expire.header("X-Agents-Token", token.trim());
         }
+        let _ = expire.send().await;
         None
     })
 }

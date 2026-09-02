@@ -10,9 +10,10 @@
 //! `/api/agents/presence`, and deletes files on success. Files are kept on
 //! failure and retried next tick. Durable local writes belong here rather than
 //! in the provider hook process, where SQLite contention can block the provider.
-//! Files older than `STALE_SECS` are deleted without posting (presence is ephemeral).
+//! Ordinary presence files older than `STALE_SECS` are deleted without posting;
+//! managed transcript-binding intents are retained until the daemon persists them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -222,6 +223,11 @@ fn collect_outbox_impl(
     let now = SystemTime::now();
     // session_id → latest payload — newest observation per session wins
     let mut by_session: HashMap<String, PendingPresenceFile> = HashMap::new();
+    // Binding intents are durable until the daemon has persisted them. Do not
+    // let presence coalescing discard an older managed observation whose
+    // transcript path is the only durable identity we have.
+    let mut managed_binding_paths = HashSet::new();
+    let mut managed_binding_payloads = Vec::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -246,18 +252,6 @@ fn collect_outbox_impl(
                 }
             }
             continue;
-        }
-
-        // Delete stale files without POSTing — presence is ephemeral.
-        if let Ok(meta) = entry.metadata() {
-            if let Ok(modified) = meta.modified() {
-                if let Ok(age) = now.duration_since(modified) {
-                    if age > Duration::from_secs(STALE_SECS) {
-                        let _ = std::fs::remove_file(&path);
-                        continue;
-                    }
-                }
-            }
         }
 
         // Read and validate JSON.
@@ -286,6 +280,26 @@ fn collect_outbox_impl(
             continue;
         }
 
+        let managed_binding_required = is_managed_binding_payload(&payload);
+        // Presence is ephemeral, but a managed transcript binding is a
+        // durable identity claim. Keep that intent through daemon outages so
+        // the first healthy collector can persist it before posting/deleting.
+        if let Ok(meta) = entry.metadata() {
+            if let Ok(modified) = meta.modified() {
+                if let Ok(age) = now.duration_since(modified) {
+                    if age > Duration::from_secs(STALE_SECS) && !managed_binding_required {
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if managed_binding_required {
+            managed_binding_paths.insert(path.clone());
+            managed_binding_payloads.push((path.clone(), payload.clone()));
+        }
+
         let observed_at = observed_at_for_payload(&payload, &entry, now);
         let next_file = PendingPresenceFile {
             path: path.clone(),
@@ -297,10 +311,14 @@ fn collect_outbox_impl(
         match by_session.get(&sid) {
             Some(existing) => {
                 if next_file.observed_at > existing.observed_at {
-                    let _ = std::fs::remove_file(&existing.path);
+                    if !managed_binding_paths.contains(&existing.path) {
+                        let _ = std::fs::remove_file(&existing.path);
+                    }
                     by_session.insert(sid, next_file);
                 } else {
-                    let _ = std::fs::remove_file(&path);
+                    if !managed_binding_paths.contains(&path) {
+                        let _ = std::fs::remove_file(&path);
+                    }
                 }
             }
             None => {
@@ -322,6 +340,25 @@ fn collect_outbox_impl(
         None
     };
 
+    let mut persisted_binding_paths = HashSet::new();
+    if let Some(conn) = local_phase_conn.as_ref() {
+        for (path, payload) in &managed_binding_payloads {
+            let provider = normalize_provider(payload.provider.as_deref());
+            let session_id = payload.session_id.trim();
+            if persist_managed_binding_for_payload(payload, provider, session_id, conn) {
+                persisted_binding_paths.insert(path.clone());
+            }
+        }
+    }
+
+    let selected_paths: HashSet<PathBuf> = by_session
+        .values()
+        .map(|pending| pending.path.clone())
+        .collect();
+    for path in persisted_binding_paths.difference(&selected_paths) {
+        let _ = std::fs::remove_file(path);
+    }
+
     for pending in by_session.into_values() {
         let PendingPresenceFile {
             path,
@@ -334,24 +371,14 @@ fn collect_outbox_impl(
         let phase = payload.state.trim().to_string();
         let transcript_path = normalize_transcript_path(payload.transcript_path.as_deref());
 
-        let managed_binding_required = payload.control_path.as_deref().map(str::trim)
-            == Some("managed")
-            && transcript_path.is_some();
-        if managed_binding_required && local_phase_conn.is_none() {
+        let managed_binding_required = is_managed_binding_payload(&payload);
+        let binding_persisted = persisted_binding_paths.contains(&path);
+        if managed_binding_required && !binding_persisted {
             warn!(
                 session_id,
                 provider, "deferring managed transcript binding until local state DB is available"
             );
             continue;
-        }
-        if let Some(conn) = local_phase_conn.as_ref() {
-            if managed_binding_required
-                && !persist_managed_binding_for_payload(&payload, &provider, &session_id, conn)
-            {
-                // Do not add this file to posts. It remains in the outbox and
-                // will be retried on the next collector tick.
-                continue;
-            }
         }
 
         result.signals.push(DrainedPresenceSignal {
@@ -688,6 +715,11 @@ fn normalize_transcript_path(path: Option<&str>) -> Option<PathBuf> {
     path.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+}
+
+fn is_managed_binding_payload(payload: &PresenceOutboxPayload) -> bool {
+    payload.control_path.as_deref().map(str::trim) == Some("managed")
+        && normalize_transcript_path(payload.transcript_path.as_deref()).is_some()
 }
 
 fn unmanaged_binding_signal_for_payload(
@@ -1419,6 +1451,10 @@ mod tests {
             "transcript_path": transcript.path(),
         });
         fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+        std::process::Command::new("touch")
+            .args(["-t", "197001020000", path.to_str().unwrap()])
+            .status()
+            .expect("touch failed");
 
         let result = collect_outbox_with_local_state_result(dir.path(), Some(db.path()));
 

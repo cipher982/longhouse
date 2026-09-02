@@ -19,9 +19,9 @@ from pathlib import Path
 
 from zerg.services.shipper.hooks import PERMISSION_GATE_SCRIPT
 
-# Materialize the canonical embedded script (what install_hooks writes to
-# ~/.claude/hooks/longhouse-permission-gate.py) and run THAT as a subprocess, so
-# these tests exercise the exact bytes shipped to users.
+# Materialize the compatibility script and run THAT as a subprocess, so the
+# legacy provider-canary behavior remains covered while new installs use the
+# native engine command.
 _HOOK_DIR = Path(tempfile.mkdtemp(prefix="lh-permission-gate-"))
 HOOK_SCRIPT = _HOOK_DIR / "longhouse-permission-gate.py"
 HOOK_SCRIPT.write_text(PERMISSION_GATE_SCRIPT)
@@ -115,7 +115,13 @@ class _StubLonghouse:
         return Handler
 
 
-def _run_hook(*, base_url: str | None, timeout_env: str = "3", extra_env: dict | None = None):
+def _run_hook(
+    *,
+    base_url: str | None,
+    timeout_env: str = "3",
+    extra_env: dict | None = None,
+    hook_session_id: str = "11111111-1111-1111-1111-111111111111",
+):
     env = {
         **_subprocess_runtime_env(),
         # The canonical installed script is dormant by default; engage it (the
@@ -132,7 +138,7 @@ def _run_hook(*, base_url: str | None, timeout_env: str = "3", extra_env: dict |
         env.update(extra_env)
     hook_input = json.dumps(
         {
-            "session_id": "11111111-1111-1111-1111-111111111111",
+            "session_id": hook_session_id,
             "tool_use_id": "toolu_test",
             "tool_name": "Bash",
             "tool_input": {"command": "ls"},
@@ -214,3 +220,15 @@ def test_hook_not_engaged_when_disabled():
     assert result.stdout.strip() == ""
     assert not stub.requests_seen  # never even registered
     assert not stub.requests_seen  # never even registered
+
+
+def test_hook_ignores_another_providers_managed_session():
+    with _StubLonghouse(decision="allow", resolved=True) as stub:
+        result = _run_hook(
+            base_url=stub.base_url,
+            extra_env={"LONGHOUSE_MANAGED_PROVIDER": "codex"},
+            hook_session_id="claude-native-session",
+        )
+    assert result.returncode == 0, result.stderr
+    assert _parse_decision(result.stdout) == "allow"
+    assert stub.requests_seen[0]["session_id"] == "claude-native-session"

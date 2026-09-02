@@ -28,6 +28,31 @@ use crate::managed_identity_contract::{
     ManagedProvider, NEVER_INHERITED_KEYS, REQUIRED_IDENTITY_KEYS,
 };
 
+/// Whether an ambient managed-session claim is owned by the provider currently
+/// handling the callback. Older launchers did not set the owner tag, so an
+/// absent tag remains compatible; an explicit different tag is a provable
+/// contradiction and must be ignored.
+pub(crate) fn managed_claim_belongs_to(provider: ManagedProvider) -> bool {
+    match std::env::var("LONGHOUSE_MANAGED_PROVIDER") {
+        Ok(value) => {
+            let value = value.trim();
+            value.is_empty() || value.eq_ignore_ascii_case(provider.as_str())
+        }
+        Err(_) => true,
+    }
+}
+
+/// Read a managed session claim only when its optional owner tag belongs to the
+/// provider consuming it. This keeps provider hooks from adopting an ambient
+/// session launched by a different managed provider.
+pub(crate) fn managed_session_id_for(provider: ManagedProvider) -> Option<String> {
+    let session_id = std::env::var("LONGHOUSE_MANAGED_SESSION_ID")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())?;
+    managed_claim_belongs_to(provider).then_some(session_id)
+}
+
 /// Somewhere an environment can be written. The launchers spawn through three
 /// different mechanisms -- `std::process::Command`, `tokio::process::Command`,
 /// and a raw `execve` -- and the overlay has to reach all of them without

@@ -28,10 +28,9 @@ pub fn run() -> anyhow::Result<()> {
         Ok(value) => value,
         Err(_) => return Ok(()),
     };
-    let session_id = std::env::var("LONGHOUSE_MANAGED_SESSION_ID")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+    let session_id = crate::managed_identity::managed_session_id_for(
+        crate::managed_identity_contract::ManagedProvider::Claude,
+    )
         .or_else(|| input.get("session_id").and_then(trimmed_value_string));
     let tool_use_id = input.get("tool_use_id").and_then(trimmed_value_string);
     let tool_name = input

@@ -8,9 +8,9 @@ events.
 
 Claude hooks (via settings.json):
 
-- **longhouse-hook.sh** (SessionStart, Stop, UserPromptSubmit, PreToolUse,
-  PostToolUse, PermissionRequest, Notification):
-  Writes presence events to a local outbox directory
+- **native ``longhouse-engine claude-lifecycle-hook``** (SessionStart, Stop,
+  UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Notification):
+  writes presence events to a local outbox directory
   (``~/.longhouse/agent/outbox/``) as small JSON files (<2ms, no network or
   SQLite).
 
@@ -46,6 +46,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import shutil
 import stat
 import tempfile
@@ -97,6 +98,11 @@ IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE NOTIF_TITLE
 )"
 
 MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-}"
+PROVIDER_SESSION_ID="$SESSION_ID"
+MANAGED_PROVIDER="${LONGHOUSE_MANAGED_PROVIDER:-}"
+if [ -n "$MANAGED_PROVIDER" ] && [ "$MANAGED_PROVIDER" != "claude" ]; then
+  MANAGED_SESSION_ID=""
+fi
 [ -n "$MANAGED_SESSION_ID" ] && SESSION_ID="$MANAGED_SESSION_ID"
 
 FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"
@@ -173,8 +179,10 @@ if [[ -n "$STATE" ]] && [[ -n "$SESSION_ID" ]]; then
   PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
         --arg tool "$TOOL" --arg cwd "$CWD" --arg transcript "$TRANSCRIPT" \\
         --arg provider "claude" --arg control_path "$CONTROL_PATH" \\
+        --arg provider_session_id "$PROVIDER_SESSION_ID" \\
         --arg provider_pid "$PROVIDER_PID" \\
     '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider, transcript_path: $transcript, control_path: $control_path}
+      + (if $control_path == "managed" and $provider_session_id != "" then {provider_session_id: $provider_session_id} else {} end)
       + (if $provider_pid == "" then {} else {provider_pid: ($provider_pid | tonumber)} end)')
 
   write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
@@ -280,19 +288,24 @@ fi
 exit 0
 """
 
-# Marker used to identify Longhouse hooks inside settings.json so we can
-# update in place rather than blindly appending duplicates.  Use the path
-# prefix "longhouse-" which is specific enough to avoid false positives on
-# user hooks that happen to mention "longhouse" in a description.
-_HOOK_MARKER = "longhouse-"
+# Markers used to identify generated lifecycle hooks inside settings.json so we
+# can update in place rather than blindly appending duplicates. Keep this
+# explicit: a user's unrelated ``longhouse-helper.sh`` is not ours to replace.
+_HOOK_MARKERS = (
+    "longhouse-hook.sh",
+    "longhouse-session-start.sh",
+    "longhouse-presence.sh",
+    "longhouse-ship.sh",
+    "claude-lifecycle-hook",
+)
 
 # ---------------------------------------------------------------------------
 # Claude PreToolUse permission-gate hook (Python)
 # ---------------------------------------------------------------------------
-# Canonical source: this constant is what gets installed to
-# ~/.claude/hooks/longhouse-permission-gate.py. It is ALWAYS installed but stays
-# dormant unless the managed launcher exports LONGHOUSE_PERMISSION_HOOK_ENABLED=1
-# (remote-approve mode), so a bypass/autonomous session is never gated.
+# Compatibility source: this constant is retained for provider canaries and
+# upgrade cleanup tests. New installs use the native engine command below; the
+# legacy script stays dormant unless a managed launcher exports
+# LONGHOUSE_PERMISSION_HOOK_ENABLED=1 (remote-approve mode).
 # server/tests_lite/test_permission_gate_hook.py loads this same constant.
 PERMISSION_GATE_SCRIPT = r'''#!/usr/bin/env python3
 """Claude Code PreToolUse hook: route tool-permission decisions through Longhouse.
@@ -418,10 +431,11 @@ def main() -> None:
     except (json.JSONDecodeError, ValueError):
         _not_engaged()
         return
-    session_id = (
-        str(os.environ.get("LONGHOUSE_MANAGED_SESSION_ID") or "").strip()
-        or str(hook_input.get("session_id") or "").strip()
-    )
+    managed_session_id = str(os.environ.get("LONGHOUSE_MANAGED_SESSION_ID") or "").strip()
+    managed_provider = str(os.environ.get("LONGHOUSE_MANAGED_PROVIDER") or "").strip()
+    if managed_provider and managed_provider.lower() != "claude":
+        managed_session_id = ""
+    session_id = managed_session_id or str(hook_input.get("session_id") or "").strip()
     tool_use_id = str(hook_input.get("tool_use_id") or "").strip()
     tool_name = str(hook_input.get("tool_name") or "").strip()
     tool_input = hook_input.get("tool_input") if isinstance(hook_input.get("tool_input"), dict) else {}
@@ -489,26 +503,26 @@ if __name__ == "__main__":
 '''
 
 
-def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
-    """Build hook entry dicts with resolved script paths.
+def _make_hook_entries(engine_path: str, longhouse_home: Path) -> tuple[dict, dict]:
+    """Build native Claude hook entries with explicit local state.
 
     Returns (stop_entry, lifecycle_entry):
-    - stop_entry: unified script for Stop (sync, local outbox write — not a banner)
-    - lifecycle_entry: unified script for SessionStart and other lifecycle hooks
+    - stop_entry: native engine command for Stop (sync, local outbox write)
+    - lifecycle_entry: native engine command for lifecycle events
     """
-    hook_path = str(hooks_dir / "longhouse-hook.sh")
+    command = f"LONGHOUSE_HOME={shlex.quote(str(longhouse_home))} {shlex.quote(engine_path)} claude-lifecycle-hook"
 
     # Stop: sync — hook only writes the local presence outbox.
     # The daemon handles transcript shipping via its file watcher.
     stop_entry = {
         "hooks": [
-            {"type": "command", "command": hook_path, "async": False, "timeout": 5},
+            {"type": "command", "command": command, "async": False, "timeout": 5},
         ],
     }
     # Lifecycle events remain sync and local-only.
     lifecycle_entry = {
         "hooks": [
-            {"type": "command", "command": hook_path, "async": False, "timeout": 5},
+            {"type": "command", "command": command, "async": False, "timeout": 5},
         ],
     }
     return stop_entry, lifecycle_entry
@@ -532,20 +546,20 @@ def _resolve_claude_dir(claude_dir: str | None = None) -> Path:
 def _merge_hook_entry_by_command(
     existing_entries: list[dict],
     new_entry: dict,
-    command_substr: str,
+    command_substr: str | tuple[str, ...],
 ) -> list[dict]:
     """Upsert a hook entry identified by a specific command substring.
 
-    Unlike _merge_hooks_for_event (which replaces ANY Longhouse hook), this only
-    replaces the entry whose command contains ``command_substr``, leaving other
-    Longhouse hooks (e.g. the lifecycle longhouse-hook.sh) on the same event
-    untouched. Used so the permission-gate hook coexists with the lifecycle hook
-    on PreToolUse.
+    Unlike _merge_hooks_for_event (which replaces lifecycle hooks), this only
+    replaces entries whose command contains one of ``command_substr`` markers,
+    leaving unrelated hooks on the same event untouched. Duplicate matching
+    entries collapse to one.
     """
     updated = False
     result: list[dict] = []
     for entry in existing_entries:
-        matches = any(command_substr in hook.get("command", "") for hook in entry.get("hooks", []))
+        markers = (command_substr,) if isinstance(command_substr, str) else command_substr
+        matches = any(any(marker in hook.get("command", "") for marker in markers) for hook in entry.get("hooks", []))
         if matches:
             # Replace the first matching entry; drop any further duplicates so
             # repeated/old installs converge to exactly one gate entry.
@@ -563,15 +577,15 @@ def _is_longhouse_hook(entry: dict) -> bool:
     """Return True if a hook entry is the Longhouse lifecycle hook.
 
     Checks whether any inner hook's ``command`` field contains the marker so we
-    can update it in place. The permission-gate hook is intentionally EXCLUDED:
-    it is a separate entry upserted by _merge_hook_entry_by_command, so the
-    lifecycle merge must not replace it.
+    can update it in place. Permission-gate hooks are intentionally EXCLUDED:
+    they are separate entries upserted by _merge_hook_entry_by_command, so the
+    lifecycle merge must not replace them.
     """
     for hook in entry.get("hooks", []):
         cmd = hook.get("command", "")
-        if "longhouse-permission-gate" in cmd:
+        if "longhouse-permission-gate" in cmd or "claude-permission-gate" in cmd:
             continue
-        if _HOOK_MARKER in cmd:
+        if any(marker in cmd for marker in _HOOK_MARKERS):
             return True
     return False
 
@@ -582,9 +596,8 @@ def _merge_hooks_for_event(
 ) -> list[dict]:
     """Merge a Longhouse hook entry into an existing list for one event.
 
-    If a Longhouse hook already exists in the list it is replaced;
-    otherwise the new entry is appended. Non-Longhouse hooks are left
-    untouched.
+    If one or more Longhouse lifecycle hooks already exist in the list, they are
+    replaced by exactly one new entry. Non-Longhouse hooks are left untouched.
 
     Args:
         existing_entries: Current list of hook entries for the event.
@@ -597,9 +610,11 @@ def _merge_hooks_for_event(
     result: list[dict] = []
     for entry in existing_entries:
         if _is_longhouse_hook(entry):
-            # Replace existing Longhouse hook with the new one
-            result.append(new_entry)
-            updated = True
+            # Replace the first existing lifecycle entry and drop duplicates so
+            # repeated or partially migrated installs converge to one path.
+            if not updated:
+                result.append(new_entry)
+                updated = True
         else:
             result.append(entry)
 
@@ -649,18 +664,17 @@ def install_hooks(
     claude_dir: str | None = None,
     engine_path: str | None = None,
 ) -> list[str]:
-    """Install Longhouse hook scripts and inject them into settings.json.
+    """Install native Longhouse Claude hooks and provider hook integrations.
 
     This function is idempotent — running it multiple times updates
     existing hooks rather than creating duplicates.
 
     Steps performed:
     1. Create ``~/.claude/hooks/`` directory.
-    2. Write ``longhouse-hook.sh`` with executable permissions.
+    2. Resolve the paired engine used for native Claude lifecycle hooks.
     3. Read ``~/.claude/settings.json`` (or start with ``{}``).
     4. Upsert Longhouse hook entries into the ``hooks`` object.
-    5. Remove deprecated standalone SessionStart scripts superseded by the
-       unified hook.
+    5. Remove obsolete shell/Python hook scripts superseded by native hooks.
     6. Write ``settings.json`` back.
 
     Args:
@@ -686,12 +700,9 @@ def install_hooks(
     actions.append(f"Ensured {projects_dir}")
 
     # ------------------------------------------------------------------
-    # 2. Write hook scripts with explicit provider + Longhouse paths baked in.
+    # 2. Resolve the paired engine used by every native Claude hook command.
     # ------------------------------------------------------------------
     longhouse_home = resolve_longhouse_home_from_provider_home(config_dir)
-    hindsight_root = config_dir / "hindsight"
-
-    # Resolve engine path at install time and bake it into the hook script.
     if engine_path is None:
         try:
             from zerg.services.shipper.service import get_engine_executable
@@ -700,34 +711,15 @@ def install_hooks(
         except RuntimeError:
             engine_path = "longhouse-engine"  # last resort: rely on PATH
 
-    hook_script_content = HOOK_SCRIPT.replace(
-        "__LONGHOUSE_HOME__",
-        _shell_double_quote(str(longhouse_home)),
-    ).replace(
-        "__HINDSIGHT_ROOT__",
-        _shell_double_quote(str(hindsight_root)),
-    )
-    hook_script = hooks_dir / "longhouse-hook.sh"
-    _write_text_if_changed(
-        hook_script,
-        hook_script_content,
-        mode=stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH,
-    )
-    actions.append(f"Wrote {hook_script}")
-
-    # Permission-gate hook (Python). Always installed but dormant unless the
-    # launcher exports LONGHOUSE_PERMISSION_HOOK_ENABLED=1 (remote-approve mode),
-    # so a bypass/autonomous session is never gated.
-    permission_gate_script = hooks_dir / "longhouse-permission-gate.py"
-    _write_text_if_changed(
-        permission_gate_script,
-        PERMISSION_GATE_SCRIPT,
-        mode=stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH,
-    )
-    actions.append(f"Wrote {permission_gate_script}")
-
-    # Remove deprecated standalone hook scripts (superseded by longhouse-hook.sh).
-    for deprecated in ("longhouse-ship.sh", "longhouse-presence.sh", "longhouse-session-start.sh"):
+    # Remove generated scripts from the pre-native installer. The settings
+    # entries below become the single Claude lifecycle and permission paths.
+    for deprecated in (
+        "longhouse-hook.sh",
+        "longhouse-permission-gate.py",
+        "longhouse-ship.sh",
+        "longhouse-presence.sh",
+        "longhouse-session-start.sh",
+    ):
         deprecated_path = hooks_dir / deprecated
         if deprecated_path.exists():
             deprecated_path.unlink()
@@ -741,14 +733,14 @@ def install_hooks(
     # ------------------------------------------------------------------
     # 4. Merge hook entries (using resolved absolute paths)
     # ------------------------------------------------------------------
-    stop_entry, lifecycle_entry = _make_hook_entries(hooks_dir)
+    stop_entry, lifecycle_entry = _make_hook_entries(engine_path, longhouse_home)
     hooks_obj = settings.setdefault("hooks", {})
 
     # Stop: async (ship is long-running; sync Stop hooks always show "hook feedback" in Claude)
     stop_list = hooks_obj.get("Stop", [])
     hooks_obj["Stop"] = _merge_hooks_for_event(stop_list, stop_entry)
 
-    # Lifecycle events: sync, local-only (outbox write <2ms).
+    # Lifecycle events: sync, local-only native engine command.
     for event in (
         "SessionStart",
         "UserPromptSubmit",
@@ -762,23 +754,24 @@ def install_hooks(
         event_list = raw if isinstance(raw, list) else []
         hooks_obj[event] = _merge_hooks_for_event(event_list, lifecycle_entry)
 
-    # PreToolUse additionally carries the permission-gate hook as its OWN entry
-    # (distinct script), upserted by script name so it coexists with the lifecycle
-    # hook rather than replacing it. It is sync and gets a longer timeout because
-    # it may block on a remote decision (the script self-clamps under Claude's
-    # hook budget and is dormant unless LONGHOUSE_PERMISSION_HOOK_ENABLED=1).
+    # PreToolUse additionally carries the native permission-gate command as its
+    # own entry. It is dormant unless the launcher enables remote approval.
     permission_gate_entry = {
         "hooks": [
             {
                 "type": "command",
-                "command": str(permission_gate_script),
+                "command": (f"LONGHOUSE_HOME={shlex.quote(str(longhouse_home))} {shlex.quote(engine_path)} claude-permission-gate"),
                 "async": False,
                 "timeout": 30,
             }
         ],
     }
     pre_list = hooks_obj.get("PreToolUse", [])
-    hooks_obj["PreToolUse"] = _merge_hook_entry_by_command(pre_list, permission_gate_entry, "longhouse-permission-gate.py")
+    hooks_obj["PreToolUse"] = _merge_hook_entry_by_command(
+        pre_list,
+        permission_gate_entry,
+        ("longhouse-permission-gate.py", "claude-permission-gate"),
+    )
 
     # ------------------------------------------------------------------
     # 5. Write settings back
@@ -802,11 +795,11 @@ def install_hooks(
     actions.extend(install_cursor_hooks(engine_path=engine_path))
 
     # Keep the third-party Antigravity plugin in the same repair/install loop
-    # as Claude, Codex, and Cursor. Do not create a new provider config on a
-    # machine that has never installed Antigravity; refresh it when its config
-    # root or binary is already present.
+    # as Claude, Codex, and Cursor. `.gemini` is also owned by Gemini CLI, so
+    # require the Antigravity binary or its provider-specific config root.
     antigravity_bin = shutil.which("agy")
-    if (Path.home() / ".gemini").exists() or antigravity_bin:
+    antigravity_cli_root = Path.home() / ".gemini" / "antigravity-cli"
+    if antigravity_bin or antigravity_cli_root.exists():
         from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
 
         plugin_root = _ensure_antigravity_runtime_plugin(antigravity_bin=antigravity_bin)

@@ -36,10 +36,17 @@ pub(crate) fn enqueue_presence(home: &Path, payload: &Value) -> std::io::Result<
     let mut bytes = serde_json::to_vec(payload).map_err(std::io::Error::other)?;
     bytes.push(b'\n');
     file.write_all(&bytes)?;
+    file.sync_all()?;
     drop(file);
     if let Err(error) = std::fs::rename(&temporary, &ready) {
         let _ = std::fs::remove_file(&temporary);
         return Err(error);
+    }
+    // The file is visible only after the rename, and the directory entry is
+    // durable before the provider callback returns. A crash must not create a
+    // binding-intent filename whose contents never reached disk.
+    if let Ok(directory) = OpenOptions::new().read(true).open(&outbox) {
+        directory.sync_all()?;
     }
     Ok(())
 }

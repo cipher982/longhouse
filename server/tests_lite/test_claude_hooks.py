@@ -54,6 +54,7 @@ def test_claude_hook_hot_path_stays_local_only():
     assert "/api/agents/presence" not in HOOK_SCRIPT
     assert "emit_presence()" not in HOOK_SCRIPT
     assert "LONGHOUSE_MANAGED_SESSION_ID" in HOOK_SCRIPT
+    assert "LONGHOUSE_MANAGED_PROVIDER" in HOOK_SCRIPT
     assert "write_presence_outbox()" in HOOK_SCRIPT
 
 
@@ -65,13 +66,20 @@ def test_claude_stop_hook_forces_sidechain_for_hindsight_workspace():
 
 def test_claude_stop_hook_entry_is_sync(tmp_path):
     """Stop hook is sync because it only performs the local outbox write."""
-    stop_entry, _lifecycle_entry = _make_hook_entries(tmp_path)
+    stop_entry, _lifecycle_entry = _make_hook_entries("/usr/bin/longhouse-engine", tmp_path / ".longhouse")
     hook = stop_entry["hooks"][0]
     assert hook["async"] is False
     assert hook["timeout"] == 5
+    assert "claude-lifecycle-hook" in hook["command"]
 
 
-def _run_hook(tmp_path, event, *, managed_session_id=None):
+def _run_hook(
+    tmp_path,
+    event,
+    *,
+    managed_session_id=None,
+    managed_provider=None,
+):
     if shutil.which("jq") is None:
         pytest.skip("jq is required to execute Claude hook fixture")
     script = tmp_path / "longhouse-hook.sh"
@@ -81,9 +89,12 @@ def _run_hook(tmp_path, event, *, managed_session_id=None):
     script.chmod(0o755)
     env = os.environ.copy()
     env.pop("LONGHOUSE_MANAGED_SESSION_ID", None)
+    env.pop("LONGHOUSE_MANAGED_PROVIDER", None)
     env.pop("LONGHOUSE_IS_SIDECHAIN", None)
     if managed_session_id is not None:
         env["LONGHOUSE_MANAGED_SESSION_ID"] = managed_session_id
+    if managed_provider is not None:
+        env["LONGHOUSE_MANAGED_PROVIDER"] = managed_provider
     completed = subprocess.run(
         ["/bin/bash", str(script)],
         input=json.dumps(event),
@@ -94,6 +105,28 @@ def _run_hook(tmp_path, event, *, managed_session_id=None):
     )
     assert completed.returncode == 0, completed.stderr
     return tmp_path / "lh"
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="hook script requires jq")
+def test_claude_hook_rejects_another_providers_managed_session(tmp_path):
+    native_session = str(uuid.uuid4())
+    managed_session = str(uuid.uuid4())
+    longhouse_home = _run_hook(
+        tmp_path,
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": native_session,
+            "transcript_path": str(tmp_path / "transcript.jsonl"),
+            "cwd": str(tmp_path),
+        },
+        managed_session_id=managed_session,
+        managed_provider="codex",
+    )
+
+    payload = json.loads(next((longhouse_home / "agent" / "outbox").glob("prs.*.json")).read_text())
+    assert payload["session_id"] == native_session
+    assert payload["control_path"] == "unmanaged"
+    assert "provider_session_id" not in payload
 
 
 def _runtime_event_files(longhouse_home):

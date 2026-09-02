@@ -329,7 +329,7 @@ def test_install_hooks_skips_codex_when_not_installed(tmp_path, monkeypatch):
 def test_install_hooks_refreshes_antigravity_when_configured(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     monkeypatch.setattr("zerg.services.shipper.hooks.shutil.which", lambda _name: None)
-    (tmp_path / ".gemini" / "config").mkdir(parents=True)
+    (tmp_path / ".gemini" / "antigravity-cli").mkdir(parents=True)
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
 
@@ -344,6 +344,22 @@ def test_install_hooks_refreshes_antigravity_when_configured(tmp_path, monkeypat
     content = hook.read_text()
     assert "bind --path" not in content
     assert "control_path" in content
+
+
+def test_install_hooks_does_not_treat_gemini_cli_config_as_antigravity(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("zerg.services.shipper.hooks.shutil.which", lambda _name: None)
+    (tmp_path / ".gemini" / "config").mkdir(parents=True)
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+
+    install_hooks(
+        url="http://localhost:8080",
+        claude_dir=str(claude_dir),
+        engine_path="/usr/bin/longhouse-engine",
+    )
+
+    assert not (tmp_path / ".gemini" / "antigravity-cli").exists()
 
 
 def test_install_hooks_installs_antigravity_plugin_when_binary_is_present(tmp_path, monkeypatch):
@@ -411,7 +427,7 @@ def test_install_hooks_replaces_deprecated_claude_session_start_hook_with_unifie
     assert len(session_start) == 2
     commands = [entry["hooks"][0]["command"] for entry in session_start]
     assert "/usr/local/bin/custom-session-start.sh" in commands
-    assert str(hooks_dir / "longhouse-hook.sh") in commands
+    assert any("claude-lifecycle-hook" in command for command in commands)
 
 
 def test_install_hooks_points_lifecycle_hooks_at_longhouse_agent_state(tmp_path, monkeypatch):
@@ -428,13 +444,12 @@ def test_install_hooks_points_lifecycle_hooks_at_longhouse_agent_state(tmp_path,
         engine_path="/usr/bin/longhouse-engine",
     )
 
-    claude_hook = (claude_dir / "hooks" / "longhouse-hook.sh").read_text()
     codex_hook = codex_dir / "hooks" / "longhouse-codex-hook.sh"
     expected_home = str(tmp_path / ".longhouse")
 
-    assert expected_home in claude_hook
-    assert f"{claude_dir / 'hindsight'}" in claude_hook
-    assert "$LONGHOUSE_HOME/agent/outbox" in claude_hook
+    claude_settings = json.loads((claude_dir / "settings.json").read_text())
+    claude_commands = [hook.get("command", "") for entry in claude_settings["hooks"]["SessionStart"] for hook in entry.get("hooks", [])]
+    assert any(expected_home in command and "claude-lifecycle-hook" in command for command in claude_commands)
 
     codex_content = codex_hook.read_text()
     assert expected_home in codex_content
