@@ -127,7 +127,6 @@ class HarnessCatalog:
                         "project": project,
                         "display_name": "Universal agent harness",
                         "managed_session_name": f"{provider}-universal-harness",
-                        "loop_mode": "assist",
                         "permission_mode": "bypass",
                         "launch_actor": "automation",
                         "launch_surface": "test",

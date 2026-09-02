@@ -143,10 +143,6 @@ class AgentSession(AgentsBase):
     last_attention_push_at = Column(DateTime(timezone=True), nullable=True)
     last_attention_push_state = Column(String(40), nullable=True)
 
-    # Per-session loop mode (assist/autopilot). Durable user-facing setting,
-    # not control-plane state — kernel rows do not encode it. Stored as a
-    # plain column so PATCH /loop-mode survives restart and refresh.
-    loop_mode = Column(String(32), nullable=False, default="assist", server_default=text("'assist'"))
     notification_muted = Column(Boolean, nullable=False, default=False, server_default=text("0"))
     # Launch-origin classification for Longhouse-owned automation. This is not
     # provider lineage: provider subagents/forks still live in session_threads

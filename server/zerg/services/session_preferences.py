@@ -11,7 +11,6 @@ from uuid import UUID
 @dataclass(frozen=True)
 class SessionPreferences:
     user_state: str = "active"
-    loop_mode: str = "assist"
     notification_muted: bool = False
     user_hidden_from_timeline: bool = False
     last_read_at: datetime | None = None
@@ -36,7 +35,6 @@ def load_session_preferences(
     if not database_module.live_store_configured():
         return SessionPreferences(
             user_state=str(getattr(standalone_session, "user_state", None) or "active"),
-            loop_mode=str(getattr(standalone_session, "loop_mode", None) or "assist"),
             notification_muted=bool(getattr(standalone_session, "notification_muted", False)),
             user_hidden_from_timeline=bool(getattr(standalone_session, "user_hidden_from_timeline", False)),
         )
@@ -46,7 +44,6 @@ def load_session_preferences(
     if isinstance(catalog, dict):
         return SessionPreferences(
             user_state=str(catalog.get("user_state") or "active"),
-            loop_mode=str(catalog.get("loop_mode") or "assist"),
             notification_muted=catalog.get("notification_muted") is True,
             user_hidden_from_timeline=bool(catalog.get("user_hidden_from_timeline")),
         )
@@ -61,7 +58,6 @@ def load_session_preferences(
         return SessionPreferences()
     return SessionPreferences(
         user_state=str(catalog.get("user_state") or "active"),
-        loop_mode=str(catalog.get("loop_mode") or "assist"),
         notification_muted=catalog.get("notification_muted") is True,
         user_hidden_from_timeline=bool(catalog.get("user_hidden_from_timeline")),
     )
@@ -72,7 +68,6 @@ async def update_session_preferences(
     *,
     owner_id: int,
     user_state: str | None = None,
-    loop_mode: str | None = None,
     notification_muted: bool | None = None,
     user_hidden_from_timeline: bool | None = None,
     last_read_at: datetime | None = None,
@@ -95,7 +90,6 @@ async def update_session_preferences(
             "session_id": str(session_id),
             "owner_id": int(owner_id),
             "user_state": user_state,
-            "loop_mode": loop_mode,
             "notification_muted": notification_muted,
             "user_hidden_from_timeline": user_hidden_from_timeline,
             "last_read_at": last_read_at.isoformat() if last_read_at is not None else None,
@@ -112,7 +106,6 @@ async def update_session_preferences(
         raise RuntimeError("Live session catalog returned invalid preferences")
     return SessionPreferences(
         user_state=str(preferences.get("user_state") or "active"),
-        loop_mode=str(preferences.get("loop_mode") or "assist"),
         notification_muted=preferences.get("notification_muted") is True,
         user_hidden_from_timeline=preferences.get("user_hidden_from_timeline") is True,
         last_read_at=_parse_optional_datetime(preferences.get("last_read_at")),

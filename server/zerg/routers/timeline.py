@@ -64,8 +64,6 @@ from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import SessionActionRequest
 from zerg.services.session_views import SessionActionResponse
-from zerg.services.session_views import SessionLoopModeRequest
-from zerg.services.session_views import SessionLoopModeResponse
 from zerg.services.session_views import SessionMobileTailResponse
 from zerg.services.session_views import SessionNotificationWatchRequest
 from zerg.services.session_views import SessionNotificationWatchResponse
@@ -634,22 +632,6 @@ async def mark_timeline_session_read(
     current_user=Depends(get_current_browser_caller),
 ):
     return await _sessions_router.mark_session_read(
-        session_id=session_id,
-        body=body,
-        db=db,
-        owner_id=int(current_user.owner_id),
-        _single=None,
-    )
-
-
-@router.patch("/sessions/{session_id}/loop-mode", response_model=SessionLoopModeResponse)
-async def set_timeline_session_loop_mode(
-    session_id: UUID,
-    body: SessionLoopModeRequest,
-    db: Session | None = Depends(no_request_db),
-    current_user=Depends(get_current_browser_caller),
-):
-    return await _sessions_router.set_session_loop_mode(
         session_id=session_id,
         body=body,
         db=db,

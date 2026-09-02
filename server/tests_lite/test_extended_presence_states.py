@@ -52,7 +52,6 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
-from zerg.session_loop_mode import SessionLoopMode
 
 # ---------------------------------------------------------------------------
 # DB + client fixtures (same pattern as other tests_lite tests)
@@ -117,7 +116,6 @@ def _make_session(
     sid: str | None = None,
     *,
     summary: str | None = None,
-    loop_mode: SessionLoopMode = SessionLoopMode.ASSIST,
 ) -> AgentSession:
     """Create a minimal AgentSession row."""
     if sid is None:
@@ -132,7 +130,6 @@ def _make_session(
         assistant_messages=0,
         tool_calls=0,
         summary=summary,
-        loop_mode=loop_mode.value,
     )
     db.add(s)
     db.commit()
@@ -345,7 +342,6 @@ def _snoozed_console_session(live_catalog: LiveCatalog, *, owner_id: int) -> str
             "session_id": str(session_id),
             "owner_id": owner_id,
             "user_state": "snoozed",
-            "loop_mode": None,
             "notification_muted": None,
             "user_hidden_from_timeline": None,
             "last_read_at": None,

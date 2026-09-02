@@ -256,7 +256,6 @@ def _seed_live_catalog_session(
                     "project": "session-input-api",
                     "display_name": "Session input api",
                     "managed_session_name": f"{provider}-session-input-api",
-                    "loop_mode": "assist",
                     "permission_mode": "bypass",
                     "launch_actor": "user",
                     "launch_surface": "cli",

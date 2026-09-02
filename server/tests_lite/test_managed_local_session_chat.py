@@ -8,7 +8,6 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
-from uuid import UUID
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
@@ -111,7 +110,6 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
         user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-        loop_mode="assist",
     )
     db.add(session)
     db.commit()
@@ -285,7 +283,6 @@ def _seed_live_catalog_session(
                     "project": "hiring",
                     "display_name": "Hiring",
                     "managed_session_name": f"{provider}-managed-local-chat",
-                    "loop_mode": "assist",
                     "permission_mode": "bypass",
                     "launch_actor": "user",
                     "launch_surface": "cli",
@@ -540,78 +537,6 @@ def test_managed_local_codex_dispatch_returns_json_ack(live_catalog, live_catalo
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         asyncio.run(_clear_machine_control_registry())
-
-
-def test_managed_local_draft_reply_returns_prefill(live_catalog, live_catalog_client, monkeypatch):
-    """Draft reply generates a composer prefill without dispatching to the live session."""
-
-    llm_calls: list[dict[str, object]] = []
-
-    class FakeCompletions:
-        async def create(self, **kwargs):
-            llm_calls.append(kwargs)
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="Please run the focused iOS tests and report the result."))]
-            )
-
-    class FakeClient:
-        def __init__(self):
-            self.chat = SimpleNamespace(completions=FakeCompletions())
-
-        async def close(self):
-            return None
-
-    owner_id, cookies = _seed_owner(live_catalog, "managed-local-draft@test.local")
-    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="codex")
-    live_catalog.commit_session(
-        owner_id=owner_id,
-        session_id=UUID(session_id),
-        device_id=LIVE_DEVICE_ID,
-        texts=("Let's add iOS steering.", "I added the endpoint and need to run tests."),
-    )
-
-    monkeypatch.setattr(
-        session_chat_impl,
-        "get_llm_client_for_use_case",
-        lambda use_case: (FakeClient(), "test-draft-model", "openai"),
-    )
-
-    try:
-        response = live_catalog_client.post(
-            f"/sessions/{session_id}/draft-reply",
-            json={"max_chars": 500},
-            cookies=cookies,
-        )
-        assert response.status_code == 200, response.text
-        data = response.json()
-        assert data["draft_text"] == "Please run the focused iOS tests and report the result."
-        assert data["model"] == "test-draft-model"
-        assert len(llm_calls) == 1
-        assert llm_calls[0]["model"] == "test-draft-model"
-        assert "max_tokens" not in llm_calls[0]
-        prompt = llm_calls[0]["messages"][1]["content"]
-        assert "Let's add iOS steering." in prompt
-        assert "need to run tests" in prompt
-        # Drafting reads the transcript; it never takes the dispatch lock.
-        assert asyncio.run(session_lock_manager.get_lock_info(session_id)) is None
-    finally:
-        asyncio.run(session_lock_manager.release(session_id))
-
-
-def test_managed_local_draft_reply_requires_live_control(live_catalog, live_catalog_client):
-    """Draft reply is not exposed for imported/unmanaged sessions."""
-
-    owner_id, cookies = _seed_owner(live_catalog, "managed-local-nodraft@test.local")
-    # A shipped transcript with no launch and no control lease: observable, not
-    # steerable, so the capability projection collapses to observe-only.
-    seeded = live_catalog.commit_session(owner_id=owner_id, texts=("imported transcript",))
-
-    response = live_catalog_client.post(
-        f"/sessions/{seeded.session_id}/draft-reply",
-        json={"max_chars": 500},
-        cookies=cookies,
-    )
-    assert response.status_code == 409, response.text
 
 
 def test_managed_local_dispatch_send_failure_returns_502(live_catalog, live_catalog_client):

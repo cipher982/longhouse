@@ -574,7 +574,6 @@ def test_local_launch_shell_binds_thread_execution_target_for_console(tmp_path):
                 "project": "pi-dogfood",
                 "display_name": "ai",
                 "managed_session_name": "pi-managed-1",
-                "loop_mode": "assist",
                 "permission_mode": "bypass",
                 "launch_actor": "cli",
                 "launch_surface": "terminal",

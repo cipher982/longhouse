@@ -86,7 +86,6 @@ def enqueue_managed_local_launch_outbox(
                                 "project": plan.project,
                                 "display_name": plan.display_name,
                                 "managed_session_name": plan.managed_session_name,
-                                "loop_mode": plan.loop_mode,
                                 "permission_mode": plan.permission_mode,
                                 "launch_actor": plan.launch_actor,
                                 "launch_surface": plan.launch_surface,

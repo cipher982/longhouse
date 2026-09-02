@@ -89,7 +89,6 @@ def test_launch_response_mints_scoped_hook_token_for_every_permission_mode():
         id=sid,
         provider="claude",
         provider_session_id="prov-1",
-        loop_mode="assist",
         source_runner_id=None,
         source_runner_name="cinder",
         managed_session_name="lh-x",
@@ -166,7 +165,6 @@ def test_cursor_remote_approval_token_does_not_require_coordination_tools():
         source_runner_id=None,
         managed_session_name="lh-cursor",
         managed_transport="cursor_helm",
-        loop_mode="assist",
         permission_mode="remote_approve",
         attach_command=f"longhouse cursor --resume-session {session_id}",
     )

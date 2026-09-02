@@ -109,7 +109,7 @@ def sync_live_catalog_session(archive_db: Session, live_db: Session, *, session_
     if live_db.get(LiveSessionCatalog, str(session_id)) is not None:
         # These fields are user-owned live state. Cold projection may seed them
         # for a newly discovered session, but must never overwrite later edits.
-        for field in ("user_state", "user_state_at", "loop_mode", "notification_muted"):
+        for field in ("user_state", "user_state_at", "notification_muted"):
             session_values.pop(field, None)
     _upsert_catalog_values(live_db, LiveSessionCatalog, session_values)
     source_card = archive_db.get(TimelineCard, session_id)

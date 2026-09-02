@@ -246,7 +246,6 @@ def _launch_payload(
             "project": "longhouse",
             "display_name": "Resume factory",
             "managed_session_name": f"{provider}-resume-factory",
-            "loop_mode": "assist",
             "permission_mode": "bypass",
             "launch_actor": "automation",
             "launch_surface": "test",

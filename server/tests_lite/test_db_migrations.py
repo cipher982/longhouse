@@ -228,57 +228,6 @@ def test_startup_migration_adds_session_execution_home_columns(tmp_path):
     assert row == ("unmanaged_local", None, None, None, None)
 
 
-def test_startup_migration_adds_session_loop_mode_and_backfills_assist(tmp_path):
-    import pytest
-
-    pytest.skip(
-        "session-identity-kernel cleanup: loop_mode/loop_thread_id columns were removed; "
-        "loop continuations are no longer modeled on AgentSession."
-    )
-    db_path = tmp_path / "legacy_sessions_loop_mode.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-
-    with engine.begin() as conn:
-        conn.exec_driver_sql(
-            """
-            CREATE TABLE sessions (
-                id VARCHAR(36) PRIMARY KEY,
-                provider VARCHAR(50) NOT NULL,
-                environment VARCHAR(20),
-                project VARCHAR(255),
-                device_id VARCHAR(255),
-                cwd TEXT,
-                git_repo TEXT,
-                git_branch VARCHAR(255),
-                started_at DATETIME NOT NULL,
-                ended_at DATETIME,
-                user_messages INTEGER DEFAULT 0,
-                assistant_messages INTEGER DEFAULT 0,
-                tool_calls INTEGER DEFAULT 0,
-                provider_session_id VARCHAR(255),
-                created_at DATETIME,
-                updated_at DATETIME
-            )
-            """
-        )
-        conn.exec_driver_sql(
-            """
-            INSERT INTO sessions (id, provider, environment, started_at, user_messages, assistant_messages, tool_calls)
-            VALUES ('00000000-0000-0000-0000-000000000123', 'claude', 'production', CURRENT_TIMESTAMP, 1, 1, 0)
-            """
-        )
-
-    _migrate_agents_columns(engine)
-
-    with engine.connect() as conn:
-        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
-        rows = conn.execute(text("SELECT id, loop_mode, loop_thread_id FROM sessions")).fetchall()
-
-    assert "loop_mode" in columns
-    assert "loop_thread_id" in columns
-    assert rows == [("00000000-0000-0000-0000-000000000123", "assist", None)]
-
-
 def test_startup_migration_clears_progress_only_runtime_live_timestamps(tmp_path):
     db_path = tmp_path / "runtime_state_truth.db"
     engine = make_engine(f"sqlite:///{db_path}")

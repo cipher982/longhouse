@@ -404,7 +404,6 @@ def _seed_live_catalog(live_path: Path, legacy_factory: sessionmaker, *, anchor:
                     user_state="active",
                     user_state_at=anchor,
                     primary_thread_id=thread_id,
-                    loop_mode="assist",
                     notification_muted=False,
                     origin_kind=config["origin_kind"],
                     hidden_from_default_timeline=0,

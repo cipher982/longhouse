@@ -7,8 +7,6 @@ is too large to live inline in the router endpoints.
 from __future__ import annotations
 
 import asyncio
-import inspect
-import json
 import logging
 import time
 from dataclasses import dataclass
@@ -29,11 +27,9 @@ import zerg.database as database_module  # noqa: F401  # tests_lite monkeypatche
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.metrics import managed_turn_wait_seconds
 from zerg.metrics import managed_turn_wait_total
-from zerg.models.agents import AgentEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
-from zerg.models_config import get_llm_client_for_use_case
 from zerg.observability import get_tracer
 from zerg.observability import mark_span_error
 from zerg.observability import set_span_attributes
@@ -56,8 +52,6 @@ from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.services.session_turns import mark_session_turn_terminal
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
-from zerg.session_loop_mode import SessionLoopMode
-from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
@@ -81,8 +75,6 @@ _MANAGED_LOCAL_SYNC_PENDING_NOTE = "".join(
         "to Longhouse.",
     ]
 )
-_DRAFT_REPLY_EVENT_LIMIT = 80
-_DRAFT_REPLY_EVENT_CHAR_LIMIT = 1800
 
 
 # ---------------------------------------------------------------------------
@@ -100,18 +92,6 @@ class SSEEvent:
     def encode(self) -> str:
         """Encode as SSE format."""
         return f"event: {self.event}\ndata: {self.data}\n\n"
-
-
-@dataclass(frozen=True, slots=True)
-class DraftReplyEvent:
-    """Storage-neutral transcript row used to prompt draft generation."""
-
-    id: int | str
-    role: str
-    content_text: str | None = None
-    tool_name: str | None = None
-    tool_input_json: object | None = None
-    tool_output_text: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +117,6 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     provider_session_id: str | None = None
     execution_home: SessionExecutionHome
     managed_transport: ManagedSessionTransport
-    loop_mode: SessionLoopMode
     source_runner_id: int | None = None
     source_runner_name: str
     managed_session_name: str
@@ -149,15 +128,6 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     hook_token: str | None = None
     # Session-scoped sender authority passed only to the coordination adapter.
     coordination_token: str | None = None
-
-
-class SessionDraftReplyResponse(BaseModel):
-    """Suggested next user message for a managed session."""
-
-    draft_text: str
-    model: str
-    generated_at: datetime
-    based_on_event_ids: list[int]
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +312,6 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
         provider_session_id=kernel_projection.provider_session_id,
         execution_home=capabilities.execution_home,
         managed_transport=capabilities.managed_transport,
-        loop_mode=coerce_session_loop_mode(session.loop_mode),
         source_runner_id=control_projection.source_runner_id,
         source_runner_name=control_projection.source_runner_name or "",
         managed_session_name=control_projection.managed_session_name or "",
@@ -397,7 +366,6 @@ def _managed_local_launch_response_from_plan(
         provider_session_id=plan.provider_session_id,
         execution_home=SessionExecutionHome.MANAGED_LOCAL,
         managed_transport=ManagedSessionTransport(plan.managed_transport),
-        loop_mode=coerce_session_loop_mode(plan.loop_mode),
         source_runner_id=plan.source_runner_id,
         source_runner_name=plan.source_name,
         managed_session_name=plan.managed_session_name,
@@ -411,148 +379,6 @@ def _managed_local_launch_response_from_plan(
         response=response,
     )
     return response
-
-
-def _event_content_for_draft(event: AgentEvent | DraftReplyEvent) -> str:
-    if event.tool_name:
-        payload = event.content_text or event.tool_output_text or ""
-        if event.tool_input_json:
-            try:
-                payload = f"input={json.dumps(event.tool_input_json, sort_keys=True)}\n{payload}".strip()
-            except TypeError:
-                payload = str(event.tool_input_json)
-        return f"{event.role} tool {event.tool_name}: {payload}".strip()
-    if event.role == "tool":
-        return f"tool result: {event.tool_output_text or event.content_text or ''}".strip()
-    return f"{event.role}: {event.content_text or ''}".strip()
-
-
-def _format_event_for_draft(event: AgentEvent | DraftReplyEvent) -> str:
-    text = _event_content_for_draft(event).strip()
-    if len(text) > _DRAFT_REPLY_EVENT_CHAR_LIMIT:
-        text = f"{text[:_DRAFT_REPLY_EVENT_CHAR_LIMIT].rstrip()} ..."
-    return f"[{event.id}] {text}"
-
-
-def _build_draft_reply_messages(*, source_session, events: list[AgentEvent | DraftReplyEvent], max_chars: int) -> list[dict[str, str]]:
-    transcript = "\n\n".join(_format_event_for_draft(event) for event in events)
-    metadata_lines = [
-        f"provider: {source_session.provider or 'unknown'}",
-        f"project: {source_session.project or 'unknown'}",
-        f"cwd: {source_session.cwd or 'unknown'}",
-        f"git_branch: {source_session.git_branch or 'unknown'}",
-        f"session_status: {getattr(source_session, 'status', None) or 'unknown'}",
-    ]
-    system = (
-        "You draft the next human operator message for a coding-agent session. "
-        "Return only the message text. Do not send the message. Do not include explanations, "
-        "markdown fences, labels, or alternatives. Keep it concise, actionable, and faithful to "
-        "the transcript. If the right next step is unclear, ask the agent for the smallest useful "
-        "clarification or status update. Never claim that the user approved, tested, or performed "
-        "work unless that is explicit in the transcript."
-    )
-    user = (
-        f"Draft one next user message of at most {max_chars} characters.\n\n"
-        "Session metadata:\n" + "\n".join(metadata_lines) + "\n\nRecent transcript tail:\n" + (transcript or "(no transcript events)")
-    )
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
-
-
-async def _close_llm_client(client) -> None:
-    close = getattr(client, "close", None)
-    if close is None:
-        return
-    result = close()
-    if inspect.isawaitable(result):
-        await result
-
-
-async def _build_managed_local_draft_reply_response(
-    *,
-    source_session,
-    request_id: str,
-    max_chars: int,
-    db: Session | None,
-    owner_id: int | None = None,
-) -> SessionDraftReplyResponse:
-    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
-
-    from zerg.routers.agents_storage_v2 import read_storage_v2_session_events_page
-
-    page = await read_storage_v2_session_events_page(
-        session_id=source_session.id,
-        owner_id=str(owner_id),
-        cursor=None,
-        anchor="tail",
-        limit=_DRAFT_REPLY_EVENT_LIMIT,
-    )
-    rows = page.get("events")
-    if not isinstance(rows, list):
-        rows = []
-    events = [
-        DraftReplyEvent(
-            id=str(row.get("event_id") or row.get("cursor") or "unknown"),
-            role=str(row.get("role") or "unknown"),
-            content_text=row.get("content_text") if isinstance(row.get("content_text"), str) else None,
-            tool_name=row.get("tool_name") if isinstance(row.get("tool_name"), str) else None,
-            tool_input_json=row.get("tool_input_json"),
-            tool_output_text=(row.get("tool_output_text") if isinstance(row.get("tool_output_text"), str) else None),
-        )
-        for row in rows
-        if isinstance(row, dict) and row.get("branch_kind") in {None, "head"}
-    ]
-    if not events:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This session has no transcript events to draft from.",
-        )
-
-    try:
-        client, model, _provider = get_llm_client_for_use_case("summarization")
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Draft reply is unavailable because no text LLM provider is configured.",
-        ) from exc
-
-    try:
-        from zerg.models_config import llm_request_policy_kwargs
-
-        response = await client.chat.completions.create(
-            model=model,
-            messages=_build_draft_reply_messages(source_session=source_session, events=events, max_chars=max_chars),
-            **llm_request_policy_kwargs(client),
-        )
-    except Exception as exc:
-        logger.exception("[%s] Draft reply generation failed for session %s", request_id, source_session.id)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Draft reply generation failed.",
-        ) from exc
-    finally:
-        await _close_llm_client(client)
-
-    raw = response.choices[0].message.content if getattr(response, "choices", None) else ""
-    draft_text = str(raw or "").strip()
-    if not draft_text:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Draft reply generation returned an empty response.",
-        )
-    if len(draft_text) > max_chars:
-        draft_text = draft_text[:max_chars].rstrip()
-
-    event_refs = [str(event.id) for event in events]
-    legacy_event_ids = [int(event_ref.removeprefix("legacy:")) for event_ref in event_refs if event_ref.removeprefix("legacy:").isdigit()]
-    return SessionDraftReplyResponse(
-        draft_text=draft_text,
-        model=str(model),
-        generated_at=datetime.now(timezone.utc),
-        based_on_event_ids=legacy_event_ids,
-    )
 
 
 def _session_chat_streaming_response(stream: AsyncIterator[str]) -> StreamingResponse:

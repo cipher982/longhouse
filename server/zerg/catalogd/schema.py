@@ -40,7 +40,7 @@ from sqlalchemy.schema import CreateColumn
 from zerg.catalogd.models import CatalogBase
 from zerg.models.live_store import LiveBase
 
-CATALOG_SCHEMA_VERSION = 4
+CATALOG_SCHEMA_VERSION = 5
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 STORAGE_TELEMETRY_ACCOUNTING_GENERATION = "storage-telemetry-v1"
 
@@ -399,10 +399,27 @@ def _initialize_fact_reducer_schema_in_transaction(connection: Connection) -> No
     )
 
 
+def _drop_loop_mode_columns(connection: Connection) -> None:
+    """Drop the per-session loop_mode column everywhere the catalog carried it.
+
+    Loop mode (assist/autopilot) was the setting for the frozen operator loop.
+    Nothing reads it any more, and a column with a server default that no
+    model declares is exactly the kind of drift the schema fingerprint exists
+    to catch, so the column goes rather than lingering as dead storage.
+    """
+
+    inspector = inspect(connection)
+    for table_name in inspector.get_table_names():
+        columns = {column["name"] for column in inspector.get_columns(table_name)}
+        if "loop_mode" in columns:
+            connection.exec_driver_sql(f'ALTER TABLE "{table_name}" DROP COLUMN loop_mode')
+
+
 CATALOG_SCHEMA_MIGRATIONS: dict[int, Callable[[Connection], None]] = {
     1: _hide_empty_human_launch_shells,
     2: _replace_session_messages_with_directed_inputs,
     3: _enforce_provider_session_alias_routing,
+    4: _drop_loop_mode_columns,
 }
 
 

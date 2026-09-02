@@ -29,7 +29,6 @@ from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_launch_provenance import sanitize_launch_provenance
-from zerg.session_loop_mode import coerce_session_loop_mode
 
 _VALID_PROVIDERS = managed_provider_names()
 _MANAGED_LOCAL_NAME_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -107,7 +106,6 @@ class ManagedLocalLaunchParams:
     git_repo: str | None = None
     git_branch: str | None = None
     display_name: str | None = None
-    loop_mode: str = "assist"
     machine_name: str | None = None
     native_claude_channels_available: bool | None = None
     claude_launch_env: dict[str, str] | None = None
@@ -145,7 +143,6 @@ class ManagedLocalLaunchPlan:
     project: str
     display_name: str
     managed_session_name: str
-    loop_mode: str
     permission_mode: str
     launch_actor: str | None
     launch_surface: str | None
@@ -293,7 +290,6 @@ def build_managed_local_launch_plan(
         launch_surface=params.launch_surface,
     )
     environment = "test" if origin_kind is not None else "development"
-    loop_mode = coerce_session_loop_mode(params.loop_mode).value
     plan = ManagedLocalLaunchPlan(
         session_id=plan_session_id,
         provider=provider,
@@ -304,7 +300,6 @@ def build_managed_local_launch_plan(
         project=project,
         display_name=display_name,
         managed_session_name=managed_session_name,
-        loop_mode=loop_mode,
         permission_mode=permission_mode,
         launch_actor=launch_actor,
         launch_surface=launch_surface,
@@ -354,7 +349,6 @@ def materialize_managed_local_launch_plan_sync(
         user_messages=0,
         assistant_messages=0,
         tool_calls=0,
-        loop_mode=plan.loop_mode,
         permission_mode=plan.permission_mode,
         origin_kind=plan.origin_kind,
         hidden_from_default_timeline=plan.hidden_from_default_timeline,

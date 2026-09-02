@@ -338,7 +338,6 @@ class LiveSessionCatalog(LiveBase):
     last_console_result_outcome = Column(String(20), nullable=True)
     last_read_at = Column(DateTime(timezone=True), nullable=True)
     primary_thread_id = Column(String(36), nullable=True, index=True)
-    loop_mode = Column(String(32), nullable=False, server_default=text("'assist'"))
     notification_muted = Column(Boolean, nullable=False, server_default=text("0"))
     origin_kind = Column(String(64), nullable=True, index=True)
     hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))

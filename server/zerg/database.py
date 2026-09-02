@@ -1088,7 +1088,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
             # launch_lease_until, launch_command_id, launch_client_request_id,
             # continued_from_session_id, continuation_kind, origin_label,
             # branched_from_event_id, is_writable_head, device_name, execution_home,
-            # loop_mode, transcript_revision, summary_revision, embedding_revision,
+            # transcript_revision, summary_revision, embedding_revision,
             # thread_root_session_id, last_activity_at) are now handled by
             # _auto_add_missing_columns. Remaining work below is non-additive:
             # legacy backfills + always-run normalization UPDATEs + index creates.
@@ -1153,18 +1153,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     UPDATE sessions
                     SET execution_home = '{SessionExecutionHome.UNMANAGED_LOCAL.value}'
                     WHERE execution_home NOT IN ('unmanaged_local', 'managed_local', 'managed_hosted', 'cloud_takeover')
-                    """
-                )
-            )
-            # Always-run normalization: legacy 'manual' loop_mode → 'assist';
-            # any out-of-enum value → 'assist'.
-            conn.execute(text("UPDATE sessions SET loop_mode = 'assist' WHERE loop_mode IS NULL OR loop_mode = 'manual'"))
-            conn.execute(
-                text(
-                    """
-                    UPDATE sessions
-                    SET loop_mode = 'assist'
-                    WHERE loop_mode NOT IN ('assist', 'autopilot')
                     """
                 )
             )
@@ -1412,6 +1400,16 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE sessions DROP COLUMN reflected_at"))
     except Exception:
         logger.debug("reflection cleanup skipped", exc_info=True)
+
+    # Loop mode (assist/autopilot) removed with the frozen operator loop — drop
+    # the session column.
+    try:
+        with engine.begin() as conn:
+            session_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
+            if "loop_mode" in session_cols:
+                conn.execute(text("ALTER TABLE sessions DROP COLUMN loop_mode"))
+    except Exception:
+        logger.debug("loop mode cleanup skipped", exc_info=True)
 
     # Daily-digest feature removed — drop User columns.
     try:

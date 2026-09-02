@@ -49,7 +49,6 @@ def test_timeline_router_exposes_browser_archive_routes():
         "/timeline/sessions/{session_id}/events",
         "/timeline/sessions/{session_id}/preview",
         "/timeline/sessions/{session_id}/action",
-        "/timeline/sessions/{session_id}/loop-mode",
         "/timeline/sessions/{session_id}/resume-intent",
         "/timeline/filters",
         "/timeline/recall",

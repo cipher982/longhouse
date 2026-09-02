@@ -59,8 +59,6 @@ from zerg.services.session_runtime_display import Tone
 from zerg.services.session_runtime_display import TruthTier
 from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_contract import build_session_state_facts
-from zerg.session_loop_mode import SessionLoopMode
-from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
 
@@ -87,10 +85,6 @@ def _json_obj(raw: str | None) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def _coerce_session_loop_mode(value: str | None) -> SessionLoopMode:
-    return coerce_session_loop_mode(value)
 
 
 def build_attach_command(session: AgentSession) -> str | None:
@@ -955,7 +949,6 @@ class SessionResponse(UTCBaseModel):
         ...,
         description="Server-derived timeline-card presentation",
     )
-    loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
     user_hidden_from_timeline: bool = Field(False, description="User has hidden this session from default timeline and search views")
     #: Launch lifecycle lives on `session_state.launch`, which is what web and
@@ -1237,7 +1230,6 @@ class ActiveSessionResponse(UTCBaseModel):
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     session_state: SessionStateFacts = Field(..., description="Versioned orthogonal session facts and presentation")
     runtime_display: SessionRuntimeDisplayResponse = Field(..., description="Server-derived display state for clients")
-    loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
 
 class ActiveSessionsResponse(UTCBaseModel):
@@ -1645,15 +1637,6 @@ class SessionReadRequest(BaseModel):
 class SessionReadResponse(BaseModel):
     session_id: str
     last_read_at: datetime | None
-
-
-class SessionLoopModeRequest(BaseModel):
-    loop_mode: SessionLoopMode = Field(..., description="assist | autopilot")
-
-
-class SessionLoopModeResponse(BaseModel):
-    session_id: str
-    loop_mode: SessionLoopMode
 
 
 class SessionNotificationWatchRequest(BaseModel):
@@ -2371,7 +2354,6 @@ def build_live_launch_placeholder_response(
             runtime_display=runtime_display,
             session_state=session_state,
         ),
-        loop_mode=SessionLoopMode.ASSIST,
         user_state=user_state,
         execution_lifetime=launch_readiness.execution_lifetime,
         sharer=sharer,

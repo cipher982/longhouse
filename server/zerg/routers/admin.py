@@ -177,7 +177,6 @@ async def configure_test_session_runtime(
                     "project": request.project,
                     "display_name": "Browser E2E managed session",
                     "managed_session_name": managed_session_name,
-                    "loop_mode": "assist",
                     "permission_mode": "bypass",
                     "launch_actor": "human_shell",
                     "launch_surface": "terminal",

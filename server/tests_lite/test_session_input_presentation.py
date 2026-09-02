@@ -103,7 +103,7 @@ def test_live_idle_session_exposes_enabled_composer_with_auto_intent():
     assert response.composer_enabled is True
     assert response.composer_disabled_reason is None
     assert response.send_disabled_reason is None
-    assert response.composer_placeholder == "Send a message to the live Codex session..."
+    assert response.composer_placeholder == "Message"
 
 
 def test_active_steerable_session_exposes_steer_as_primary_intent():
@@ -136,7 +136,7 @@ def test_active_claude_channel_session_exposes_steer_as_primary_intent():
     assert response.input_mode == "live"
     assert response.default_input_intent == "steer"
     assert response.can_steer_active_turn is True
-    assert response.composer_placeholder == "Send a message to the live Claude session..."
+    assert response.composer_placeholder == "Steer this turn"
 
 
 def test_idle_claude_channel_session_exposes_auto_primary_intent():
@@ -153,7 +153,7 @@ def test_idle_claude_channel_session_exposes_auto_primary_intent():
 
     assert response.input_mode == "live"
     assert response.default_input_intent == "auto"
-    assert response.composer_placeholder == "Send a message to the live Claude session..."
+    assert response.composer_placeholder == "Message"
 
 
 def test_offline_managed_session_exposes_disabled_composer_reason():

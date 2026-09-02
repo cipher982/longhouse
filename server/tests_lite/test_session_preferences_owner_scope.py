@@ -49,7 +49,6 @@ READ_THROUGH = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
 PREFERENCE_ROUTES: list[tuple[str, str, str, dict[str, Any]]] = [
     ("action", "post", "action", {"action": "park"}),
     ("read", "post", "read", {"read_through": READ_THROUGH}),
-    ("loop-mode", "patch", "loop-mode", {"loop_mode": "autopilot"}),
     ("notification-watch", "patch", "notification-watch", {"notification_muted": True}),
     ("timeline-visibility", "patch", "timeline-visibility", {"hidden": True}),
 ]
@@ -58,7 +57,6 @@ PREFERENCE_ROUTES: list[tuple[str, str, str, dict[str, Any]]] = [
 # cross-owner write is only proven blocked if these are still true afterwards.
 UNTOUCHED_CATALOG_STATE = {
     "user_state": "active",
-    "loop_mode": "assist",
     "notification_muted": False,
     "user_hidden_from_timeline": False,
     "last_read_at": None,
@@ -242,7 +240,6 @@ def test_catalog_rpc_refuses_a_preferences_write_with_no_owner(live_catalog):  #
     params = {
         "session_id": session_id,
         "user_state": "parked",
-        "loop_mode": None,
         "notification_muted": None,
         "user_hidden_from_timeline": None,
         "last_read_at": None,
@@ -281,7 +278,6 @@ def test_preferences_load_never_reads_the_catalog_without_an_owner(live_catalog)
             "session_id": session_id,
             "owner_id": owner,
             "user_state": "archived",
-            "loop_mode": "autopilot",
             "notification_muted": True,
             "user_hidden_from_timeline": None,
             "last_read_at": None,

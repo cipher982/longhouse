@@ -28,9 +28,9 @@ from zerg.routers.agents_sessions import DirectedInputCreate
 from zerg.routers.agents_sessions import DirectedInputReply
 from zerg.routers.agents_sessions import _attempt_directed_input_delivery
 from zerg.routers.agents_sessions import create_directed_input
-from zerg.routers.agents_sessions import set_session_loop_mode
+from zerg.routers.agents_sessions import set_session_notification_watch
 from zerg.routers.agents_sessions import wall_query
-from zerg.services.session_views import SessionLoopModeRequest
+from zerg.services.session_views import SessionNotificationWatchRequest
 from zerg.services.write_serializer import get_catalog_write_serializer
 from zerg.services.write_serializer import get_live_write_serializer
 
@@ -104,20 +104,20 @@ def test_session_preference_mutation_uses_catalog_rpc_without_sqlite(monkeypatch
         observed.update(preferences)
         from zerg.services.session_preferences import SessionPreferences
 
-        return SessionPreferences(loop_mode="autopilot")
+        return SessionPreferences(notification_muted=True)
 
     monkeypatch.setattr("zerg.services.session_preferences.update_session_preferences", update_preferences)
     response = asyncio.run(
-        set_session_loop_mode(
+        set_session_notification_watch(
             session_id=session_id,
-            body=SessionLoopModeRequest(loop_mode="autopilot"),
+            body=SessionNotificationWatchRequest(notification_muted=True),
             db=None,
             owner_id=7,
             _single=None,
         )
     )
-    assert response.loop_mode.value == "autopilot"
-    assert observed == {"session_id": session_id, "owner_id": 7, "loop_mode": "autopilot"}
+    assert response.notification_muted is True
+    assert observed == {"session_id": session_id, "owner_id": 7, "notification_muted": True}
 
 
 def _request_with_headers(**headers: str) -> Request:

@@ -463,7 +463,6 @@ def _pending_response_from_catalog(
                 runtime_display=runtime_display,
                 session_state=session_state,
             ),
-            "loop_mode": session.loop_mode or "assist",
             "user_state": session.user_state or "active",
             "execution_lifetime": execution_lifetime,
         }
@@ -595,7 +594,6 @@ def _response_from_catalog(
             runtime_display=runtime_display,
             session_state=session_state,
         ),
-        loop_mode=session.loop_mode or "assist",
         user_state=session.user_state or "active",
         user_hidden_from_timeline=bool(session.user_hidden_from_timeline),
         execution_lifetime=readiness.execution_lifetime if readiness is not None else None,

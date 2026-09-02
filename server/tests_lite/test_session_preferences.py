@@ -37,7 +37,7 @@ def live():
         yield catalog
 
 
-def _stale_archive(*, user_state: str, loop_mode: str, notification_muted: bool):
+def _stale_archive(*, user_state: str, notification_muted: bool):
     """An archive mirror row still carrying what the live catalog has moved past."""
 
     return type(
@@ -45,7 +45,6 @@ def _stale_archive(*, user_state: str, loop_mode: str, notification_muted: bool)
         (),
         {
             "user_state": user_state,
-            "loop_mode": loop_mode,
             "notification_muted": notification_muted,
         },
     )()
@@ -56,7 +55,6 @@ def _console_session(
     *,
     owner_id: int,
     user_state: str,
-    loop_mode: str,
     notification_muted: bool,
     user_hidden_from_timeline: bool | None = None,
 ) -> UUID:
@@ -85,7 +83,6 @@ def _console_session(
             "session_id": str(session_id),
             "owner_id": owner_id,
             "user_state": user_state,
-            "loop_mode": loop_mode,
             "notification_muted": notification_muted,
             "user_hidden_from_timeline": user_hidden_from_timeline,
             "last_read_at": None,
@@ -100,7 +97,7 @@ def test_live_catalog_is_authoritative_for_session_preferences(live):
     """Guard: the catalog decides, and a stale archive mirror never overrides it.
 
     The archive row is a lagging copy. If the loader ever preferred it, a
-    session the user archived, muted or put on autopilot would read back with
+    session the user archived or muted would read back with
     whatever the mirror last happened to hold.
     """
 
@@ -109,15 +106,13 @@ def test_live_catalog_is_authoritative_for_session_preferences(live):
         live,
         owner_id=owner,
         user_state="archived",
-        loop_mode="autopilot",
         notification_muted=True,
     )
-    stale_archive = _stale_archive(user_state="active", loop_mode="assist", notification_muted=False)
+    stale_archive = _stale_archive(user_state="active", notification_muted=False)
 
     preferences = load_session_preferences(session_id, owner_id=owner, standalone_session=stale_archive)
 
     assert preferences.user_state == "archived"
-    assert preferences.loop_mode == "autopilot"
     assert preferences.notification_muted is True
 
 
@@ -125,19 +120,18 @@ def test_missing_live_row_uses_canonical_defaults_not_archive(live):
     """Guard: a session the catalog does not know reads as canonical defaults.
 
     Falling back to the archive row here would resurrect preferences the
-    catalog has no record of -- an unknown session would arrive archived, muted
-    and on autopilot because a stale mirror said so.
+    catalog has no record of -- an unknown session would arrive archived and
+    muted because a stale mirror said so.
     """
 
     owner = live.create_user("owner@preferences.test")
     unknown_session_id = uuid4()
     assert live.rpc("session.read.v2", {"session_id": str(unknown_session_id)})["found"] is False
-    stale_archive = _stale_archive(user_state="archived", loop_mode="autopilot", notification_muted=True)
+    stale_archive = _stale_archive(user_state="archived", notification_muted=True)
 
     preferences = load_session_preferences(unknown_session_id, owner_id=owner, standalone_session=stale_archive)
 
     assert preferences.user_state == "active"
-    assert preferences.loop_mode == "assist"
     assert preferences.notification_muted is False
 
 
@@ -155,7 +149,6 @@ def test_catalog_mode_reads_preferences_without_opening_sqlite(live, monkeypatch
         live,
         owner_id=owner,
         user_state="snoozed",
-        loop_mode="autopilot",
         notification_muted=True,
         user_hidden_from_timeline=True,
     )
@@ -167,6 +160,5 @@ def test_catalog_mode_reads_preferences_without_opening_sqlite(live, monkeypatch
     preferences = load_session_preferences(session_id, owner_id=owner)
 
     assert preferences.user_state == "snoozed"
-    assert preferences.loop_mode == "autopilot"
     assert preferences.notification_muted is True
     assert preferences.user_hidden_from_timeline is True

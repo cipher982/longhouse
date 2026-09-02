@@ -325,7 +325,6 @@ async def test_managed_registration_converges_when_transcript_ingest_arrives_fir
             "project": "longhouse",
             "display_name": "Managed local",
             "managed_session_name": "claude-managed-ingest-first",
-            "loop_mode": "assist",
             "permission_mode": "bypass",
             "launch_actor": "human_ui",
             "launch_surface": "cli",

@@ -21,7 +21,6 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveUser
 from zerg.routers import agents_sessions
 from zerg.services.session_views import SessionActionRequest
-from zerg.services.session_views import SessionLoopModeRequest
 from zerg.services.session_views import SessionNotificationWatchRequest
 
 
@@ -63,7 +62,6 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
                 environment="dev",
                 started_at=now,
                 user_state="active",
-                loop_mode="assist",
                 notification_muted=0,
             )
         )
@@ -81,13 +79,6 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
             owner_id=1,
             _single=None,
         )
-        loop = await agents_sessions.set_session_loop_mode(
-            session_id=UUID(session_id),
-            body=SessionLoopModeRequest(loop_mode="autopilot"),
-            db=None,
-            owner_id=1,
-            _single=None,
-        )
         watch = await agents_sessions.set_session_notification_watch(
             session_id=UUID(session_id),
             body=SessionNotificationWatchRequest(notification_muted=True),
@@ -96,22 +87,19 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
             _single=None,
         )
         assert action.user_state == "snoozed"
-        assert loop.loop_mode.value == "autopilot"
         assert watch.notification_muted is True
 
         snapshot = await client.call("session.read.v2", {"session_id": session_id})
         catalog = snapshot["facts"]["catalog"]
         assert catalog["user_state"] == "snoozed"
-        assert catalog["loop_mode"] == "autopilot"
         assert catalog["notification_muted"] is True
-        assert snapshot["commit_seq"] == "3"
+        assert snapshot["commit_seq"] == "2"
         replay = await client.call(
             "session.preferences.update.v2",
             {
                 "session_id": session_id,
                 "owner_id": 1,
                 "user_state": None,
-                "loop_mode": None,
                 "notification_muted": True,
                 "user_hidden_from_timeline": None,
                 "last_read_at": None,
@@ -119,7 +107,7 @@ async def test_session_preference_routes_are_catalog_owned_without_db(daemon_pat
             },
         )
         assert replay["updated"] is False
-        assert replay["commit_seq"] == "3"
+        assert replay["commit_seq"] == "2"
     finally:
         await client.close()
         await daemon.close()

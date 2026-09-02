@@ -313,7 +313,6 @@ async def test_codex_visibility_repair_refuses_when_fact_changes_after_dry_run(d
                 "session_id": session_id,
                 "owner_id": 1,
                 "user_state": None,
-                "loop_mode": None,
                 "notification_muted": None,
                 "user_hidden_from_timeline": True,
                 "last_read_at": None,

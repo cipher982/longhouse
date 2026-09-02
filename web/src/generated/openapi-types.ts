@@ -1299,26 +1299,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/{session_id}/draft-reply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Draft Reply For Live Session
-         * @description Generate a suggested next user message for a live managed-local session.
-         */
-        post: operations["draft_reply_for_live_session_sessions__session_id__draft_reply_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/sessions/{session_id}/interrupt-live": {
         parameters: {
             query?: never;
@@ -1592,26 +1572,6 @@ export interface paths {
          * @description Machine-facing explicit live-send surface for managed-local sessions.
          */
         post: operations["send_to_live_session_agents_agents_sessions__session_id__send_live_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/sessions/{session_id}/draft-reply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Draft Reply For Live Session Agents
-         * @description Machine-facing draft-reply surface for managed-local sessions.
-         */
-        post: operations["draft_reply_for_live_session_agents_agents_sessions__session_id__draft_reply_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2000,23 +1960,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/api/timeline/sessions/{session_id}/loop-mode": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Set Timeline Session Loop Mode */
-        patch: operations["set_timeline_session_loop_mode_timeline_sessions__session_id__loop_mode_patch"];
         trace?: never;
     };
     "/api/timeline/sessions/{session_id}/notification-watch": {
@@ -2698,26 +2641,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/api/agents/sessions/{session_id}/loop-mode": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Set Session Loop Mode
-         * @description Set the explicit loop mode for a coding session.
-         */
-        patch: operations["set_session_loop_mode_agents_sessions__session_id__loop_mode_patch"];
         trace?: never;
     };
     "/api/agents/sessions/{session_id}/notification-watch": {
@@ -5383,7 +5306,6 @@ export interface components {
             provider_session_id?: string | null;
             execution_home: components["schemas"]["SessionExecutionHome"];
             managed_transport: components["schemas"]["ManagedSessionTransport"];
-            loop_mode: components["schemas"]["SessionLoopMode"];
             /** Source Runner Id */
             source_runner_id?: number | null;
             /** Source Runner Name */
@@ -5438,11 +5360,6 @@ export interface components {
              * @description Optional display name for the session
              */
             display_name?: string | null;
-            /**
-             * @description assist | autopilot
-             * @default assist
-             */
-            loop_mode: components["schemas"]["SessionLoopMode"];
             /**
              * Machine Name
              * @description Optional local Longhouse machine label override stored on the launched session
@@ -7835,35 +7752,6 @@ export interface components {
             close_reason?: string | null;
         };
         /**
-         * SessionDraftReplyRequest
-         * @description Request a suggested next user message without sending it.
-         */
-        SessionDraftReplyRequest: {
-            /**
-             * Max Chars
-             * @description Maximum draft length
-             * @default 1200
-             */
-            max_chars: number;
-        };
-        /**
-         * SessionDraftReplyResponse
-         * @description Suggested next user message for a managed session.
-         */
-        SessionDraftReplyResponse: {
-            /** Draft Text */
-            draft_text: string;
-            /** Model */
-            model: string;
-            /**
-             * Generated At
-             * Format: date-time
-             */
-            generated_at: string;
-            /** Based On Event Ids */
-            based_on_event_ids: number[];
-        };
-        /**
          * SessionExecutionHome
          * @description Where a coding session currently lives.
          * @enum {string}
@@ -7974,23 +7862,6 @@ export interface components {
              * @default false
              */
             fork_available: boolean;
-        };
-        /**
-         * SessionLoopMode
-         * @description How much autonomy Longhouse may exercise for a coding session.
-         * @enum {string}
-         */
-        SessionLoopMode: "assist" | "autopilot";
-        /** SessionLoopModeRequest */
-        SessionLoopModeRequest: {
-            /** @description assist | autopilot */
-            loop_mode: components["schemas"]["SessionLoopMode"];
-        };
-        /** SessionLoopModeResponse */
-        SessionLoopModeResponse: {
-            /** Session Id */
-            session_id: string;
-            loop_mode: components["schemas"]["SessionLoopMode"];
         };
         /**
          * SessionMessageRequest
@@ -8668,11 +8539,6 @@ export interface components {
             transcript_preview?: components["schemas"]["SessionTranscriptPreviewResponse"] | null;
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
-            /**
-             * @description Session loop mode: assist|autopilot
-             * @default assist
-             */
-            loop_mode: components["schemas"]["SessionLoopMode"];
             /**
              * User State
              * @description User classification: active|parked|snoozed|archived
@@ -12590,44 +12456,6 @@ export interface operations {
             };
         };
     };
-    draft_reply_for_live_session_sessions__session_id__draft_reply_post: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["SessionDraftReplyRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionDraftReplyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     interrupt_live_session_sessions__session_id__interrupt_live_post: {
         parameters: {
             query?: {
@@ -13149,41 +12977,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    draft_reply_for_live_session_agents_agents_sessions__session_id__draft_reply_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["SessionDraftReplyRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionDraftReplyResponse"];
                 };
             };
             /** @description Validation Error */
@@ -13941,41 +13734,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionReadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_timeline_session_loop_mode_timeline_sessions__session_id__loop_mode_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SessionLoopModeRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionLoopModeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -15285,41 +15043,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionReadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_session_loop_mode_agents_sessions__session_id__loop_mode_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SessionLoopModeRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionLoopModeResponse"];
                 };
             };
             /** @description Validation Error */

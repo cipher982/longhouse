@@ -76,7 +76,6 @@ class LiveControlSession:
     ended_at: object | None
     closed_at: object | None
     close_reason: str | None
-    loop_mode: str
     permission_mode: str
     primary_thread_id: UUID | None
     command_family: Literal["console_turn", "live_control"]
@@ -120,7 +119,6 @@ def load_live_control_session(db: Session, session_id: UUID | str) -> LiveContro
         closed_at=row.closed_at,
         close_reason=str(row.close_reason).strip() if row.close_reason else None,
         command_family="console_turn" if str(row.origin_kind or "").strip() == "console" else "live_control",
-        loop_mode=str(row.loop_mode or "assist"),
         permission_mode=str(row.permission_mode or "bypass"),
         primary_thread_id=thread_id,
     )
@@ -166,7 +164,6 @@ def load_live_control_session_snapshot(session_id: UUID | str, *, owner_id: int)
         closed_at=_datetime(catalog.get("closed_at")),
         close_reason=str(catalog["close_reason"]) if catalog.get("close_reason") else None,
         command_family="console_turn" if str(catalog.get("origin_kind") or "").strip() == "console" else "live_control",
-        loop_mode=str(catalog.get("loop_mode") or "assist"),
         permission_mode=str(catalog.get("permission_mode") or "bypass"),
         primary_thread_id=UUID(str(primary_thread_id)) if primary_thread_id else None,
         catalog_facts=facts,
@@ -553,7 +550,6 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
         ended_at=session_payload.get("ended_at"),
         closed_at=session_payload.get("closed_at"),
         close_reason=session_payload.get("close_reason"),
-        loop_mode=str(session_payload.get("loop_mode") or "assist"),
         permission_mode=str(session_payload.get("permission_mode") or "bypass"),
         primary_thread_id=(UUID(str(session_payload["primary_thread_id"])) if session_payload.get("primary_thread_id") else None),
         command_family="live_control",

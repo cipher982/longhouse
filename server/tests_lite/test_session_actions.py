@@ -59,7 +59,6 @@ def _seed_session(live: LiveCatalog, *, user_state: str = "active") -> str:
                 "session_id": str(session_id),
                 "owner_id": owner_id,
                 "user_state": user_state,
-                "loop_mode": None,
                 "notification_muted": None,
                 "user_hidden_from_timeline": None,
                 "last_read_at": None,

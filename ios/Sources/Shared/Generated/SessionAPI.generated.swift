@@ -43,11 +43,6 @@ struct APISessionControlResponse: Codable, Hashable, Sendable {
     let attachCommand: String?
 }
 
-enum APISessionLoopMode: String, Codable, Hashable, Sendable, CaseIterable {
-    case assist = "assist"
-    case autopilot = "autopilot"
-}
-
 enum APIActivityRecency: String, Codable, Hashable, Sendable, CaseIterable {
     case live = "live"
     case recent = "recent"
@@ -392,7 +387,6 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let runtimeDisplay: APISessionRuntimeDisplayResponse
     let transcriptPreview: APISessionTranscriptPreviewResponse?
     let timelineCard: APITimelineCardPresentationResponse
-    let loopMode: APISessionLoopMode?
     let userState: String?
     let userHiddenFromTimeline: Bool?
     let executionLifetime: String?
@@ -621,18 +615,6 @@ struct APISessionInputResponse: Codable, Hashable, Sendable {
     let turn: APIConsoleTurnReceiptResponse?
     let intent: String
     let queued: [APIQueuedInputSummary]?
-}
-
-struct APISessionDraftReplyResponse: Codable, Hashable, Sendable {
-    let draftText: String
-    let model: String
-    let generatedAt: String
-    let basedOnEventIds: [Int]
-}
-
-struct APISessionLoopModeResponse: Codable, Hashable, Sendable {
-    let sessionId: String
-    let loopMode: APISessionLoopMode
 }
 
 struct APISessionTurnTimingResponse: Codable, Hashable, Sendable {

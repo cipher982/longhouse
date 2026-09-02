@@ -259,7 +259,6 @@ def _launch_managed_local_session(
                     "project": project,
                     "display_name": project,
                     "managed_session_name": f"lh-{provider}-{project}",
-                    "loop_mode": "assist",
                     "permission_mode": "bypass",
                     "launch_actor": "user",
                     "launch_surface": "cli",
@@ -442,7 +441,6 @@ def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool
             user_messages=0,
             assistant_messages=0,
             tool_calls=0,
-            loop_mode="assist",
         )
         db.add(session)
         db.commit()

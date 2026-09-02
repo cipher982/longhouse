@@ -73,8 +73,6 @@ from zerg.services.session_views import MachineSessionResponse
 from zerg.services.session_views import MachineSessionsListResponse
 from zerg.services.session_views import SessionActionRequest
 from zerg.services.session_views import SessionActionResponse
-from zerg.services.session_views import SessionLoopModeRequest
-from zerg.services.session_views import SessionLoopModeResponse
 from zerg.services.session_views import SessionNotificationWatchRequest
 from zerg.services.session_views import SessionNotificationWatchResponse
 from zerg.services.session_views import SessionProjectionResponse
@@ -1023,23 +1021,6 @@ async def mark_session_read(
         )
     publish_session_read_update(session_id=str(session_id))
     return SessionReadResponse(session_id=str(session_id), last_read_at=preferences.last_read_at)
-
-
-@router.patch("/sessions/{session_id}/loop-mode", response_model=SessionLoopModeResponse)
-async def set_session_loop_mode(
-    session_id: UUID,
-    body: SessionLoopModeRequest,
-    db: Session | None = Depends(no_request_db),
-    owner_id: int = Depends(_session_preferences_owner_id),
-    _single: None = Depends(require_single_tenant),
-) -> SessionLoopModeResponse:
-    """Set the explicit loop mode for a coding session."""
-    from zerg.services.session_preferences import update_session_preferences
-
-    preferences = await update_session_preferences(session_id, owner_id=owner_id, loop_mode=body.loop_mode.value)
-    if preferences is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    return SessionLoopModeResponse(session_id=str(session_id), loop_mode=preferences.loop_mode)
 
 
 @router.patch("/sessions/{session_id}/notification-watch", response_model=SessionNotificationWatchResponse)

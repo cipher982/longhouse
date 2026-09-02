@@ -85,7 +85,7 @@ def project_send_affordance(
                 input_mode="console",
                 default_input_intent="auto",
                 composer_enabled=True,
-                composer_placeholder="Message this coding agent",
+                composer_placeholder="Message",
                 composer_disabled_reason=None,
                 send_disabled_reason=None,
             )
@@ -122,7 +122,9 @@ def project_send_affordance(
             input_mode="live",
             default_input_intent=default_intent,
             composer_enabled=True,
-            composer_placeholder=f"Send a message to the live {provider_session}...",
+            composer_placeholder=(
+                "Steer this turn" if default_intent == "steer" else "Queue for next turn" if default_intent == "queue" else "Message"
+            ),
             composer_disabled_reason=None,
             send_disabled_reason=None,
         )

@@ -191,7 +191,6 @@ def test_managed_local_launch_response_contract_rejects_missing_claude_provider_
     from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract
     from zerg.session_execution_home import ManagedSessionTransport
     from zerg.session_execution_home import SessionExecutionHome
-    from zerg.session_loop_mode import SessionLoopMode
 
     response = ManagedLocalSessionLaunchResponse(
         session_id="session-123",
@@ -200,7 +199,6 @@ def test_managed_local_launch_response_contract_rejects_missing_claude_provider_
         provider_session_id=None,
         execution_home=SessionExecutionHome.MANAGED_LOCAL,
         managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE,
-        loop_mode=SessionLoopMode.ASSIST,
         source_runner_id=1,
         source_runner_name="cinder",
         managed_session_name="demo",
@@ -219,7 +217,6 @@ def test_managed_local_launch_response_contract_accepts_pi_print_without_attach_
     from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract
     from zerg.session_execution_home import ManagedSessionTransport
     from zerg.session_execution_home import SessionExecutionHome
-    from zerg.session_loop_mode import SessionLoopMode
 
     response = ManagedLocalSessionLaunchResponse(
         session_id="session-pi-1",
@@ -228,7 +225,6 @@ def test_managed_local_launch_response_contract_accepts_pi_print_without_attach_
         provider_session_id=None,
         execution_home=SessionExecutionHome.MANAGED_LOCAL,
         managed_transport=ManagedSessionTransport.PI_PRINT,
-        loop_mode=SessionLoopMode.ASSIST,
         source_runner_id=1,
         source_runner_name="cinder",
         managed_session_name="pi-demo",
@@ -250,7 +246,6 @@ def test_managed_local_launch_response_contract_rejects_pi_print_attach_command(
     from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract
     from zerg.session_execution_home import ManagedSessionTransport
     from zerg.session_execution_home import SessionExecutionHome
-    from zerg.session_loop_mode import SessionLoopMode
 
     response = ManagedLocalSessionLaunchResponse(
         session_id="session-pi-2",
@@ -259,7 +254,6 @@ def test_managed_local_launch_response_contract_rejects_pi_print_attach_command(
         provider_session_id=None,
         execution_home=SessionExecutionHome.MANAGED_LOCAL,
         managed_transport=ManagedSessionTransport.PI_PRINT,
-        loop_mode=SessionLoopMode.ASSIST,
         source_runner_id=1,
         source_runner_name="cinder",
         managed_session_name="pi-demo",

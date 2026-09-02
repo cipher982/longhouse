@@ -371,7 +371,6 @@ def test_attention_resolution_clears_legacy_needs_user_push(tmp_path):
                 environment="local",
                 project="zerg",
                 started_at=t0,
-                loop_mode="assist",
                 summary_title="Legacy ready notification",
                 last_attention_push_state="needs_user",
                 last_attention_push_at=t0,
@@ -421,7 +420,6 @@ def test_presence_widget_push_hash_ignores_ephemeral_runtime_state(tmp_path):
                 environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="assist",
                 summary_title="Widget watched session",
             )
         )
@@ -539,7 +537,6 @@ def test_presence_widget_push_requires_widget_token(tmp_path):
                 environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="assist",
                 summary_title="No widget token",
             )
         )
@@ -603,7 +600,6 @@ def test_presence_widget_push_send_failure_clears_stamp(tmp_path):
                 environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="assist",
                 summary_title="Widget send failure",
             )
         )
@@ -669,7 +665,6 @@ def test_presence_widget_push_missing_state_table_degrades(tmp_path):
                 environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="assist",
                 summary_title="Missing widget state table",
             )
         )
@@ -743,7 +738,6 @@ def test_archive_presence_does_not_invent_live_activity_state(tmp_path):
                 environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="assist",
                 summary_title="Watched session",
             )
         )
@@ -821,7 +815,6 @@ def test_archive_needs_user_does_not_invent_live_activity_idle(tmp_path):
                 environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="assist",
                 summary_title="Watched ready session",
             )
         )
@@ -884,7 +877,6 @@ def test_archive_presence_leaves_live_activity_stamp_clear(tmp_path):
                 environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="assist",
                 summary_title="Live Activity failure",
             )
         )
@@ -950,7 +942,6 @@ def test_presence_attention_push_respects_user_mute(tmp_path):
                 environment="local",
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
-                loop_mode="assist",
                 summary_title="Wait for input",
             )
         )

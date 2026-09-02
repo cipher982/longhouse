@@ -60,14 +60,12 @@ from zerg.services.managed_local_launcher import build_managed_local_launch_plan
 from zerg.services.managed_local_launcher import managed_local_run_id_for_session
 from zerg.services.managed_local_launcher import resolve_managed_local_launch_runner
 from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
-from zerg.services.session_chat_impl import SessionDraftReplyResponse
 from zerg.services.session_chat_impl import SessionLockInfo
 from zerg.services.session_chat_impl import _acquire_session_lock_or_raise
 from zerg.services.session_chat_impl import _assert_live_session_action_available
 from zerg.services.session_chat_impl import _assert_live_session_send_available
 from zerg.services.session_chat_impl import _authorize_live_send
 from zerg.services.session_chat_impl import _build_managed_local_chat_response
-from zerg.services.session_chat_impl import _build_managed_local_draft_reply_response
 from zerg.services.session_chat_impl import _load_session_for_continuation
 from zerg.services.session_chat_impl import _lock_scope_id_for_session
 from zerg.services.session_chat_impl import _managed_local_launch_response_from_plan
@@ -93,8 +91,6 @@ from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CURSOR_POLL
 from zerg.services.session_views import SessionPauseRequestProjectionResponse
-from zerg.session_loop_mode import SessionLoopMode
-from zerg.session_loop_mode import coerce_session_loop_mode
 
 logger = logging.getLogger(__name__)
 
@@ -119,12 +115,6 @@ class SessionMessageRequest(BaseModel):
     """Request to send one message into an explicit session interaction path."""
 
     message: str = Field(..., min_length=1, max_length=10000, description="User message")
-
-
-class SessionDraftReplyRequest(BaseModel):
-    """Request a suggested next user message without sending it."""
-
-    max_chars: int = Field(1200, ge=100, le=4000, description="Maximum draft length")
 
 
 class ConsoleSessionCreateRequest(BaseModel):
@@ -226,7 +216,6 @@ async def _write_hot_managed_local_launch_readiness(
             "project": plan.project,
             "display_name": plan.display_name,
             "managed_session_name": plan.managed_session_name,
-            "loop_mode": plan.loop_mode,
             "permission_mode": plan.permission_mode,
             "launch_actor": plan.launch_actor,
             "launch_surface": plan.launch_surface,
@@ -319,7 +308,6 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     git_repo: str | None = Field(None, description="Optional git repository path")
     git_branch: str | None = Field(None, description="Optional git branch name")
     display_name: str | None = Field(None, description="Optional display name for the session")
-    loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="assist | autopilot")
     machine_name: str | None = Field(
         None,
         description="Optional local Longhouse machine label override stored on the launched session",
@@ -866,36 +854,6 @@ async def send_to_live_session(
         ) from exc
 
 
-@router.post("/{session_id}/draft-reply", response_model=SessionDraftReplyResponse)
-async def draft_reply_for_live_session(
-    session_id: str,
-    body: SessionDraftReplyRequest | None = None,
-    db: Session | None = Depends(_catalog_control_db_dependency),
-    current_user: Caller = Depends(get_current_browser_route_caller),
-):
-    """Generate a suggested next user message for a live managed-local session."""
-    request_id = str(uuid.uuid4())[:8]
-    source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
-    _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
-    try:
-        max_chars = (body or SessionDraftReplyRequest()).max_chars
-        return await _build_managed_local_draft_reply_response(
-            source_session=source_session,
-            request_id=request_id,
-            max_chars=max_chars,
-            db=db,
-            owner_id=current_user.id,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("[%s] Error in draft_reply_for_live_session", request_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(exc)[:200]}",
-        ) from exc
-
-
 @agents_router.post("/{session_id}/send-live")
 async def send_to_live_session_agents(
     session_id: str,
@@ -938,49 +896,6 @@ async def send_to_live_session_agents(
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, request_id)
         logger.exception(f"[{request_id}] Error in send_to_live_session_agents")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(exc)[:200]}",
-        ) from exc
-
-
-@agents_router.post("/{session_id}/draft-reply", response_model=SessionDraftReplyResponse)
-async def draft_reply_for_live_session_agents(
-    session_id: str,
-    request: Request,
-    body: SessionDraftReplyRequest | None = None,
-    db: Session | None = Depends(_catalog_control_db_dependency),
-    device_token: DeviceToken | None = Depends(verify_agents_caller),
-    _single: None = Depends(require_single_tenant),
-):
-    """Machine-facing draft-reply surface for managed-local sessions."""
-    settings = get_settings()
-    principal = caller_principal(device_token)
-    resolved_device_token = principal if isinstance(principal, DeviceToken) else None
-
-    request_id = str(uuid.uuid4())[:8]
-    _authorize_live_send(
-        request=request,
-        device_token=resolved_device_token,
-        auth_disabled=settings.auth_disabled,
-    )
-    owner_id = _resolve_agents_owner_id(db, resolved_device_token)
-    source_session = _load_session_for_continuation(db, session_id, owner_id=owner_id)
-    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
-
-    try:
-        max_chars = (body or SessionDraftReplyRequest()).max_chars
-        return await _build_managed_local_draft_reply_response(
-            source_session=source_session,
-            request_id=request_id,
-            max_chars=max_chars,
-            db=db,
-            owner_id=owner_id,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("[%s] Error in draft_reply_for_live_session_agents", request_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
@@ -1260,7 +1175,6 @@ async def launch_managed_local_this_device(
             git_repo=body.git_repo,
             git_branch=body.git_branch,
             display_name=body.display_name,
-            loop_mode=coerce_session_loop_mode(body.loop_mode).value,
             machine_name=machine_name,
             native_claude_channels_available=body.native_claude_channels_available,
             claude_launch_env=body.claude_launch_env,

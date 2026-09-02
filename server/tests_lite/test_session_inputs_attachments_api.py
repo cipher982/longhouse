@@ -509,7 +509,6 @@ def _seed_live_catalog_session(
                     "project": "session-input-attachments",
                     "display_name": "Session input attachments",
                     "managed_session_name": f"{provider}-attachments",
-                    "loop_mode": "assist",
                     "permission_mode": "bypass",
                     "launch_actor": "user",
                     "launch_surface": "cli",

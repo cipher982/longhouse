@@ -610,7 +610,6 @@ def _live_control_session_dto(session: Any) -> dict[str, Any]:
         "ended_at": _encode_datetime(session.ended_at),
         "closed_at": _encode_datetime(session.closed_at),
         "close_reason": session.close_reason,
-        "loop_mode": session.loop_mode,
         "permission_mode": session.permission_mode,
         "primary_thread_id": str(session.primary_thread_id) if session.primary_thread_id else None,
     }
@@ -4102,7 +4101,6 @@ class CatalogStore:
                         and str(catalog.project or "") == plan.project
                         and str(catalog.git_repo or "") == str(launch.get("git_repo") or "")
                         and str(catalog.git_branch or "") == str(launch.get("git_branch") or "")
-                        and str(catalog.loop_mode or "") == plan.loop_mode
                         and str(catalog.permission_mode or "") == plan.permission_mode
                         and (not provider_session_id or provider_alias is not None)
                         # Rows created before launch_fingerprint existed retain
@@ -6227,7 +6225,6 @@ class CatalogStore:
         session_id: str,
         owner_id: int,
         user_state: str | None,
-        loop_mode: str | None,
         notification_muted: bool | None,
         user_hidden_from_timeline: bool | None,
         observed_at: datetime,
@@ -6254,7 +6251,6 @@ class CatalogStore:
                     select(
                         table.c.user_state,
                         table.c.user_state_at,
-                        table.c.loop_mode,
                         table.c.notification_muted,
                         table.c.user_hidden_from_timeline,
                         table.c.user_hidden_at,
@@ -6269,7 +6265,6 @@ class CatalogStore:
                     connection.execute(
                         select(
                             StorageSession.__table__.c.user_state,
-                            StorageSession.__table__.c.loop_mode,
                             StorageSession.__table__.c.notification_muted,
                             StorageSession.__table__.c.user_hidden_from_timeline,
                             StorageSession.__table__.c.last_read_at,
@@ -6294,7 +6289,6 @@ class CatalogStore:
                         "found": True,
                         "preferences": {
                             "user_state": str(storage_current["user_state"] or "active"),
-                            "loop_mode": str(storage_current["loop_mode"] or "assist"),
                             "notification_muted": bool(storage_current["notification_muted"]),
                             "user_hidden_from_timeline": (
                                 user_hidden_from_timeline
@@ -6315,8 +6309,6 @@ class CatalogStore:
             if user_state is not None and user_state != str(current["user_state"] or "active"):
                 values["user_state"] = user_state
                 values["user_state_at"] = observed_at
-            if loop_mode is not None and loop_mode != str(current["loop_mode"] or "assist"):
-                values["loop_mode"] = loop_mode
             if notification_muted is not None and notification_muted != bool(current["notification_muted"]):
                 values["notification_muted"] = int(notification_muted)
             if user_hidden_from_timeline is not None and user_hidden_from_timeline != bool(current["user_hidden_from_timeline"]):
@@ -6356,7 +6348,6 @@ class CatalogStore:
                 "preferences": {
                     "user_state": user_state if user_state is not None else str(current["user_state"] or "active"),
                     "user_state_at": _encode_datetime(observed_at if "user_state" in values else current["user_state_at"]),
-                    "loop_mode": loop_mode if loop_mode is not None else str(current["loop_mode"] or "assist"),
                     "notification_muted": (notification_muted if notification_muted is not None else bool(current["notification_muted"])),
                     "user_hidden_from_timeline": (
                         user_hidden_from_timeline if user_hidden_from_timeline is not None else bool(current["user_hidden_from_timeline"])
@@ -12057,7 +12048,6 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "last_console_result_outcome": row["last_console_result_outcome"],
         "last_read_at": row["last_read_at"],
         "primary_thread_id": None,
-        "loop_mode": str(row["loop_mode"]),
         "notification_muted": bool(row["notification_muted"]),
         "origin_kind": row["origin_kind"],
         "hidden_from_default_timeline": int(row["hidden_from_default_timeline"]),
@@ -12683,7 +12673,6 @@ _CATALOG_FIELDS = frozenset(
         "last_console_result_outcome",
         "last_read_at",
         "primary_thread_id",
-        "loop_mode",
         "notification_muted",
         "origin_kind",
         "hidden_from_default_timeline",
@@ -13447,7 +13436,6 @@ def _storage_session_dto(row) -> dict[str, Any]:
         "media_state": str(row["media_state"]),
         "missing_media_hashes": list(json.loads(str(row["missing_media_hashes_json"] or "[]"))),
         "user_state": str(row["user_state"]),
-        "loop_mode": str(row["loop_mode"]),
         "notification_muted": bool(row["notification_muted"]),
         "origin_kind": row["origin_kind"],
         "hidden_from_default_timeline": bool(row["hidden_from_default_timeline"]),

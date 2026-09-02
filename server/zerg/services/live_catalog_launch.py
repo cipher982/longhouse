@@ -77,7 +77,6 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
             tool_calls=0,
             summary_title=display_name,
             primary_thread_id=thread_id,
-            loop_mode="assist",
             # Console genuinely hard-codes bypass and passes the provider's
             # skip-permissions flag, so this is an observed posture, not a
             # default standing in for one.
@@ -353,7 +352,6 @@ def create_live_launch_catalog_shell(
     expires_at: datetime,
     launch_actor: str | None,
     launch_surface: str | None,
-    loop_mode: str = "assist",
     # No default. A launch knows what approvals it started under, and defaulting
     # here is what recorded every Helm session as bypass: the caller computed
     # `provider_local` and the value was silently replaced on the way to storage.
@@ -403,7 +401,6 @@ def create_live_launch_catalog_shell(
             first_user_message_preview=(initial_prompt or "").strip()[:500] or None,
             last_visible_text_preview=(initial_prompt or "").strip()[:500] or None,
             primary_thread_id=thread_key,
-            loop_mode=loop_mode,
             permission_mode=permission_mode,
             permission_mode_source="launch_plan",
             origin_kind=origin_kind,

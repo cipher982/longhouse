@@ -2253,7 +2253,6 @@ class CatalogDaemon:
             "session_id",
             "owner_id",
             "user_state",
-            "loop_mode",
             "notification_muted",
             "user_hidden_from_timeline",
             "last_read_at",
@@ -2273,16 +2272,11 @@ class CatalogDaemon:
             "archived",
         }:
             return self._error(request, "invalid_request", "user_state is not recognized")
-        if params["loop_mode"] is not None and params["loop_mode"] not in {"assist", "autopilot"}:
-            return self._error(request, "invalid_request", "loop_mode is not recognized")
         if params["notification_muted"] is not None and type(params["notification_muted"]) is not bool:
             return self._error(request, "invalid_request", "notification_muted must be a boolean or null")
         if params["user_hidden_from_timeline"] is not None and type(params["user_hidden_from_timeline"]) is not bool:
             return self._error(request, "invalid_request", "user_hidden_from_timeline must be a boolean or null")
-        if all(
-            params[field] is None
-            for field in ("user_state", "loop_mode", "notification_muted", "user_hidden_from_timeline", "last_read_at")
-        ):
+        if all(params[field] is None for field in ("user_state", "notification_muted", "user_hidden_from_timeline", "last_read_at")):
             return self._error(request, "invalid_request", "at least one preference must be provided")
         try:
             params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
@@ -4494,7 +4488,6 @@ _LOCAL_LAUNCH_PLAN_FIELDS = {
     "project",
     "display_name",
     "managed_session_name",
-    "loop_mode",
     "permission_mode",
     "launch_actor",
     "launch_surface",
@@ -4686,7 +4679,6 @@ def _validate_local_launch_rpc(value: object) -> dict:
         ("project", 255),
         ("display_name", 255),
         ("managed_session_name", 255),
-        ("loop_mode", 32),
         ("permission_mode", 32),
         ("environment", 32),
         ("managed_transport", 64),

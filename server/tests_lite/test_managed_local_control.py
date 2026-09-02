@@ -113,7 +113,6 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude", owner_id: int
         user_messages=0,
         assistant_messages=0,
         tool_calls=0,
-        loop_mode="assist",
     )
     db.add(session)
     db.flush()
@@ -160,7 +159,6 @@ def _seed_managed_control_session(db, live_catalog, *, provider: str = "claude")
                     cwd=session.cwd,
                     started_at=session.started_at,
                     primary_thread_id=str(thread.id),
-                    loop_mode=session.loop_mode,
                     created_at=now,
                     updated_at=now,
                 )

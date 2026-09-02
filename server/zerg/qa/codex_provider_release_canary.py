@@ -187,7 +187,6 @@ def _register_managed_codex_launch(
         "provider": "codex",
         "project": "provider-factory",
         "display_name": "Longhouse provider qualification",
-        "loop_mode": "assist",
         "machine_name": machine_name,
         "permission_mode": "provider_local",
     }
