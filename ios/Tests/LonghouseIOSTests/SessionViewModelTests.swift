@@ -838,7 +838,9 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func submittedInputReconcilesByExactRecentTextWhenOriginIsMissing() async throws {
+    func submittedInputStaysWhenTheEchoCarriesNoIdentity() async throws {
+        // Same text, no origin, no receipt: the phone never guesses that this
+        // row is its send. The bubble stays until identity arrives.
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(
             workspaces: [before],
@@ -865,10 +867,10 @@ struct SessionViewModelTests {
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
-        await waitForSubmittedInputsToClear(model)
+        await waitForWorkspaceRequestCount(api, atLeast: 2)
 
         #expect(sent)
-        #expect(model.submittedInputs.isEmpty)
+        #expect(model.submittedInputs.count == 1)
         #expect(model.items.map(\.id) == ["user:11"])
     }
 
@@ -899,18 +901,26 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func submittedInputClearsOnceTheTailWindowScrollsPastTheSend() async throws {
+    func submittedInputClearsWhenTheServerReceiptLinksAnEchoBehindTheWindow() async throws {
         // A long turn projects more items than the phone's tail window holds,
         // so the durable echo of the send is behind the window by the time the
-        // phone looks. The server confirmed delivery and the turn has visibly
-        // moved on: the optimistic bubble must not stay pinned under it.
+        // phone looks. The server linked the receipt to that event at ingest,
+        // and the receipt alone resolves the optimistic bubble.
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let sentAt = Date()
         let api = FakeSessionWorkspaceClient(
             workspaces: [before],
             sendResponse: SessionInputResponse(outcome: .sent, inputId: nil, clientRequestId: nil, intent: .auto, queued: []),
-            afterSendWorkspace: { _ in
-                try makeAssistantWindow(startingEventId: 100, count: 50, firstTimestamp: sentAt.addingTimeInterval(20), total: 80)
+            afterSendWorkspace: { clientRequestId in
+                try makeAssistantWindow(
+                    startingEventId: 100,
+                    count: 50,
+                    firstTimestamp: sentAt.addingTimeInterval(20),
+                    total: 80,
+                    inputReceiptsJSON: """
+                    [{"client_request_id": "\(clientRequestId ?? "")", "intent": "auto", "status": "delivered", "created_at": null, "event_id": "user-11"}]
+                    """
+                )
             }
         )
         let appState = AppState()
@@ -926,16 +936,24 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func submittedInputStaysWhileTheTailWindowStillCoversTheSend() async throws {
-        // Same shape, but the window is not full: everything since the send is
-        // visible and the echo simply has not arrived, so the bubble stays.
+    func submittedInputStaysWhileTheReceiptIsUnlinked() async throws {
+        // The server knows about the send but has not seen its echo yet: the
+        // receipt carries no event id, so the bubble stays.
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let sentAt = Date()
         let api = FakeSessionWorkspaceClient(
             workspaces: [before],
             sendResponse: SessionInputResponse(outcome: .sent, inputId: nil, clientRequestId: nil, intent: .auto, queued: []),
-            afterSendWorkspace: { _ in
-                try makeAssistantWindow(startingEventId: 100, count: 20, firstTimestamp: sentAt.addingTimeInterval(20), total: 20)
+            afterSendWorkspace: { clientRequestId in
+                try makeAssistantWindow(
+                    startingEventId: 100,
+                    count: 20,
+                    firstTimestamp: sentAt.addingTimeInterval(20),
+                    total: 20,
+                    inputReceiptsJSON: """
+                    [{"client_request_id": "\(clientRequestId ?? "")", "intent": "auto", "status": "delivered", "created_at": null, "event_id": null}]
+                    """
+                )
             }
         )
         let appState = AppState()
@@ -956,9 +974,11 @@ struct SessionViewModelTests {
         startingEventId: Int,
         count: Int,
         firstTimestamp: Date,
-        total: Int
+        total: Int,
+        inputReceiptsJSON: String? = nil
     ) throws -> SessionWorkspaceResponse {
         let formatter = ISO8601DateFormatter()
+        let inputReceiptsField = inputReceiptsJSON.map { "\n            \"input_receipts\": \($0)," } ?? ""
         let items = try (0..<count).map { offset -> String in
             let timestamp = try jsonString(formatter.string(from: firstTimestamp.addingTimeInterval(Double(offset))))
             return """
@@ -985,7 +1005,7 @@ struct SessionViewModelTests {
             "provider": "codex",
             "project": "zerg",
             "summary_title": "Workspace Session",
-            "user_state": "active",
+            "user_state": "active",\(inputReceiptsField)
             "capabilities": {
               "live_control_available": true,
               "host_reattach_available": true,
@@ -1039,7 +1059,10 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func repeatedPromptDoesNotReconcileAgainstEventVisibleBeforeSend() async throws {
+    func repeatedPromptWithoutIdentityStaysPendingAcrossReload() async throws {
+        // The same words were sent before and again now. Neither the row that
+        // was visible before the send nor the newer one carries identity, so a
+        // reload still does not claim either of them.
         let now = Date()
         let before = try makeWorkspace(
             eventId: 10,
@@ -1064,7 +1087,7 @@ struct SessionViewModelTests {
         #expect(model.submittedInputs.count == 1)
 
         await model.reload(sessionId: "session-1", appState: appState)
-        #expect(model.submittedInputs.isEmpty)
+        #expect(model.submittedInputs.count == 1)
         #expect(model.items.map(\.id).contains("user:11"))
     }
 
@@ -1316,9 +1339,11 @@ struct SessionViewModelTests {
         transcriptPreviewJSON: String? = nil,
         pauseRequestJSON: String? = nil,
         total: Int = 1,
-        pageOffset: Int = 0
+        pageOffset: Int = 0,
+        inputReceiptsJSON: String? = nil
     ) throws -> SessionWorkspaceResponse {
         let encodedContent = try jsonString(content)
+        let inputReceiptsField = inputReceiptsJSON.map { "\n            \"input_receipts\": \($0)," } ?? ""
         let encodedTimestamp = try jsonString(timestamp)
         let inputOriginField = inputOriginJSON.map { ",\n                  \"input_origin\": \($0)" } ?? ""
         let transcriptPreviewField = transcriptPreviewJSON.map { ",\n            \"transcript_preview\": \($0)" } ?? ""
@@ -1336,7 +1361,7 @@ struct SessionViewModelTests {
             "provider": "codex",
             "project": "zerg",
             "summary_title": "Workspace Session",
-            "user_state": "active",
+            "user_state": "active",\(inputReceiptsField)
             "capabilities": {
               "live_control_available": true,
               "host_reattach_available": true,

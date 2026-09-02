@@ -775,13 +775,13 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             role: "user",
             content: text,
             timestamp: ISO8601DateFormatter().string(from: Date()),
-            inputOrigin: fixtureName == "console-reconcile"
-                ? nil
-                : SessionInputOrigin(
-                    authoredVia: .longhouse,
-                    sessionInputId: inputID,
-                    clientRequestId: clientRequestId
-                )
+            // A Console echo has no archive input id; the server links the
+            // delivered receipt at ingest and stamps the client_request_id.
+            inputOrigin: SessionInputOrigin(
+                authoredVia: .longhouse,
+                sessionInputId: fixtureName == "console-reconcile" ? nil : inputID,
+                clientRequestId: clientRequestId
+            )
         ))
         nextEventID += 1
         if fixtureName == "console-reconcile" {
