@@ -1509,6 +1509,7 @@
     {
       "path": "server/tests_lite/test_storage_v2_workspace.py",
       "providers": [
+        "claude",
         "codex",
         "cursor"
       ]

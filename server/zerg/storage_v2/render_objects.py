@@ -64,6 +64,7 @@ class RenderRecord:
     tool_call_id: str | None = None
     thread_id: str | None = None
     branch_kind: str | None = None
+    parent_uuid: str | None = None
     raw_record_ordinal: int = 0
     # Parser-owned semantic fact. Raw provider records stay in the companion
     # raw object; this field lets render/search consumers avoid reinterpreting
@@ -281,6 +282,7 @@ def _validate_spec(spec: RenderObjectSpec) -> None:
             ("tool_call_id", 255),
             ("thread_id", 255),
             ("branch_kind", 64),
+            ("parent_uuid", 255),
             ("interaction_kind", 64),
         ):
             value = getattr(record, field)

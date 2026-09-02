@@ -149,7 +149,12 @@ _LEGACY_RENDER_RECORD_FIELDS = {
     "branch_kind",
     "raw_record_ordinal",
 }
-_EXPECTED_RENDER_RECORD_FIELDS = _LEGACY_RENDER_RECORD_FIELDS | {"interaction_kind"}
+_EXPECTED_RENDER_RECORD_FIELDS = (
+    _LEGACY_RENDER_RECORD_FIELDS,
+    _LEGACY_RENDER_RECORD_FIELDS | {"interaction_kind"},
+    _LEGACY_RENDER_RECORD_FIELDS | {"parent_uuid"},
+    _LEGACY_RENDER_RECORD_FIELDS | {"interaction_kind", "parent_uuid"},
+)
 _RENDER_MANIFEST_LIMIT = 1_000
 _RENDER_READ_BATCH = 2
 _MAX_MEDIA_REFS = 1_000
@@ -420,7 +425,7 @@ def _parse_render_spec(
     record_payloads: list[dict[str, Any]] = []
     records_by_raw_ordinal: dict[int, list[int]] = {}
     for item in wire_records:
-        if not isinstance(item, dict) or set(item) not in (_LEGACY_RENDER_RECORD_FIELDS, _EXPECTED_RENDER_RECORD_FIELDS):
+        if not isinstance(item, dict) or set(item) not in _EXPECTED_RENDER_RECORD_FIELDS:
             raise ValueError("each render record has invalid fields")
         for field in ("order_time_us", "source_position", "event_subordinal", "raw_record_ordinal"):
             if type(item[field]) is not int:
@@ -1326,6 +1331,21 @@ def _render_record_order_key(decoded, record: RenderRecord) -> tuple[int, str, s
     )
 
 
+def _claude_abandoned_event_ids(
+    records: list[tuple[tuple[int, str, str, str, str, int, int], RenderRecord]],
+) -> set[str]:
+    siblings: dict[str, list[tuple[tuple[int, str, str, str, str, int, int], RenderRecord]]] = {}
+    for key, record in records:
+        if record.role == "user" and record.parent_uuid:
+            siblings.setdefault(record.parent_uuid, []).append((key, record))
+
+    abandoned: set[str] = set()
+    for group in siblings.values():
+        group.sort(key=lambda item: (item[1].source_position, item[1].event_subordinal, item[0]))
+        abandoned.update(record.event_id for _, record in group[:-1])
+    return abandoned
+
+
 def _manifest_first_key(manifest: dict[str, object]) -> tuple[int, str, str, str, str, int, int]:
     raw = manifest.get("first_order_key")
     if not isinstance(raw, str):
@@ -1620,6 +1640,7 @@ async def read_storage_v2_session_events_page(
     cursor: str | None,
     anchor: str,
     limit: int,
+    branch_mode: str = "all",
     timing: ServerTimingRecorder | None = None,
 ) -> dict[str, object]:
     """Read one verified render page for a known owner.
@@ -1630,6 +1651,8 @@ async def read_storage_v2_session_events_page(
 
     if anchor not in {"start", "tail"}:
         raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_anchor", "anchor must be start or tail")
+    if branch_mode not in {"head", "all"}:
+        raise _http_error(status.HTTP_400_BAD_REQUEST, "invalid_branch_mode", "branch_mode must be one of: head, all")
     decoded_cursor = None
     if cursor is not None:
         try:
@@ -1712,6 +1735,9 @@ async def read_storage_v2_session_events_page(
     raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
     sequence_context_cache: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
     ordered_events: list[tuple[tuple[int, str, str, str, str, int, int], dict[str, object]]] = []
+    claude_generation = False
+    claude_branch_records: list[tuple[tuple[int, str, str, str, str, int, int], RenderRecord]] = []
+    claude_semantic_event_ids: set[str] = set()
     next_object_index = 0
     cursor_key = _cursor_order_key(decoded_cursor) if decoded_cursor is not None else None
     object_read_duration_ms = 0.0
@@ -1737,6 +1763,7 @@ async def read_storage_v2_session_events_page(
                 object_read_duration_ms += (monotonic() - object_read_started) * 1000.0
             for item, decoded in zip(batch_manifests, decoded_batch, strict=True):
                 spec = decoded.spec
+                claude_generation = claude_generation or spec.provider.strip().lower() == "claude"
                 if (
                     spec.session_id != session_id
                     or spec.render_generation != generation_id
@@ -1757,6 +1784,9 @@ async def read_storage_v2_session_events_page(
                     reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
                 )
                 for ordinal, record in enumerate(spec.records):
+                    key = _render_record_order_key(decoded, record)
+                    if claude_generation:
+                        claude_branch_records.append((key, record))
                     recovered_kind = recovered_kinds.get(ordinal)
                     # A legacy render object may have persisted the ambiguous
                     # command as durable before a later Claude caveat arrived.
@@ -1771,6 +1801,8 @@ async def read_storage_v2_session_events_page(
                         interaction_kind=interaction_kind,
                     ):
                         continue
+                    if claude_generation:
+                        claude_semantic_event_ids.add(record.event_id)
                     key = _render_record_order_key(decoded, record)
                     if (anchor == "start" and (cursor_key is None or key > cursor_key)) or (
                         anchor == "tail" and (cursor_key is None or key < cursor_key)
@@ -1797,7 +1829,7 @@ async def read_storage_v2_session_events_page(
             ordered_events.sort(key=lambda item: item[0])
             if len(ordered_events) > limit:
                 cutoff = ordered_events[limit][0] if anchor == "start" else ordered_events[-limit - 1][0]
-                if (
+                if not claude_generation and (
                     next_object_index >= len(objects)
                     or (anchor == "start" and _manifest_first_key(objects[next_object_index]) > cutoff)
                     or (anchor == "tail" and _manifest_last_key(objects[next_object_index]) < cutoff)
@@ -1838,6 +1870,14 @@ async def read_storage_v2_session_events_page(
     finally:
         timing.record("render_object_read", object_read_duration_ms)
 
+    abandoned_ids = _claude_abandoned_event_ids(claude_branch_records) if claude_generation else set()
+    abandoned_events = len(abandoned_ids & claude_semantic_event_ids)
+    for _, wire in ordered_events:
+        if wire.get("event_id") in abandoned_ids:
+            wire["branch_kind"] = "abandoned"
+    if branch_mode == "head":
+        ordered_events = [(key, wire) for key, wire in ordered_events if wire.get("event_id") not in abandoned_ids]
+
     page = ordered_events[:limit] if anchor == "start" else ordered_events[-limit:]
     has_more = len(ordered_events) > limit or next_object_index < len(objects) or manifest.get("objects_truncated") is True
     if retain_product_metrics:
@@ -1856,6 +1896,7 @@ async def read_storage_v2_session_events_page(
         "next_cursor": (page[-1][1]["cursor"] if anchor == "start" else page[0][1]["cursor"]) if page and has_more else None,
         "has_more": has_more,
         "total": total,
+        "abandoned_events": abandoned_events,
     }
 
 

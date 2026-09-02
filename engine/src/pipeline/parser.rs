@@ -50,6 +50,8 @@ pub enum Role {
 #[derive(Debug, Clone, Serialize)]
 pub struct ParsedEvent {
     pub uuid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_uuid: Option<String>,
     pub session_id: String,
     pub timestamp: DateTime<Utc>,
     pub role: Role,
@@ -189,6 +191,8 @@ struct RawLine {
     created_at: Option<String>,
     timestamp: Option<String>,
     uuid: Option<String>,
+    #[serde(rename = "parentUuid")]
+    parent_uuid: Option<String>,
     #[serde(rename = "sessionId")]
     session_id: Option<String>,
     #[serde(rename = "agentId")]
@@ -1068,6 +1072,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                 if let Some(text) = text {
                     events.push(ParsedEvent {
                         uuid: msg_id.clone(),
+                        parent_uuid: None,
                         session_id: canonical_session_id.clone(),
                         timestamp,
                         role: Role::User,
@@ -1089,6 +1094,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                 if let Some(text) = text {
                     events.push(ParsedEvent {
                         uuid: msg_id.clone(),
+                        parent_uuid: None,
                         session_id: canonical_session_id.clone(),
                         timestamp,
                         role: Role::Assistant,
@@ -1143,6 +1149,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                         .map(|s| s.to_string());
                     events.push(ParsedEvent {
                         uuid: format!("{}-tool-{}", msg_id, tc_id),
+                        parent_uuid: None,
                         session_id: canonical_session_id.clone(),
                         timestamp: tc_timestamp,
                         role: Role::Assistant,
@@ -1159,6 +1166,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                     if let Some(output_text) = tool_output_text {
                         events.push(ParsedEvent {
                             uuid: format!("{}-result-{}", msg_id, tc_id),
+                            parent_uuid: None,
                             session_id: canonical_session_id.clone(),
                             timestamp: tc_timestamp,
                             role: Role::Tool,
@@ -1882,6 +1890,7 @@ fn extract_events(
 
     match effective_role {
         "user" => {
+            let event_start = events.len();
             extract_user_events(
                 content_str,
                 session_id,
@@ -1891,8 +1900,12 @@ fn extract_events(
                 raw_line,
                 events,
             );
+            for event in &mut events[event_start..] {
+                event.parent_uuid = obj.parent_uuid.clone();
+            }
         }
         "assistant" => {
+            let event_start = events.len();
             extract_assistant_events(
                 content_str,
                 session_id,
@@ -1902,6 +1915,9 @@ fn extract_events(
                 raw_line,
                 events,
             );
+            for event in &mut events[event_start..] {
+                event.parent_uuid = obj.parent_uuid.clone();
+            }
         }
         _ => {
             // Unknown type — skip
@@ -1974,6 +1990,7 @@ fn cursor_event(
 ) -> ParsedEvent {
     ParsedEvent {
         uuid,
+        parent_uuid: None,
         session_id: session_id.to_string(),
         timestamp,
         role,
@@ -2219,6 +2236,7 @@ fn extract_antigravity_events(
             if !text.is_empty() {
                 events.push(ParsedEvent {
                     uuid: antigravity_uuid(obj, line_offset, "user"),
+                    parent_uuid: None,
                     session_id: session_id.to_string(),
                     timestamp,
                     role: Role::User,
@@ -2252,6 +2270,7 @@ fn extract_antigravity_events(
             }
             events.push(ParsedEvent {
                 uuid: antigravity_uuid(obj, line_offset, &format!("tool-{idx}")),
+                parent_uuid: None,
                 session_id: session_id.to_string(),
                 timestamp,
                 role: Role::Assistant,
@@ -2339,6 +2358,7 @@ fn extract_antigravity_events(
             _ => (Some(text.to_string()), None, None, "antigravity_assistant"),
         };
         events.push(ParsedEvent {
+            parent_uuid: None,
             uuid: antigravity_uuid(
                 obj,
                 line_offset,
@@ -2386,6 +2406,7 @@ fn extract_compaction_metadata_event(
                 content = "Conversation compacted".to_string();
             }
             Some(ParsedEvent {
+                parent_uuid: None,
                 uuid: obj
                     .uuid
                     .clone()
@@ -2411,6 +2432,7 @@ fn extract_compaction_metadata_event(
                 }
             }
             Some(ParsedEvent {
+                parent_uuid: None,
                 uuid: obj
                     .uuid
                     .clone()
@@ -2451,6 +2473,7 @@ fn extract_compaction_metadata_event(
             }
 
             Some(ParsedEvent {
+                parent_uuid: None,
                 uuid: obj
                     .uuid
                     .clone()
@@ -2543,6 +2566,7 @@ fn extract_codex_event_msg(
 
     events.push(ParsedEvent {
         uuid: format!("{}-action-turn-interrupted", msg_uuid),
+        parent_uuid: None,
         session_id: session_id.to_string(),
         timestamp,
         role: Role::System,
@@ -2623,6 +2647,7 @@ fn extract_codex_events(
                     } else {
                         events.push(ParsedEvent {
                             uuid: format!("{}-action-turn-interrupted-marker", msg_uuid),
+                            parent_uuid: None,
                             session_id: session_id.to_string(),
                             timestamp,
                             role: Role::System,
@@ -2690,6 +2715,7 @@ fn extract_codex_events(
 
             events.push(ParsedEvent {
                 uuid: msg_uuid.to_string(),
+                parent_uuid: None,
                 session_id: session_id.to_string(),
                 timestamp,
                 role,
@@ -2729,6 +2755,7 @@ fn extract_codex_events(
 
             events.push(ParsedEvent {
                 uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
+                parent_uuid: None,
                 session_id: session_id.to_string(),
                 timestamp,
                 role: Role::Assistant,
@@ -2794,6 +2821,7 @@ fn extract_codex_events(
 
             events.push(ParsedEvent {
                 uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
+                parent_uuid: None,
                 session_id: session_id.to_string(),
                 timestamp,
                 role: Role::Tool,
@@ -2861,6 +2889,7 @@ fn extract_user_events(
                 if !text.trim().is_empty() {
                     events.push(ParsedEvent {
                         uuid: msg_uuid.to_string(),
+                        parent_uuid: None,
                         session_id: session_id.to_string(),
                         timestamp,
                         role: Role::User,
@@ -2881,6 +2910,7 @@ fn extract_user_events(
         if !text.trim().is_empty() {
             events.push(ParsedEvent {
                 uuid: msg_uuid.to_string(),
+                parent_uuid: None,
                 session_id: session_id.to_string(),
                 timestamp,
                 role: Role::User,
@@ -2921,6 +2951,7 @@ fn extract_assistant_events(
                 if !text.trim().is_empty() {
                     events.push(ParsedEvent {
                         uuid: format!("{}-text-{}", msg_uuid, idx),
+                        parent_uuid: None,
                         session_id: session_id.to_string(),
                         timestamp,
                         role: Role::Assistant,
@@ -2963,6 +2994,7 @@ fn extract_assistant_events(
 
                 events.push(ParsedEvent {
                     uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
+                    parent_uuid: None,
                     session_id: session_id.to_string(),
                     timestamp,
                     role: Role::Assistant,
@@ -3030,6 +3062,7 @@ fn extract_tool_results_from_items(
         if let Some(text) = output_text {
             events.push(ParsedEvent {
                 uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
+                parent_uuid: None,
                 session_id: session_id.to_string(),
                 timestamp,
                 role: Role::Tool,

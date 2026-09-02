@@ -854,6 +854,7 @@ fn extract_events_from_part(
             }
             events.push(ParsedEvent {
                 uuid: stable_event_uuid(provider_session_id, &part.id, "text"),
+                parent_uuid: None,
                 session_id: longhouse_session_id.to_string(),
                 timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
                 role: event_role(role),
@@ -881,6 +882,7 @@ fn extract_events_from_part(
             let input = state.get("input").and_then(raw_value_from_json);
             events.push(ParsedEvent {
                 uuid: stable_event_uuid(provider_session_id, &part.id, "tool_call"),
+                parent_uuid: None,
                 session_id: longhouse_session_id.to_string(),
                 timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
                 role: Role::Assistant,
@@ -896,6 +898,7 @@ fn extract_events_from_part(
             if let Some(output) = tool_output_text(state) {
                 events.push(ParsedEvent {
                     uuid: stable_event_uuid(provider_session_id, &part.id, "tool_result"),
+                    parent_uuid: None,
                     session_id: longhouse_session_id.to_string(),
                     timestamp: timestamp_from_ms(part.time_updated.max(part.time_created)),
                     role: Role::Tool,
@@ -914,6 +917,7 @@ fn extract_events_from_part(
             if let Some(text) = file_part_text(part_data) {
                 events.push(ParsedEvent {
                     uuid: stable_event_uuid(provider_session_id, &part.id, "file"),
+                    parent_uuid: None,
                     session_id: longhouse_session_id.to_string(),
                     timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
                     role: event_role(role),
@@ -932,6 +936,7 @@ fn extract_events_from_part(
             if let Some(text) = patch_part_text(part_data) {
                 events.push(ParsedEvent {
                     uuid: stable_event_uuid(provider_session_id, &part.id, "patch"),
+                    parent_uuid: None,
                     session_id: longhouse_session_id.to_string(),
                     timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
                     role: event_role(role),

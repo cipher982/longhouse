@@ -97,6 +97,9 @@ def _workspace_envelope(
     events = page.get("events") if page is not None else []
     if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The render projection is invalid.")
+    abandoned_events = int(page.get("abandoned_events") or 0) if page is not None else 0
+    if branch_mode == "head":
+        events = [event for event in events if event.get("branch_kind") != "abandoned"]
     completed_tool_call_ids = {str(event["tool_call_id"]) for event in events if event.get("role") == "tool" and event.get("tool_call_id")}
     items = [
         _event_projection(
@@ -109,6 +112,8 @@ def _workspace_envelope(
         for event in events
     ]
     total = int(page.get("total") or 0) if page is not None else 0
+    if branch_mode == "head":
+        total = max(0, total - abandoned_events)
     latest_event_id = str(events[-1]["event_id"]) if events else None
     fingerprint_payload = {
         "session_commit_seq": session_commit_seq,
@@ -137,7 +142,7 @@ def _workspace_envelope(
             "total": total,
             "page_offset": (max(0, total - len(items)) if anchor == "tail" and cursor is None else 0),
             "branch_mode": branch_mode,
-            "abandoned_events": 0,
+            "abandoned_events": abandoned_events,
             "generation_id": page.get("generation_id") if page is not None else None,
             "next_cursor": page.get("next_cursor") if page is not None else None,
             "has_more": page.get("has_more") is True if page is not None else False,
@@ -223,6 +228,7 @@ async def build_storage_v2_workspace(
             cursor=cursor,
             anchor=anchor,
             limit=limit,
+            branch_mode=branch_mode,
             timing=timing,
         )
     return _workspace_envelope(

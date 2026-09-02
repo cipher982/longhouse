@@ -119,6 +119,20 @@ def test_render_aggregate_keeps_claude_control_raw_but_excludes_it_from_semantic
     assert sealed.last_visible_text_preview == "Build the feature"
 
 
+def test_render_object_preserves_claude_parent_uuid(tmp_path):
+    base = _spec()
+    spec = replace(
+        base,
+        provider="claude",
+        records=(replace(base.records[0], parent_uuid="parent-event"),),
+    )
+
+    sealed = seal_render_object(tmp_path, spec)
+    decoded = read_render_object(tmp_path, sealed.object_path, expected_object_hash=sealed.object_hash)
+
+    assert decoded.spec.records[0].parent_uuid == "parent-event"
+
+
 def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
     raw = RawObjectSpec(
         tenant_id="tenant-a",
@@ -175,6 +189,7 @@ def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
                     "tool_call_id": None,
                     "thread_id": None,
                     "branch_kind": None,
+                    "parent_uuid": "parent-event",
                     "raw_record_ordinal": 1,
                 },
             ],
@@ -185,6 +200,7 @@ def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
 
     assert parsed is not None
     assert [record.interaction_kind for record in parsed.records] == ["local_control", "durable_user_message"]
+    assert parsed.records[1].parent_uuid == "parent-event"
 
 
 def test_storage_wire_uses_complete_raw_window_for_command_before_caveat():

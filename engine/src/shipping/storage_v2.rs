@@ -116,6 +116,8 @@ pub struct StorageV2SessionFacts {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageV2RenderRecord {
     pub event_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_uuid: Option<String>,
     pub order_time_us: i64,
     pub source_position: u64,
     pub event_subordinal: u32,

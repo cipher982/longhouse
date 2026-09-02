@@ -18,8 +18,10 @@ from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveUser
+from zerg.routers.agents_storage_v2 import _claude_abandoned_event_ids
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_control_catalog import load_live_control_session_snapshot
+from zerg.storage_v2.render_objects import RenderRecord
 
 
 class _Catalog:
@@ -55,6 +57,7 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
             "cursor": None,
             "anchor": "tail",
             "limit": 50,
+            "branch_mode": "head",
         }
         return {
             "generation_id": str(uuid4()),
@@ -115,6 +118,101 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
     assert result["projection"]["page_offset"] == 73
     assert result["workspace_revision"]["latest_event_id"] == "event-2"
     assert read_args == {"owner_id": 42}
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_workspace_projects_claude_abandoned_sibling(monkeypatch):
+    session_id = uuid4()
+    session = SimpleNamespace(
+        provider="claude",
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        capabilities=SimpleNamespace(live_control_available=True),
+        model_dump=lambda **_kwargs: {"id": str(session_id), "lifecycle": "open", "capabilities": {}},
+    )
+    events = [
+        {
+            "event_id": "abandoned",
+            "cursor": "cursor-abandoned",
+            "timestamp": "2026-07-12T12:00:00+00:00",
+            "role": "user",
+            "content_text": "first send",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "branch_kind": "abandoned",
+        },
+        {
+            "event_id": "live",
+            "cursor": "cursor-live",
+            "timestamp": "2026-07-12T12:00:01+00:00",
+            "role": "user",
+            "content_text": "resend",
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "branch_kind": None,
+        },
+    ]
+
+    async def read_page(**kwargs):
+        kwargs.pop("timing")
+        assert kwargs["branch_mode"] in {"head", "all"}
+        return {
+            "generation_id": str(uuid4()),
+            "events": events,
+            "next_cursor": None,
+            "has_more": False,
+            "total": 2,
+            "abandoned_events": 1,
+        }
+
+    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: _Catalog())
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id, **_kwargs: (session, None, "7"))
+    monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", read_page)
+
+    head = await workspace_module.build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=42,
+        branch_mode="head",
+        limit=50,
+    )
+    all_events = await workspace_module.build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=42,
+        branch_mode="all",
+        limit=50,
+    )
+
+    assert head["projection"]["abandoned_events"] == 1
+    assert head["projection"]["total"] == 1
+    assert [item["event"]["content_text"] for item in head["projection"]["items"]] == ["resend"]
+    assert all_events["projection"]["abandoned_events"] == 1
+    assert [item["event"]["content_text"] for item in all_events["projection"]["items"]] == ["first send", "resend"]
+    assert all_events["projection"]["items"][0]["event"]["is_head_branch"] is False
+
+
+def test_claude_abandoned_sibling_selection_keeps_linear_chain_on_head():
+    def record(event_id, order_time_us, parent_uuid):
+        return RenderRecord(
+            event_id=event_id,
+            order_time_us=order_time_us,
+            source_position=order_time_us,
+            event_subordinal=0,
+            role="user",
+            content_text=event_id,
+            parent_uuid=parent_uuid,
+        )
+
+    records = [
+        ((1, "", "", "", "", 1, 0), record("root", 1, None)),
+        ((2, "", "", "", "", 2, 0), record("abandoned", 2, "assistant")),
+        ((3, "", "", "", "", 3, 0), record("resend", 3, "assistant")),
+        ((4, "", "", "", "", 4, 0), record("followup", 4, "resend")),
+    ]
+
+    assert _claude_abandoned_event_ids(records) == {"abandoned"}
 
 
 @pytest.mark.asyncio

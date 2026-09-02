@@ -181,6 +181,43 @@ fn golden_claude_basic() {
 }
 
 #[test]
+fn claude_preserves_parent_links_for_sibling_head_projection() {
+    let path = fixtures_dir().join("golden").join("claude").join("branch_siblings.jsonl");
+    let output = Command::new(engine_bin())
+        .args(["parse", "--dump-events"])
+        .arg(path)
+        .output()
+        .expect("run engine parser");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let events: Vec<Value> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("parse event JSON"))
+        .collect();
+    let users: Vec<(&str, Option<&str>)> = events
+        .iter()
+        .filter(|event| event["role"] == "user")
+        .map(|event| {
+            (
+                event["uuid"].as_str().expect("user uuid"),
+                event["parent_uuid"].as_str(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        users,
+        vec![
+            ("root-0000-0000-0000-000000000001", None),
+            ("abandoned-0000-0000-0000-000000000003", Some("assistant-0000-0000-0000-000000000002")),
+            ("resend-0000-0000-0000-000000000004", Some("assistant-0000-0000-0000-000000000002")),
+            ("followup-0000-0000-0000-000000000005", Some("resend-0000-0000-0000-000000000004")),
+        ]
+    );
+}
+
+#[test]
 fn golden_codex_basic() {
     let base = fixtures_dir().join("golden").join("codex");
     run_golden_test(&base.join("basic.jsonl"), &base.join("basic.expected.json"));

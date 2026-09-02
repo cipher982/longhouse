@@ -108,6 +108,7 @@ mod tests {
         ParseResult {
             events: vec![ParsedEvent {
                 uuid: "event-1".to_string(),
+                parent_uuid: None,
                 session_id: "provider-session".to_string(),
                 timestamp: Utc::now(),
                 role: Role::User,

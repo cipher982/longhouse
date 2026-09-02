@@ -2964,6 +2964,7 @@ fn cursor_render_records(
                 tool_call_id,
                 thread_id: None,
                 branch_kind: (kind == "reasoning").then(|| "reasoning".to_string()),
+                parent_uuid: None,
                 raw_record_ordinal: *raw_record_ordinal,
             });
         }
@@ -4189,6 +4190,7 @@ fn render_record(
         .context("parsed tool input is not JSON")?;
     Ok(StorageV2RenderRecord {
         event_id: event.uuid.clone(),
+        parent_uuid: event.parent_uuid.clone(),
         order_time_us: event.timestamp.timestamp_micros(),
         source_position,
         event_subordinal,
@@ -4261,6 +4263,7 @@ fn insert_conversation_reset_boundary(
         })),
         tool_output_text: None,
         tool_call_id: None,
+        parent_uuid: None,
         thread_id: None,
         branch_kind: Some("conversation_reset".to_string()),
         raw_record_ordinal: 0,
@@ -4561,6 +4564,7 @@ mod tests {
             tool_input_json: None,
             tool_output_text: None,
             tool_call_id: None,
+            parent_uuid: None,
             thread_id: None,
             branch_kind: None,
             raw_record_ordinal: 0,
