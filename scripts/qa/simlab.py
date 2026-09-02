@@ -316,7 +316,20 @@ def cmd_up(args: argparse.Namespace) -> None:
         die(f"expected a device token, got {token[:8]}")
     record_timing(timings, "token_mint", started)
 
-    agent_env = {**os.environ, "HOME": str(home), "LONGHOUSE_HOME": str(home / ".longhouse"), "RUST_LOG": "info"}
+    # The scratch agent gets an explicit environment, not the caller's. Every
+    # provider root the engine discovers derives from HOME or an XDG/provider
+    # override, and an inherited override once pointed the scratch engine at
+    # the real user's Cursor databases.
+    agent_env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+        "HOME": str(home),
+        "LONGHOUSE_HOME": str(home / ".longhouse"),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+        "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+        "RUST_LOG": "info",
+    }
     # `auth` records the machine identity the storage handshake later checks
     # against; the machine name must be the device id the token was minted for.
     started = time.monotonic()
