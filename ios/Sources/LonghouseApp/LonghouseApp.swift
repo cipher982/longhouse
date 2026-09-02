@@ -42,6 +42,7 @@ struct LonghouseApp: App {
                     } else if UITestHooks.shouldResetState {
                         appState.isValidating = false
                     } else {
+                        await appState.adoptHeadlessCredentialsIfProvided()
                         await appState.restoreSession()
                         if environment["LONGHOUSE_WIDGET_PROBE_ON_LAUNCH"] == "1" {
                             let result = await WidgetSessionLoader.load()
@@ -168,6 +169,40 @@ final class AppState: ObservableObject {
 
     var shouldShowAuthenticatedShell: Bool {
         isAuthenticated || hasLocalSessionCandidate
+    }
+
+    /// Headless sign-in for the simulator lane: a Debug launch can carry the
+    /// server URL and a runtime token in its environment, so an agent gets an
+    /// authenticated app without tapping through Google. The credential is
+    /// stored exactly where the hosted sign-in stores it; `restoreSession`
+    /// then treats it like any other locally trusted token.
+    static let headlessServerURLEnvironmentKey = "LONGHOUSE_HEADLESS_SERVER_URL"
+    static let headlessAuthTokenEnvironmentKey = "LONGHOUSE_HEADLESS_AUTH_TOKEN"
+    /// A session to open once the timeline is up, through the same pending-id
+    /// path a push or deep link uses. A URL opened from outside the app would
+    /// stop at the system's "Open in Longhouse?" prompt; the environment does not.
+    static let headlessOpenSessionEnvironmentKey = "LONGHOUSE_HEADLESS_OPEN_SESSION"
+
+    func adoptHeadlessCredentialsIfProvided() async {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        if let sessionID = environment[Self.headlessOpenSessionEnvironmentKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sessionID.isEmpty {
+            PushNotificationStore.storePendingSessionID(sessionID)
+            logger.info("headless open session queued session=\(sessionID, privacy: .public)")
+        }
+        guard let url = environment[Self.headlessServerURLEnvironmentKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let token = environment[Self.headlessAuthTokenEnvironmentKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !url.isEmpty, !token.isEmpty, URL(string: url) != nil
+        else { return }
+        serverURL = url
+        KeychainHelper.saveServerURL(url)
+        SharedAuthStore.saveServerURL(url)
+        SharedAuthStore.clearManagedCookies(for: url)
+        SharedAuthStore.removeSharedCookieStorage(for: url)
+        SharedAuthStore.saveRuntimeToken(token, for: url)
+        logger.info("headless credentials adopted server=\(url, privacy: .public)")
+        #endif
     }
 
     func restoreSession() async {

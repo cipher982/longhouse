@@ -933,6 +933,9 @@ final class SessionViewModel: ObservableObject {
     /// history runs out, or a page adds nothing.
     func fillHistoryForShortViewport(sessionId: String, appState: AppState) async {
         guard activeSessionId == sessionId else { return }
+        // WebKit reconciles twice per render; the second ask must not read
+        // the first page's in-flight state as "added nothing" and stall.
+        guard !isLoadingOlder else { return }
         guard historyFillStalledAtLoadedCount != loadedProjectionItemCount else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
         let before = loadedProjectionItemCount

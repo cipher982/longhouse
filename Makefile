@@ -215,6 +215,15 @@ phone-deploy: ## Debug-build the iOS app and install+relaunch it on the paired i
 phone-logs: ## The phone's own diagnostics from the hosted tenant log (SINCE=30m SESSION=<id>)
 	@scripts/ops/phone.sh logs --since $(or $(SINCE),30m) $(if $(SESSION),--session $(SESSION),)
 
+sim-deploy: ## Boot the simulator, Debug-build, install, and launch signed in (SESSION=<id> opens it)
+	@scripts/ops/sim.sh deploy $(SESSION)
+
+sim-shot: ## Screenshot the simulator into artifacts/sim/ (LABEL=name)
+	@scripts/ops/sim.sh shot $(or $(LABEL),screen)
+
+sim-logs: ## The app's OSLog from the simulator (SINCE=5m, FOLLOW=1 to stream)
+	@scripts/ops/sim.sh logs --since $(or $(SINCE),5m) $(if $(FOLLOW),--follow,)
+
 test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit tests)
 	@cd web && bun run test -- --run src/components/session-workspace/__tests__/RenderTelemetryPanel.test.tsx src/pages/__tests__/SessionDetailPage.test.tsx
 	@python3 scripts/build/generate_build_identity.py
