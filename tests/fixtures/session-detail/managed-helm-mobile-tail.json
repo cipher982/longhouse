@@ -230,9 +230,9 @@
     "page_offset": 0,
     "branch_mode": "head",
     "abandoned_events": 0,
-    "generation_id": null,
-    "next_cursor": null,
-    "has_more": false
+    "generation_id": "fixture-generation",
+    "next_cursor": "TEhDMgEB-fixture-older-page",
+    "has_more": true
   },
   "snapshot_event_id": "01J9ZQ8N2K7F3W",
   "workspace_revision": {

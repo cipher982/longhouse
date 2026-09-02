@@ -279,7 +279,8 @@ export function useSessionWorkspace(
         },
         onWorkspaceChanged: (data) => {
           recordServerClockSkew(data?.server_now_ms);
-          activityFeed.push(classifyWorkspaceChange(data));
+          const frameKind = classifyWorkspaceChange(data);
+          if (frameKind) activityFeed.push(frameKind);
           if (data.catalog_commit_seq != null && data.catalog_commit_seq > 0) {
             pendingStateRenderBeaconRef.current = {
               sessionId,

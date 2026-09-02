@@ -24,6 +24,16 @@ describe("classifyWorkspaceChange", () => {
     expect(classifyWorkspaceChange({})).toBe("state");
   });
 
+  it("reads what woke the server when the frame carries no preview", () => {
+    expect(classifyWorkspaceChange({ transcript_preview: null, change_kind: "ingest" })).toBe("tool_result");
+    expect(classifyWorkspaceChange({ transcript_preview: null, change_kind: "transcript_preview" })).toBe(
+      "text_delta",
+    );
+    expect(classifyWorkspaceChange({ transcript_preview: null, change_kind: "runtime" })).toBe("state");
+    expect(classifyWorkspaceChange({ transcript_preview: null, change_kind: "read_update" })).toBeNull();
+    expect(classifyWorkspaceChange({ transcript_preview: null, change_kind: "title_update" })).toBeNull();
+  });
+
   it("splits tool frames by call state", () => {
     expect(
       classifyWorkspaceChange({

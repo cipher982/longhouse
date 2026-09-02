@@ -39,11 +39,29 @@ export const ACTIVITY_FRAME_WEIGHT: Record<ActivityFrameKind, number> = {
 
 const MAX_FRAMES = 400;
 
+/**
+ * A frame without a preview still says what woke the server. Durable ingest is
+ * how a Claude turn shows its tool boundaries (it never streams text), so it
+ * draws as a result bar; a bare runtime wake is a state tick; a read or title
+ * update is bookkeeping and draws nothing (null).
+ */
 export function classifyWorkspaceChange(
-  change: Pick<SessionWorkspaceStreamChange, "transcript_preview">,
-): ActivityFrameKind {
+  change: Pick<SessionWorkspaceStreamChange, "transcript_preview"> & { change_kind?: string | null },
+): ActivityFrameKind | null {
   const preview = change.transcript_preview;
-  if (!preview) return "state";
+  if (!preview) {
+    switch (change.change_kind) {
+      case "ingest":
+        return "tool_result";
+      case "transcript_preview":
+        return "text_delta";
+      case "read_update":
+      case "title_update":
+        return null;
+      default:
+        return "state";
+    }
+  }
   if (preview.tool_name) {
     return preview.tool_call_state === "running" ? "tool_start" : "tool_result";
   }

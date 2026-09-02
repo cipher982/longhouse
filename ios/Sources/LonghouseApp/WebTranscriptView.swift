@@ -1009,6 +1009,11 @@ struct WebTranscriptView: UIViewRepresentable {
                 let target = self.shouldStickToBottom && !self.userScrollInProgress
                     ? maxOffset
                     : min(max(scrollView.contentOffset.y, minOffset), maxOffset)
+                ClientDiagnosticsReporter.shared.record(
+                    stage: "webkit_viewport",
+                    detail: "height=\(Int(previous))->\(Int(height)) content=\(Int(scrollView.contentSize.height)) offset=\(Int(scrollView.contentOffset.y)) target=\(Int(target)) max=\(Int(maxOffset)) inset_bottom=\(Int(insets.bottom)) stick=\(self.shouldStickToBottom) dragging=\(self.userScrollInProgress)",
+                    sessionId: nil
+                )
                 guard abs(scrollView.contentOffset.y - target) > 0.5 else { return }
                 scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: target), animated: false)
             }
@@ -1255,6 +1260,13 @@ struct WebTranscriptView: UIViewRepresentable {
                         diagnosticsEnabled: diagnosticsEnabled,
                         onDiagnostics: onDiagnostics
                     )
+                    // A render changes the content height the same way a
+                    // keyboard changes the viewport height: the offset UIKit is
+                    // holding may now be past the last row. Re-clamp through
+                    // the same generation-guarded path so a pinned transcript
+                    // never rests on a blank band after content shrinks.
+                    let height = webView.bounds.height
+                    self.viewportHeightDidChange(from: height, to: height, on: webView)
                 }
             }
         }
@@ -1628,6 +1640,12 @@ private extension WebTranscriptView {
       /* SwiftUI lays the WebView out inside the safe area, so its frame already
          stops above the floating control card. This is only the comfort gap. */
       padding: 12px 16px 18px;
+      /* A short tail hugs the composer like a conversation, instead of
+         floating at the top over a blank band. Rows space themselves with
+         bottom margins only, so the flex column changes nothing else. */
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
     }
 
     .empty, .error {
@@ -1923,9 +1941,15 @@ private extension WebTranscriptView {
     }
 
     .tool-title {
+      /* A long edit list must trail off with an ellipsis, not run under the
+         right edge and take the count with it. */
+      min-width: 0;
+      flex: 0 1 auto;
       font-size: 13px;
       font-weight: 600;
       color: var(--secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
       white-space: nowrap;
     }
 

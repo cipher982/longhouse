@@ -83,6 +83,11 @@ actor SessionWorkspaceStream {
 
         let session_id: String
         let latest_event_id: Int
+        /// What woke the server: `ingest` (durable events landed), `runtime`
+        /// (state facts), `transcript_preview`, `read_update`, `title_update`.
+        var change_kind: String? = nil
+        /// Durable events an `ingest` wake carried; nil for other wakes.
+        var events_inserted: Int? = nil
         let thread_session_count: Int?
         let latest_event_emitted_at_ms: Int64?
         let server_fanout_at_ms: Int64?

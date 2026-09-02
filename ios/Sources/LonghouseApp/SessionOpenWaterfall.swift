@@ -21,6 +21,11 @@ final class SessionOpenWaterfall {
         }
         // The same marks, shipped: OSLog on a phone is unreadable without a
         // cable and root, so the server keeps a copy beside its own log.
+        // Per-frame marks stay local; a busy Codex turn emits several a
+        // second, and `stream_end` already carries the line and byte totals.
+        guard !Self.localOnlyStages.contains(stage) else { return }
         ClientDiagnosticsReporter.shared.record(stage: stage, detail: detail, sessionId: sessionId)
     }
+
+    private static let localOnlyStages: Set<String> = ["stream_changed", "stream_preview_applied"]
 }

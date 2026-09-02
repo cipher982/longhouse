@@ -404,7 +404,13 @@ extension APISessionProjectionResponse {
             total: total,
             pageOffset: pageOffset ?? 0,
             branchMode: branchMode ?? "head",
-            abandonedEvents: abandonedEvents ?? 0
+            abandonedEvents: abandonedEvents ?? 0,
+            // Storage-v2 pages by cursor, not offset. Dropping these here left
+            // every "older page" request cursor-less, so the phone fetched the
+            // latest window again and history never loaded.
+            generationId: generationId,
+            nextCursor: nextCursor,
+            hasMore: hasMore
         )
     }
 }

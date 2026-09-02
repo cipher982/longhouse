@@ -83,12 +83,27 @@ final class ActivityPulseStore: ObservableObject {
         return .state
     }
 
-    nonisolated static func classify(_ change: SessionWorkspaceStream.WorkspaceChanged) -> ActivityPulse.Kind {
-        guard let preview = change.transcript_preview else { return .state }
-        return classify(
-            toolName: preview.tool_name,
-            toolCallState: preview.tool_call_state,
-            isProvisional: preview.is_provisional
-        )
+    /// A frame without a preview still says what woke it. Durable ingest is
+    /// how a Claude turn shows its tool boundaries (it never streams text), so
+    /// it draws as a result bar; a bare runtime wake is a state tick; a read
+    /// or title update is bookkeeping and draws nothing.
+    nonisolated static func classify(_ change: SessionWorkspaceStream.WorkspaceChanged) -> ActivityPulse.Kind? {
+        if let preview = change.transcript_preview {
+            return classify(
+                toolName: preview.tool_name,
+                toolCallState: preview.tool_call_state,
+                isProvisional: preview.is_provisional
+            )
+        }
+        return classify(changeKind: change.change_kind)
+    }
+
+    nonisolated static func classify(changeKind: String?) -> ActivityPulse.Kind? {
+        switch changeKind {
+        case "ingest": return .toolResult
+        case "transcript_preview": return .textDelta
+        case "read_update", "title_update": return nil
+        default: return .state
+        }
     }
 }

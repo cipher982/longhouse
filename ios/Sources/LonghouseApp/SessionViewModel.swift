@@ -96,6 +96,11 @@ final class SessionViewModel: ObservableObject {
     private var prefetchInFlightToken: Int?
     private var nextPrefetchToken = 0
     private var isLoadingOlder = false
+    /// The loaded count at which the last autofill page added nothing. Stops
+    /// a server that answers "older" with the same window from being asked
+    /// again on every refresh; any real change to the loaded count re-arms it.
+    private var autofillStalledAtLoadedCount: Int?
+    private var autofillTask: Task<Void, Never>?
     private var openWaterfall: SessionOpenWaterfall?
     private let apiFactory: (String) -> SessionWorkspaceClient?
     private let streamFactory: (URL, String, Int?, String?) -> SessionWorkspaceStreamSource
@@ -156,6 +161,9 @@ final class SessionViewModel: ObservableObject {
             lastWorkspaceProjectionItems = []
             loadedProjectionItemCount = 0
             totalProjectionItemCount = 0
+            autofillStalledAtLoadedCount = nil
+            autofillTask?.cancel()
+            autofillTask = nil
             tailSnapshotEventId = nil
             tailNextCursor = nil
             prefetchedOlderTail = nil
@@ -247,6 +255,8 @@ final class SessionViewModel: ObservableObject {
         pollTask = nil
         prefetchTask?.cancel()
         prefetchTask = nil
+        autofillTask?.cancel()
+        autofillTask = nil
         realtimeRefreshRetryTask?.cancel()
         realtimeRefreshRetryTask = nil
         realtimeRefreshFailureCount = 0
@@ -761,7 +771,9 @@ final class SessionViewModel: ObservableObject {
         case .heartbeat:
             break
         case .changed(let change):
-            activity.record(ActivityPulseStore.classify(change))
+            if let kind = ActivityPulseStore.classify(change) {
+                activity.record(kind)
+            }
             // Push wake -> refetch the compact tail and emit render beacon.
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
             let clockSkewMs = Int(clamping: await stream?.clockSkewMs() ?? 0)
@@ -878,34 +890,56 @@ final class SessionViewModel: ObservableObject {
     }
 
     func loadOlder(sessionId: String, appState: AppState) async {
-        guard activeSessionId == sessionId else { return }
-        guard loadedProjectionItemCount < totalProjectionItemCount else { return }
-        guard !isLoadingOlder else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
+        await loadOlder(api: api, sessionId: sessionId)
+    }
+
+    /// Fewer rendered rows than this after a tail refresh means the 50-item
+    /// window collapsed into a handful of grouped tool rows and the transcript
+    /// would sit in the top third of the screen over a blank band. Pull the
+    /// next older page until the viewport has something to show.
+    static let minimumFilledRows = 8
+
+    /// Returns how many projection items the older page added; zero when
+    /// nothing was fetched, nothing was new, or the request failed.
+    @discardableResult
+    private func loadOlder(api: SessionWorkspaceClient, sessionId: String) async -> Int {
+        guard activeSessionId == sessionId else { return 0 }
+        guard loadedProjectionItemCount < totalProjectionItemCount else { return 0 }
+        guard !isLoadingOlder else { return 0 }
 
         if let prefetchedOlderTail,
            prefetchedOlderOffset == loadedProjectionItemCount,
            prefetchedOlderSnapshotEventId == tailSnapshotEventId {
-            applyOlderTail(prefetchedOlderTail)
+            let added = applyOlderTail(prefetchedOlderTail)
             self.prefetchedOlderTail = nil
             self.prefetchedOlderOffset = nil
             self.prefetchedOlderSnapshotEventId = nil
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
-            return
+            return added
         }
 
         isLoadingOlder = true
         defer { isLoadingOlder = false }
         do {
+            let before = loadedProjectionItemCount
             let tail = try await fetchOlderTail(api: api, sessionId: sessionId, offset: loadedProjectionItemCount)
-            guard activeSessionId == sessionId else { return }
-            applyOlderTail(tail)
+            guard activeSessionId == sessionId else { return 0 }
+            let added = applyOlderTail(tail)
+            openWaterfall?.mark(
+                "older_applied",
+                "page_items=\(tail.projection.items.count) added=\(added) loaded=\(before)->\(loadedProjectionItemCount) total=\(totalProjectionItemCount) cursor=\(tail.projection.nextCursor != nil)"
+            )
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            return added
         } catch let LonghouseAPIError.structured(_, code, _) where code == "projection_drift" {
+            openWaterfall?.mark("older_drift")
             try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
         } catch {
             // Older history is opportunistic; keep the visible tail stable.
+            openWaterfall?.mark("older_failed", "error=\(error)")
         }
+        return 0
     }
 
     private func refreshTail(api: SessionWorkspaceClient, sessionId: String, allowFailure: Bool = false) async throws {
@@ -1010,6 +1044,31 @@ final class SessionViewModel: ObservableObject {
             )
             saveCurrentCache()
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            // Only a full window that grouped down to a few rows qualifies; a
+            // short session is short because it has no more history.
+            if mergedEvents.count >= initialTailLimit,
+               builtItems.count < Self.minimumFilledRows,
+               loadedProjectionItemCount < totalProjectionItemCount,
+               autofillStalledAtLoadedCount != loadedProjectionItemCount,
+               !isLoadingOlder {
+                openWaterfall?.mark(
+                    "autofill_older",
+                    "rows=\(builtItems.count) loaded=\(loadedProjectionItemCount) total=\(totalProjectionItemCount)"
+                )
+                // Detached on purpose: the refresh must not wait on history.
+                // The speculative prefetch is usually already on its way, so
+                // let it land and use that page rather than racing it.
+                let stalledAt = loadedProjectionItemCount
+                let prefetch = prefetchTask
+                autofillTask?.cancel()
+                autofillTask = Task { [weak self] in
+                    if let prefetch { await prefetch.value }
+                    guard let self, !Task.isCancelled, self.activeSessionId == sessionId else { return }
+                    if await self.loadOlder(api: api, sessionId: sessionId) == 0 {
+                        self.autofillStalledAtLoadedCount = stalledAt
+                    }
+                }
+            }
         } catch {
             openWaterfall?.mark("request_failed", "error=\(error)")
             throw error
@@ -1138,7 +1197,9 @@ final class SessionViewModel: ObservableObject {
         )
     }
 
-    private func applyOlderTail(_ tail: SessionMobileTailResponse) {
+    /// Returns how many projection items the page actually added.
+    @discardableResult
+    private func applyOlderTail(_ tail: SessionMobileTailResponse) -> Int {
         totalProjectionItemCount = tail.projection.total
         tailNextCursor = tail.projection.nextCursor
         lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint ?? lastWorkspaceRevisionFingerprint
@@ -1167,6 +1228,7 @@ final class SessionViewModel: ObservableObject {
             reconcileSubmittedInputs(with: lastWorkspaceEvents)
             saveCurrentCache()
         }
+        return olderProjectionItems.count
     }
 
     private func projectionItemsWithTranscriptPreview(

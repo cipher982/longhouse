@@ -19,6 +19,16 @@ struct ActivityPulseStoreTests {
     }
 
     @Test
+    func framesWithoutPreviewClassifyByWhatWokeTheServer() {
+        #expect(ActivityPulseStore.classify(changeKind: "ingest") == .toolResult)
+        #expect(ActivityPulseStore.classify(changeKind: "transcript_preview") == .textDelta)
+        #expect(ActivityPulseStore.classify(changeKind: "runtime") == .state)
+        #expect(ActivityPulseStore.classify(changeKind: nil) == .state)
+        #expect(ActivityPulseStore.classify(changeKind: "read_update") == nil)
+        #expect(ActivityPulseStore.classify(changeKind: "title_update") == nil)
+    }
+
+    @Test
     func pruneKeepsOnlyTheVisibleWindow() {
         let store = ActivityPulseStore()
         let now = Date()

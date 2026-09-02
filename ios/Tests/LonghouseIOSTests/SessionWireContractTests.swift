@@ -55,4 +55,16 @@ struct SessionWireContractTests {
         #expect(tail.snapshotEventId == "01J9ZQ8N2K7F3W")
         #expect(tail.workspaceRevision?.latestEventId == "01J9ZQ8N2K7F3W")
     }
+
+    @Test
+    func mobileTailKeepsTheOlderPageCursor() throws {
+        // Storage-v2 pages by cursor. The adapter used to drop it, so every
+        // "older page" request went out cursor-less and fetched the latest
+        // window again; history never loaded on the phone.
+        let tail = try loadManagedHelmTail()
+
+        #expect(tail.projection.nextCursor == "TEhDMgEB-fixture-older-page")
+        #expect(tail.projection.generationId == "fixture-generation")
+        #expect(tail.projection.hasMore == true)
+    }
 }
