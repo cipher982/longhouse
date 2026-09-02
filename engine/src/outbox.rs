@@ -1440,6 +1440,40 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_outbox_persists_antigravity_managed_binding_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let path = dir.path().join("prs.ANTIGRAVITY.json");
+        let payload = serde_json::json!({
+            "session_id": "antigravity-session",
+            "state": "idle",
+            "provider": "antigravity",
+            "control_path": "managed",
+            "transcript_path": transcript.path(),
+        });
+        fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+
+        let result = collect_outbox_with_local_state_result(dir.path(), Some(db.path()));
+
+        assert_eq!(result.posts.len(), 1);
+        let conn = crate::state::db::open_db(Some(db.path())).unwrap();
+        let row: (String, String, String) = conn
+            .query_row(
+                "SELECT path, session_id, provider FROM session_binding",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            PathBuf::from(row.0),
+            fs::canonicalize(transcript.path()).unwrap()
+        );
+        assert_eq!(row.1, "antigravity-session");
+        assert_eq!(row.2, "antigravity");
+    }
+
+    #[test]
     fn test_empty_outbox_does_not_open_local_phase_db() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("engine.db");

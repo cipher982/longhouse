@@ -35,6 +35,7 @@ mod error_tracker;
 mod fault_injection;
 mod flight;
 mod heartbeat;
+mod hook_outbox;
 mod machine_presence;
 mod managed_antigravity_scan;
 mod managed_bridge_scan;
@@ -59,6 +60,7 @@ mod opencode_control;
 mod opencode_db;
 mod opencode_run;
 mod outbox;
+mod permission_gate;
 mod pi_print;
 mod pipeline;
 mod process_group;
@@ -595,9 +597,9 @@ enum Commands {
 
     /// Bind a transcript path to a managed Longhouse session ID.
     ///
-    /// Used by hooks and launchers to tell the daemon which session ID to use
-    /// when shipping a managed-local transcript. Must be called BEFORE the
-    /// transcript has new content to ship.
+    /// Used by launchers and operator tools to tell the daemon which session
+    /// ID to use when shipping a managed-local transcript. Must be called
+    /// BEFORE the transcript has new content to ship.
     Bind {
         /// Canonical absolute path to the transcript file
         #[arg(long)]

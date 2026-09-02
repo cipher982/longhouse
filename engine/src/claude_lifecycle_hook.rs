@@ -96,7 +96,7 @@ fn run_inner() -> anyhow::Result<()> {
             payload["provider_pid"] = json!(provider_pid);
         }
     }
-    enqueue_presence(&longhouse_home()?.join("agent/outbox"), &payload)?;
+    crate::hook_outbox::enqueue_presence(&longhouse_home()?, &payload)?;
     if event == "SessionStart" && managed_session_id.is_some() && coordination_bootstrap_enabled() {
         println!(
             "{}",
@@ -190,15 +190,6 @@ fn longhouse_home() -> anyhow::Result<PathBuf> {
         return Ok(PathBuf::from(home));
     }
     Ok(PathBuf::from(std::env::var("HOME")?).join(".longhouse"))
-}
-
-fn enqueue_presence(dir: &std::path::Path, payload: &Value) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let temporary = dir.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
-    let ready = dir.join(format!("prs.{}.json", uuid::Uuid::new_v4()));
-    std::fs::write(&temporary, serde_json::to_vec(payload)?)?;
-    std::fs::rename(temporary, ready)?;
-    Ok(())
 }
 
 fn coordination_bootstrap_enabled() -> bool {

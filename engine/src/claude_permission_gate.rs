@@ -4,13 +4,11 @@
 //! malformed response produces a Claude `deny`, never an implicit allow.
 
 use std::io::Read;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 pub fn run() -> anyhow::Result<()> {
     if !enabled() {
@@ -48,21 +46,26 @@ pub fn run() -> anyhow::Result<()> {
     let (Some(session_id), Some(tool_use_id)) = (session_id, tool_use_id) else {
         return Ok(());
     };
-    let decision = permission_decision(
+    let decision = crate::permission_gate::remote_decision(
         base_url.trim_end_matches('/'),
         &std::env::var("LONGHOUSE_HOOK_TOKEN").unwrap_or_default(),
         &session_id,
         &tool_use_id,
         &tool_name,
         tool_input,
+        None,
         timeout_from_env(),
     );
-    emit(decision.unwrap_or_else(|| {
-        (
-            "deny".into(),
-            "Longhouse permission gate could not reach a decision".into(),
-        )
-    }));
+    emit(
+        decision
+            .map(|decision| (decision.decision, decision.reason.unwrap_or_default()))
+            .unwrap_or_else(|| {
+                (
+                    "deny".into(),
+                    "Longhouse permission gate could not reach a decision".into(),
+                )
+            }),
+    );
     Ok(())
 }
 
@@ -99,58 +102,6 @@ fn timeout_from_env() -> Duration {
         Duration::ZERO
     } else {
         Duration::from_secs_f64(seconds).min(DEFAULT_TIMEOUT)
-    }
-}
-
-fn permission_decision(
-    base_url: &str,
-    token: &str,
-    session_id: &str,
-    tool_use_id: &str,
-    tool_name: &str,
-    tool_input: Value,
-    timeout: Duration,
-) -> Option<(String, String)> {
-    let runtime = tokio::runtime::Runtime::new().ok()?;
-    runtime.block_on(async {
-        let client = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().ok()?;
-        let mut register = client
-            .post(format!("{base_url}/api/agents/permission-requests"))
-            .json(&json!({"session_id": session_id, "tool_use_id": tool_use_id, "tool_name": tool_name, "tool_input": tool_input}));
-        if !token.trim().is_empty() {
-            register = register.header("X-Agents-Token", token.trim());
-        }
-        let ack: Value = register.send().await.ok()?.error_for_status().ok()?.json().await.ok()?;
-        let pause_request_id = ack.get("pause_request_id")?.as_str()?.trim();
-        if pause_request_id.is_empty() { return None; }
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            let mut poll = client.get(format!("{base_url}/api/agents/permission-decision"))
-                .query(&[("session_id", session_id), ("tool_use_id", tool_use_id), ("pause_request_id", pause_request_id)]);
-            if !token.trim().is_empty() {
-                poll = poll.header("X-Agents-Token", token.trim());
-            }
-            let result: Value = poll.send().await.ok()?.error_for_status().ok()?.json().await.ok()?;
-            if result.get("resolved").is_some_and(json_truthy) {
-                let decision = result.get("decision").and_then(Value::as_str)?.to_ascii_lowercase();
-                if !matches!(decision.as_str(), "allow" | "deny" | "ask") { return None; }
-                let reason = result.get("reason").and_then(Value::as_str).filter(|value| !value.is_empty()).map(str::to_owned).unwrap_or_else(|| format!("Longhouse {decision}"));
-                return Some((decision, reason));
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-        None
-    })
-}
-
-fn json_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
     }
 }
 

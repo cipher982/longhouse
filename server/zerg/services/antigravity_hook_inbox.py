@@ -32,16 +32,12 @@ class _AntigravityLaunchError(Exception):
 
 _ANTIGRAVITY_HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse Antigravity hook - local presence outbox + managed transcript binding.
+# Longhouse Antigravity hook - local presence/inbox boundary.
 INPUT=$(/bin/cat)
 EVENT="${1:-}"
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-}"
 if [ -z "$LONGHOUSE_HOME" ]; then
   LONGHOUSE_HOME=__LONGHOUSE_HOME__
-fi
-ENGINE="${LONGHOUSE_ENGINE:-}"
-if [ -z "$ENGINE" ]; then
-  ENGINE=__ENGINE_PATH__
 fi
 PYTHON="${LONGHOUSE_HOOK_PYTHON:-python3}"
 
@@ -49,30 +45,20 @@ emit_default_response() {
   case "$EVENT" in
     PreInvocation) printf '{"injectSteps":[]}\\n' ;;
     PostInvocation) printf '{"injectSteps":[],"terminationBehavior":""}\\n' ;;
-    Stop) printf '{"decision":"","reason":""}\\n' ;;
+    Stop) printf '{"decision":"allow","reason":""}\\n' ;;
     *) printf '{}\\n' ;;
   esac
 }
 
-PROBE_ERR=$("$PYTHON" -c 'import json' 2>&1)
-if [ $? -ne 0 ]; then
-  printf 'longhouse-antigravity-hook: python probe failed: %s
-' "$PROBE_ERR" >&2
-  emit_default_response
-  exit 0
-fi
-
 LONGHOUSE_HOOK_INPUT="$INPUT" \\
 LONGHOUSE_HOOK_EVENT="$EVENT" \\
 LONGHOUSE_HOOK_HOME="$LONGHOUSE_HOME" \\
-LONGHOUSE_HOOK_ENGINE="$ENGINE" \\
 "$PYTHON" - <<'PY'
 from __future__ import annotations
 
 import json
 import os
 import socket
-import subprocess
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -137,6 +123,10 @@ def write_private_json(path: Path, payload: dict) -> None:
 def write_presence_outbox(longhouse_home: str, payload: dict) -> None:
     outbox = Path(longhouse_home) / "agent" / "outbox"
     outbox.mkdir(parents=True, exist_ok=True)
+    try:
+        outbox.chmod(0o700)
+    except OSError:
+        return
     fd, tmp_name = tempfile.mkstemp(prefix=".tmp.", dir=str(outbox))
     tmp_path = Path(tmp_name)
     try:
@@ -331,32 +321,6 @@ elif event == "Stop":
 
 if state and session_id:
     hook_observed_at = now_iso()
-    # Bind before publishing state. The engine can discover a new Antigravity
-    # transcript as soon as the state file appears; publishing first races an
-    # unmanaged storage envelope ahead of the durable managed-session binding.
-    if managed_session_id and transcript:
-        bind_env = os.environ.copy()
-        if longhouse_home:
-            bind_env["LONGHOUSE_HOME"] = longhouse_home
-        bind_args = [
-            os.environ.get("LONGHOUSE_HOOK_ENGINE") or "longhouse-engine",
-            "bind",
-            "--path",
-            transcript,
-            "--session-id",
-            managed_session_id,
-            "--provider",
-            "antigravity",
-        ]
-        if longhouse_home:
-            bind_args.extend(["--db", str(Path(longhouse_home) / "agent" / "longhouse-shipper.db")])
-        subprocess.run(
-            bind_args,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=bind_env,
-        )
     write_presence_outbox(
         longhouse_home,
         {
@@ -367,6 +331,7 @@ if state and session_id:
             "provider": "antigravity",
             "transcript_path": transcript,
             "step_index": step_index,
+            "control_path": "managed" if managed_session_id else "unmanaged",
         },
     )
     write_session_state(
@@ -449,10 +414,10 @@ if session_id and claimed_receipts:
 PY
 HOOK_RC=$?
 if [ "$HOOK_RC" -ne 0 ]; then
-  printf 'longhouse-antigravity-hook: python hook failed with exit %s
+  printf 'longhouse-antigravity-hook: local hook failed with exit %s; continuing provider execution
 ' "$HOOK_RC" >&2
   emit_default_response
-  exit "$HOOK_RC"
+  exit 0
 fi
 exit 0
 """
@@ -481,15 +446,6 @@ def _antigravity_global_hooks_path() -> Path:
 
 def _antigravity_installed_plugin_hooks_path() -> Path:
     return Path.home() / ".gemini" / "config" / "plugins" / _ANTIGRAVITY_PLUGIN_NAME / "hooks.json"
-
-
-def _default_engine_path() -> str:
-    try:
-        from zerg.services.shipper.service import get_engine_executable
-
-        return get_engine_executable()
-    except RuntimeError:
-        return "longhouse-engine"
 
 
 def _ensure_private_dir(path: Path) -> None:
@@ -540,9 +496,26 @@ def _write_text_if_changed(path: Path, content: str, *, mode: int | None = None)
                 return
         except OSError:
             pass
-    path.write_text(content, encoding="utf-8")
-    if mode is not None:
-        path.chmod(mode)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is None:
+            try:
+                mode = path.stat().st_mode & 0o777
+            except OSError:
+                mode = 0o600
+        tmp_path.chmod(mode)
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def _remove_file_if_exists(path: Path) -> None:
@@ -670,7 +643,6 @@ def _ensure_antigravity_runtime_plugin(
     *,
     config_dir: Path | None = None,
     antigravity_cli_root: Path | None = None,
-    engine_path: str | None = None,
     antigravity_bin: str | None = None,
     global_hooks_path: Path | None = None,
 ) -> Path:
@@ -681,9 +653,6 @@ def _ensure_antigravity_runtime_plugin(
     hook_content = _ANTIGRAVITY_HOOK_SCRIPT.replace(
         "__LONGHOUSE_HOME__",
         shlex.quote(str(longhouse_home)),
-    ).replace(
-        "__ENGINE_PATH__",
-        shlex.quote(engine_path or _default_engine_path()),
     )
     _write_text_if_changed(
         plugin_root / "plugin.json",

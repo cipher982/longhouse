@@ -1,8 +1,8 @@
 """Subprocess tests for the real PreToolUse permission_gate.py hook.
 
-The hook is safety-critical: it can gate a real tool execution, so it MUST fail
-open (emit no decision, exit 0) on timeout or any error, and only emit allow/deny
-when Longhouse explicitly resolves the request.
+The hook is safety-critical: it can gate a real tool execution, so once engaged
+it MUST fail closed (emit deny, exit 0) on timeout or any error, and only emit
+allow/deny when Longhouse explicitly resolves the request.
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ class _StubLonghouse:
         self._ack_pause_request_id = ack_pause_request_id
         self.requests_seen: list[dict] = []
         self.decision_polls = 0
+        self.expirations = 0
         self.last_decision_path = ""
         handler = self._build_handler()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -82,6 +83,9 @@ class _StubLonghouse:
                     if outer._ack_pause_request_id is not None:
                         ack["pause_request_id"] = outer._ack_pause_request_id
                     self._reply(200, ack)
+                elif self.path.startswith("/api/agents/permission-requests/") and self.path.endswith("/expire"):
+                    outer.expirations += 1
+                    self._reply(200, {"resolved": True, "decision": "deny"})
                 else:
                     self._reply(404, {})
 
@@ -176,6 +180,7 @@ def test_hook_engaged_timeout_defaults_to_deny():
     assert result.returncode == 0, result.stderr
     assert _parse_decision(result.stdout) == "deny"
     assert stub.decision_polls >= 1  # it really polled before giving up
+    assert stub.expirations == 1
 
 
 def test_hook_engaged_unreachable_defaults_to_deny():

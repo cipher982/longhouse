@@ -22,7 +22,8 @@ def _pre_tool_use_commands(claude_dir: Path) -> list[str]:
     return cmds
 
 
-def test_install_writes_permission_gate_and_registers_pretooluse(tmp_path):
+def test_install_writes_permission_gate_and_registers_pretooluse(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     claude_dir = tmp_path / ".claude"
     install_hooks("http://localhost:8080", token="zdt_x", claude_dir=str(claude_dir), engine_path=TRUE_BIN)
 
@@ -36,7 +37,8 @@ def test_install_writes_permission_gate_and_registers_pretooluse(tmp_path):
     assert any("longhouse-permission-gate.py" in c for c in cmds), "gate registered on PreToolUse"
 
 
-def test_install_is_idempotent_keeps_both_pretooluse_hooks(tmp_path):
+def test_install_is_idempotent_keeps_both_pretooluse_hooks(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     claude_dir = tmp_path / ".claude"
     install_hooks("http://localhost:8080", token="zdt_x", claude_dir=str(claude_dir), engine_path=TRUE_BIN)
     install_hooks("http://localhost:8080", token="zdt_x", claude_dir=str(claude_dir), engine_path=TRUE_BIN)

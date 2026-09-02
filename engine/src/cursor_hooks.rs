@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use uuid::Uuid;
 
 const EVENTS: &[&str] = &[
@@ -226,10 +226,8 @@ pub fn lifecycle(event: &str) {
         } else {
             "idle"
         };
-        let _ = write(
-            home()
-                .join("agent/outbox")
-                .join(format!("prs.{}.json", Uuid::new_v4())),
+        let _ = crate::hook_outbox::enqueue_presence(
+            &home(),
             &json!({"session_id":session_id,"state":state,"tool_name":payload.get("tool_name"),"cwd":payload.get("cwd"),"provider":"cursor","control_path":"managed"}),
         );
     }
@@ -458,101 +456,22 @@ pub fn permission(event: &str) -> anyhow::Result<()> {
             .cloned()
             .unwrap_or_else(|| json!({}))
     };
-    let outcome = remote_decision(
+    let outcome = crate::permission_gate::remote_decision(
         base.trim_end_matches('/'),
         token.trim(),
         &session_id,
         &request_id,
         tool_name,
         tool_input,
+        Some("cursor"),
         timeout,
     );
-    match outcome.as_deref() {
+    match outcome.as_ref().map(|decision| decision.decision.as_str()) {
         Some("allow") => println!("{}", json!({"permission":"allow"})),
         Some("deny") => println!("{}", json!({"permission":"deny"})),
         _ => deny("No human approval was received before the Longhouse deadline; command blocked"),
     }
     Ok(())
-}
-
-fn remote_decision(
-    base: &str,
-    token: &str,
-    session_id: &str,
-    request_id: &str,
-    tool_name: &str,
-    tool_input: Value,
-    timeout: Duration,
-) -> Option<String> {
-    let runtime = tokio::runtime::Runtime::new().ok()?;
-    runtime.block_on(async {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .ok()?;
-        let ack: Value = client
-            .post(format!("{base}/api/agents/permission-requests"))
-            .header("X-Agents-Token", token)
-            .header("User-Agent", "Longhouse-Cursor-Permission-Hook/1")
-            .json(&json!({
-                "session_id": session_id,
-                "tool_use_id": request_id,
-                "tool_name": tool_name,
-                "tool_input": tool_input,
-                "provider": "cursor",
-                "wait_timeout_seconds": timeout.as_secs_f64(),
-            }))
-            .send()
-            .await
-            .ok()?
-            .error_for_status()
-            .ok()?
-            .json()
-            .await
-            .ok()?;
-        let pause_id = ack.get("pause_request_id")?.as_str()?.trim();
-        if pause_id.is_empty() {
-            return None;
-        }
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            let result: Value = client
-                .get(format!("{base}/api/agents/permission-decision"))
-                .header("X-Agents-Token", token)
-                .query(&[
-                    ("session_id", session_id),
-                    ("tool_use_id", request_id),
-                    ("pause_request_id", pause_id),
-                    ("provider", "cursor"),
-                ])
-                .send()
-                .await
-                .ok()?
-                .error_for_status()
-                .ok()?
-                .json()
-                .await
-                .ok()?;
-            if result.get("resolved").is_some_and(|value| value == true) {
-                let decision = result.get("decision")?.as_str()?.to_ascii_lowercase();
-                return matches!(decision.as_str(), "allow" | "deny").then_some(decision);
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-        let _ = client
-            .post(format!(
-                "{base}/api/agents/permission-requests/{pause_id}/expire"
-            ))
-            .header("X-Agents-Token", token)
-            .json(&json!({
-                "session_id": session_id,
-                "reason": "Approval deadline expired before a human decision",
-            }))
-            .timeout(Duration::from_secs(2))
-            .send()
-            .await;
-        None
-    })
 }
 
 #[cfg(test)]

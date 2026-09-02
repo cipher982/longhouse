@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import stat
+import tempfile
 from pathlib import Path
 
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
@@ -103,6 +104,7 @@ write_presence_outbox() {
   payload="$1"
   OUTBOX="$LONGHOUSE_HOME/agent/outbox"
   [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX" || return 1
+  chmod 700 "$OUTBOX" 2>/dev/null || return 1
   TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX") || return 1
   printf '%s\n' "$payload" > "$TMPFILE" || { rm -f "$TMPFILE"; return 1; }
   mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
@@ -239,6 +241,7 @@ write_presence_outbox() {
   payload="$1"
   OUTBOX="$LONGHOUSE_HOME/agent/outbox"
   [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX" || return 1
+  chmod 700 "$OUTBOX" 2>/dev/null || return 1
   TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX") || return 1
   printf '%s\n' "$payload" > "$TMPFILE" || { rm -f "$TMPFILE"; return 1; }
   mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
@@ -309,6 +312,7 @@ turn never hangs.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -327,9 +331,19 @@ def _not_engaged() -> None:
     sys.exit(0)
 
 
-def _fail_decision() -> None:
+def _fail_decision(
+    base_url: str = "",
+    pause_request_id: str = "",
+    session_id: str = "",
+    token: str = "",
+) -> None:
     # Engaged but could not reach a decision -> deny. An unreachable control plane
     # must never silently allow a tool. (No configurable fail mode: one safe path.)
+    if base_url and pause_request_id:
+        try:
+            _expire_request(base_url, pause_request_id, session_id, token)
+        except (urllib.error.URLError, OSError, ValueError):
+            pass
     _emit_decision("deny", "Longhouse permission gate could not reach a decision")
 
 
@@ -350,27 +364,39 @@ def _enabled() -> bool:
     return raw not in {"0", "false", "no", "off", ""}
 
 
-def _post_json(url, body, token):
+def _post_json(url, body, token, timeout_s):
     data = json.dumps(body).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
         headers["X-Agents-Token"] = token
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
         if not (200 <= resp.status < 300):
             return None
         return json.loads(resp.read().decode("utf-8") or "{}")
 
 
-def _get_decision(url, token):
+def _get_decision(url, token, timeout_s):
     headers = {}
     if token:
         headers["X-Agents-Token"] = token
     req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
         if not (200 <= resp.status < 300):
             return None
         return json.loads(resp.read().decode("utf-8") or "{}")
+
+
+def _expire_request(base_url, pause_request_id, session_id, token):
+    _post_json(
+        base_url + "/api/agents/permission-requests/" + pause_request_id + "/expire",
+        {
+            "session_id": session_id,
+            "reason": "Approval deadline expired before a human decision",
+        },
+        token,
+        2.0,
+    )
 
 
 def main() -> None:
@@ -399,14 +425,24 @@ def main() -> None:
     except (TypeError, ValueError):
         timeout_s = _DEFAULT_TIMEOUT_S
     timeout_s = max(0.0, min(timeout_s, _MAX_TIMEOUT_S))
+    if not math.isfinite(timeout_s):
+        timeout_s = _DEFAULT_TIMEOUT_S
     global _ENGAGED
     _ENGAGED = True
     deadline = time.monotonic() + timeout_s
+
+    def remaining() -> float:
+        return min(_REQUEST_TIMEOUT_S, max(0.0, deadline - time.monotonic()))
+
+    request_timeout = remaining()
+    if request_timeout <= 0:
+        _fail_decision()
     try:
         ack = _post_json(
             base_url + "/api/agents/permission-requests",
             {"session_id": session_id, "tool_use_id": tool_use_id, "tool_name": tool_name, "tool_input": tool_input},
             token,
+            request_timeout,
         )
     except (urllib.error.URLError, OSError, ValueError):
         _fail_decision()
@@ -421,19 +457,19 @@ def main() -> None:
     decision_url = base_url + "/api/agents/permission-decision?" + urllib.parse.urlencode(
         {"session_id": session_id, "tool_use_id": tool_use_id, "pause_request_id": pause_request_id}
     )
-    while time.monotonic() < deadline:
+    while (request_timeout := remaining()) > 0:
         try:
-            result = _get_decision(decision_url, token)
+            result = _get_decision(decision_url, token, request_timeout)
         except (urllib.error.URLError, OSError, ValueError):
-            _fail_decision()
+            _fail_decision(base_url, pause_request_id, session_id, token)
             return
         if isinstance(result, dict) and result.get("resolved"):
             decision = str(result.get("decision") or "").strip().lower()
             if decision in {"allow", "deny", "ask"}:
                 _emit_decision(decision, result.get("reason"))
-            _fail_decision()
-        time.sleep(_POLL_INTERVAL_S)
-    _fail_decision()
+            _fail_decision(base_url, pause_request_id, session_id, token)
+        time.sleep(min(_POLL_INTERVAL_S, request_timeout))
+    _fail_decision(base_url, pause_request_id, session_id, token)
 
 
 if __name__ == "__main__":
@@ -587,8 +623,7 @@ def _read_settings(settings_path: Path) -> dict:
 
 def _write_settings(settings_path: Path, data: dict) -> None:
     """Write settings dict back to settings.json with indent=2."""
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(json.dumps(data, indent=2) + "\n")
+    _write_text_if_changed(settings_path, json.dumps(data, indent=2) + "\n")
 
 
 def _shell_double_quote(value: str) -> str:
@@ -666,16 +701,22 @@ def install_hooks(
         _shell_double_quote(str(hindsight_root)),
     )
     hook_script = hooks_dir / "longhouse-hook.sh"
-    hook_script.write_text(hook_script_content)
-    hook_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    _write_text_if_changed(
+        hook_script,
+        hook_script_content,
+        mode=stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH,
+    )
     actions.append(f"Wrote {hook_script}")
 
     # Permission-gate hook (Python). Always installed but dormant unless the
     # launcher exports LONGHOUSE_PERMISSION_HOOK_ENABLED=1 (remote-approve mode),
     # so a bypass/autonomous session is never gated.
     permission_gate_script = hooks_dir / "longhouse-permission-gate.py"
-    permission_gate_script.write_text(PERMISSION_GATE_SCRIPT)
-    permission_gate_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    _write_text_if_changed(
+        permission_gate_script,
+        PERMISSION_GATE_SCRIPT,
+        mode=stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH,
+    )
     actions.append(f"Wrote {permission_gate_script}")
 
     # Remove deprecated standalone hook scripts (superseded by longhouse-hook.sh).
@@ -926,13 +967,35 @@ def install_codex_hooks(
     return actions
 
 
-def _write_text_if_changed(path: Path, content: str) -> bool:
+def _write_text_if_changed(path: Path, content: str, *, mode: int | None = None) -> bool:
     try:
         if path.exists() and path.read_text() == content:
+            if mode is not None:
+                path.chmod(mode)
             return False
     except OSError:
         pass
-    path.write_text(content)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is None:
+            try:
+                mode = stat.S_IMODE(path.stat().st_mode)
+            except OSError:
+                mode = stat.S_IRUSR | stat.S_IWUSR
+        temporary.chmod(mode)
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
     return True
 
 
