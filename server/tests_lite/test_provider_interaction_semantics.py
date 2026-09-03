@@ -15,8 +15,11 @@ from zerg.services.managed_provider_contracts import all_managed_provider_contra
 from zerg.services.provider_interaction_semantics import INTERACTION_DURABLE_USER_MESSAGE
 from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL
 from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
+from zerg.services.provider_interaction_semantics import claude_task_notification_display
+from zerg.services.provider_interaction_semantics import claude_task_notification_summary
 from zerg.services.provider_interaction_semantics import interaction_context_key_parts
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_event_included
@@ -431,6 +434,50 @@ def test_claude_is_meta_image_placeholder_is_not_a_user_event() -> None:
     assert semantics["counts_as_user_message"] is False
     assert semantics["title_eligible"] is False
     assert semantic_event_included("claude", role="user", content_text=content, raw_json=raw) is False
+
+
+def test_claude_task_notification_is_a_visible_status_not_a_user_message() -> None:
+    content = """<task-notification>
+<task-id>task123</task-id>
+<tool-use-id>toolu123</tool-use-id>
+<output-file>/tmp/task.output</output-file>
+<status>completed</status>
+<summary>Background command \"Run the checks\" completed (exit code 0)</summary>
+</task-notification>"""
+    raw = {
+        "type": "user",
+        "origin": {"kind": "task-notification"},
+        "message": {"role": "user", "content": content},
+    }
+
+    assert claude_task_notification_display(raw) == 'Background command "Run the checks" completed (exit code 0)'
+    assert claude_task_notification_display(json.dumps(raw)) == 'Background command "Run the checks" completed (exit code 0)'
+    assert claude_task_notification_summary(content) == 'Background command "Run the checks" completed (exit code 0)'
+
+    semantics = classify_provider_interaction(
+        "claude",
+        role="user",
+        content_text=content,
+        raw_json=raw,
+    )
+
+    assert semantics["interaction_kind"] == INTERACTION_PROVIDER_NOTIFICATION
+    assert semantics["counts_as_user_message"] is False
+    assert semantics["title_eligible"] is False
+    assert semantics["starts_model_turn"] is False
+    assert semantics["changes_provider_state"] is False
+    assert semantic_event_included("claude", role="user", content_text=content, raw_json=raw) is False
+
+
+def test_claude_task_notification_lookalike_without_origin_stays_user_text() -> None:
+    content = "<task-notification><summary>Background command completed</summary></task-notification>"
+    raw = {"type": "user", "message": {"role": "user", "content": content}}
+
+    semantics = classify_provider_interaction("claude", role="user", content_text=content, raw_json=raw)
+
+    assert semantics["interaction_kind"] == INTERACTION_DURABLE_USER_MESSAGE
+    assert semantics["counts_as_user_message"] is True
+    assert semantic_event_included("claude", role="user", content_text=content, raw_json=raw) is True
 
 
 def test_captured_claude_effort_jsonl_classifies_real_command_rows() -> None:

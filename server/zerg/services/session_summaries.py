@@ -27,6 +27,7 @@ from zerg.models.agents import SessionThread
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
+from zerg.services.provider_interaction_semantics import semantic_event_included
 from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.raw_json_compression import decode_raw_json
@@ -142,6 +143,16 @@ def events_to_dicts(events: list[AgentEvent], *, provider: str | None = None) ->
             title_eligible=(getattr(event, "title_eligible", None) if raw_json is None else None),
             sequence_context=interaction_sequence_context,
         )
+        if not semantic_event_included(
+            event_provider,
+            role=event.role,
+            content_text=event.content_text,
+            raw_json=raw_json,
+            interaction_kind=getattr(event, "interaction_kind", None),
+            title_eligible=(getattr(event, "title_eligible", None) if raw_json is None else None),
+            sequence_context=interaction_sequence_context,
+        ):
+            continue
         if event.role == "user" and not semantics["title_eligible"]:
             continue
         result.append(
@@ -223,6 +234,16 @@ def _load_summary_event_chunk(
             title_eligible=(getattr(row, "title_eligible", None) if raw_json is None else None),
             sequence_context=interaction_sequence_context,
         )
+        if not semantic_event_included(
+            provider,
+            role=row.role,
+            content_text=row.content_text,
+            raw_json=raw_json,
+            interaction_kind=getattr(row, "interaction_kind", None),
+            title_eligible=(getattr(row, "title_eligible", None) if raw_json is None else None),
+            sequence_context=interaction_sequence_context,
+        ):
+            continue
         if row.role == "user" and not semantics["title_eligible"]:
             continue
         events.append(

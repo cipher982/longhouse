@@ -16,6 +16,7 @@ from uuid import UUID
 
 import zstandard
 
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.services.provider_interaction_semantics import VALID_INTERACTION_KINDS
 from zerg.services.provider_interaction_semantics import semantic_event_included
 
@@ -332,11 +333,12 @@ def _aggregate(spec: RenderObjectSpec) -> dict[str, object]:
             interaction_kind=record.interaction_kind,
         )
     )
-    first_user = next((record.content_text for record in semantic_records if record.role == "user" and record.content_text), None)
+    conversation_records = tuple(record for record in semantic_records if record.interaction_kind != INTERACTION_PROVIDER_NOTIFICATION)
+    first_user = next((record.content_text for record in conversation_records if record.role == "user" and record.content_text), None)
     last_visible = next(
         (
             record.content_text or record.tool_output_text
-            for record in reversed(semantic_records)
+            for record in reversed(conversation_records)
             if record.content_text or record.tool_output_text
         ),
         None,
@@ -344,7 +346,7 @@ def _aggregate(spec: RenderObjectSpec) -> dict[str, object]:
     return {
         "first_order_key": _order_key(spec, records[0]) if records else None,
         "last_order_key": _order_key(spec, records[-1]) if records else None,
-        "user_messages": sum(record.role == "user" for record in semantic_records),
+        "user_messages": sum(record.role == "user" for record in conversation_records),
         "assistant_messages": sum(record.role == "assistant" and record.tool_name is None for record in records),
         "tool_calls": sum(record.tool_name is not None for record in records),
         "first_user_message_preview": _preview(first_user),

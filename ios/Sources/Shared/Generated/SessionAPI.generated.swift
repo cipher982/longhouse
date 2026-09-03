@@ -543,6 +543,7 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let id: JSONValue
     let role: String
     let contentText: String?
+    let interactionKind: String?
     let rawContentText: String?
     let inputOrigin: APIInputOriginResponse?
     let turnEnd: APITurnEndResponse?

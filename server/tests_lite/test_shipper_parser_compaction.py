@@ -61,6 +61,45 @@ def test_parse_session_file_emits_compaction_system_events(tmp_path):
     assert events[3].content_text == "Context microcompacted [trigger=auto pre_tokens=11975]"
 
 
+def test_parse_session_file_projects_claude_task_notification(tmp_path):
+    notification = {
+        "type": "user",
+        "uuid": "task-1",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "origin": {"kind": "task-notification"},
+        "message": {
+            "role": "user",
+            "content": (
+                "<task-notification>\n"
+                "<status>completed</status>\n"
+                "<summary>Background command finished (exit code 0)</summary>\n"
+                "</task-notification>"
+            ),
+        },
+    }
+    lookalike = {
+        "type": "user",
+        "uuid": "user-1",
+        "timestamp": "2026-01-01T00:00:02Z",
+        "message": {"role": "user", "content": "<task-notification><summary>quoted</summary></task-notification>"},
+    }
+    path = _write_jsonl(tmp_path, "task-notification-session.jsonl", [json.dumps(notification), json.dumps(lookalike)])
+
+    events = list(parse_session_file(path))
+    assert [(event.raw_type, event.role, event.content_text) for event in events] == [
+        ("claude_task_notification", "system", "Background command finished (exit code 0)"),
+        ("user", "user", "<task-notification><summary>quoted</summary></task-notification>"),
+    ]
+    assert events[0].raw_line == json.dumps(notification)
+
+    events_full, last_good_offset, _metadata = parse_session_file_full(path)
+    assert [(event.raw_type, event.role) for event in events_full] == [
+        ("claude_task_notification", "system"),
+        ("user", "user"),
+    ]
+    assert last_good_offset == path.stat().st_size
+
+
 def test_parse_session_file_full_tracks_offsets_with_compaction_events(tmp_path):
     path = _write_jsonl(
         tmp_path,

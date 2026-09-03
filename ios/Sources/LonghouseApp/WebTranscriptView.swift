@@ -358,6 +358,8 @@ struct WebTranscriptView: UIViewRepresentable {
         switch item {
         case .user(let event), .assistant(let event), .orphanTool(let event):
             turnEnd = event.turnEnd
+        case .providerNotification:
+            turnEnd = nil
         case .tool(let call, let result, _):
             turnEnd = result?.turnEnd ?? call.turnEnd
         case .activityGroup(let calls):
@@ -395,6 +397,8 @@ struct WebTranscriptView: UIViewRepresentable {
                 origin: nil,
                 mediaRefs: payloadMediaRefs(event.mediaRefs, serverURL: serverURL)
             )
+        case .providerNotification(let event):
+            return providerNotificationPayload(id: item.id, text: event.contentText ?? "")
         case .action(let action, _):
             return actionPayload(id: item.id, action: action)
         case .tool(let call, let result, _):
@@ -445,6 +449,29 @@ struct WebTranscriptView: UIViewRepresentable {
             fullBody: nil,
             collapsed: false,
             status: action.kind,
+            duration: nil,
+            input: nil,
+            output: nil,
+            calls: [],
+            origin: nil,
+            media: nil
+        )
+    }
+
+    private nonisolated static func providerNotificationPayload(
+        id: String,
+        text: String
+    ) -> WebTranscriptPayloadItem {
+        WebTranscriptPayloadItem(
+            id: id,
+            kind: "providerNotification",
+            role: nil,
+            title: nil,
+            subtitle: nil,
+            body: text,
+            fullBody: nil,
+            collapsed: false,
+            status: nil,
             duration: nil,
             input: nil,
             output: nil,
@@ -1858,6 +1885,29 @@ private extension WebTranscriptView {
       font-weight: 650;
     }
 
+    .provider-notification {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      color: var(--secondary);
+      font-size: 12px;
+      line-height: 1.4;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .provider-notification-mark {
+      color: var(--accent);
+      flex: 0 0 auto;
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    .provider-notification-body {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
     .turn-end {
       margin-top: 8px;
       color: var(--secondary);
@@ -2743,6 +2793,15 @@ private extension WebTranscriptView {
       `;
     }
 
+    function providerNotification(item) {
+      return `
+        <div class="row provider-notification" data-testid="session-provider-notification">
+          <span class="provider-notification-mark" aria-hidden="true">•</span>
+          <span class="provider-notification-body">${escapeHtml(item.body || 'Provider update')}</span>
+        </div>
+      `;
+    }
+
     function renderItem(item, index) {
       const html = renderItemBody(item, index);
       if (!html || !item.turnEnd) return html;
@@ -2763,6 +2822,7 @@ private extension WebTranscriptView {
       if (item.kind === 'message') return message(item, index);
       if (item.kind === 'submitted') return submitted(item);
       if (item.kind === 'action') return action(item);
+      if (item.kind === 'providerNotification') return providerNotification(item);
       if (item.kind === 'question') return question(item);
       if (item.kind === 'tool') return toolDetails(item);
       if (item.kind === 'activityGroup') return activityGroup(item);

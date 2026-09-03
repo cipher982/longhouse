@@ -17,6 +17,7 @@ from zerg.catalogd.client import CatalogClient
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import claude_sequence_dependent_control_candidate
 from zerg.services.provider_interaction_semantics import claude_sequence_dependent_control_content_candidate
+from zerg.services.provider_interaction_semantics import claude_task_notification_summary
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.storage_v2.raw_objects import RawObjectSpec
@@ -83,6 +84,7 @@ async def recover_render_interaction_kinds(
         ordinal: record
         for ordinal, record in enumerate(records)
         if getattr(record, "interaction_kind", None) is None
+        or (provider.strip().lower() == "claude" and claude_task_notification_summary(getattr(record, "content_text", None)) is not None)
         or (reclassify_sequence_controls and claude_sequence_dependent_control_content_candidate(getattr(record, "content_text", None)))
     }
     if stats is not None:
@@ -247,7 +249,11 @@ async def enrich_render_interaction_kinds(
             content_text=record.content_text,
             raw_json=raw_text,
         )
-        if getattr(record, "interaction_kind", None) is None or needs_claude_sequence_replay:
+        if (
+            getattr(record, "interaction_kind", None) is None
+            or claude_task_notification_summary(record.content_text) is not None
+            or needs_claude_sequence_replay
+        ):
             candidates.add(ordinal)
     if not candidates:
         return render_spec

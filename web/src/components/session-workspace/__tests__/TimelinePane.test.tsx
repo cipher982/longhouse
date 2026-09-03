@@ -44,6 +44,18 @@ const longhouseMessageItem: TimelineItem = {
   },
 };
 
+const providerNotificationItem: TimelineItem = {
+  kind: "provider_notification",
+  event: {
+    ...messageItem.event,
+    id: 4,
+    role: "system",
+    content_text: 'Background command "Run the checks" completed (exit code 0)',
+    interaction_kind: "provider_notification",
+    timestamp: "2026-03-19T16:48:00Z",
+  },
+};
+
 const mediaMessageItem: TimelineItem = {
   kind: "message",
   event: {
@@ -375,6 +387,29 @@ function makeFailedToolItem(output: string, wrapped = true): TimelineItem {
 }
 
 describe("TimelinePane", () => {
+  it("renders provider notifications as compact status rows", () => {
+    render(
+      <TimelinePane
+        items={[providerNotificationItem]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("session-provider-notification");
+    expect(row).toHaveAttribute("data-row-kind", "provider-notification");
+    expect(row).toHaveTextContent('Background command "Run the checks" completed (exit code 0)');
+    expect(row).not.toHaveTextContent("<task-notification>");
+  });
+
   it("exposes copy-independent pagination counts", () => {
     render(
       <TimelinePane

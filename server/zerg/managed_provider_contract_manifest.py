@@ -145,6 +145,7 @@ _INTERACTION_PROBE_KINDS = frozenset(
         "local_control",
         "local_control_output",
         "provider_system",
+        "provider_notification",
         "conversation_boundary",
         "unknown_user_input",
     }

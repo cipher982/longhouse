@@ -698,6 +698,8 @@ export function buildTimelineModel(
       } else {
         eventIdToSelectionKey.set(event.id, `tool:orphan:${event.id}`);
       }
+    } else if (event.interaction_kind === "provider_notification") {
+      eventIdToSelectionKey.set(event.id, `provider_notification:${event.id}`);
     } else {
       eventIdToSelectionKey.set(event.id, `message:${event.id}`);
     }
@@ -721,6 +723,10 @@ export function buildTimelineModel(
 
     const event = projectionItem.event;
     if (!event) continue;
+    if (event.interaction_kind === "provider_notification") {
+      items.push({ kind: "provider_notification", event });
+      continue;
+    }
     if (event.role === "system") continue;
     if (event.role === "tool" && absorbedResultIds.has(event.id)) continue;
 
@@ -832,6 +838,14 @@ export function buildTimelineModel(
   for (const item of groupedItems) {
     if (item.kind === "seam" || item.kind === "action") continue;
 
+    if (item.kind === "provider_notification") {
+      const key = `provider_notification:${item.event.id}`;
+      const rowId = `event-${item.event.id}`;
+      selectionMap.set(key, { kind: "provider_notification", key, rowId, event: item.event });
+      eventIdToRowId.set(item.event.id, rowId);
+      continue;
+    }
+
     if (item.kind === "message") {
       const key = `message:${item.event.id}`;
       const rowId = `event-${item.event.id}`;
@@ -903,6 +917,7 @@ export function buildTimelineModel(
 export function getPreferredSelectionKey(item: TimelineItem): string | null {
   if (item.kind === "seam") return null;
   if (item.kind === "action") return null;
+  if (item.kind === "provider_notification") return null;
   if (item.kind === "message") return `message:${item.event.id}`;
   if (item.kind === "tool") return `tool:${item.interaction.key}`;
   return `group:${item.group.key}`;
@@ -912,6 +927,7 @@ export function timelineItemContainsSelection(item: TimelineItem, selectionKey: 
   if (!selectionKey) return false;
   if (item.kind === "seam") return false;
   if (item.kind === "action") return false;
+  if (item.kind === "provider_notification") return selectionKey === `provider_notification:${item.event.id}`;
   if (item.kind === "message") return selectionKey === `message:${item.event.id}`;
   if (item.kind === "tool") return selectionKey === `tool:${item.interaction.key}`;
   if (selectionKey === `group:${item.group.key}`) return true;

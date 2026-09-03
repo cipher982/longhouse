@@ -551,6 +551,8 @@ export interface AgentEvent {
   cursor?: string | null;
   role: string;
   content_text: string | null;
+  /** Parser-owned semantic kind for provider-authored status rows. */
+  interaction_kind?: string | null;
   raw_content_text?: string | null;
   input_origin?: AgentEventInputOrigin | null;
   /** Provider turn accounting stamped on the event the turn ended on. */

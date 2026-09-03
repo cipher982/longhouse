@@ -181,6 +181,15 @@ fn golden_claude_basic() {
 }
 
 #[test]
+fn golden_claude_task_notification() {
+    let base = fixtures_dir().join("golden").join("claude");
+    run_golden_test(
+        &base.join("task_notification.jsonl"),
+        &base.join("task_notification.expected.json"),
+    );
+}
+
+#[test]
 fn claude_preserves_parent_links_for_sibling_head_projection() {
     let path = fixtures_dir()
         .join("golden")

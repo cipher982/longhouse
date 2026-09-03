@@ -193,6 +193,11 @@ pub struct ParseResult {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+struct RawOrigin {
+    kind: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct RawLine {
     r#type: Option<String>,
     /// Cursor's current agent-transcript JSONL format uses a top-level role
@@ -206,6 +211,11 @@ struct RawLine {
     uuid: Option<String>,
     #[serde(rename = "parentUuid")]
     parent_uuid: Option<String>,
+    /// Claude task notifications identify themselves outside the message body.
+    // Keep this raw so an unrelated provider shape under `origin` cannot make
+    // the whole line unparsable. The notification helper decodes only the
+    // object form it owns.
+    origin: Option<Box<RawValue>>,
     #[serde(rename = "sessionId")]
     session_id: Option<String>,
     #[serde(rename = "agentId")]
@@ -1811,6 +1821,49 @@ fn bounded_text(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
+fn claude_task_tag_value(body: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = body.find(&open)? + open.len();
+    let end = body[start..].find(&close)? + start;
+    let value = body[start..end].split_whitespace().collect::<Vec<_>>().join(" ");
+    (!value.is_empty()).then_some(bounded_text(&value, 2_000))
+}
+
+fn claude_task_notification_summary(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    let body = trimmed
+        .strip_prefix("<task-notification>")?
+        .strip_suffix("</task-notification>")?
+        .trim();
+    if let Some(summary) = claude_task_tag_value(body, "summary") {
+        return Some(summary);
+    }
+    if let Some(status) = claude_task_tag_value(body, "status") {
+        return Some(bounded_text(&format!("Background task {status}"), 2_000));
+    }
+    Some("Background task update".to_string())
+}
+
+fn claude_task_notification_display(obj: &RawLine) -> Option<String> {
+    let origin = obj
+        .origin
+        .as_ref()
+        .and_then(|raw| serde_json::from_str::<RawOrigin>(raw.get()).ok());
+    if origin.as_ref()?.kind.as_deref() != Some("task-notification") {
+        return None;
+    }
+    if !matches!(obj.r#type.as_deref(), None | Some("user") | Some("message")) {
+        return None;
+    }
+    let message = obj.message.as_ref()?;
+    if message.role.as_deref().is_some_and(|role| role != "user") {
+        return None;
+    }
+    let content = extract_text_from_raw_content(message.content.get())?;
+    claude_task_notification_summary(&content)
+}
+
 /// Provider facts live on lines the transcript surface never renders. Match
 /// on the cheap discriminators first; only a matched line is re-parsed as a
 /// JSON tree, so the hot path pays nothing for ordinary user/assistant rows.
@@ -2090,6 +2143,28 @@ fn extract_events(
             raw_line,
             events,
         );
+        return;
+    }
+
+    // Claude's background-task completion envelope is a provider-authored
+    // status row, not a user prompt. Keep the source line archived verbatim,
+    // but project the row as a compact system notification for clients.
+    if let Some(display_text) = claude_task_notification_display(obj) {
+        events.push(ParsedEvent {
+            uuid: msg_uuid,
+            parent_uuid: obj.parent_uuid.clone(),
+            session_id: session_id.to_string(),
+            timestamp,
+            role: Role::System,
+            content_text: Some(display_text),
+            tool_name: None,
+            tool_input_json: None,
+            tool_output_text: None,
+            tool_call_id: None,
+            source_offset: line_offset,
+            raw_type: "claude_task_notification".to_string(),
+            raw_line: Some(raw_line.to_string()),
+        });
         return;
     }
 

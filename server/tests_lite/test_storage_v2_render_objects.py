@@ -109,12 +109,21 @@ def test_render_aggregate_keeps_claude_control_raw_but_excludes_it_from_semantic
                 role="user",
                 content_text="Build the feature",
             ),
+            RenderRecord(
+                event_id="task-notification",
+                order_time_us=1_700_000_000_000_002,
+                source_position=2,
+                event_subordinal=0,
+                role="system",
+                content_text='Background command "Run the checks" completed (exit code 0)',
+                interaction_kind="provider_notification",
+            ),
         ),
     )
 
     sealed = seal_render_object(tmp_path, claude)
 
-    assert sealed.event_count == 2
+    assert sealed.event_count == 3
     assert sealed.user_messages == 1
     assert sealed.first_user_message_preview == "Build the feature"
     assert sealed.last_visible_text_preview == "Build the feature"
@@ -144,7 +153,7 @@ def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
         source_epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
         range_kind="record_ordinal",
         range_start=0,
-        range_end=2,
+        range_end=3,
         records=(
             RawRecord(
                 source_position=0,
@@ -153,6 +162,14 @@ def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
             RawRecord(
                 source_position=1,
                 data=b'{"type":"user","message":{"role":"user","content":"Build the feature"}}',
+            ),
+            RawRecord(
+                source_position=2,
+                data=(
+                    b'{"type":"user","origin":{"kind":"task-notification"},'
+                    b'"message":{"role":"user","content":"<task-notification><status>completed</status>'
+                    b'<summary>Background command finished</summary></task-notification>"}}'
+                ),
             ),
         ),
     )
@@ -193,6 +210,21 @@ def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
                     "parent_uuid": "parent-event",
                     "raw_record_ordinal": 1,
                 },
+                {
+                    "event_id": "task-notification",
+                    "order_time_us": 3,
+                    "source_position": 2,
+                    "event_subordinal": 0,
+                    "role": "user",
+                    "content_text": "<task-notification><status>completed</status><summary>Background command finished</summary></task-notification>",
+                    "tool_name": None,
+                    "tool_input_json": None,
+                    "tool_output_text": None,
+                    "tool_call_id": None,
+                    "thread_id": None,
+                    "branch_kind": None,
+                    "raw_record_ordinal": 2,
+                },
             ],
         },
         raw_spec=raw,
@@ -200,7 +232,13 @@ def test_storage_wire_derives_semantics_from_raw_when_engine_omits_field():
     )
 
     assert parsed is not None
-    assert [record.interaction_kind for record in parsed.records] == ["local_control", "durable_user_message"]
+    assert [record.interaction_kind for record in parsed.records] == [
+        "local_control",
+        "durable_user_message",
+        "provider_notification",
+    ]
+    assert parsed.records[2].role == "system"
+    assert parsed.records[2].content_text == "Background command finished"
     assert parsed.records[1].parent_uuid == "parent-event"
 
 

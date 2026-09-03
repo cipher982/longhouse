@@ -30,6 +30,7 @@ from zerg.services.agent_heartbeat_health import load_machine_transport_health_m
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_event_included
@@ -774,7 +775,14 @@ def _latest_semantic_user_event_map(
             or_(
                 AgentEvent.title_eligible.is_(None),
                 AgentEvent.title_eligible == 0,
-                AgentEvent.interaction_kind.in_(("local_control", "local_control_output", "conversation_boundary")),
+                AgentEvent.interaction_kind.in_(
+                    (
+                        "local_control",
+                        "local_control_output",
+                        "conversation_boundary",
+                        INTERACTION_PROVIDER_NOTIFICATION,
+                    )
+                ),
             )
         )
         .order_by(AgentEvent.session_id.asc(), AgentEvent.timestamp.asc(), AgentEvent.id.asc())

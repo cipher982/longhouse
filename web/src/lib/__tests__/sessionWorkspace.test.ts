@@ -137,6 +137,38 @@ describe("buildTimelineModel", () => {
     }
     expect(selection.interaction.toolName).toBe("Bash");
   });
+
+  it("keeps provider notifications visible without treating them as messages", () => {
+    const event: AgentEvent = {
+      id: 43,
+      role: "system",
+      content_text: 'Background command "Run the checks" completed (exit code 0)',
+      interaction_kind: "provider_notification",
+      tool_name: null,
+      tool_input_json: null,
+      tool_output_text: null,
+      tool_call_id: null,
+      timestamp: "2026-03-22T22:01:00Z",
+      in_active_context: true,
+    };
+
+    const model = buildTimelineModel([
+      {
+        kind: "event",
+        session_id: "session-claude",
+        timestamp: event.timestamp,
+        event,
+      },
+    ]);
+
+    expect(model.items).toEqual([{ kind: "provider_notification", event }]);
+    expect(model.items).not.toEqual(expect.arrayContaining([{ kind: "message", event }]));
+    expect(model.eventIdToSelectionKey.get(event.id)).toBe("provider_notification:43");
+    expect(model.selectionMap.get("provider_notification:43")).toMatchObject({
+      kind: "provider_notification",
+      event,
+    });
+  });
 });
 
 describe("projectionItemsWithTranscriptPreview", () => {

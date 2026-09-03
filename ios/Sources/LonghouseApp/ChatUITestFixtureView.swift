@@ -722,6 +722,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             seedEvents = TranscriptBenchmarkTrace.initialEvents()
         } else if fixture.name == "tools" {
             seedEvents = Self.toolFixtureEvents()
+        } else if fixture.name == "provider-notification" {
+            seedEvents = Self.providerNotificationFixtureEvents()
         } else if fixture.name == "marketing" {
             seedEvents = Self.marketingFixtureEvents()
         } else {
@@ -1294,6 +1296,38 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
         ))
         return events
+    }
+
+    private static func providerNotificationFixtureEvents() -> [SessionEvent] {
+        [
+            makeEvent(
+                id: 1,
+                role: "user",
+                content: "Run the checks in the background.",
+                timestamp: fixedTimestamp(offset: 1)
+            ),
+            makeEvent(
+                id: 2,
+                role: "assistant",
+                content: "I started the checks; the provider will report back when they finish.",
+                timestamp: fixedTimestamp(offset: 2)
+            ),
+            SessionEvent(
+                id: 3,
+                role: "system",
+                contentText: "Background command \"Run the checks\" completed (exit code 0)",
+                interactionKind: "provider_notification",
+                toolName: nil,
+                toolInputJSON: nil,
+                toolOutputText: nil,
+                toolCallId: nil,
+                toolCallState: nil,
+                timestamp: fixedTimestamp(offset: 3),
+                inActiveContext: true,
+                isHeadBranch: true,
+                inputOrigin: nil
+            ),
+        ]
     }
 
     /// A realistic CODING session for marketing captures: a real-feeling task

@@ -48,6 +48,30 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(payload.latestItemId, "ios-request-1")
     }
 
+    func testPayloadRendersProviderNotificationAsCompactStatusItem() {
+        let event = SessionEvent(
+            id: 42,
+            role: "system",
+            contentText: "Background command \"Run the checks\" completed (exit code 0)",
+            interactionKind: "provider_notification",
+            toolName: nil,
+            toolInputJSON: nil,
+            toolOutputText: nil,
+            toolCallId: nil,
+            toolCallState: nil,
+            timestamp: "2026-05-02T20:00:42Z",
+            inActiveContext: true,
+            isHeadBranch: true,
+            inputOrigin: nil
+        )
+        let items = TimelineBuilder.build(events: [event])
+        let rows = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
+
+        XCTAssertEqual(rows.map(\.kind), ["providerNotification"])
+        XCTAssertEqual(rows.first?.body, event.contentText)
+        XCTAssertNil(rows.first?.role)
+    }
+
     func testPayloadSuppressesSubmittedInputWhenDurableLonghouseEventHasSameSessionInputId() {
         let rows = WebTranscriptView.payloadItems(
             timelineItems: [

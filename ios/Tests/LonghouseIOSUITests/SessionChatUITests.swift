@@ -48,6 +48,23 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
+    func testProviderNotificationRendersAsCompactRow() {
+        let app = launchChatFixture(name: "provider-notification", eventCount: 0)
+
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8))
+        let renderStatus = app.staticTexts["transcript-benchmark-status"]
+        XCTAssertTrue(renderStatus.waitForExistence(timeout: 8))
+        XCTAssertTrue(
+            waitForLabel(renderStatus, containing: "stage=rendered", timeout: Self.webTranscriptTimeout),
+            renderStatus.label
+        )
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "provider-notification"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testCaptureToolsTranscriptLightScreenshot() throws {
         try captureSessionScreenshot(
             fixtureName: "marketing",

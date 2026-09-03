@@ -1547,6 +1547,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let branchKind: String?
     let role: String
     let contentText: String?
+    /// Provider-owned status/control records rendered outside the conversation.
+    let interactionKind: String?
     let toolName: String?
     let toolInputJSON: [String: JSONValue]?
     /// Lossless provider value. Most tools use an object; Codex custom tools may use a string.
@@ -1568,6 +1570,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         id: String,
         role: String,
         contentText: String?,
+        interactionKind: String? = nil,
         toolName: String?,
         toolInputJSON: [String: JSONValue]?,
         toolInputValue: JSONValue? = nil,
@@ -1594,6 +1597,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         self.branchKind = branchKind
         self.role = role
         self.contentText = contentText
+        self.interactionKind = interactionKind
         self.toolName = toolName
         self.toolInputJSON = toolInputJSON
         self.toolInputValue = toolInputValue ?? toolInputJSON.map(JSONValue.object)
@@ -1616,6 +1620,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         id: Int,
         role: String,
         contentText: String?,
+        interactionKind: String? = nil,
         toolName: String?,
         toolInputJSON: [String: JSONValue]?,
         toolInputValue: JSONValue? = nil,
@@ -1639,6 +1644,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
             id: String(id),
             role: role,
             contentText: contentText,
+            interactionKind: interactionKind,
             toolName: toolName,
             toolInputJSON: toolInputJSON,
             toolInputValue: toolInputValue,
@@ -1680,6 +1686,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         branchKind = try container.decodeIfPresent(String.self, forKey: .branchKind)
         role = try container.decode(String.self, forKey: .role)
         contentText = try container.decodeIfPresent(String.self, forKey: .contentText)
+        interactionKind = try container.decodeIfPresent(String.self, forKey: .interactionKind)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
         toolInputValue = try container.decodeIfPresent(JSONValue.self, forKey: .toolInputJSON)
         toolInputJSON = toolInputValue?.objectValue
@@ -1707,6 +1714,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         try container.encodeIfPresent(branchKind, forKey: .branchKind)
         try container.encode(role, forKey: .role)
         try container.encodeIfPresent(contentText, forKey: .contentText)
+        try container.encodeIfPresent(interactionKind, forKey: .interactionKind)
         try container.encodeIfPresent(toolName, forKey: .toolName)
         try container.encodeIfPresent(toolInputValue, forKey: .toolInputJSON)
         try container.encodeIfPresent(toolOutputText, forKey: .toolOutputText)
@@ -1730,6 +1738,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case branchKind
         case role
         case contentText
+        case interactionKind
         case toolName
         case toolInputJSON = "toolInputJson"
         case toolOutputText

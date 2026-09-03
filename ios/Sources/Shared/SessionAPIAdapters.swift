@@ -255,6 +255,7 @@ extension APIEventResponse {
             id: id.sessionEventIdentifier,
             role: role,
             contentText: contentText,
+            interactionKind: interactionKind,
             toolName: toolName,
             toolInputJSON: toolInputJson?.objectValue,
             toolInputValue: toolInputJson,

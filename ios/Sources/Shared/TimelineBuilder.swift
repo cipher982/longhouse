@@ -16,6 +16,7 @@ enum ToolPairing: String, Sendable {
 enum TimelineItem: Identifiable, Sendable {
     case user(SessionEvent)
     case assistant(SessionEvent)
+    case providerNotification(SessionEvent)
     case action(SessionAction, timestamp: String)
     case tool(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing)
     case orphanTool(SessionEvent)
@@ -25,6 +26,7 @@ enum TimelineItem: Identifiable, Sendable {
         switch self {
         case .user(let e): return "user:\(e.id)"
         case .assistant(let e): return "prose:\(e.id)"
+        case .providerNotification(let e): return "provider-notification:\(e.id)"
         case .action(let action, _): return action.id
         case .tool(let call, _, _): return "tool:\(call.id)"
         case .orphanTool(let e): return "orphan:\(e.id)"
@@ -37,6 +39,8 @@ enum TimelineItem: Identifiable, Sendable {
     var sortTimestamp: String {
         switch self {
         case .user(let e), .assistant(let e), .orphanTool(let e):
+            return e.timestamp
+        case .providerNotification(let e):
             return e.timestamp
         case .action(_, let timestamp):
             return timestamp
@@ -344,6 +348,10 @@ enum TimelineBuilder {
         var answerIndexes: Set<Int> = []
 
         for event in events {
+            if event.interactionKind == "provider_notification" {
+                raw.append(.providerNotification(event))
+                continue
+            }
             if event.role == "system" { continue }
 
             switch event.role {

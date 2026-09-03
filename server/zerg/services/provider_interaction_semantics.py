@@ -22,6 +22,7 @@ INTERACTION_DURABLE_USER_MESSAGE = "durable_user_message"
 INTERACTION_LOCAL_CONTROL = "local_control"
 INTERACTION_LOCAL_CONTROL_OUTPUT = "local_control_output"
 INTERACTION_PROVIDER_SYSTEM = "provider_system"
+INTERACTION_PROVIDER_NOTIFICATION = "provider_notification"
 INTERACTION_CONVERSATION_BOUNDARY = "conversation_boundary"
 INTERACTION_UNKNOWN_USER_INPUT = "unknown_user_input"
 
@@ -34,6 +35,7 @@ VALID_INTERACTION_KINDS = frozenset(
         INTERACTION_LOCAL_CONTROL,
         INTERACTION_LOCAL_CONTROL_OUTPUT,
         INTERACTION_PROVIDER_SYSTEM,
+        INTERACTION_PROVIDER_NOTIFICATION,
         INTERACTION_CONVERSATION_BOUNDARY,
         INTERACTION_UNKNOWN_USER_INPUT,
     }
@@ -215,6 +217,61 @@ _CLAUDE_COMMAND_RECORD_RE = re.compile(
     re.DOTALL,
 )
 _CLAUDE_COMMAND_OUTPUT_RE = re.compile(r"^\s*<local-command-stdout>.*?</local-command-stdout>\s*$", re.DOTALL)
+_CLAUDE_TASK_NOTIFICATION_RE = re.compile(
+    r"^\s*<task-notification>\s*(?P<body>.*?)\s*</task-notification>\s*$",
+    re.DOTALL,
+)
+
+
+def _claude_task_tag_value(body: str, tag: str) -> str | None:
+    match = re.search(rf"<{tag}>\s*(.*?)\s*</{tag}>", body, re.DOTALL)
+    if match is None:
+        return None
+    value = " ".join(match.group(1).split())
+    return value[:2_000] or None
+
+
+def claude_task_notification_summary(content_text: str | None) -> str | None:
+    """Return the compact display text from Claude's task notification XML.
+
+    The outer envelope is intentionally exact. This helper may be used on a
+    normalized render record that no longer has the raw ``origin`` sidecar, so
+    it establishes shape only; callers that classify a provider record must
+    also require :func:`claude_task_notification_display`'s structural origin.
+    """
+
+    match = _CLAUDE_TASK_NOTIFICATION_RE.fullmatch(str(content_text or ""))
+    if match is None:
+        return None
+    summary = _claude_task_tag_value(match.group("body"), "summary")
+    if summary is not None:
+        return summary
+    status = _claude_task_tag_value(match.group("body"), "status")
+    if status is not None:
+        return f"Background task {status}"[:2_000]
+    return "Background task update"
+
+
+def claude_task_notification_display(raw_json: Any) -> str | None:
+    """Recognize a genuine Claude task notification and return its display text.
+
+    Claude marks these records with ``origin.kind=task-notification``. The
+    marker is the authorship boundary: pasted or quoted XML without it stays a
+    normal user message even when the text has the same tags.
+    """
+
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return None
+    origin = raw.get("origin")
+    if not isinstance(origin, Mapping) or origin.get("kind") != "task-notification":
+        return None
+    if raw.get("type") not in {None, "user", "message"}:
+        return None
+    message = raw.get("message")
+    if not isinstance(message, Mapping) or message.get("role") not in {None, "user"}:
+        return None
+    return claude_task_notification_summary(_raw_content(raw))
 
 
 def _claude_native_command_record(
@@ -537,12 +594,17 @@ def classify_provider_interaction(
     claude_native_command = any(
         _claude_native_command_record(raw, value, sequence_context) for value in (text, raw_text, combined) if value
     )
+    claude_task_notification = normalized_provider == "claude" and claude_task_notification_display(raw) is not None
     claude_native_image_placeholder = (
         normalized_provider == "claude"
         and normalized_role == "user"
         and any(_claude_native_image_placeholder(raw, value) for value in (text, raw_text) if value)
     )
-    if claude_native_image_placeholder:
+    if claude_task_notification:
+        kind = INTERACTION_PROVIDER_NOTIFICATION
+        changes_provider_state = False
+        starts_model_turn = False
+    elif claude_native_image_placeholder:
         kind = INTERACTION_PROVIDER_SYSTEM
         changes_provider_state = False
         starts_model_turn = False
@@ -576,6 +638,9 @@ def classify_provider_interaction(
             changes_provider_state = False
             starts_model_turn = False
         elif kind == INTERACTION_PROVIDER_SYSTEM:
+            changes_provider_state = False
+            starts_model_turn = False
+        elif kind == INTERACTION_PROVIDER_NOTIFICATION:
             changes_provider_state = False
             starts_model_turn = False
 
@@ -687,12 +752,16 @@ def semantic_event_included(
 ) -> bool:
     """Whether a normalized event belongs in semantic projections.
 
-    Non-user records remain part of semantic context. Provider-local records
-    that are normalized as ``role=user`` are the only rows this boundary can
-    exclude, and they are excluded only when the provider contract supplies
+    Non-user records remain part of semantic context except for explicit
+    provider notifications. Provider-local records that are normalized as
+    ``role=user`` are excluded only when the provider contract supplies
     positive evidence that they are local control rather than a prompt.
     """
 
+    if interaction_kind == INTERACTION_PROVIDER_NOTIFICATION:
+        return False
+    if str(provider or "").strip().lower() == "claude" and claude_task_notification_display(raw_json) is not None:
+        return False
     if str(role or "").strip().lower() != "user":
         return True
     return title_eligible_provider_event(
@@ -742,9 +811,12 @@ __all__ = [
     "INTERACTION_DURABLE_USER_MESSAGE",
     "INTERACTION_LOCAL_CONTROL",
     "INTERACTION_LOCAL_CONTROL_OUTPUT",
+    "INTERACTION_PROVIDER_NOTIFICATION",
     "INTERACTION_PROVIDER_SYSTEM",
     "INTERACTION_UNKNOWN_USER_INPUT",
     "classify_provider_interaction",
+    "claude_task_notification_display",
+    "claude_task_notification_summary",
     "interaction_context_key_parts",
     "interaction_contract_snapshot",
     "semantic_projection_facts",

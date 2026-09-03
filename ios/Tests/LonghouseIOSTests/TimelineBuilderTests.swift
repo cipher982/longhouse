@@ -30,10 +30,29 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(ToolTiers.resolve("CallDynamicTool").label, "CallDynamicTool")
     }
 
+    func testProviderNotificationIsAStandaloneTimelineRow() {
+        let event = event(
+            id: 42,
+            role: "system",
+            text: "Background command \"Run the checks\" completed (exit code 0)",
+            interactionKind: "provider_notification"
+        )
+
+        let items = TimelineBuilder.build(events: [event])
+
+        XCTAssertEqual(items.count, 1)
+        guard case .providerNotification(let notification) = items[0] else {
+            return XCTFail("expected provider notification")
+        }
+        XCTAssertEqual(notification.contentText, event.contentText)
+        XCTAssertEqual(items[0].id, "provider-notification:42")
+    }
+
     private func event(
         id: Int,
         role: String,
         text: String? = nil,
+        interactionKind: String? = nil,
         tool: String? = nil,
         input: [String: JSONValue]? = nil,
         output: String? = nil,
@@ -46,6 +65,7 @@ final class TimelineBuilderTests: XCTestCase {
             id: id,
             role: role,
             contentText: text,
+            interactionKind: interactionKind,
             toolName: tool,
             toolInputJSON: input,
             toolOutputText: output,

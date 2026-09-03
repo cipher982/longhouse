@@ -178,6 +178,22 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     actionKind: nil,
                     provider: nil
                 )
+            case .providerNotification(let event):
+                return ExpectedRow(
+                    kind: "provider_notification",
+                    role: event.role,
+                    eventId: event.legacyNumericId,
+                    toolName: nil,
+                    callEventId: nil,
+                    resultEventId: nil,
+                    pairing: nil,
+                    toolNames: nil,
+                    callEventIds: nil,
+                    resultEventIds: nil,
+                    pairings: nil,
+                    actionKind: nil,
+                    provider: nil
+                )
             case .action(let action, _):
                 return ExpectedRow(
                     kind: "action",
@@ -253,7 +269,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
                 return count + 1
             case .activityGroup(let calls):
                 return count + calls.count
-            case .user, .assistant, .action:
+            case .user, .assistant, .providerNotification, .action:
                 return count
             }
         }
@@ -282,7 +298,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
             switch item {
             case .user(let event), .assistant(let event):
                 return event
-            case .tool, .orphanTool, .activityGroup, .action:
+            case .tool, .orphanTool, .activityGroup, .providerNotification, .action:
                 return nil
             }
         }

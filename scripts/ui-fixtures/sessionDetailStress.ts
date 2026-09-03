@@ -28,6 +28,7 @@ type AgentEvent = {
   id: number;
   role: string;
   content_text: string | null;
+  interaction_kind?: string | null;
   turn_end?: {
     duration_ms: number;
     ended_at: string;
@@ -673,6 +674,12 @@ export function buildSessionDetailStressFixture(): {
       content_text:
         "Agreed. This fixture should stress the parts you actually judge by eye: who said what, what is running now, how much work happened, and whether managed control is obvious.",
       turn_end: { duration_ms: 129_299, ended_at: "2026-04-15T15:22:35Z", message_count: 42 },
+    }),
+    makeEvent(2145, "system", "2026-04-15T15:22:36Z", {
+      // Keep the provider-status row in the capture's tail viewport so the
+      // visual check proves its compact rendering without scrolling.
+      content_text: 'Background command "Run the checks" completed (exit code 0)',
+      interaction_kind: "provider_notification",
     }),
     makeEvent(215, "assistant", "2026-04-15T16:11:35Z", {
       tool_name: "exec_command",

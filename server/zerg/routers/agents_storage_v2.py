@@ -34,7 +34,10 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
+from zerg.services.provider_interaction_semantics import claude_task_notification_display
+from zerg.services.provider_interaction_semantics import claude_task_notification_summary
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_event_included
 from zerg.services.provider_interaction_semantics import semantic_projection_facts
@@ -457,6 +460,16 @@ def _parse_render_spec(
         if record_indexes:
             for record_index in record_indexes:
                 record_payload = record_payloads[record_index]
+                notification_text = (
+                    claude_task_notification_display(raw_json) if str(raw_spec.provider or "").strip().lower() == "claude" else None
+                )
+                if notification_text is not None:
+                    # The parser revision is allowed to lag the host. Normalize
+                    # this provider envelope at the durability boundary so an
+                    # old engine cannot leak its XML into a served transcript.
+                    record_payload["role"] = "system"
+                    record_payload["content_text"] = notification_text
+                    record_payload["interaction_kind"] = INTERACTION_PROVIDER_NOTIFICATION
                 supplied_kind = record_payload.get("interaction_kind")
                 classification = semantic_projection_facts(
                     raw_spec.provider,
@@ -1447,7 +1460,14 @@ def _manifest_last_key(manifest: dict[str, object]) -> tuple[int, str, str, str,
     return tuple(decoded)  # type: ignore[return-value]
 
 
-def _render_event_wire(session_id: UUID, generation_id: UUID, decoded, record: RenderRecord) -> dict[str, object]:
+def _render_event_wire(
+    session_id: UUID,
+    generation_id: UUID,
+    decoded,
+    record: RenderRecord,
+    *,
+    interaction_kind: str | None = None,
+) -> dict[str, object]:
     spec = decoded.spec
     try:
         seconds, microseconds = divmod(record.order_time_us, 1_000_000)
@@ -1465,12 +1485,19 @@ def _render_event_wire(session_id: UUID, generation_id: UUID, decoded, record: R
         source_position=record.source_position,
         event_subordinal=record.event_subordinal,
     )
+    effective_interaction_kind = interaction_kind or record.interaction_kind
+    role = record.role
+    content_text = record.content_text
+    if effective_interaction_kind == INTERACTION_PROVIDER_NOTIFICATION:
+        role = "system"
+        content_text = claude_task_notification_summary(content_text) or content_text
     return {
         "event_id": record.event_id,
         "cursor": render_detail_cursor_token(cursor),
         "timestamp": timestamp,
-        "role": record.role,
-        "content_text": record.content_text,
+        "role": role,
+        "content_text": content_text,
+        "interaction_kind": effective_interaction_kind,
         "tool_name": record.tool_name,
         "tool_input_json": record.tool_input_json,
         "tool_output_text": record.tool_output_text,
@@ -1928,7 +1955,8 @@ async def _read_storage_v2_session_events_page_admitted(
                     # only fall back to the stored fact when replay has no
                     # answer because evidence is unavailable.
                     interaction_kind = recovered_kind if recovered_kind is not None else getattr(record, "interaction_kind", None)
-                    if not semantic_event_included(
+                    is_provider_notification = interaction_kind == INTERACTION_PROVIDER_NOTIFICATION
+                    if not is_provider_notification and not semantic_event_included(
                         spec.provider,
                         role=record.role,
                         content_text=record.content_text,
@@ -1942,7 +1970,13 @@ async def _read_storage_v2_session_events_page_admitted(
                         anchor == "tail" and (cursor_key is None or key < cursor_key)
                     ):
                         try:
-                            wire = _render_event_wire(session_id, generation_id, decoded, record)
+                            wire = _render_event_wire(
+                                session_id,
+                                generation_id,
+                                decoded,
+                                record,
+                                interaction_kind=interaction_kind,
+                            )
                         except ValueError:
                             # One unserializable row must not cost the reader
                             # the whole page. Sealing now rejects timestamps

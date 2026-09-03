@@ -4151,6 +4151,11 @@ export interface components {
              */
             content_text?: string | null;
             /**
+             * Interaction Kind
+             * @description Parser-owned semantic kind, e.g. provider_notification
+             */
+            interaction_kind?: string | null;
+            /**
              * Raw Content Text
              * @description Raw provider content when it differs from display content
              */

@@ -1,0 +1,23 @@
+{
+  "event_count": 3,
+  "events": [
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "user",
+      "content_text": "Run the checks"
+    },
+    {
+      "kind": "event",
+      "role": "system",
+      "raw_type": "claude_task_notification",
+      "content_text": "Background command \"Run the checks\" completed (exit code 0)"
+    },
+    {
+      "kind": "event",
+      "role": "assistant",
+      "raw_type": "assistant",
+      "content_text": "All checks passed."
+    }
+  ]
+}

@@ -1884,6 +1884,21 @@ def test_searchd_semantic_projection_hides_claude_control_from_search_and_counts
             "thread_id": None,
             "branch_kind": None,
         },
+        {
+            "event_id": "task-notification",
+            "record_ordinal": 2,
+            "order_time_us": now_us + 2,
+            "source_position": 2,
+            "event_subordinal": 0,
+            "role": "system",
+            "content_text": 'Background command "Run the checks" completed (exit code 0)',
+            "interaction_kind": "provider_notification",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
     ]
     try:
         store.index_object(
@@ -1938,9 +1953,20 @@ def test_searchd_semantic_projection_hides_claude_control_from_search_and_counts
             window_end_us=None,
             limit=10,
         )
+        notification_results = store.search(
+            owner_id="42",
+            query="background command",
+            project=None,
+            provider=None,
+            environment=None,
+            window_start_us=None,
+            window_end_us=None,
+            limit=10,
+        )
         assert command_results["results"] == []
         assert [row["event_id"] for row in prompt_results["results"]] == ["prompt"]
-        assert connection.execute("SELECT COUNT(*) FROM events WHERE session_id = ?", (session_id,)).fetchone()[0] == 2
+        assert notification_results["results"] == []
+        assert connection.execute("SELECT COUNT(*) FROM events WHERE session_id = ?", (session_id,)).fetchone()[0] == 3
     finally:
         connection.close()
 

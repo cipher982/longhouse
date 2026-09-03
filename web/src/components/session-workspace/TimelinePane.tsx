@@ -171,6 +171,29 @@ function ActionRow({ action }: { action: TimelineAction }) {
   );
 }
 
+function ProviderNotificationRow({
+  event,
+  isSelected,
+}: {
+  event: AgentEvent;
+  isSelected: boolean;
+}) {
+  const text = event.content_text || "Provider update";
+  return (
+    <div
+      id={`provider-notification-${event.id}`}
+      className={`tl-provider-notification${isSelected ? " is-selected" : ""}`}
+      data-testid="session-provider-notification"
+      data-row-kind="provider-notification"
+      aria-label={text}
+    >
+      <span className="tl-provider-notification__mark" aria-hidden="true">•</span>
+      <span className="tl-provider-notification__label">{text}</span>
+      <span className="tl-provider-notification__time">{formatTime(event.timestamp)}</span>
+    </div>
+  );
+}
+
 const MESSAGE_COLLAPSE_LINE_LIMIT = 600;
 const MESSAGE_PREVIEW_HEAD_LINES = 220;
 const MESSAGE_PREVIEW_TAIL_LINES = 80;
@@ -1181,6 +1204,9 @@ export function TimelinePane({
           (item.action.action.provider || "").toLowerCase().includes(query)
         );
       }
+      if (item.kind === "provider_notification") {
+        return item.event.content_text?.toLowerCase().includes(query) ?? false;
+      }
       const interactions =
         item.kind === "activity_group" ? item.group.interactions : [item.interaction];
       return interactions.some((interaction) => {
@@ -1379,6 +1405,16 @@ export function TimelinePane({
 
             if (item.kind === "action") {
               return <ActionRow key={item.action.key} action={item.action} />;
+            }
+
+            if (item.kind === "provider_notification") {
+              return (
+                <ProviderNotificationRow
+                  key={item.event.id}
+                  event={item.event}
+                  isSelected={timelineItemContainsSelection(item, selectedKey)}
+                />
+              );
             }
 
             if (item.kind === "message") {

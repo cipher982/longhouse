@@ -26,6 +26,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Iterator
 
+from zerg.services.provider_interaction_semantics import claude_task_notification_display
+
 try:
     import orjson as _json_mod
 
@@ -461,6 +463,21 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
                     message = obj.get("message", {})
                     content = message.get("content", [])
 
+                    notification_text = claude_task_notification_display(obj)
+                    if notification_text is not None:
+                        timestamp = _parse_timestamp(obj.get("timestamp")) or datetime.now(timezone.utc)
+                        yield ParsedEvent(
+                            uuid=obj.get("uuid", str(uuid.uuid4())),
+                            session_id=session_id,
+                            timestamp=timestamp,
+                            role="system",
+                            content_text=notification_text,
+                            source_offset=line_offset,
+                            raw_type="claude_task_notification",
+                            raw_line=line_text,
+                        )
+                        continue
+
                     has_tool_result = False
                     if isinstance(content, list):
                         for item in content:
@@ -599,6 +616,23 @@ def _parse_with_offset_tracking(
                 if event_type == "user":
                     message = obj.get("message", {})
                     content = message.get("content", [])
+
+                    notification_text = claude_task_notification_display(obj)
+                    if notification_text is not None:
+                        timestamp = _parse_timestamp(obj.get("timestamp")) or datetime.now(timezone.utc)
+                        events.append(
+                            ParsedEvent(
+                                uuid=obj.get("uuid", str(uuid.uuid4())),
+                                session_id=session_id,
+                                timestamp=timestamp,
+                                role="system",
+                                content_text=notification_text,
+                                source_offset=line_offset,
+                                raw_type="claude_task_notification",
+                                raw_line=line_text,
+                            )
+                        )
+                        continue
 
                     has_tool_result = False
                     if isinstance(content, list):

@@ -1471,6 +1471,10 @@ class EventResponse(UTCBaseModel):
     id: int | str = Field(..., description="Stable legacy or storage-v2 event ID")
     role: str = Field(..., description="Message role")
     content_text: Optional[str] = Field(None, description="Message content")
+    interaction_kind: Optional[str] = Field(
+        None,
+        description="Parser-owned semantic kind, e.g. provider_notification",
+    )
     raw_content_text: Optional[str] = Field(
         None,
         description="Raw provider content when it differs from display content",

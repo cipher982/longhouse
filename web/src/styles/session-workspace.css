@@ -1356,6 +1356,34 @@
     white-space: nowrap;
   }
 
+  .tl-provider-notification {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    max-width: var(--tl-tool-max);
+    width: 100%;
+    margin-inline: auto;
+    padding: 2px 0;
+    color: var(--color-text-muted);
+    font-size: 12px;
+  }
+  .tl-provider-notification.is-selected { color: var(--color-text-secondary); }
+  .tl-provider-notification__mark {
+    color: rgba(212, 184, 122, 0.72);
+    flex-shrink: 0;
+  }
+  .tl-provider-notification__label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .tl-provider-notification__time {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-family: var(--font-family-mono);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
   /* --- Shared ---
      One centered conversation column. Everything — prose, tool rows,
      seams — lives inside a single column clamped to the tool width, so

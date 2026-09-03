@@ -56,6 +56,7 @@ def _event_projection(
             "cursor": event["cursor"],
             "role": event["role"],
             "content_text": event.get("content_text"),
+            "interaction_kind": event.get("interaction_kind"),
             "raw_content_text": None,
             "input_origin": input_origin,
             "turn_end": turn_end,
