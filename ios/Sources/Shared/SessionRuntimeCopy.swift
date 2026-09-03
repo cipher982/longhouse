@@ -76,3 +76,31 @@ extension SessionDetail {
             .last { !$0.isEmpty }
     }
 }
+
+extension SessionUsageLatest {
+    /// "opus 5 · high · 501k ctx": the terminal's model line, compacted for a chip.
+    var chipLabel: String {
+        var parts: [String] = []
+        if let model = Self.shortModelName(model) { parts.append(model) }
+        if let effort = effort?.trimmingCharacters(in: .whitespacesAndNewlines), !effort.isEmpty { parts.append(effort) }
+        parts.append("\(Self.compactTokens(contextTokens)) ctx")
+        return parts.joined(separator: " · ")
+    }
+
+    /// "claude-opus-5" → "opus 5", "gpt-5.6-sol" → "gpt 5.6 sol". Vendor prefixes
+    /// are chrome; the phone already knows which provider this is.
+    static func shortModelName(_ raw: String?) -> String? {
+        guard var name = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !name.isEmpty else { return nil }
+        for prefix in ["claude-", "anthropic/", "openai/"] where name.hasPrefix(prefix) {
+            name.removeFirst(prefix.count)
+        }
+        return name.replacingOccurrences(of: "-", with: " ")
+    }
+
+    /// 501447 → "501k", 12_800 → "13k", 900 → "900", 1_200_000 → "1.2M".
+    static func compactTokens(_ tokens: Int) -> String {
+        if tokens >= 1_000_000 { return String(format: "%.1fM", Double(tokens) / 1_000_000) }
+        if tokens >= 1_000 { return "\(Int((Double(tokens) / 1_000).rounded()))k" }
+        return String(tokens)
+    }
+}

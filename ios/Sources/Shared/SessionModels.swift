@@ -888,6 +888,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var lastTurn: SessionLastTurn? = nil
     /// The provider's latest away recap, when it wrote one.
     var recap: SessionRecap? = nil
+    /// Model, effort and context size on the provider's last turn-ending response.
+    var usageLatest: SessionUsageLatest? = nil
 
     var displayTitle: String {
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
@@ -1204,7 +1206,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             deviceId: deviceId,
             inputReceipts: inputReceipts,
             lastTurn: lastTurn,
-            recap: recap
+            recap: recap,
+            usageLatest: usageLatest
         )
     }
 
@@ -1391,6 +1394,16 @@ struct SessionTurnEnd: Codable, Hashable, Sendable {
 /// The provider's own catch-up note, written while the user was away.
 struct SessionRecap: Codable, Hashable, Sendable {
     let text: String
+    let at: String
+}
+
+/// Model, effort and context size from the provider's last turn-ending response.
+struct SessionUsageLatest: Codable, Hashable, Sendable {
+    let model: String?
+    let effort: String?
+    let contextTokens: Int
+    let outputTokens: Int
+    let thinkingTokens: Int?
     let at: String
 }
 

@@ -18,6 +18,13 @@ import { ManagedLaunchHintCard } from "./ManagedLaunchHintCard";
 import { ProviderGlyph } from "../ProviderGlyph";
 import { formatResumeReason } from "./ResumeSessionModal";
 
+/** 501447 → "501k", 1_250_000 → "1.3M". */
+function compactTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return String(tokens);
+}
+
 interface SessionContextPaneProps {
   session: AgentSession;
   title: string;
@@ -234,6 +241,18 @@ export function SessionContextPane({
               value={formatFullDate(session.started_at)}
             />
             <MetaRow label="Duration" value={durationStr} />
+            {session.usage_latest ? (
+              <MetaRow
+                label="Model"
+                value={[
+                  session.usage_latest.model,
+                  session.usage_latest.effort,
+                  `${compactTokens(session.usage_latest.context_tokens)} context`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              />
+            ) : null}
             {branchLabel ? (
               <MetaRow label="Branch" value={branchLabel} />
             ) : null}

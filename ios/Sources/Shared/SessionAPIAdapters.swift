@@ -233,7 +233,17 @@ extension APISessionResponse {
             deviceId: deviceId,
             inputReceipts: inputReceipts?.map(\.sessionInputReceipt),
             lastTurn: lastTurn?.sessionLastTurn,
-            recap: recap.map { SessionRecap(text: $0.text, at: $0.at) }
+            recap: recap.map { SessionRecap(text: $0.text, at: $0.at) },
+            usageLatest: usageLatest.map {
+                SessionUsageLatest(
+                    model: $0.model,
+                    effort: $0.effort,
+                    contextTokens: $0.contextTokens,
+                    outputTokens: $0.outputTokens,
+                    thinkingTokens: $0.thinkingTokens,
+                    at: $0.at
+                )
+            }
         )
     }
 }

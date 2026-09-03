@@ -57,6 +57,15 @@ export interface AgentSession {
   recap?: { text: string; at: string } | null;
   /** The most recent turn the provider reported as finished. */
   last_turn?: AgentSessionLastTurn | null;
+  /** Model, effort and context size from the provider's last turn-ending response. */
+  usage_latest?: {
+    model?: string | null;
+    effort?: string | null;
+    context_tokens: number;
+    output_tokens: number;
+    thinking_tokens?: number | null;
+    at: string;
+  } | null;
   /** Server-resolved headline to render verbatim (no client fallback ladder). */
   timeline_title?: string | null;
   summary_status?:

@@ -60,7 +60,13 @@ struct SessionView: View {
         transcript
         .safeAreaInset(edge: .top, spacing: 0) {
             if let recap = viewModel.detail?.recap {
-                SessionRecapBanner(recap: recap)
+                SessionRecapBanner(recap: recap, usage: viewModel.detail?.usageLatest)
+            } else if let usage = viewModel.detail?.usageLatest {
+                SessionUsageChip(usage: usage)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
+                    .background(.bar)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -775,23 +781,30 @@ private struct SessionNavigationSubtitle: ViewModifier {
 /// tap to read all of it.
 struct SessionRecapBanner: View {
     let recap: SessionRecap
+    var usage: SessionUsageLatest? = nil
     @State private var expanded = false
 
     var body: some View {
         Button {
             withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
         } label: {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "text.quote")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 2)
-                Text(recap.text)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(expanded ? nil : 2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "text.quote")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                    Text(recap.text)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(expanded ? nil : 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let usage {
+                    SessionUsageChip(usage: usage)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
@@ -800,5 +813,20 @@ struct SessionRecapBanner: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier("session-recap")
         .accessibilityLabel("Recap: \(recap.text)")
+    }
+}
+
+/// "opus 5 · high · 501k ctx": the provider's model line as a quiet chip.
+struct SessionUsageChip: View {
+    let usage: SessionUsageLatest
+
+    var body: some View {
+        Text(usage.chipLabel)
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(.quaternary))
+            .accessibilityIdentifier("session-usage-chip")
     }
 }
