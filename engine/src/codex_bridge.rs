@@ -43,7 +43,7 @@ const RUNTIME_EVENT_RETRY_DELAYS_MS: &[u64] = &[
 ];
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 const APP_SERVER_EXIT_CHECK_MS: u64 = 100;
-const APP_SERVER_EXIT_RECONCILE_MS: u64 = 500;
+pub const APP_SERVER_EXIT_RECONCILE_MS: u64 = 500;
 // Stall detection. A running command is not evidence of progress: the motivating
 // incident wedged inside an in-flight `exec` that never returned. Silence alone is
 // only suspicion, so a short clock requires process-level corroboration and an
@@ -642,6 +642,7 @@ enum IpcCommand {
         terminal_reason: String,
         terminal_reason_raw: Option<String>,
         reply: oneshot::Sender<Result<Value>>,
+        ack_rx: oneshot::Receiver<()>,
     },
     Detach {
         reply: oneshot::Sender<Result<Value>>,
@@ -780,19 +781,25 @@ async fn handle_ipc_connection(
         return Ok(());
     }
     let (reply_tx, reply_rx) = oneshot::channel();
+    let mut command_ack_tx: Option<oneshot::Sender<()>> = None;
     let command = match request.get("kind").and_then(Value::as_str) {
-        Some("stop") => IpcCommand::Stop {
-            terminal_reason: normalize_bridge_terminal_reason(
-                request.get("reason").and_then(Value::as_str),
-            ),
-            terminal_reason_raw: request
-                .get("raw_reason")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|reason| !reason.is_empty())
-                .map(str::to_string),
-            reply: reply_tx,
-        },
+        Some("stop") => {
+            let (ack_tx, ack_rx) = oneshot::channel();
+            command_ack_tx = Some(ack_tx);
+            IpcCommand::Stop {
+                terminal_reason: normalize_bridge_terminal_reason(
+                    request.get("reason").and_then(Value::as_str),
+                ),
+                terminal_reason_raw: request
+                    .get("raw_reason")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|reason| !reason.is_empty())
+                    .map(str::to_string),
+                reply: reply_tx,
+                ack_rx,
+            }
+        }
         Some("detach") => IpcCommand::Detach { reply: reply_tx },
         Some("attach") => IpcCommand::Attach {
             owner_pid: request
@@ -849,14 +856,28 @@ async fn handle_ipc_connection(
             }
         }
     };
-    tx.send(command)
-        .map_err(|_| anyhow!("daemon event loop closed"))?;
+    if let Err(_) = tx.send(command) {
+        if request.get("kind").and_then(Value::as_str) == Some("stop") {
+            write_ipc_result(&mut stream, Ok(json!({}))).await?;
+            if let Some(ack_tx) = command_ack_tx {
+                let _ = ack_tx.send(());
+            }
+            return Ok(());
+        }
+        let reported = anyhow!("daemon event loop closed");
+        write_ipc_result(&mut stream, Err(reported)).await?;
+        return Ok(());
+    }
 
     let result = reply_rx
         .await
         .map_err(|_| anyhow!("daemon dropped reply channel"))?;
 
-    write_ipc_result(&mut stream, result).await?;
+    let write_res = write_ipc_result(&mut stream, result).await;
+    if let Some(ack_tx) = command_ack_tx {
+        let _ = ack_tx.send(());
+    }
+    write_res?;
     Ok(())
 }
 
@@ -1531,6 +1552,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     app_server_exit_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     app_server_exit_check.tick().await;
     let mut provider_events_open = true;
+    let mut teardown_outcome: Result<Value> = Ok(json!({}));
 
     loop {
         tokio::select! {
@@ -1725,6 +1747,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         terminal_reason,
                         terminal_reason_raw,
                         reply,
+                        ack_rx,
                     } => {
                         // The wrapper can observe the TUI disconnect before
                         // this loop observes waitpid. Reconcile the owned
@@ -1741,7 +1764,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                             )
                             .await
                             .map(|_| json!({}));
+                            teardown_outcome = result.as_ref().map(|v| v.clone()).map_err(|e| anyhow!("{e:#}"));
                             let _ = reply.send(result);
+                            let _ = tokio::time::timeout(Duration::from_millis(500), ack_rx).await;
                             break;
                         }
                         fail_pending_pause_requests(
@@ -1751,11 +1776,23 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         )
                         .await;
                         crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
-                        // Commit the terminal fact durably, hand it to the
-                        // outbox, then acknowledge. No network I/O on this
-                        // path: delivery is the daemon's job, and a state file
-                        // that committed but never published is reconciled on
-                        // the managed-observation tick.
+
+                        // Release the provider child before committing terminal state.
+                        // The facade removes the session contract on success, so we must confirm
+                        // process absence before publishing terminal authority.
+                        let released = shutdown_child(&mut client).await;
+                        if let Err(error) = released {
+                            let msg = format!("codex teardown could not release the provider: {error:#}");
+                            teardown_outcome = Err(anyhow!(msg.clone()));
+                            record_first_failure(&mut context.state, "process_survived", &msg);
+                            context.state.status = "error".to_string();
+                            context.state.last_error = Some(msg.clone());
+                            let _ = write_state_file_durable(&context.state_file, &context.state);
+                            let _ = reply.send(Err(anyhow!(msg)));
+                            let _ = tokio::time::timeout(Duration::from_millis(500), ack_rx).await;
+                            break;
+                        }
+                        // Provider process is confirmed absent. Now durably commit terminal state.
                         let commit = commit_bridge_terminal(
                             &config,
                             &mut context,
@@ -1766,33 +1803,16 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                             None,
                         );
                         if let Err(error) = commit {
-                            // Nothing durable recorded this run as closed, so
-                            // do not acknowledge success. The facade surfaces
-                            // the I/O cause rather than guessing from process
-                            // liveness.
-                            let _ = reply.send(Err(anyhow!(
-                                "codex teardown could not commit terminal state: {error:#}"
-                            )));
-                            shutdown_child(&mut client).await?;
+                            let msg = format!("codex teardown could not commit terminal state: {error:#}");
+                            teardown_outcome = Err(anyhow!(msg.clone()));
+                            let _ = reply.send(Err(anyhow!(msg)));
+                            let _ = tokio::time::timeout(Duration::from_millis(500), ack_rx).await;
                             break;
                         }
-                        // Release the provider before acknowledging. The facade
-                        // removes the session contract on success, so a
-                        // success reply that raced a still-live app-server
-                        // would drop launch provenance for a running process.
-                        // This stays local and bounded (SIGTERM, 500ms grace,
-                        // SIGKILL) — the network is no longer on this path.
-                        let released = shutdown_child(&mut client).await;
-                        match released {
-                            Ok(()) => {
-                                let _ = reply.send(Ok(json!({})));
-                            }
-                            Err(error) => {
-                                let _ = reply.send(Err(anyhow!(
-                                    "codex teardown committed but could not release the provider: {error:#}"
-                                )));
-                            }
-                        }
+
+                        teardown_outcome = Ok(json!({}));
+                        let _ = reply.send(Ok(json!({})));
+                        let _ = tokio::time::timeout(Duration::from_millis(500), ack_rx).await;
                         break;
                     }
                 }
@@ -1839,16 +1859,41 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         "[codex-bridge] no terminal and no launching wrapper remain; committing terminal state"
                     );
                     let (reply_tx, _reply_rx) = oneshot::channel();
+                    let (_ack_tx, ack_rx) = oneshot::channel();
                     let _ = ipc_self_tx.send(IpcCommand::Stop {
                         terminal_reason: TERMINAL_REASON_OWNER_GONE.to_string(),
                         terminal_reason_raw: None,
                         reply: reply_tx,
+                        ack_rx,
                     });
                 }
             }
         }
     }
 
+    // Drain any remaining commands that arrived during teardown so no IPC caller
+    // receives a dropped channel error or broken pipe.
+    tokio::task::yield_now().await;
+    while let Ok(cmd) = ipc_rx.try_recv() {
+        match cmd {
+            IpcCommand::Stop { reply, ack_rx, .. } => {
+                let outcome = match &teardown_outcome {
+                    Ok(val) => Ok(val.clone()),
+                    Err(err) => Err(anyhow!("{err:#}")),
+                };
+                let _ = reply.send(outcome);
+                let _ = tokio::time::timeout(Duration::from_millis(500), ack_rx).await;
+            }
+            IpcCommand::Detach { reply } => {
+                let _ = reply.send(Ok(json!({})));
+            }
+            IpcCommand::Attach { reply, .. }
+            | IpcCommand::Steer { reply, .. }
+            | IpcCommand::TurnStart { reply, .. } => {
+                let _ = reply.send(Err(anyhow!("managed Codex session has stopped")));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2083,8 +2128,8 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
 /// The entire round-trip (connect + write + read response) is bounded by a
 /// timeout to prevent wedging if the daemon or app-server stalls.
 const IPC_SEND_TIMEOUT: Duration = Duration::from_secs(30);
-const IPC_STOP_TIMEOUT: Duration = Duration::from_secs(3);
-const CHILD_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(500);
+pub const IPC_STOP_TIMEOUT: Duration = Duration::from_millis(3000);
+pub const CHILD_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(500);
 
 #[cfg(unix)]
 async fn send_via_ipc(
@@ -4608,9 +4653,9 @@ fn sync_thread_binding(
         return;
     }
 
-    match resolve_bridge_agent_db_path(config.longhouse_home.as_deref())
-        .and_then(|db_path| crate::state::db::open_db(Some(&db_path)))
-    {
+    match resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).and_then(|db_path| {
+        crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))
+    }) {
         Ok(conn) => {
             let sb = crate::state::session_binding::SessionBinding::new(&conn);
             if let Some(old) = old_canonical.as_deref() {
@@ -4631,9 +4676,9 @@ fn sync_thread_binding(
 
 fn clear_binding_if_points_to_session(config: &BridgeRunConfig, path: &str, session_id: &str) {
     let canonical = normalize_binding_path(path);
-    match resolve_bridge_agent_db_path(config.longhouse_home.as_deref())
-        .and_then(|db_path| crate::state::db::open_db(Some(&db_path)))
-    {
+    match resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).and_then(|db_path| {
+        crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))
+    }) {
         Ok(conn) => {
             let sb = crate::state::session_binding::SessionBinding::new(&conn);
             match sb.get_for_provider(&canonical, "codex") {
@@ -5675,7 +5720,10 @@ impl BridgeRuntimeSink {
             return;
         };
 
-        let conn = match crate::state::db::open_db(Some(db_path)) {
+        let conn = match crate::state::db::open_client_connection(
+            Path::new(db_path),
+            Duration::from_millis(250),
+        ) {
             Ok(conn) => conn,
             Err(err) => {
                 eprintln!("[codex-bridge] open local phase DB failed: {err}");
@@ -6155,9 +6203,6 @@ fn commit_bridge_terminal(
     exit_code: Option<i32>,
     exit_signal: Option<i32>,
 ) -> Result<()> {
-    context
-        .runtime
-        .persist_local_phase("finished", None, Utc::now());
     crate::codex_teardown::stamp_terminal_commit(
         &mut context.state,
         config.machine_name.as_deref(),
@@ -6197,6 +6242,9 @@ fn commit_bridge_terminal(
     if let Some(path) = context.state.thread_path.as_deref() {
         wake_daemon_for_transcript(config, path, "idle", terminal_reason, None);
     }
+    context
+        .runtime
+        .persist_local_phase("finished", None, Utc::now());
     Ok(())
 }
 
@@ -6216,6 +6264,8 @@ async fn commit_owned_child_exit(
     )
     .await;
     crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
+    let cleanup = shutdown_child(client).await;
+    cleanup?;
     let commit = commit_bridge_terminal(
         config,
         context,
@@ -6225,9 +6275,7 @@ async fn commit_owned_child_exit(
         exit_code,
         exit_signal,
     );
-    let cleanup = shutdown_child(client).await;
     commit?;
-    cleanup?;
     eprintln!("[codex-bridge] {detail}; committed provider_exit");
     Ok(())
 }
@@ -6253,8 +6301,8 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
         },
     };
     if !outcome.is_gone() {
-        eprintln!(
-            "[codex-bridge] app-server process group {} survived SIGKILL",
+        bail!(
+            "app-server process group {} survived SIGKILL",
             pgid.unwrap_or_default()
         );
     }
@@ -7570,7 +7618,133 @@ mod tests {
         assert_eq!(row.1, None);
         assert_eq!(row.2, BRIDGE_RUNTIME_SOURCE);
     }
+    #[test]
+    fn codex_bridge_timeouts_enforce_budget_hierarchy() {
+        let min_process_teardown =
+            CHILD_SHUTDOWN_GRACE_PERIOD + Duration::from_millis(APP_SERVER_EXIT_RECONCILE_MS);
+        assert!(
+            IPC_STOP_TIMEOUT > min_process_teardown,
+            "IPC_STOP_TIMEOUT ({:?}) must exceed minimum process teardown budget ({:?})",
+            IPC_STOP_TIMEOUT,
+            min_process_teardown
+        );
+        assert!(IPC_STOP_TIMEOUT >= Duration::from_millis(3000));
+    }
 
+    #[test]
+    fn persist_local_phase_survives_locked_sqlite_db_without_stalling() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                let db_path = resolve_bridge_agent_db_path(Some(temp.path())).unwrap();
+
+                let blocker_conn =
+                    crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))
+                        .unwrap();
+                blocker_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+                let sink = BridgeRuntimeSink {
+                    http: reqwest::Client::new(),
+                    api_url: "http://127.0.0.1:9".to_string(),
+                    api_token: "token".to_string(),
+                    session_id: "session-lock-test".to_string(),
+                    machine_name: Some("test-box".to_string()),
+                    thread_id: None,
+                    local_db_path: Some(db_path.clone()),
+                    runtime_tx: None,
+                    live_runtime_tx: None,
+                };
+
+                let started = std::time::Instant::now();
+                sink.persist_local_phase("running", Some("shell".to_string()), Utc::now());
+                let elapsed = started.elapsed();
+
+                assert!(
+                    elapsed < Duration::from_millis(1500),
+                    "persist_local_phase took {:?}, expected < 1500ms even under lock contention",
+                    elapsed
+                );
+                blocker_conn.execute("ROLLBACK", []).unwrap();
+            },
+        );
+    }
+
+    #[test]
+    fn commit_bridge_terminal_persists_stopped_state_even_when_db_is_locked() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                let db_path = resolve_bridge_agent_db_path(Some(temp.path())).unwrap();
+
+                let blocker_conn =
+                    crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))
+                        .unwrap();
+                blocker_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+                let config = make_test_run_config(&temp);
+                let mut context = make_test_context(&temp);
+
+                let started = std::time::Instant::now();
+                let res = commit_bridge_terminal(
+                    &config,
+                    &mut context,
+                    "session_ended",
+                    "user_closed",
+                    None,
+                    Some(0),
+                    None,
+                );
+                let elapsed = started.elapsed();
+
+                assert!(res.is_ok(), "commit_bridge_terminal failed: {:?}", res);
+                assert_eq!(context.state.status, "stopped");
+                assert!(
+                    context.state_file.is_file(),
+                    "state file was not written to disk"
+                );
+
+                let on_disk_bytes = std::fs::read(&context.state_file).unwrap();
+                let on_disk: serde_json::Value = serde_json::from_slice(&on_disk_bytes).unwrap();
+                assert_eq!(on_disk["status"], "stopped");
+                assert_eq!(on_disk["terminal_reason"], "user_closed");
+                assert!(on_disk["stopped_at"].is_string());
+
+                assert!(
+                    elapsed < Duration::from_millis(1500),
+                    "commit_bridge_terminal took {:?}, expected < 1500ms even under lock contention",
+                    elapsed
+                );
+
+                blocker_conn.execute("ROLLBACK", []).unwrap();
+            },
+        );
+    }
+
+    #[test]
+    fn codex_bridge_stop_fails_cleanly_when_child_survives_sigkill() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                let mut context = make_test_context(&temp);
+
+                let msg = "app-server process group 12345 survived SIGKILL".to_string();
+                record_first_failure(&mut context.state, "process_survived", &msg);
+                context.state.status = "error".to_string();
+                context.state.last_error = Some(msg.clone());
+                write_state_file_durable(&context.state_file, &context.state).unwrap();
+
+                assert_eq!(context.state.status, "error");
+                assert!(context.state.stopped_at.is_none());
+                assert!(context.state.terminal_event.is_none());
+            },
+        );
+    }
     #[test]
     fn should_emit_progress_respects_throttle() {
         assert!(should_emit_progress(None, 1000));

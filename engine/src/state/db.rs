@@ -4,6 +4,7 @@
 //! Forward/backward compatible — both Python and Rust can read/write.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -67,6 +68,41 @@ pub fn open_connection(db_path: &Path) -> Result<Connection> {
         "PRAGMA foreign_keys=ON;
          PRAGMA synchronous=NORMAL;
          PRAGMA busy_timeout=5000;",
+    )?;
+    Ok(conn)
+}
+/// Open a fresh connection to an already-initialized shipper DB with a custom busy timeout.
+///
+/// Skips the full schema bootstrap `open_db` runs at startup. Suitable for fast-path
+/// client processes that only need to record state or query bindings without stalling.
+pub fn open_client_connection(db_path: &Path, busy_timeout: Duration) -> Result<Connection> {
+    if !is_sqlite_keyword_path(db_path) {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    let conn = Connection::open(db_path)
+        .with_context(|| format!("opening SQLite DB: {}", db_path.display()))?;
+    conn.busy_timeout(busy_timeout)?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys=ON;
+         PRAGMA synchronous=NORMAL;
+         CREATE TABLE IF NOT EXISTS session_phase_state (
+             session_id TEXT PRIMARY KEY,
+             provider TEXT NOT NULL,
+             phase TEXT NOT NULL,
+             tool_name TEXT,
+             source TEXT NOT NULL,
+             observed_at TEXT NOT NULL,
+             revision INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE TABLE IF NOT EXISTS session_binding (
+             path TEXT PRIMARY KEY,
+             session_id TEXT NOT NULL,
+             provider TEXT NOT NULL,
+             updated_at TEXT NOT NULL,
+             provider_session_id TEXT
+         );",
     )?;
     Ok(conn)
 }

@@ -48,7 +48,7 @@ use tokio::process::Child;
 pub const DEFAULT_GRACE: Duration = Duration::from_millis(500);
 
 /// How long to keep checking after `SIGKILL` before reporting `Survived`.
-const KILL_CONFIRM_BUDGET: Duration = Duration::from_millis(500);
+pub const KILL_CONFIRM_BUDGET: Duration = Duration::from_millis(500);
 
 /// Gap between liveness checks while waiting for a group to exit.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -291,14 +291,20 @@ pub async fn shutdown_owned_child(
             libc::killpg(pgid, libc::SIGKILL);
         }
     }
-    if !exited_on_term {
+    let reaped_on_kill = if !exited_on_term {
         let _ = child.start_kill();
-        let _ = child.wait().await;
-    }
+        matches!(
+            tokio::time::timeout(KILL_CONFIRM_BUDGET, child.wait()).await,
+            Ok(Ok(_))
+        )
+    } else {
+        true
+    };
     match pgid {
         Some(pgid) if !wait_for_group_exit(pgid, KILL_CONFIRM_BUDGET).await => {
             GroupShutdown::Survived
         }
+        None if !reaped_on_kill => GroupShutdown::Survived,
         _ => GroupShutdown::Killed,
     }
 }

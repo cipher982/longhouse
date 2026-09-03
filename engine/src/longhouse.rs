@@ -484,6 +484,10 @@ struct BridgeState {
     terminal_state: Option<String>,
     #[serde(default)]
     terminal_reason: Option<String>,
+    #[serde(default)]
+    terminal_event: Option<serde_json::Value>,
+    #[serde(default)]
+    terminal_dedupe_key: Option<String>,
 }
 
 fn paired_engine_path() -> anyhow::Result<PathBuf> {
@@ -4096,8 +4100,8 @@ enum TeardownOutcome {
 /// Outer bound for the stop helper, aligned to the helper's own
 /// `IPC_STOP_TIMEOUT` (3s) plus process spawn margin rather than an
 /// independently chosen number that can silently disagree with it.
-const CODEX_STOP_DEADLINE: Duration = Duration::from_secs(4);
-const CODEX_STOP_FORCE_REAP_BUDGET: Duration = Duration::from_millis(250);
+pub const CODEX_STOP_DEADLINE: Duration = Duration::from_millis(5000);
+pub const CODEX_STOP_FORCE_REAP_BUDGET: Duration = Duration::from_millis(500);
 
 fn stop_codex_bridge(
     session_id: &str,
@@ -4269,16 +4273,31 @@ fn classify_codex_teardown(
     }
     // A stale `stopped` file from a previous run of the same session id must
     // not be read as this run's outcome.
-    if let (Some(expected), Some(found)) = (expected_run_id, state.run_id.as_deref()) {
-        if expected != found {
-            return TeardownOutcome::NoDurableRecord {
-                detail: format!("{detail}; bridge state belongs to run {found}, not {expected}"),
-            };
+    if let Some(expected) = expected_run_id {
+        match state.run_id.as_deref() {
+            Some(found) if found == expected => {}
+            Some(found) => {
+                return TeardownOutcome::NoDurableRecord {
+                    detail: format!(
+                        "{detail}; bridge state belongs to run {found}, not {expected}"
+                    ),
+                };
+            }
+            None => {
+                return TeardownOutcome::NoDurableRecord {
+                    detail: format!(
+                        "{detail}; bridge state is missing run_id, expected {expected}"
+                    ),
+                };
+            }
         }
     }
     // `stopped` without a terminal commit marker means the file predates
     // durable teardown, so there is no reconstructable terminal event.
-    if state.stopped_at.is_none() {
+    if state.stopped_at.is_none()
+        || state.terminal_state.is_none()
+        || state.terminal_reason.is_none()
+    {
         return TeardownOutcome::NoDurableRecord {
             detail: format!("{detail}; bridge state has no durable terminal record"),
         };
@@ -5730,6 +5749,97 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&echoed.stdout),
             "/Users/dave's mac/bin/longhouse-engine"
+        );
+    }
+    #[test]
+    fn codex_teardown_timeouts_enforce_budget_hierarchy() {
+        assert!(CODEX_STOP_DEADLINE.as_millis() >= 5000);
+        let helper_reap_deadline = CODEX_STOP_DEADLINE - CODEX_STOP_FORCE_REAP_BUDGET;
+        assert!(
+            helper_reap_deadline >= Duration::from_millis(4000),
+            "Helper reap deadline ({:?}) must exceed 4s so stop helper is never killed prematurely",
+            helper_reap_deadline
+        );
+    }
+
+    #[test]
+    fn classify_codex_teardown_rejects_missing_run_id_when_expected() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "11111111-1111-4111-8111-111111111111";
+        let expected_run = "22222222-2222-4222-8222-222222222222";
+        let cwd = temp.path().join("workspace");
+        let rollout = temp.path().join("rollout.jsonl");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(&rollout, "{}\n").unwrap();
+
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                let state_path = codex_bridge_state_path(session_id).unwrap();
+                std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+                std::fs::write(
+                    &state_path,
+                    serde_json::to_vec(&json!({
+                        "cwd": cwd,
+                        "codex_bin": "/usr/local/bin/codex",
+                        "status": "stopped",
+                        "thread_id": "88888888-8888-4888-8888-888888888888",
+                        "thread_path": rollout,
+                        "run_id": null,
+                        "stopped_at": "2026-08-23T01:12:01Z",
+                        "terminal_state": "session_ended",
+                        "terminal_reason": "user_closed",
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+
+                let outcome = classify_codex_teardown(session_id, Some(expected_run), None);
+                assert!(matches!(
+                    outcome,
+                    TeardownOutcome::NoDurableRecord { detail } if detail.contains("missing run_id")
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn classify_codex_teardown_rejects_missing_terminal_markers() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "33333333-3333-4333-8333-333333333333";
+        let run_id = "44444444-4444-4444-8444-444444444444";
+        let cwd = temp.path().join("workspace");
+        let rollout = temp.path().join("rollout.jsonl");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(&rollout, "{}\n").unwrap();
+
+        temp_env::with_var(
+            "LONGHOUSE_HOME",
+            Some(temp.path().display().to_string()),
+            || {
+                let state_path = codex_bridge_state_path(session_id).unwrap();
+                std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+                std::fs::write(
+                    &state_path,
+                    serde_json::to_vec(&json!({
+                        "cwd": cwd,
+                        "codex_bin": "/usr/local/bin/codex",
+                        "status": "stopped",
+                        "thread_id": "88888888-8888-4888-8888-888888888888",
+                        "thread_path": rollout,
+                        "run_id": run_id,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+
+                let outcome = classify_codex_teardown(session_id, Some(run_id), None);
+                assert!(matches!(
+                    outcome,
+                    TeardownOutcome::NoDurableRecord { detail } if detail.contains("no durable terminal record")
+                ));
+            },
         );
     }
 }
