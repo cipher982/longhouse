@@ -676,6 +676,8 @@ class CatalogDaemon:
             return await self._read_storage_telemetry_summary(request)
         if request.method == "storage.session.raw_manifest.v2":
             return await self._read_storage_session_raw_manifest(request)
+        if request.method == "storage.session.raw_neighborhood.v2":
+            return await self._read_storage_session_raw_neighborhood(request)
         if request.method == "storage.session.projector.raw_manifest.v2":
             return await self._read_storage_session_raw_manifest(request, projector=True)
         if request.method == "storage.session.render_manifest.v2":
@@ -3108,6 +3110,29 @@ class CatalogDaemon:
                 after_source_key=after_source_key,
                 limit=limit,
             )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_storage_session_raw_neighborhood(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "owner_id", "envelope_id"}:
+            return self._error(request, "invalid_request", f"{request.method} has invalid parameters")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        owner_id = request.params["owner_id"]
+        if not _is_string(owner_id, maximum=64):
+            return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
+        envelope_id = request.params["envelope_id"]
+        if not _is_hash(envelope_id):
+            return self._error(request, "invalid_request", "envelope_id must be lowercase SHA-256 hex")
+        assert self._store is not None
+        result = await self._coalesced_session_detail_read(
+            "storage.session.raw_neighborhood.v2",
+            self._store.read_storage_session_raw_neighborhood,
+            session_id=session_id,
+            owner_id=owner_id,
+            envelope_id=envelope_id,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_render_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

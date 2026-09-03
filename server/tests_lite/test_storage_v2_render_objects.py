@@ -16,6 +16,7 @@ os.environ.setdefault("TESTING", "1")
 
 from zerg.routers.agents_storage_v2 import _parse_render_spec
 from zerg.services.render_object_workers import RenderObjectWorkerPool
+from zerg.services.storage_v2_semantics import SemanticRecoveryStats
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import _repaired_interaction_kind
 from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
@@ -661,12 +662,13 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
         calls = 0
 
         async def call(self, method, params, **_kwargs):
-            assert method == "storage.session.raw_manifest.v2"
+            assert method == "storage.session.raw_neighborhood.v2"
             self.calls += 1
             if self.calls == 1:
-                return missing_page
+                return {**missing_page, "companion_found": False}
             return {
                 "found": True,
+                "companion_found": True,
                 "objects": [
                     {
                         "envelope_id": sealed.envelope_id,
@@ -681,7 +683,6 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
                         "tenant_id": "tenant-a",
                     }
                 ],
-                "objects_truncated": False,
             }
 
     class RawReader:
@@ -689,7 +690,7 @@ async def test_storage_semantic_recovery_reloads_manifest_after_transient_absenc
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     catalog = Catalog()
-    with pytest.raises(StorageV2SemanticRecoveryError, match="raw (manifest|companion)"):
+    with pytest.raises(StorageV2SemanticRecoveryError, match="raw (neighborhood|companion)"):
         await recover_render_interaction_kinds(
             catalog=catalog,
             raw_workers=RawReader(),
@@ -843,9 +844,10 @@ async def test_storage_semantic_recovery_skips_full_stream_scan_without_sequence
 
     class Catalog:
         async def call(self, method, params, **_kwargs):
-            assert method == "storage.session.raw_manifest.v2"
+            assert method == "storage.session.raw_neighborhood.v2"
             return {
                 "found": True,
+                "companion_found": True,
                 "objects": [
                     {
                         "envelope_id": sealed.envelope_id,
@@ -937,8 +939,26 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
             ),
         ),
     )
+    adjacent_benign = RawObjectSpec(
+        tenant_id="tenant-a",
+        machine_id="cinder",
+        session_id=session_id,
+        provider="claude",
+        opaque_source_id="history.jsonl",
+        source_epoch=source_epoch,
+        range_kind="record_ordinal",
+        range_start=2,
+        range_end=3,
+        records=(
+            RawRecord(
+                source_position=2,
+                data=b'{"type":"assistant","message":{"role":"assistant","content":"done"}}',
+            ),
+        ),
+    )
     command_sealed = seal_raw_object(tmp_path, command)
     caveat_sealed = seal_raw_object(tmp_path, later_caveat)
+    benign_sealed = seal_raw_object(tmp_path, adjacent_benign)
     render = RenderObjectSpec(
         session_id=session_id,
         render_generation=UUID("018f0c3a-7b2d-7f10-8a11-223456789abc"),
@@ -964,14 +984,18 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
     )
 
     class RawReader:
+        reads = 0
+
         async def read(self, object_path, object_hash, tenant_id, **_kwargs):
+            self.reads += 1
             return read_raw_object(tmp_path, object_path, expected_object_hash=object_hash)
 
     class Catalog:
         async def call(self, method, params, **_kwargs):
-            assert method == "storage.session.raw_manifest.v2"
+            assert method == "storage.session.raw_neighborhood.v2"
             return {
                 "found": True,
+                "companion_found": True,
                 "objects": [
                     {
                         "envelope_id": command_sealed.envelope_id,
@@ -997,13 +1021,26 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
                         "object_hash": caveat_sealed.object_hash,
                         "tenant_id": "tenant-a",
                     },
+                    {
+                        "envelope_id": benign_sealed.envelope_id,
+                        "machine_id": "cinder",
+                        "provider": "claude",
+                        "opaque_source_id": "history.jsonl",
+                        "source_epoch": str(source_epoch),
+                        "range_start": 2,
+                        "range_end": 3,
+                        "object_path": benign_sealed.object_path,
+                        "object_hash": benign_sealed.object_hash,
+                        "tenant_id": "tenant-a",
+                    },
                 ],
-                "objects_truncated": False,
             }
 
+    reader = RawReader()
+    stats = SemanticRecoveryStats()
     recovered = await recover_render_interaction_kinds(
         catalog=Catalog(),
-        raw_workers=RawReader(),
+        raw_workers=reader,
         session_id=str(session_id),
         owner_id="42",
         provider="claude",
@@ -1012,9 +1049,12 @@ async def test_storage_semantic_recovery_reclassifies_legacy_command_when_caveat
         manifest_cache={},
         sequence_context_cache={},
         reclassify_sequence_controls=True,
+        stats=stats,
     )
 
     assert recovered == {0: "local_control"}
+    assert reader.reads == 3
+    assert stats.raw_companions_read == 3
 
 
 @pytest.mark.asyncio

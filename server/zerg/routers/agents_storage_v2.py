@@ -1860,7 +1860,7 @@ async def _read_storage_v2_session_events_page_admitted(
     workers = get_render_object_worker_pool()
     raw_workers = get_raw_object_worker_pool()
     raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
-    sequence_context_cache: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
+    sequence_context_cache: dict[tuple[str, ...], dict[str, object]] = {}
     ordered_events: list[tuple[tuple[int, str, str, str, str, int, int], dict[str, object]]] = []
     claude_generation = False
     claude_branch_records: list[tuple[tuple[int, str, str, str, str, int, int], RenderRecord]] = []

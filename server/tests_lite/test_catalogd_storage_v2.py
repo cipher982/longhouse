@@ -694,6 +694,45 @@ async def test_storage_commit_rejects_existing_session_owner_mismatch(daemon_pat
 
 
 @pytest.mark.asyncio
+async def test_raw_neighborhood_is_fixed_around_requested_companion(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = uuid4()
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        committed = []
+        for position in range(9):
+            raw = _raw_params(
+                epoch=epoch,
+                session_id=session_id,
+                start=position,
+                end=position + 1,
+                records=(bytes([position]),),
+                sealed_at=now,
+            )
+            await client.call("storage.raw_object.commit.v2", raw)
+            committed.append(raw)
+
+        neighborhood = await client.call(
+            "storage.session.raw_neighborhood.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "envelope_id": committed[4]["envelope_id"],
+            },
+        )
+
+        assert neighborhood["companion_found"] is True
+        assert [row["range_start"] for row in neighborhood["objects"]] == ["2", "3", "4", "5", "6"]
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_storage_commit_explains_cross_provider_session_collision(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

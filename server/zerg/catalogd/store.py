@@ -9899,6 +9899,90 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def read_storage_session_raw_neighborhood(
+        self,
+        *,
+        session_id: UUID,
+        owner_id: str,
+        envelope_id: str,
+    ) -> dict[str, Any]:
+        """Return one raw companion and at most two source neighbors per side."""
+
+        session_table = StorageSession.__table__
+        raw = LiveRawObject.__table__
+        tombstone = LiveSessionTombstone.__table__
+        session_key = str(session_id)
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            deleted = connection.execute(
+                select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
+            ).scalar_one_or_none()
+            session_row = (
+                connection.execute(
+                    select(session_table).where(
+                        session_table.c.session_id == session_key,
+                        session_table.c.owner_id == owner_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            current = None
+            if deleted is None and session_row is not None:
+                current = (
+                    connection.execute(
+                        select(raw).where(
+                            raw.c.session_id == session_key,
+                            raw.c.envelope_id == envelope_id,
+                            raw.c.retired_at.is_(None),
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+            rows: list[Any] = []
+            if current is not None:
+                identity = (
+                    raw.c.session_id == session_key,
+                    raw.c.machine_id == current["machine_id"],
+                    raw.c.provider == current["provider"],
+                    raw.c.opaque_source_id == current["opaque_source_id"],
+                    raw.c.source_epoch == current["source_epoch"],
+                    raw.c.retired_at.is_(None),
+                )
+                position = tuple_(raw.c.range_start, raw.c.envelope_id)
+                current_position = (current["range_start"], current["envelope_id"])
+                before = list(
+                    connection.execute(
+                        select(raw)
+                        .where(*identity, position < current_position)
+                        .order_by(raw.c.range_start.desc(), raw.c.envelope_id.desc())
+                        .limit(2)
+                    )
+                    .mappings()
+                    .all()
+                )
+                after = list(
+                    connection.execute(
+                        select(raw)
+                        .where(*identity, position > current_position)
+                        .order_by(raw.c.range_start.asc(), raw.c.envelope_id.asc())
+                        .limit(2)
+                    )
+                    .mappings()
+                    .all()
+                )
+                rows = [*reversed(before), current, *after]
+            return {
+                "found": session_row is not None and deleted is None,
+                "deleted": deleted is not None,
+                "deletion_revision": str(deleted) if deleted is not None else None,
+                "companion_found": current is not None,
+                "objects": [_raw_object_manifest_dto(row) for row in rows],
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
     def read_storage_session_render_manifest(
         self,
         *,
