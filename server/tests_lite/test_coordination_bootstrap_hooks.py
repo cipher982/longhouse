@@ -39,6 +39,7 @@ def test_static_coordination_bootstrap_is_default_on_but_managed_only(
     hook.chmod(0o755)
     env = os.environ.copy()
     env.pop("LONGHOUSE_MANAGED_SESSION_ID", None)
+    env.pop("LONGHOUSE_MANAGED_PROVIDER", None)
     env.pop("LONGHOUSE_COORDINATION_BOOTSTRAP", None)
     if managed:
         env["LONGHOUSE_MANAGED_SESSION_ID"] = "11111111-1111-1111-1111-111111111111"
