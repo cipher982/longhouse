@@ -935,6 +935,30 @@ struct SessionViewModelTests {
         #expect(model.submittedInputs.isEmpty)
     }
 
+
+    @Test
+    func recapFromTheProviderReachesTheDetail() async throws {
+        // The provider's away recap is served on the session; the phone shows
+        // it above the transcript so a returning user catches up without reading.
+        let workspace = try makeWorkspace(
+            eventId: 10,
+            content: "Rebuilt the DRIVE page.",
+            recapJSON: """
+            {"text": "Rebuilt the DRIVE page as a console instrument. Next: check it in the truck.", "at": "2026-09-02T23:10:05.294000+00:00"}
+            """
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+
+        #expect(model.detail?.recap?.text == "Rebuilt the DRIVE page as a console instrument. Next: check it in the truck.")
+        #expect(model.detail?.recap?.at == "2026-09-02T23:10:05.294000+00:00")
+        #expect(try makeWorkspace(eventId: 11, content: "no recap").session.recap == nil)
+    }
+
     @Test
     func submittedInputStaysWhileTheReceiptIsUnlinked() async throws {
         // The server knows about the send but has not seen its echo yet: the
@@ -1340,10 +1364,12 @@ struct SessionViewModelTests {
         pauseRequestJSON: String? = nil,
         total: Int = 1,
         pageOffset: Int = 0,
-        inputReceiptsJSON: String? = nil
+        inputReceiptsJSON: String? = nil,
+        recapJSON: String? = nil
     ) throws -> SessionWorkspaceResponse {
         let encodedContent = try jsonString(content)
         let inputReceiptsField = inputReceiptsJSON.map { "\n            \"input_receipts\": \($0)," } ?? ""
+        let recapField = recapJSON.map { "\n            \"recap\": \($0)," } ?? ""
         let encodedTimestamp = try jsonString(timestamp)
         let inputOriginField = inputOriginJSON.map { ",\n                  \"input_origin\": \($0)" } ?? ""
         let transcriptPreviewField = transcriptPreviewJSON.map { ",\n            \"transcript_preview\": \($0)" } ?? ""
@@ -1361,7 +1387,7 @@ struct SessionViewModelTests {
             "provider": "codex",
             "project": "zerg",
             "summary_title": "Workspace Session",
-            "user_state": "active",\(inputReceiptsField)
+            "user_state": "active",\(inputReceiptsField)\(recapField)
             "capabilities": {
               "live_control_available": true,
               "host_reattach_available": true,

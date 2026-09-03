@@ -1446,6 +1446,9 @@
   .tl-msg--user .tl-msg__who { color: rgba(233, 211, 163, 0.92); }
   .tl-msg--assistant .tl-msg__who { color: var(--color-brand-primary); }
   .tl-msg__time { color: var(--color-text-muted); font-family: var(--font-family-mono); font-size: 11px; }
+  .session-context-recap { padding: 8px 0 10px; border-bottom: 1px solid var(--color-border-subtle, rgba(255,255,255,0.08)); }
+  .session-context-recap__label { color: var(--color-text-muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px; }
+  .session-context-recap__text { color: var(--color-text-muted); font-size: 13px; line-height: 1.5; }
   .tl-turn-end { margin-top: 8px; color: var(--color-text-muted); font-family: var(--font-family-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
   .tl-msg__body {
     color: rgba(250, 245, 236, 0.96);

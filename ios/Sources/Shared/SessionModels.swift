@@ -886,6 +886,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var inputReceipts: [SessionInputReceipt]? = nil
     /// The most recent turn the provider reported as finished.
     var lastTurn: SessionLastTurn? = nil
+    /// The provider's latest away recap, when it wrote one.
+    var recap: SessionRecap? = nil
 
     var displayTitle: String {
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
@@ -1201,7 +1203,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             transcriptPreview: transcriptPreview,
             deviceId: deviceId,
             inputReceipts: inputReceipts,
-            lastTurn: lastTurn
+            lastTurn: lastTurn,
+            recap: recap
         )
     }
 
@@ -1383,6 +1386,12 @@ struct SessionTurnEnd: Codable, Hashable, Sendable {
     let durationMs: Int
     let endedAt: String
     let messageCount: Int?
+}
+
+/// The provider's own catch-up note, written while the user was away.
+struct SessionRecap: Codable, Hashable, Sendable {
+    let text: String
+    let at: String
 }
 
 /// The most recent turn the provider reported as finished, for the session chrome.

@@ -58,6 +58,11 @@ struct SessionView: View {
         // feedback loop repeatedly resized and repinned WebKit while the user was
         // trying to focus the composer.
         transcript
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let recap = viewModel.detail?.recap {
+                SessionRecapBanner(recap: recap)
+            }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomChrome
                 .frame(maxWidth: .infinity)
@@ -762,5 +767,38 @@ private struct SessionNavigationSubtitle: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// The provider's away recap, above the transcript: the catch-up line the
+/// terminal prints in dim text when you come back. Collapsed to two lines;
+/// tap to read all of it.
+struct SessionRecapBanner: View {
+    let recap: SessionRecap
+    @State private var expanded = false
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "text.quote")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+                Text(recap.text)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(expanded ? nil : 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("session-recap")
+        .accessibilityLabel("Recap: \(recap.text)")
     }
 }

@@ -232,7 +232,8 @@ extension APISessionResponse {
             transcriptPreview: transcriptPreview?.sessionTranscriptPreview,
             deviceId: deviceId,
             inputReceipts: inputReceipts?.map(\.sessionInputReceipt),
-            lastTurn: lastTurn?.sessionLastTurn
+            lastTurn: lastTurn?.sessionLastTurn,
+            recap: recap.map { SessionRecap(text: $0.text, at: $0.at) }
         )
     }
 }

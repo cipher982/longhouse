@@ -53,6 +53,10 @@ export interface AgentSession {
   summary_title: string | null;
   /** Frozen, write-once headline; stable across the session's life. */
   anchor_title?: string | null;
+  /** The provider's latest away recap, when it wrote one. */
+  recap?: { text: string; at: string } | null;
+  /** The most recent turn the provider reported as finished. */
+  last_turn?: AgentSessionLastTurn | null;
   /** Server-resolved headline to render verbatim (no client fallback ladder). */
   timeline_title?: string | null;
   summary_status?:

@@ -198,6 +198,12 @@ export function SessionContextPane({
         </div>
       ) : null}
 
+      {session.recap?.text ? (
+        <div className="session-context-recap" data-testid="session-recap">
+          <div className="session-context-recap__label">Recap</div>
+          <div className="session-context-recap__text">{session.recap.text}</div>
+        </div>
+      ) : null}
       {session.summary ? (
         <details className="session-pane-disclosure session-pane-disclosure--tertiary session-pane-disclosure--summary">
           <summary className="session-pane-disclosure__summary">
