@@ -112,7 +112,9 @@ pub async fn start_antigravity_print_turn(
         &config.prompt,
         config.model.as_deref(),
         config.conversation_id.as_deref(),
-        config.print_timeout_secs.unwrap_or(DEFAULT_PRINT_TIMEOUT_SECS),
+        config
+            .print_timeout_secs
+            .unwrap_or(DEFAULT_PRINT_TIMEOUT_SECS),
     );
     let argv = std::iter::once(config.antigravity_bin.clone())
         .chain(args.iter().cloned())
@@ -545,7 +547,10 @@ fn antigravity_brain_root() -> Option<PathBuf> {
 impl AntigravityPrintSink {
     async fn bind_transcript(&self, transcript: &Path, provider_session_id: &str) {
         if let Some(db_path) = self.local_db_path.as_deref() {
-            match crate::state::db::open_db(Some(db_path)) {
+            match crate::state::db::open_client_connection(
+                Path::new(db_path),
+                Duration::from_millis(500),
+            ) {
                 Ok(conn) => {
                     let binding = crate::state::session_binding::SessionBinding::new(&conn);
                     if let Err(err) = binding.bind(
@@ -672,8 +677,15 @@ impl AntigravityPrintSink {
         let Some(db_path) = self.local_db_path.as_deref() else {
             return;
         };
-        let Ok(conn) = crate::state::db::open_db(Some(db_path)) else {
-            return;
+        let conn = match crate::state::db::open_client_connection(
+            Path::new(db_path),
+            Duration::from_millis(250),
+        ) {
+            Ok(conn) => conn,
+            Err(err) => {
+                eprintln!("[antigravity-print] open local phase DB failed: {err}");
+                return;
+            }
         };
         let signal = crate::state::session_phase::SessionPhaseSignal {
             session_id: self.session_id.clone(),
@@ -683,7 +695,13 @@ impl AntigravityPrintSink {
             source: ANTIGRAVITY_PRINT_ADAPTER.to_string(),
             observed_at,
         };
-        let _ = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal);
+        if let Err(err) = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal)
+        {
+            eprintln!(
+                "[antigravity-print] persist local phase failed for {}: {err}",
+                self.session_id
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -866,11 +884,12 @@ mod tests {
         assert_eq!(args[print_index + 1], "do the thing");
         assert_eq!(print_index, args.len() - 2);
         assert!(args.iter().any(|arg| arg == "--print-timeout"));
-        assert!(args
-            .iter()
-            .position(|arg| arg == "--print-timeout")
-            .unwrap()
-            < print_index);
+        assert!(
+            args.iter()
+                .position(|arg| arg == "--print-timeout")
+                .unwrap()
+                < print_index
+        );
     }
 
     #[test]

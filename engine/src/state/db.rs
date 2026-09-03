@@ -76,10 +76,16 @@ pub fn open_connection(db_path: &Path) -> Result<Connection> {
 /// Skips the full schema bootstrap `open_db` runs at startup. Suitable for fast-path
 /// client processes that only need to record state or query bindings without stalling.
 pub fn open_client_connection(db_path: &Path, busy_timeout: Duration) -> Result<Connection> {
-    if !is_sqlite_keyword_path(db_path) {
+    let on_disk = !is_sqlite_keyword_path(db_path);
+    if on_disk {
         if let Some(parent) = db_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating DB directory: {}", parent.display()))?;
+            #[cfg(unix)]
+            restrict_agent_dir(parent);
         }
+        #[cfg(unix)]
+        restrict_db_files(db_path)?;
     }
     let conn = Connection::open(db_path)
         .with_context(|| format!("opening SQLite DB: {}", db_path.display()))?;

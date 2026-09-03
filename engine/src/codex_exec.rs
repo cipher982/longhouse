@@ -1773,7 +1773,10 @@ impl CodexExecRuntimeSink {
             .or_else(|| codex_rollout_path(provider_thread_id));
         if let Some(db_path) = self.local_db_path.as_deref() {
             if let Some(source_path) = source_path.as_deref() {
-                match crate::state::db::open_db(Some(db_path)) {
+                match crate::state::db::open_client_connection(
+                    Path::new(db_path),
+                    Duration::from_millis(500),
+                ) {
                     Ok(conn) => {
                         let binding = crate::state::session_binding::SessionBinding::new(&conn);
                         // Record the thread this binding was made for. Without
@@ -1809,7 +1812,10 @@ impl CodexExecRuntimeSink {
         let Some(db_path) = self.local_db_path.as_deref() else {
             return;
         };
-        let conn = match crate::state::db::open_db(Some(db_path)) {
+        let conn = match crate::state::db::open_client_connection(
+            Path::new(db_path),
+            Duration::from_millis(250),
+        ) {
             Ok(conn) => conn,
             Err(err) => {
                 eprintln!("[codex-exec] open local phase DB failed: {err}");

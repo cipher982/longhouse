@@ -287,9 +287,7 @@ pub fn interrupt_pi_print_turn(run_id: &str, session_id: &str) -> Result<()> {
     if claim.adapter.as_deref() != Some(PI_PRINT_ADAPTER) || claim.state != "spawned" {
         anyhow::bail!("Pi Console turn is not active");
     }
-    let pid = claim
-        .pid
-        .context("Pi Console turn has no provider pid")?;
+    let pid = claim.pid.context("Pi Console turn has no provider pid")?;
     let expected_start = claim
         .process_start_time
         .as_deref()
@@ -341,7 +339,8 @@ async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, sink: PiPrintSi
         .is_some();
     if cancel_requested {
         cleanup_process_group(sink.process_group_id).await;
-        sink.post_terminal("run_cancelled", status.code(), None).await;
+        sink.post_terminal("run_cancelled", status.code(), None)
+            .await;
         return;
     }
     if !status.success() {
@@ -370,10 +369,13 @@ async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, sink: PiPrintSi
         .await;
         return;
     };
-    sink.bind_transcript(&transcript, &provider_session_id).await;
+    sink.bind_transcript(&transcript, &provider_session_id)
+        .await;
     sink.post_binding(&provider_session_id, &transcript).await;
-    sink.wake_transcript_shipper(&transcript, &provider_session_id).await;
-    sink.post_terminal("run_completed", status.code(), None).await;
+    sink.wake_transcript_shipper(&transcript, &provider_session_id)
+        .await;
+    sink.post_terminal("run_completed", status.code(), None)
+        .await;
 }
 
 async fn monitor_recovered_claim(
@@ -435,9 +437,11 @@ async fn settle_pi_claim(sink: &PiPrintSink, cancel_requested: bool, stderr_path
         .await;
         return;
     };
-    sink.bind_transcript(&transcript, &provider_session_id).await;
+    sink.bind_transcript(&transcript, &provider_session_id)
+        .await;
     sink.post_binding(&provider_session_id, &transcript).await;
-    sink.wake_transcript_shipper(&transcript, &provider_session_id).await;
+    sink.wake_transcript_shipper(&transcript, &provider_session_id)
+        .await;
     sink.post_terminal("run_completed", None, None).await;
 }
 
@@ -509,15 +513,24 @@ fn read_session_header_id(path: &Path) -> Option<String> {
 
 fn pi_console_session_root(session_id: &str) -> PathBuf {
     match crate::config::get_agent_dir() {
-        Ok(agent_dir) => agent_dir.join("pi-console").join(session_id).join("sessions"),
-        Err(_) => PathBuf::from(".").join("pi-console").join(session_id).join("sessions"),
+        Ok(agent_dir) => agent_dir
+            .join("pi-console")
+            .join(session_id)
+            .join("sessions"),
+        Err(_) => PathBuf::from(".")
+            .join("pi-console")
+            .join(session_id)
+            .join("sessions"),
     }
 }
 
 impl PiPrintSink {
     async fn bind_transcript(&self, transcript: &Path, provider_session_id: &str) {
         if let Some(db_path) = self.local_db_path.as_deref() {
-            match crate::state::db::open_db(Some(db_path)) {
+            match crate::state::db::open_client_connection(
+                Path::new(db_path),
+                Duration::from_millis(500),
+            ) {
                 Ok(conn) => {
                     let binding = crate::state::session_binding::SessionBinding::new(&conn);
                     if let Err(err) =
@@ -628,8 +641,15 @@ impl PiPrintSink {
         let Some(db_path) = self.local_db_path.as_deref() else {
             return;
         };
-        let Ok(conn) = crate::state::db::open_db(Some(db_path)) else {
-            return;
+        let conn = match crate::state::db::open_client_connection(
+            Path::new(db_path),
+            Duration::from_millis(250),
+        ) {
+            Ok(conn) => conn,
+            Err(err) => {
+                eprintln!("[pi-print] open local phase DB failed: {err}");
+                return;
+            }
         };
         let signal = crate::state::session_phase::SessionPhaseSignal {
             session_id: self.session_id.clone(),
@@ -639,7 +659,13 @@ impl PiPrintSink {
             source: PI_PRINT_ADAPTER.to_string(),
             observed_at,
         };
-        let _ = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal);
+        if let Err(err) = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal)
+        {
+            eprintln!(
+                "[pi-print] persist local phase failed for {}: {err}",
+                self.session_id
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -801,7 +827,9 @@ mod tests {
     #[test]
     fn session_header_id_is_read_from_the_session_jsonl_header() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("1723200000_019f6b93-edf6-7bd0-a757-b5195a61abdd.jsonl");
+        let path = temp
+            .path()
+            .join("1723200000_019f6b93-edf6-7bd0-a757-b5195a61abdd.jsonl");
         std::fs::write(
             &path,
             "{\"type\":\"session\",\"version\":3,\"id\":\"019f6b93-edf6-7bd0-a757-b5195a61abdd\",\"cwd\":\"/tmp\",\"timestamp\":\"2026-08-10T00:00:00Z\"}\n{\"type\":\"message\",\"id\":\"msg1\",\"timestamp\":\"2026-08-10T00:00:01Z\"}\n",

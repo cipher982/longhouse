@@ -800,8 +800,15 @@ impl ClaudePrintSink {
         let Some(db_path) = self.local_db_path.as_deref() else {
             return;
         };
-        let Ok(conn) = crate::state::db::open_db(Some(db_path)) else {
-            return;
+        let conn = match crate::state::db::open_client_connection(
+            Path::new(db_path),
+            Duration::from_millis(250),
+        ) {
+            Ok(conn) => conn,
+            Err(err) => {
+                eprintln!("[claude-print] open local phase DB failed: {err}");
+                return;
+            }
         };
         let signal = crate::state::session_phase::SessionPhaseSignal {
             session_id: self.session_id.clone(),
@@ -811,7 +818,13 @@ impl ClaudePrintSink {
             source: CLAUDE_PRINT_ADAPTER.to_string(),
             observed_at,
         };
-        let _ = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal);
+        if let Err(err) = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal)
+        {
+            eprintln!(
+                "[claude-print] persist local phase failed for {}: {err}",
+                self.session_id
+            );
+        }
     }
 
     async fn post_events(&self, events: Vec<Value>) {
@@ -1253,5 +1266,40 @@ mod tests {
         );
         let system = json!({"type": "system", "subtype": "init"});
         assert_eq!(claude_phase_from_event(&system), None);
+    }
+    #[test]
+    fn persist_local_phase_survives_locked_sqlite_db_without_stalling() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("agent/longhouse-shipper.db");
+
+        let blocker_conn =
+            crate::state::db::open_client_connection(&db_path, Duration::from_millis(500)).unwrap();
+        blocker_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+        let sink = ClaudePrintSink {
+            session_id: "claude-lock-test".to_string(),
+            thread_id: "thread-1".to_string(),
+            turn_id: None,
+            run_id: "run-1".to_string(),
+            client_request_id: None,
+            provider_thread_id: "p-thread-1".to_string(),
+            launch_id: "launch-1".to_string(),
+            process_group_id: None,
+            machine_name: "test-box".to_string(),
+            local_db_path: Some(db_path),
+            runtime_events_outbox_dir: temp.path().join("outbox"),
+        };
+
+        let started = std::time::Instant::now();
+        sink.persist_local_phase("running", Some("Bash".to_string()), Utc::now());
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "persist_local_phase took {:?}, expected < 1500ms even under lock contention",
+            elapsed
+        );
+
+        blocker_conn.execute("ROLLBACK", []).unwrap();
     }
 }
