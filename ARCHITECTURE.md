@@ -104,6 +104,17 @@ The project uses some shorthand nouns. The important ones:
 - **Peers** — other machines/agents reporting into the same Runtime Host.
 - **Runner** — an optional WebSocket command executor for remote execution on
   a user-owned machine.
+- **Provider fact** — something the provider's own terminal shows that lives on
+  a transcript line the transcript view never renders: a turn's duration, an
+  away recap, the provider's own session title, model and context usage. The
+  Machine Agent parses these beside the transcript and ships them with the
+  bytes that carry them; the Runtime Host keeps one row per source line and
+  projects them as `turn_end`, `last_turn`, `recap`, and `usage_latest`. Which
+  signals each provider writes, and how proven each is, is declared per
+  provider under `transcript_signals` in `schemas/managed_providers.yml`;
+  `schemas/transcript_shapes/` is the append-only catalog of every transcript
+  line shape seen per provider version, and `scripts/qa/transcript_census.py`
+  fails on a shape nobody has classified.
 
 ## Where to read next
 
