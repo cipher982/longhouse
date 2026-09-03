@@ -1,0 +1,87 @@
+{
+  "fact_count": 7,
+  "facts": [
+    {
+      "kind": "turn.duration",
+      "at": "2026-09-03T11:25:31.445Z",
+      "source_offset": 2395,
+      "payload": {
+        "duration_ms": 18391,
+        "outcome": "completed",
+        "time_to_first_token_ms": 8662,
+        "turn_id": "01a06704-0998-75c0-b532-a2e5db03a420"
+      }
+    },
+    {
+      "kind": "turn.usage",
+      "at": "2026-09-03T11:25:31.445Z",
+      "source_offset": 2395,
+      "payload": {
+        "cache_creation_input_tokens": 300,
+        "cache_read_input_tokens": 24700,
+        "context_tokens": 25210,
+        "context_window": 258400,
+        "effort": "xhigh",
+        "input_tokens": 25000,
+        "model": "gpt-5.6-luna",
+        "output_tokens": 210,
+        "thinking_tokens": 90
+      }
+    },
+    {
+      "kind": "turn.api_error",
+      "at": "2026-09-03T14:41:00Z",
+      "source_offset": 4065,
+      "payload": {
+        "details": "error sending request for url (https://chatgpt.com/backend-api/codex/responses)",
+        "error": "stream disconnected before completion: transport error",
+        "kind": "stream_error"
+      }
+    },
+    {
+      "kind": "turn.duration",
+      "at": "2026-09-03T17:26:39.735Z",
+      "source_offset": 4366,
+      "payload": {
+        "duration_ms": 10839735,
+        "outcome": "aborted",
+        "reason": "interrupted",
+        "turn_id": "01a06704-2222-75c0-b532-a2e5db03a420"
+      }
+    },
+    {
+      "kind": "turn.usage",
+      "at": "2026-09-03T17:26:39.735Z",
+      "source_offset": 4366,
+      "payload": {
+        "cache_creation_input_tokens": 800,
+        "cache_read_input_tokens": 38000,
+        "context_tokens": 40000,
+        "context_window": 258400,
+        "effort": "high",
+        "input_tokens": 39000,
+        "model": "gpt-5.6-luna",
+        "output_tokens": 1000,
+        "thinking_tokens": 500
+      }
+    },
+    {
+      "kind": "context.compaction",
+      "at": "2026-09-03T17:27:00Z",
+      "source_offset": 4618,
+      "payload": {
+        "pre_tokens": 40000,
+        "replacement_items": 2
+      }
+    },
+    {
+      "kind": "turn.api_error",
+      "at": "2026-09-03T17:28:00Z",
+      "source_offset": 4973,
+      "payload": {
+        "error": "You've hit your usage limit. Try again at 6pm.",
+        "kind": "error"
+      }
+    }
+  ]
+}

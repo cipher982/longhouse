@@ -1389,6 +1389,8 @@ struct SessionTurnEnd: Codable, Hashable, Sendable {
     let durationMs: Int
     let endedAt: String
     let messageCount: Int?
+    /// "completed" or "aborted": Codex reports a stopped turn's duration too.
+    var outcome: String? = nil
 }
 
 /// The provider's own catch-up note, written while the user was away.
@@ -1405,6 +1407,8 @@ struct SessionUsageLatest: Codable, Hashable, Sendable {
     let outputTokens: Int
     let thinkingTokens: Int?
     let at: String
+    /// The model's context window when the provider reports it (Codex does).
+    var contextWindow: Int? = nil
 }
 
 /// The most recent turn the provider reported as finished, for the session chrome.
@@ -1412,6 +1416,7 @@ struct SessionLastTurn: Codable, Hashable, Sendable {
     let durationMs: Int
     let endedAt: String
     let eventId: String?
+    var outcome: String? = nil
 }
 
 struct SessionInputReceipt: Codable, Hashable, Sendable {

@@ -247,7 +247,9 @@ export function SessionContextPane({
                 value={[
                   session.usage_latest.model,
                   session.usage_latest.effort,
-                  `${compactTokens(session.usage_latest.context_tokens)} context`,
+                  session.usage_latest.context_window
+                    ? `${compactTokens(session.usage_latest.context_tokens)}/${compactTokens(session.usage_latest.context_window)} context`
+                    : `${compactTokens(session.usage_latest.context_tokens)} context`,
                 ]
                   .filter(Boolean)
                   .join(" · ")}

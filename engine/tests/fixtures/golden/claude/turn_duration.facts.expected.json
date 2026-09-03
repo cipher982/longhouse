@@ -8,6 +8,7 @@
       "payload": {
         "cache_creation_input_tokens": 261,
         "cache_read_input_tokens": 501447,
+        "context_tokens": 501710,
         "input_tokens": 2,
         "model": "claude-opus-5",
         "output_tokens": 177

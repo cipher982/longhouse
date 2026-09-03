@@ -79,11 +79,17 @@ extension SessionDetail {
 
 extension SessionUsageLatest {
     /// "opus 5 · high · 501k ctx": the terminal's model line, compacted for a chip.
+    /// "gpt 5.6 luna · xhigh · 25k/258k ctx" when the provider names its window.
     var chipLabel: String {
         var parts: [String] = []
         if let model = Self.shortModelName(model) { parts.append(model) }
         if let effort = effort?.trimmingCharacters(in: .whitespacesAndNewlines), !effort.isEmpty { parts.append(effort) }
-        parts.append("\(Self.compactTokens(contextTokens)) ctx")
+        let context = Self.compactTokens(contextTokens)
+        if let contextWindow, contextWindow > 0 {
+            parts.append("\(context)/\(Self.compactTokens(contextWindow)) ctx")
+        } else {
+            parts.append("\(context) ctx")
+        }
         return parts.joined(separator: " · ")
     }
 

@@ -28,7 +28,12 @@ type AgentEvent = {
   id: number;
   role: string;
   content_text: string | null;
-  turn_end?: { duration_ms: number; ended_at: string; message_count?: number | null } | null;
+  turn_end?: {
+    duration_ms: number;
+    ended_at: string;
+    message_count?: number | null;
+    outcome?: "completed" | "aborted";
+  } | null;
   tool_name: string | null;
   tool_input_json: unknown;
   tool_output_text: string | null;
@@ -483,11 +488,12 @@ export function buildSessionDetailStressFixture(): {
       at: "2026-04-15T15:30:00Z",
     },
     usage_latest: {
-      model: "claude-opus-5",
-      effort: "high",
-      context_tokens: 501_447,
-      output_tokens: 177,
-      thinking_tokens: 0,
+      model: "gpt-5.6-luna",
+      effort: "xhigh",
+      context_tokens: 25_210,
+      context_window: 258_400,
+      output_tokens: 210,
+      thinking_tokens: 90,
       at: "2026-04-15T15:22:34Z",
     },
     summary:
@@ -529,7 +535,8 @@ export function buildSessionDetailStressFixture(): {
     makeEvent(102, "assistant", "2026-04-15T14:44:20Z", {
       content_text:
         "The strongest direction is a dense workbench: compact turn blocks, fixed runtime strip, keyboardable filters, and a mode that jumps between user prompts.",
-      turn_end: { duration_ms: 129_299, ended_at: "2026-04-15T14:44:21Z", message_count: 42 },
+      // A turn the user stopped: Codex still reports how long it ran.
+      turn_end: { duration_ms: 3_729_000, ended_at: "2026-04-15T14:44:21Z", message_count: 42, outcome: "aborted" },
     }),
     makeEvent(103, "assistant", "2026-04-15T14:45:10Z", {
       tool_name: "exec_command",

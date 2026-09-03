@@ -852,6 +852,9 @@ class TurnEndResponse(BaseModel):
     duration_ms: int = Field(..., description="Wall-clock milliseconds the provider reported for the turn")
     ended_at: datetime = Field(..., description="When the provider reported the turn done")
     message_count: Optional[int] = Field(None, description="Provider message count at turn end, when reported")
+    outcome: Literal["completed", "aborted"] = Field(
+        "completed", description="Whether the provider finished the turn or the user stopped it"
+    )
 
 
 class SessionRecapResponse(BaseModel):
@@ -866,7 +869,8 @@ class UsageLatestResponse(BaseModel):
 
     model: Optional[str] = Field(None, description="Model id the provider reported")
     effort: Optional[str] = Field(None, description="Reasoning effort the provider reported")
-    context_tokens: int = Field(..., description="Input + cached tokens on the last turn-ending response: the live context size")
+    context_tokens: int = Field(..., description="The provider's own context size after the last turn-ending response")
+    context_window: Optional[int] = Field(None, description="The model's context window, when the provider reports it")
     output_tokens: int = Field(..., description="Output tokens on that response")
     thinking_tokens: Optional[int] = Field(None, description="Thinking tokens on that response, when reported")
     at: datetime = Field(..., description="When that response was written")
@@ -878,6 +882,9 @@ class LastTurnResponse(BaseModel):
     duration_ms: int = Field(..., description="Wall-clock milliseconds of the last finished turn")
     ended_at: datetime = Field(..., description="When the last turn finished")
     event_id: Optional[str] = Field(None, description="The event the turn ended on, when it is known")
+    outcome: Literal["completed", "aborted"] = Field(
+        "completed", description="Whether the provider finished the turn or the user stopped it"
+    )
 
 
 class SessionInputReceiptResponse(BaseModel):

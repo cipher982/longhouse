@@ -366,9 +366,10 @@ struct WebTranscriptView: UIViewRepresentable {
             turnEnd = nil
         }
         guard let turnEnd else { return nil }
+        let stopped = turnEnd.outcome == "aborted"
         return WebTranscriptTurnEnd(
-            label: "Worked for \(TurnEndCopy.duration(milliseconds: turnEnd.durationMs))",
-            doneAt: TurnEndCopy.doneAt(turnEnd.endedAt, now: now)
+            label: "\(stopped ? "Interrupted after" : "Worked for") \(TurnEndCopy.duration(milliseconds: turnEnd.durationMs))",
+            doneAt: TurnEndCopy.doneAt(turnEnd.endedAt, now: now, verb: stopped ? "stopped" : "done")
         )
     }
 
@@ -2953,19 +2954,20 @@ enum TurnEndCopy {
     }
 
     /// "done 9:15 AM" today, "done Tue 9:15 AM" within a week, else with the date.
-    nonisolated static func doneAt(_ endedAt: String, now: Date = Date(), calendar: Calendar = .current) -> String {
-        guard let date = LonghouseDateParser.parse(endedAt) else { return "done" }
+    /// A stopped turn says "stopped" instead.
+    nonisolated static func doneAt(_ endedAt: String, now: Date = Date(), calendar: Calendar = .current, verb: String = "done") -> String {
+        guard let date = LonghouseDateParser.parse(endedAt) else { return verb }
         let time = DateFormatter()
         time.calendar = calendar
         time.dateStyle = .none
         time.timeStyle = .short
         if calendar.isDate(date, inSameDayAs: now) {
-            return "done \(time.string(from: date))"
+            return "\(verb) \(time.string(from: date))"
         }
         let day = DateFormatter()
         day.calendar = calendar
         let withinWeek = now.timeIntervalSince(date) < 7 * 24 * 3600
         day.setLocalizedDateFormatFromTemplate(withinWeek ? "EEE" : "MMM d")
-        return "done \(day.string(from: date)) \(time.string(from: date))"
+        return "\(verb) \(day.string(from: date)) \(time.string(from: date))"
     }
 }

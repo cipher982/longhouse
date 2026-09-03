@@ -119,8 +119,14 @@ def turn_ends_by_event(facts: list[dict[str, Any]], events: list[dict[str, objec
             "duration_ms": duration_ms,
             "ended_at": fact["at"].isoformat(),
             "message_count": message_count if isinstance(message_count, int) else None,
+            "outcome": _turn_outcome(payload),
         }
     return decorations
+
+
+def _turn_outcome(payload: dict[str, Any]) -> str:
+    """Codex closes an interrupted turn with its duration too; Claude only writes finished ones."""
+    return "aborted" if payload.get("outcome") == "aborted" else "completed"
 
 
 def last_turn(facts: list[dict[str, Any]], decorations: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
@@ -135,7 +141,12 @@ def last_turn(facts: list[dict[str, Any]], decorations: dict[str, dict[str, Any]
         return None
     ended_at = latest["at"].isoformat()
     event_id = next((event_id for event_id, turn in decorations.items() if turn["ended_at"] == ended_at), None)
-    return {"duration_ms": latest["payload"]["duration_ms"], "ended_at": ended_at, "event_id": event_id}
+    return {
+        "duration_ms": latest["payload"]["duration_ms"],
+        "ended_at": ended_at,
+        "event_id": event_id,
+        "outcome": _turn_outcome(latest["payload"]),
+    }
 
 
 def recap(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -165,15 +176,21 @@ def usage_latest(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
     if latest is None:
         return None
     payload = latest["payload"]
-    context_tokens = sum(
-        int(payload[key])
-        for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-        if type(payload.get(key)) is int
-    )
+    # The engine names the provider's own context accounting; facts written
+    # before it did carry only Claude's input classes, whose sum is the same number.
+    if type(payload.get("context_tokens")) is int:
+        context_tokens = int(payload["context_tokens"])
+    else:
+        context_tokens = sum(
+            int(payload[key])
+            for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+            if type(payload.get(key)) is int
+        )
     return {
         "model": payload.get("model") if isinstance(payload.get("model"), str) else None,
         "effort": payload.get("effort") if isinstance(payload.get("effort"), str) else None,
         "context_tokens": context_tokens,
+        "context_window": int(payload["context_window"]) if type(payload.get("context_window")) is int else None,
         "output_tokens": int(payload["output_tokens"]),
         "thinking_tokens": int(payload["thinking_tokens"]) if type(payload.get("thinking_tokens")) is int else None,
         "at": latest["at"].isoformat(),

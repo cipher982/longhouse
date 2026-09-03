@@ -241,7 +241,8 @@ extension APISessionResponse {
                     contextTokens: $0.contextTokens,
                     outputTokens: $0.outputTokens,
                     thinkingTokens: $0.thinkingTokens,
-                    at: $0.at
+                    at: $0.at,
+                    contextWindow: $0.contextWindow
                 )
             }
         )
@@ -368,13 +369,13 @@ private extension JSONValue {
 
 extension APITurnEndResponse {
     var sessionTurnEnd: SessionTurnEnd {
-        SessionTurnEnd(durationMs: durationMs, endedAt: endedAt, messageCount: messageCount)
+        SessionTurnEnd(durationMs: durationMs, endedAt: endedAt, messageCount: messageCount, outcome: outcome)
     }
 }
 
 extension APILastTurnResponse {
     var sessionLastTurn: SessionLastTurn {
-        SessionLastTurn(durationMs: durationMs, endedAt: endedAt, eventId: eventId)
+        SessionLastTurn(durationMs: durationMs, endedAt: endedAt, eventId: eventId, outcome: outcome)
     }
 }
 

@@ -126,12 +126,22 @@ def test_turn_end_anchors_to_the_last_non_user_event_before_the_fact():
     ]
     ends = turn_ends_by_event(facts, events)
     assert ends == {
-        "t-1": {"duration_ms": 129_299, "ended_at": facts[0]["at"].isoformat(), "message_count": 898},
-        "a-2": {"duration_ms": 58_459, "ended_at": facts[1]["at"].isoformat(), "message_count": None},
+        "t-1": {"duration_ms": 129_299, "ended_at": facts[0]["at"].isoformat(), "message_count": 898, "outcome": "completed"},
+        "a-2": {"duration_ms": 58_459, "ended_at": facts[1]["at"].isoformat(), "message_count": None, "outcome": "completed"},
     }
-    assert last_turn(facts, ends) == {"duration_ms": 58_459, "ended_at": facts[1]["at"].isoformat(), "event_id": "a-2"}
+    assert last_turn(facts, ends) == {
+        "duration_ms": 58_459,
+        "ended_at": facts[1]["at"].isoformat(),
+        "event_id": "a-2",
+        "outcome": "completed",
+    }
     # Off-page anchors still surface as the session's last turn, without an event.
-    assert last_turn(facts, {}) == {"duration_ms": 58_459, "ended_at": facts[1]["at"].isoformat(), "event_id": None}
+    assert last_turn(facts, {}) == {
+        "duration_ms": 58_459,
+        "ended_at": facts[1]["at"].isoformat(),
+        "event_id": None,
+        "outcome": "completed",
+    }
 
 
 def test_workspace_envelope_stamps_turn_end_and_last_turn():
@@ -159,8 +169,38 @@ def test_workspace_envelope_stamps_turn_end_and_last_turn():
     )
     items = envelope["projection"]["items"]
     assert items[0]["event"]["turn_end"] is None
-    assert items[1]["event"]["turn_end"] == {"duration_ms": 129_299, "ended_at": facts[0]["at"].isoformat(), "message_count": None}
-    assert envelope["session"]["last_turn"] == {"duration_ms": 129_299, "ended_at": facts[0]["at"].isoformat(), "event_id": "a-1"}
+    assert items[1]["event"]["turn_end"] == {
+        "duration_ms": 129_299,
+        "ended_at": facts[0]["at"].isoformat(),
+        "message_count": None,
+        "outcome": "completed",
+    }
+    assert envelope["session"]["last_turn"] == {
+        "duration_ms": 129_299,
+        "ended_at": facts[0]["at"].isoformat(),
+        "event_id": "a-1",
+        "outcome": "completed",
+    }
+
+
+def test_a_stopped_codex_turn_is_served_as_aborted_not_as_work_done():
+    t0 = datetime(2026, 9, 3, 14, 26, 0, tzinfo=UTC)
+    events = [_event("u-1", "user", t0), _event("a-1", "assistant", t0 + timedelta(minutes=1))]
+    facts = [
+        {
+            "kind": "turn.duration",
+            "at": t0 + timedelta(hours=3),
+            "payload": {"duration_ms": 10_839_735, "outcome": "aborted", "reason": "interrupted", "turn_id": "t-2"},
+        }
+    ]
+    decorations = turn_ends_by_event(facts, events)
+    assert decorations["a-1"]["outcome"] == "aborted"
+    assert last_turn(facts, decorations) == {
+        "duration_ms": 10_839_735,
+        "ended_at": facts[0]["at"].isoformat(),
+        "event_id": "a-1",
+        "outcome": "aborted",
+    }
 
 
 @pytest.mark.asyncio
@@ -291,11 +331,43 @@ def test_usage_latest_is_the_newest_turn_ending_usage_with_context_size():
         "model": "claude-opus-5",
         "effort": "high",
         "context_tokens": 401_302,
+        "context_window": None,
         "output_tokens": 177,
         "thinking_tokens": 12,
         "at": t0.isoformat(),
     }
     assert usage_latest([]) is None
+
+
+def test_usage_latest_trusts_the_providers_own_context_accounting():
+    """Codex names its context size and window; its input classes overlap, so a sum would be wrong."""
+    t0 = datetime(2026, 9, 3, 11, 25, 31, tzinfo=UTC)
+    facts = [
+        {
+            "kind": "turn.usage",
+            "at": t0,
+            "payload": {
+                "model": "gpt-5.6-luna",
+                "effort": "xhigh",
+                "input_tokens": 25_000,
+                "cache_read_input_tokens": 24_700,
+                "cache_creation_input_tokens": 300,
+                "output_tokens": 210,
+                "thinking_tokens": 90,
+                "context_tokens": 25_210,
+                "context_window": 258_400,
+            },
+        }
+    ]
+    assert usage_latest(facts) == {
+        "model": "gpt-5.6-luna",
+        "effort": "xhigh",
+        "context_tokens": 25_210,
+        "context_window": 258_400,
+        "output_tokens": 210,
+        "thinking_tokens": 90,
+        "at": t0.isoformat(),
+    }
 
 
 @pytest.mark.asyncio

@@ -260,7 +260,7 @@ fn golden_antigravity_legacy_json_basic() {
 // Provider facts — the side channel beside the transcript
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct SnapshotFact {
     kind: String,
     at: String,
@@ -275,9 +275,13 @@ struct FactsSnapshot {
 }
 
 fn parse_to_facts_snapshot(input_path: &Path) -> FactsSnapshot {
+    parse_to_facts_snapshot_from(input_path, 0)
+}
+
+fn parse_to_facts_snapshot_from(input_path: &Path, offset: u64) -> FactsSnapshot {
     let bin = engine_bin();
     let output = Command::new(&bin)
-        .args(["parse", "--dump-facts"])
+        .args(["parse", "--dump-facts", "--offset", &offset.to_string()])
         .arg(input_path)
         .output()
         .unwrap_or_else(|e| panic!("Failed to run engine: {}", e));
@@ -360,6 +364,74 @@ fn golden_claude_recap_and_title_facts() {
     );
     let events = parse_to_snapshot(&base.join("recap_title.jsonl"));
     assert_eq!(events.event_count, 2, "only the user and assistant rows are events");
+}
+
+/// Codex closes a turn on `task_complete` (or `turn_aborted`, which unlike
+/// Claude still carries the duration). The usage fact is stamped on that same
+/// line from the last `token_count`, with the model and effort the turn's
+/// `turn_context` named, and Codex's own context accounting (`total_tokens`)
+/// rather than a sum of overlapping input classes. Stream and terminal errors
+/// and the compaction record are facts beside the transcript.
+#[test]
+fn golden_codex_turn_signal_facts() {
+    let base = fixtures_dir().join("golden").join("codex");
+    run_golden_facts_test(
+        &base.join("turn_signals.jsonl"),
+        &base.join("turn_signals.facts.expected.json"),
+    );
+    let events = parse_to_snapshot(&base.join("turn_signals.jsonl"));
+    assert!(
+        events
+            .events
+            .iter()
+            .all(|event| !matches!(
+                event.raw_type.as_str(),
+                "task_complete" | "token_count" | "turn_context" | "compacted" | "stream_error"
+            )),
+        "signal lines must not become render events"
+    );
+}
+
+/// The engine resumes mid-file. When the batch starts on the closing line,
+/// the turn's `turn_context` and `token_count` lie before the offset; the
+/// parser replays them from a bounded window so the usage fact is unchanged.
+#[test]
+fn golden_codex_facts_survive_incremental_resume() {
+    let base = fixtures_dir().join("golden").join("codex");
+    let path = base.join("turn_signals.jsonl");
+    let bytes = std::fs::read(&path).expect("read fixture");
+    let needle = b"\"type\":\"task_complete\"";
+    let hit = bytes
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .expect("fixture has a task_complete line");
+    let line_start = bytes[..hit]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|nl| nl + 1)
+        .unwrap_or(0) as u64;
+    let full = parse_to_facts_snapshot(&path);
+    let resumed = parse_to_facts_snapshot_from(&path, line_start);
+    let full_at_offset = full
+        .facts
+        .iter()
+        .filter(|fact| fact.source_offset == line_start)
+        .cloned()
+        .collect::<Vec<_>>();
+    let resumed_at_offset = resumed
+        .facts
+        .iter()
+        .filter(|fact| fact.source_offset == line_start)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(full_at_offset, resumed_at_offset);
+    let usage = resumed_at_offset
+        .iter()
+        .find(|fact| fact.kind == "turn.usage")
+        .expect("resume still yields the usage fact");
+    assert_eq!(usage.payload["model"], "gpt-5.6-luna");
+    assert_eq!(usage.payload["effort"], "xhigh");
+    assert_eq!(usage.payload["context_tokens"], 25210);
 }
 
 /// Usage lands once per turn on the line that ends it, never on tool-use

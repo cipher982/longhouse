@@ -62,6 +62,8 @@ export interface AgentSession {
     model?: string | null;
     effort?: string | null;
     context_tokens: number;
+    /** The model's context window when the provider reports it (Codex does). */
+    context_window?: number | null;
     output_tokens: number;
     thinking_tokens?: number | null;
     at: string;
@@ -459,12 +461,15 @@ export interface AgentEventTurnEnd {
   duration_ms: number;
   ended_at: string;
   message_count?: number | null;
+  /** Codex reports a stopped turn's duration too; Claude only writes finished ones. */
+  outcome?: "completed" | "aborted";
 }
 
 export interface AgentSessionLastTurn {
   duration_ms: number;
   ended_at: string;
   event_id?: string | null;
+  outcome?: "completed" | "aborted";
 }
 
 export interface AgentEventInputOrigin {

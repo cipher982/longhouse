@@ -594,47 +594,50 @@
       ],
       "transcript_signals": {
         "turn.duration": {
-          "disposition": "not_implemented",
-          "raw_source": "event_msg/task_complete",
+          "disposition": "implemented",
+          "raw_source": "event_msg/task_complete + event_msg/turn_aborted",
           "first_seen_version": "0.142.2",
+          "fixture": "engine/tests/fixtures/golden/codex/turn_signals.jsonl",
           "canary": "codex_transcript_signals",
-          "trigger": "turn_end",
-          "owner_action": "parse task_complete duration_ms and turn_aborted duration_ms into turn.duration"
+          "trigger": "turn_end"
         },
         "session.recap": {
           "disposition": "upstream_absent",
           "raw_source": "none",
           "canary": "codex_transcript_signals",
-          "trigger": "idle_after_turn"
+          "trigger": "idle_after_turn",
+          "owner_action": "Codex 0.153.0 recaps (tui.auto_recap, /recap) are rendered in the TUI from history and never enter the rollout; the census closes this cell if a recap record appears"
         },
         "session.title": {
           "disposition": "not_implemented",
-          "raw_source": "sidecar:state_5.sqlite/threads.title",
+          "raw_source": "sidecar:state_5.sqlite/threads.name",
           "canary": "codex_transcript_signals",
           "trigger": "first_turn",
-          "owner_action": "read the thread title from the Codex state store the way Cursor and OpenCode stores are read"
+          "owner_action": "read threads.name from the Codex state store; Codex named 11 of 2257 threads on the reference machine, so the Longhouse title stays the default until that changes"
         },
         "turn.usage": {
-          "disposition": "not_implemented",
-          "raw_source": "event_msg/token_count",
+          "disposition": "implemented",
+          "raw_source": "event_msg/token_count + turn_context, stamped on the turn's closing line",
           "first_seen_version": "0.142.2",
+          "fixture": "engine/tests/fixtures/golden/codex/turn_signals.jsonl",
           "canary": "codex_transcript_signals",
-          "trigger": "turn_end",
-          "owner_action": "parse token_count last_token_usage and model_context_window into turn.usage"
+          "trigger": "turn_end"
         },
         "turn.api_error": {
-          "disposition": "upstream_absent",
-          "raw_source": "none",
+          "disposition": "implemented",
+          "raw_source": "event_msg/error + event_msg/stream_error",
+          "fixture": "engine/tests/fixtures/golden/codex/turn_signals.jsonl",
           "canary": "codex_transcript_signals",
-          "trigger": "none_reliable"
+          "trigger": "none_reliable",
+          "owner_action": "shapes taken from the 0.151.0 protocol crate (ErrorEvent, StreamErrorEvent); neither has appeared in the reference corpus yet"
         },
         "context.compaction": {
-          "disposition": "not_implemented",
+          "disposition": "implemented",
           "raw_source": "compacted",
           "first_seen_version": "0.142.2",
+          "fixture": "engine/tests/fixtures/golden/codex/turn_signals.jsonl",
           "canary": "codex_transcript_signals",
-          "trigger": "slash_compact",
-          "owner_action": "parse compacted window records into context.compaction"
+          "trigger": "slash_compact"
         },
         "input.queue": {
           "disposition": "not_implemented",

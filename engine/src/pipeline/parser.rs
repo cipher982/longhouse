@@ -1393,6 +1393,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     // the prior batch, so seed from the record before `offset`.
     let mut antigravity_pending = seed_antigravity_pending(path, offset);
     let mut codex_pending = CodexPending::default();
+    let mut codex_facts = seed_codex_fact_state(path, offset);
 
     let mut pos: usize = 0;
     while pos < data.len() {
@@ -1462,7 +1463,13 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
             &mut antigravity_pending,
             &mut codex_pending,
         );
-        extract_provider_facts(&obj, trimmed, line_offset, &mut provider_facts);
+        extract_provider_facts(
+            &obj,
+            trimmed,
+            line_offset,
+            &mut provider_facts,
+            &mut codex_facts,
+        );
     }
 
     // Finalize metadata
@@ -1511,6 +1518,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     // See parse_mmap: seed antigravity call/result pairing across the resume boundary.
     let mut antigravity_pending = seed_antigravity_pending(path, offset);
     let mut codex_pending = CodexPending::default();
+    let mut codex_facts = seed_codex_fact_state(path, offset);
     let mut line = String::new();
 
     loop {
@@ -1579,7 +1587,13 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
             &mut antigravity_pending,
             &mut codex_pending,
         );
-        extract_provider_facts(&obj, trimmed.as_bytes(), line_offset, &mut provider_facts);
+        extract_provider_facts(
+            &obj,
+            trimmed.as_bytes(),
+            line_offset,
+            &mut provider_facts,
+            &mut codex_facts,
+        );
     }
 
     metadata.started_at = min_ts;
@@ -1805,7 +1819,17 @@ fn extract_provider_facts(
     trimmed: &[u8],
     line_offset: u64,
     facts: &mut Vec<ParsedProviderFact>,
+    codex: &mut CodexFactState,
 ) {
+    // Codex rollout lines carry their discriminator under `payload.type`;
+    // these three top-level types are Codex's alone.
+    if matches!(
+        obj.r#type.as_deref(),
+        Some("event_msg") | Some("turn_context") | Some("compacted")
+    ) {
+        extract_codex_provider_facts(obj, trimmed, line_offset, facts, codex);
+        return;
+    }
     let kind = match (obj.r#type.as_deref(), obj.subtype.as_deref()) {
         (Some("system"), Some("turn_duration")) => "turn.duration",
         (Some("system"), Some("away_summary")) => "session.recap",
@@ -1918,6 +1942,21 @@ fn extract_provider_facts(
             if !payload.contains_key("output_tokens") {
                 return;
             }
+            // Claude's context is everything it read on this call: fresh
+            // input plus both cache classes. Named here so every provider's
+            // usage fact carries the same key for the same meaning.
+            let context_tokens: u64 = [
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+            ]
+            .iter()
+            .filter_map(|key| payload.get(*key).and_then(|v| v.as_u64()))
+            .sum();
+            payload.insert(
+                "context_tokens".to_string(),
+                serde_json::Value::from(context_tokens),
+            );
             serde_json::Value::Object(payload)
         }
         "turn.api_error" => {
@@ -2763,6 +2802,289 @@ const CODEX_TURN_INTERRUPTED_MARKER_RAW_TYPE: &str = "codex_turn_interrupted_mar
 #[derive(Debug, Default)]
 struct CodexPending {
     suppress_next_turn_aborted_marker: bool,
+}
+
+/// Codex spreads one turn's accounting over several lines: `turn_context`
+/// names the model and effort at the start, `token_count` repeats the usage
+/// after every model call, and `task_complete` (or `turn_aborted`) closes the
+/// turn with its duration. The facts are one per turn, stamped on the closing
+/// line, so the parser carries the latest settings and usage forward.
+#[derive(Default)]
+struct CodexFactState {
+    model: Option<String>,
+    effort: Option<String>,
+    /// `info.last_token_usage` from the most recent `token_count` line.
+    last_usage: Option<serde_json::Map<String, serde_json::Value>>,
+    context_window: Option<u64>,
+}
+
+impl CodexFactState {
+    fn note_turn_context(&mut self, payload: &serde_json::Map<String, serde_json::Value>) {
+        if let Some(model) = payload.get("model").and_then(|v| v.as_str()) {
+            self.model = Some(model.to_string());
+        }
+        let effort = payload.get("effort").and_then(|v| v.as_str()).or_else(|| {
+            payload
+                .get("collaboration_mode")
+                .and_then(|m| m.get("settings"))
+                .and_then(|s| s.get("reasoning_effort"))
+                .and_then(|v| v.as_str())
+        });
+        if let Some(effort) = effort {
+            self.effort = Some(effort.to_string());
+        }
+    }
+
+    fn note_token_count(&mut self, payload: &serde_json::Map<String, serde_json::Value>) {
+        let Some(info) = payload.get("info").and_then(|v| v.as_object()) else {
+            return;
+        };
+        if let Some(last) = info.get("last_token_usage").and_then(|v| v.as_object()) {
+            self.last_usage = Some(last.clone());
+        }
+        if let Some(window) = info.get("model_context_window").and_then(|v| v.as_u64()) {
+            self.context_window = Some(window);
+        }
+    }
+
+    /// The context size Codex itself reports is `last_token_usage.total_tokens`
+    /// (`TokenUsage::tokens_in_context_window` in the protocol crate), so the
+    /// payload names it outright instead of leaving the server to sum input
+    /// classes that overlap in OpenAI's accounting.
+    fn usage_payload(&self) -> Option<serde_json::Value> {
+        let last = self.last_usage.as_ref()?;
+        let mut payload = serde_json::Map::new();
+        if let Some(model) = self.model.as_deref() {
+            payload.insert("model".to_string(), serde_json::Value::from(model));
+        }
+        if let Some(effort) = self.effort.as_deref() {
+            payload.insert("effort".to_string(), serde_json::Value::from(effort));
+        }
+        for (wire, ours) in [
+            ("input_tokens", "input_tokens"),
+            ("cached_input_tokens", "cache_read_input_tokens"),
+            ("cache_write_input_tokens", "cache_creation_input_tokens"),
+            ("output_tokens", "output_tokens"),
+            ("reasoning_output_tokens", "thinking_tokens"),
+            ("total_tokens", "context_tokens"),
+        ] {
+            if let Some(count) = last.get(wire).and_then(|v| v.as_u64()) {
+                payload.insert(ours.to_string(), serde_json::Value::from(count));
+            }
+        }
+        if let Some(window) = self.context_window {
+            payload.insert("context_window".to_string(), serde_json::Value::from(window));
+        }
+        if !payload.contains_key("output_tokens") {
+            return None;
+        }
+        Some(serde_json::Value::Object(payload))
+    }
+}
+
+/// On an incremental parse the turn's `turn_context` and `token_count` lines
+/// may sit before `offset`; replay the ones in a bounded window ending there so
+/// the closing line still yields its usage fact.
+fn seed_codex_fact_state(path: &Path, offset: u64) -> CodexFactState {
+    let mut state = CodexFactState::default();
+    if offset == 0 {
+        return state;
+    }
+    const SEED_WINDOW_BYTES: u64 = 1024 * 1024;
+    let window = SEED_WINDOW_BYTES.min(offset);
+    let start = offset - window;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return state;
+    };
+    use std::io::{Read, Seek};
+    if file.seek(std::io::SeekFrom::Start(start)).is_err() {
+        return state;
+    }
+    let mut buf = vec![0u8; window as usize];
+    if file.read_exact(&mut buf).is_err() {
+        return state;
+    }
+    let search: &[u8] = if start > 0 {
+        match buf.iter().position(|&b| b == b'\n') {
+            Some(nl) => &buf[nl + 1..],
+            None => return state,
+        }
+    } else {
+        &buf[..]
+    };
+    for line in search.split(|&b| b == b'\n') {
+        let line = trim_bytes(line);
+        if line.is_empty() {
+            continue;
+        }
+        let is_turn_context = contains_bytes(line, b"\"turn_context\"");
+        if !is_turn_context && !contains_bytes(line, b"\"token_count\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(payload) = value.get("payload").and_then(|v| v.as_object()) else {
+            continue;
+        };
+        match value.get("type").and_then(|v| v.as_str()) {
+            Some("turn_context") => state.note_turn_context(payload),
+            Some("event_msg") if payload.get("type").and_then(|v| v.as_str()) == Some("token_count") => {
+                state.note_token_count(payload)
+            }
+            _ => {}
+        }
+    }
+    state
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+}
+
+/// Codex provider facts. Only the handful of line shapes that carry a signal
+/// are parsed as a JSON tree; `response_item` rows, the transcript hot path,
+/// never reach this point.
+fn extract_codex_provider_facts(
+    obj: &RawLine,
+    trimmed: &[u8],
+    line_offset: u64,
+    facts: &mut Vec<ParsedProviderFact>,
+    state: &mut CodexFactState,
+) {
+    let line_type = obj.r#type.as_deref().unwrap_or("");
+    let payload_type = obj
+        .payload
+        .as_ref()
+        .and_then(|p| p.r#type.as_deref())
+        .unwrap_or("");
+    let wanted = matches!(
+        (line_type, payload_type),
+        ("turn_context", _)
+            | ("compacted", _)
+            | (
+                "event_msg",
+                "token_count" | "task_complete" | "turn_aborted" | "error" | "stream_error"
+            )
+    );
+    if !wanted {
+        return;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(trimmed) else {
+        return;
+    };
+    let Some(payload) = value.get("payload").and_then(|v| v.as_object()) else {
+        return;
+    };
+    match (line_type, payload_type) {
+        ("turn_context", _) => {
+            state.note_turn_context(payload);
+            return;
+        }
+        ("event_msg", "token_count") => {
+            state.note_token_count(payload);
+            return;
+        }
+        _ => {}
+    }
+    let Some(at) = obj.timestamp.as_deref().and_then(parse_timestamp) else {
+        return;
+    };
+    let mut push = |kind: &str, payload: serde_json::Value| {
+        facts.push(ParsedProviderFact {
+            kind: kind.to_string(),
+            at,
+            source_offset: line_offset,
+            payload,
+        });
+    };
+    match (line_type, payload_type) {
+        ("compacted", _) => {
+            let mut fact = serde_json::Map::new();
+            if let Some(items) = payload.get("replacement_history").and_then(|v| v.as_array()) {
+                fact.insert(
+                    "replacement_items".to_string(),
+                    serde_json::Value::from(items.len()),
+                );
+            }
+            if let Some(pre) = state
+                .last_usage
+                .as_ref()
+                .and_then(|u| u.get("total_tokens"))
+                .and_then(|v| v.as_u64())
+            {
+                fact.insert("pre_tokens".to_string(), serde_json::Value::from(pre));
+            }
+            push("context.compaction", serde_json::Value::Object(fact));
+        }
+        ("event_msg", "task_complete" | "turn_aborted") => {
+            if let Some(duration_ms) = payload.get("duration_ms").and_then(|v| v.as_u64()) {
+                let mut fact = serde_json::Map::new();
+                fact.insert(
+                    "duration_ms".to_string(),
+                    serde_json::Value::from(duration_ms),
+                );
+                fact.insert(
+                    "outcome".to_string(),
+                    serde_json::Value::from(if payload_type == "task_complete" {
+                        "completed"
+                    } else {
+                        "aborted"
+                    }),
+                );
+                if let Some(reason) = payload.get("reason").and_then(|v| v.as_str()) {
+                    fact.insert("reason".to_string(), serde_json::Value::from(reason));
+                }
+                if let Some(ttft) = payload
+                    .get("time_to_first_token_ms")
+                    .and_then(|v| v.as_u64())
+                {
+                    fact.insert(
+                        "time_to_first_token_ms".to_string(),
+                        serde_json::Value::from(ttft),
+                    );
+                }
+                if let Some(turn_id) = payload.get("turn_id").and_then(|v| v.as_str()) {
+                    fact.insert("turn_id".to_string(), serde_json::Value::from(turn_id));
+                }
+                push("turn.duration", serde_json::Value::Object(fact));
+            }
+            // The context the next prompt starts from is whatever the last
+            // model call reported, whether the turn finished or was stopped.
+            if let Some(usage) = state.usage_payload() {
+                push("turn.usage", usage);
+            }
+        }
+        ("event_msg", "error" | "stream_error") => {
+            let Some(message) = payload
+                .get("message")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+            else {
+                return;
+            };
+            let mut fact = serde_json::Map::new();
+            fact.insert(
+                "error".to_string(),
+                serde_json::Value::from(bounded_text(message, 500)),
+            );
+            fact.insert("kind".to_string(), serde_json::Value::from(payload_type));
+            if let Some(details) = payload
+                .get("additional_details")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+            {
+                fact.insert(
+                    "details".to_string(),
+                    serde_json::Value::from(bounded_text(details, 500)),
+                );
+            }
+            push("turn.api_error", serde_json::Value::Object(fact));
+        }
+        _ => {}
+    }
 }
 
 fn extract_codex_event_msg(

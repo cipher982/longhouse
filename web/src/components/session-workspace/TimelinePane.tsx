@@ -284,9 +284,11 @@ function truncateMarkdown(text: string): string {
 
 function TurnEndRow({ turnEnd }: { turnEnd: AgentEventTurnEnd | null | undefined }) {
   if (!turnEnd) return null;
+  const stopped = turnEnd.outcome === "aborted";
   return (
     <div className="tl-turn-end" data-testid="session-turn-end">
-      ✻ Worked for {formatTurnDuration(turnEnd.duration_ms)} · done {formatTime(turnEnd.ended_at)}
+      ✻ {stopped ? "Interrupted after" : "Worked for"} {formatTurnDuration(turnEnd.duration_ms)} ·{" "}
+      {stopped ? "stopped" : "done"} {formatTime(turnEnd.ended_at)}
     </div>
   );
 }

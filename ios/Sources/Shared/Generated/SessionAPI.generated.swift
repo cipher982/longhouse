@@ -10,6 +10,7 @@ struct APILastTurnResponse: Codable, Hashable, Sendable {
     let durationMs: Int
     let endedAt: String
     let eventId: String?
+    let outcome: String?
 }
 
 struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
@@ -347,6 +348,7 @@ struct APIUsageLatestResponse: Codable, Hashable, Sendable {
     let model: String?
     let effort: String?
     let contextTokens: Int
+    let contextWindow: Int?
     let outputTokens: Int
     let thinkingTokens: Int?
     let at: String
@@ -534,6 +536,7 @@ struct APITurnEndResponse: Codable, Hashable, Sendable {
     let durationMs: Int
     let endedAt: String
     let messageCount: Int?
+    let outcome: String?
 }
 
 struct APIEventResponse: Codable, Hashable, Sendable {

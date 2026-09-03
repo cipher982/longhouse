@@ -578,7 +578,7 @@ private struct ProviderChromePreview: View {
 #Preview("Usage chip alone · Light") {
     ProviderChromePreview(
         recap: nil,
-        usage: SessionUsageLatest(model: "openai/gpt-5.6-sol", effort: "xhigh", contextTokens: 258_400, outputTokens: 80, thinkingTokens: 33, at: "2026-09-02T23:07:00Z")
+        usage: SessionUsageLatest(model: "openai/gpt-5.6-sol", effort: "xhigh", contextTokens: 25_210, outputTokens: 80, thinkingTokens: 33, at: "2026-09-02T23:07:00Z", contextWindow: 258_400)
     )
     .preferredColorScheme(.light)
 }

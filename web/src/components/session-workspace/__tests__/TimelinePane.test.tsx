@@ -816,4 +816,21 @@ describe("TimelinePane turn footers", () => {
     expect(footers[0]).toContain("done ");
     expect(footers[1]).toContain("Worked for 58s");
   });
+
+  it("calls a stopped turn interrupted, not work done", () => {
+    const stopped: TimelineItem = {
+      kind: "message",
+      event: {
+        ...messageItem.event,
+        id: 41,
+        content_text: "Auditing…",
+        turn_end: { duration_ms: 10_839_735, ended_at: "2026-09-03T17:26:39Z", outcome: "aborted" },
+      },
+    };
+    renderPane([stopped]);
+    const footer = screen.getByTestId("session-turn-end").textContent;
+    expect(footer).toContain("Interrupted after 3h");
+    expect(footer).toContain("stopped ");
+    expect(footer).not.toContain("Worked for");
+  });
 });

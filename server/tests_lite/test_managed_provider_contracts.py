@@ -1148,9 +1148,14 @@ def test_outstanding_factory_work_names_unprojected_transcript_signals():
 
     rows = [row for row in outstanding_factory_work() if row["operation"].startswith("transcript_signal:")]
     assert {(row["provider"], row["operation"]) for row in rows} >= {
-        ("codex", "transcript_signal:turn.duration"),
+        ("codex", "transcript_signal:session.title"),
+        ("codex", "transcript_signal:input.queue"),
         ("claude", "transcript_signal:input.queue"),
         ("claude", "transcript_signal:turn.thinking"),
     }
     assert all(row["owner_action"] for row in rows), "every open signal names the work that closes it"
-    assert not any(row["provider"] == "claude" and row["operation"] == "transcript_signal:turn.duration" for row in rows)
+    for provider in ("claude", "codex"):
+        assert not any(
+            row["provider"] == provider and row["operation"] in {"transcript_signal:turn.duration", "transcript_signal:turn.usage"}
+            for row in rows
+        ), f"{provider} turn signals are implemented"

@@ -4649,6 +4649,13 @@ export interface components {
              * @description The event the turn ended on, when it is known
              */
             event_id?: string | null;
+            /**
+             * Outcome
+             * @description Whether the provider finished the turn or the user stopped it
+             * @default completed
+             * @enum {string}
+             */
+            outcome: "completed" | "aborted";
         };
         /**
          * Lifecycle
@@ -10161,6 +10168,13 @@ export interface components {
              * @description Provider message count at turn end, when reported
              */
             message_count?: number | null;
+            /**
+             * Outcome
+             * @description Whether the provider finished the turn or the user stopped it
+             * @default completed
+             * @enum {string}
+             */
+            outcome: "completed" | "aborted";
         };
         /** TurnLatencyPercentilesResponse */
         TurnLatencyPercentilesResponse: {
@@ -10226,9 +10240,14 @@ export interface components {
             effort?: string | null;
             /**
              * Context Tokens
-             * @description Input + cached tokens on the last turn-ending response: the live context size
+             * @description The provider's own context size after the last turn-ending response
              */
             context_tokens: number;
+            /**
+             * Context Window
+             * @description The model's context window, when the provider reports it
+             */
+            context_window?: number | null;
             /**
              * Output Tokens
              * @description Output tokens on that response
