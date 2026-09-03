@@ -5196,7 +5196,7 @@ export interface components {
             title_state?: string | null;
             /**
              * Title Source
-             * @description Title provenance: ai|prompt|project
+             * @description Title provenance: ai|provider|prompt|project
              */
             title_source?: string | null;
             /**
@@ -8299,6 +8299,23 @@ export interface components {
             last_read_at: string | null;
         };
         /**
+         * SessionRecapResponse
+         * @description The provider's own catch-up note, written when the user was away.
+         */
+        SessionRecapResponse: {
+            /**
+             * Text
+             * @description Recap text as the provider wrote it, terminal chrome removed
+             */
+            text: string;
+            /**
+             * At
+             * Format: date-time
+             * @description When the provider wrote the recap
+             */
+            at: string;
+        };
+        /**
          * SessionResponse
          * @description Response for a single session.
          */
@@ -8604,6 +8621,8 @@ export interface components {
             input_receipts?: components["schemas"]["SessionInputReceiptResponse"][];
             /** @description The most recent turn the provider reported as finished, from its own transcript accounting. */
             last_turn?: components["schemas"]["LastTurnResponse"] | null;
+            /** @description The provider's latest away recap for this session, when it wrote one. */
+            recap?: components["schemas"]["SessionRecapResponse"] | null;
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
             /**

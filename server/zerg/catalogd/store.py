@@ -9482,7 +9482,7 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
-    def complete_storage_title(self, *, session_id: UUID, title: str, completed_at: datetime) -> dict[str, Any]:
+    def complete_storage_title(self, *, session_id: UUID, title: str, completed_at: datetime, source: str = "ai") -> dict[str, Any]:
         if is_path_like_title(title):
             raise ValueError("path_like_title")
         table = StorageSession.__table__
@@ -9537,6 +9537,7 @@ class CatalogStore:
                 )
                 .values(
                     anchor_title=title,
+                    anchor_title_source=source,
                     summary_title=title,
                     title_last_attempt_at=completed_at,
                     title_retry_at=None,
@@ -9552,6 +9553,7 @@ class CatalogStore:
                     .where(catalog.c.session_id == session_key)
                     .values(
                         anchor_title=title,
+                        anchor_title_source=source,
                         summary_title=title,
                         title_retry_at=None,
                         title_last_error=None,
@@ -12231,6 +12233,7 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "summary": None,
         "summary_title": row["summary_title"],
         "anchor_title": ai_title or None,
+        "anchor_title_source": (row["anchor_title_source"] if ai_title else None),
         "title_retry_at": row["title_retry_at"],
         "title_last_error": row["title_last_error"],
         "first_user_message_preview": row["first_user_message_preview"],
@@ -12266,6 +12269,7 @@ _STORAGE_CATALOG_OVERLAY_FIELDS = frozenset(
         "tool_calls",
         "summary_title",
         "anchor_title",
+        "anchor_title_source",
         "title_retry_at",
         "title_last_error",
         "first_user_message_preview",
@@ -12856,6 +12860,7 @@ _CATALOG_FIELDS = frozenset(
         "summary",
         "summary_title",
         "anchor_title",
+        "anchor_title_source",
         "title_retry_at",
         "title_last_error",
         "first_user_message_preview",
@@ -13615,6 +13620,7 @@ def _storage_session_dto(row) -> dict[str, Any]:
         "tool_calls": int(row["tool_calls"]),
         "summary_title": row["summary_title"],
         "anchor_title": row["anchor_title"],
+        "anchor_title_source": row["anchor_title_source"],
         "title_attempt_count": int(row["title_attempt_count"] or 0),
         "title_last_attempt_at": _encode_datetime(row["title_last_attempt_at"]),
         "title_retry_at": _encode_datetime(row["title_retry_at"]),

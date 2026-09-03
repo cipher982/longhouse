@@ -18,6 +18,8 @@ import pytest
 
 from zerg.config import get_settings
 from zerg.services.session_provider_facts import last_turn
+from zerg.services.session_provider_facts import recap
+from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_provider_facts import turn_ends_by_event
 from zerg.services.storage_v2_workspace import _workspace_envelope
 
@@ -159,3 +161,104 @@ def test_workspace_envelope_stamps_turn_end_and_last_turn():
     assert items[0]["event"]["turn_end"] is None
     assert items[1]["event"]["turn_end"] == {"duration_ms": 129_299, "ended_at": facts[0]["at"].isoformat(), "message_count": None}
     assert envelope["session"]["last_turn"] == {"duration_ms": 129_299, "ended_at": facts[0]["at"].isoformat(), "event_id": "a-1"}
+
+
+@pytest.mark.asyncio
+async def test_provider_title_freezes_the_anchor_and_skips_the_llm_title(monkeypatch):
+    """Claude names its own session; Longhouse keeps that name instead of buying one."""
+    from zerg.services import storage_session_titles
+
+    scheduled: list[dict] = []
+    monkeypatch.setattr(storage_session_titles, "schedule_storage_session_title", lambda candidate: scheduled.append(candidate) or True)
+
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-title-") as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        session_id = uuid4()
+        payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4())
+        payload["session_id"] = str(session_id)
+        payload["facts"] = [
+            {
+                "kind": "session.title",
+                "at": "1970-01-01T00:00:00+00:00",
+                "source_position": 0,
+                "payload": {"title": "G55 app tablet UI beautification"},
+            }
+        ]
+        response = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert response.status_code == 200, response.text
+
+        read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert read["found"] is True
+        assert read["session"]["anchor_title"] == "G55 app tablet UI beautification"
+        assert read["session"]["anchor_title_source"] == "provider"
+        assert scheduled == [], "no LLM title is scheduled when the provider already named the session"
+
+        # A later provider title never rewrites the frozen anchor.
+        payload["facts"] = [
+            {
+                "kind": "session.title",
+                "at": "1970-01-01T00:00:00+00:00",
+                "source_position": 1,
+                "payload": {"title": "Something else entirely"},
+            }
+        ]
+        again = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert again.status_code == 200, again.text
+        read_again = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert read_again["session"]["anchor_title"] == "G55 app tablet UI beautification"
+
+
+def test_title_provenance_names_the_provider_when_it_wrote_the_anchor():
+    assert resolve_title_provenance(
+        anchor_title="G55 app tablet UI beautification",
+        first_user_message="make it beautiful",
+        user_messages=1,
+        title_retry_at=None,
+        anchor_title_source="provider",
+    ) == ("ready", "provider")
+    assert resolve_title_provenance(
+        anchor_title="Console session bugs and UX",
+        first_user_message="fix it",
+        user_messages=1,
+        title_retry_at=None,
+    ) == ("ready", "ai")
+
+
+def test_recap_is_the_newest_provider_recap_and_never_synthesised():
+    t0 = datetime(2026, 9, 2, 23, 10, 5, tzinfo=UTC)
+    facts = [
+        {"kind": "session.recap", "at": t0, "payload": {"text": "Rebuilt the DRIVE page. Next: check it in the truck."}},
+        {
+            "kind": "session.recap",
+            "at": t0 + timedelta(minutes=14),
+            "payload": {"text": "Fixed 15 defects. Next: deploy the gateway build."},
+        },
+        {"kind": "turn.duration", "at": t0 + timedelta(minutes=20), "payload": {"duration_ms": 10}},
+    ]
+    assert recap(facts) == {"text": "Fixed 15 defects. Next: deploy the gateway build.", "at": (t0 + timedelta(minutes=14)).isoformat()}
+    assert recap([facts[2]]) is None
+
+
+def test_workspace_envelope_serves_the_recap():
+    session_id = uuid4()
+    session = SimpleNamespace(
+        provider="claude",
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        capabilities=SimpleNamespace(live_control_available=True, can_start_turn=True),
+        model_dump=lambda mode: {"id": str(session_id)},
+    )
+    t0 = datetime(2026, 9, 2, 23, 10, 5, tzinfo=UTC)
+    envelope = _workspace_envelope(
+        session_id=session_id,
+        session=session,
+        session_commit_seq="7",
+        branch_mode="head",
+        anchor="tail",
+        cursor=None,
+        storage={"commit_seq": "3", "session": {"updated_at": t0.isoformat()}},
+        page={"events": [], "total": 0, "generation_id": "g1", "next_cursor": None},
+        receipts=[],
+        facts=[{"kind": "session.recap", "at": t0, "payload": {"text": "Next: check it in the truck."}}],
+    )
+    assert envelope["session"]["recap"] == {"text": "Next: check it in the truck.", "at": t0.isoformat()}
+    assert envelope["session"]["last_turn"] is None

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 _WHITESPACE = re.compile(r"\s+")
 _LINK_TIMEOUT_SECONDS = 2.0
-_LIST_TIMEOUT_SECONDS = 1.0
+_LIST_TIMEOUT_SECONDS = 4.25
 
 
 def normalize_input_text(value: str | None) -> str:

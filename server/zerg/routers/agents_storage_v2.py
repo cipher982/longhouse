@@ -632,6 +632,21 @@ def _parse_envelope(
     }
 
 
+def _first_provider_title(facts: list[dict[str, Any]]) -> str | None:
+    """The oldest provider title in this batch, sanitized like every anchor."""
+    from zerg.services.session_title import sanitize_timeline_title
+
+    titled = sorted(
+        (fact for fact in facts if fact["kind"] == "session.title" and isinstance(fact["payload"].get("title"), str)),
+        key=lambda fact: int(fact["source_position"]),
+    )
+    for fact in titled:
+        title = sanitize_timeline_title(fact["payload"]["title"], max_words=6)
+        if title:
+            return title
+    return None
+
+
 def _parse_provider_facts(value: object, *, range_start: int, range_end: int) -> list[dict[str, Any]]:
     """Wire facts as catalogd expects them; shape errors reject the envelope."""
     if value is None:
@@ -1226,7 +1241,21 @@ async def _commit_admitted_envelope(
             },
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
-        if (
+        provider_title = _first_provider_title(parsed["provider_facts"])
+        if committed.get("title_generation_required") is True and provider_title is not None:
+            # The provider already named this session; freeze its title
+            # instead of paying for one. A frozen anchor makes this a no-op.
+            await catalogd.call(
+                "storage.session.title.complete.v2",
+                {
+                    "session_id": str(spec.session_id),
+                    "title": provider_title,
+                    "completed_at": datetime.now(UTC).isoformat(),
+                    "source": "provider",
+                },
+                timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
+            )
+        elif (
             committed.get("title_generation_required") is True
             and render_manifest is not None
             and str(render_manifest.get("first_user_message_preview") or "").strip()

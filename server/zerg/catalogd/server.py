@@ -2747,16 +2747,21 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _complete_storage_title(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "title", "completed_at"}:
+        if set(request.params) - {"source"} != {"session_id", "title", "completed_at"}:
             return self._error(request, "invalid_request", "title completion has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
             title = _bounded_text(request.params["title"], "title", 255)
             completed_at = _parse_datetime(request.params["completed_at"], "completed_at")
+            source = request.params.get("source", "ai")
+            if source not in {"ai", "provider"}:
+                raise ValueError("title source must be ai or provider")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(self._store.complete_storage_title, session_id=session_id, title=title, completed_at=completed_at)
+        result = await self._run_store(
+            self._store.complete_storage_title, session_id=session_id, title=title, completed_at=completed_at, source=source
+        )
         self._title_health_cache = None
         return CatalogRpcResponse(id=request.id, result=result)
 
@@ -4155,7 +4160,7 @@ def _validate_storage_identity_fields(params: dict) -> None:
         raise ValueError("range_kind must be byte_offset or record_ordinal")
 
 
-PROVIDER_FACT_KINDS = frozenset({"turn.duration"})
+PROVIDER_FACT_KINDS = frozenset({"turn.duration", "session.recap", "session.title"})
 _PROVIDER_FACT_PAYLOAD_MAX_BYTES = 8_192
 
 
@@ -4183,6 +4188,10 @@ def _validate_provider_facts(
             raise ValueError("provider fact payload must be a small JSON object")
         if kind == "turn.duration" and type(payload.get("duration_ms")) is not int:
             raise ValueError("turn.duration facts need an integer duration_ms")
+        if kind == "session.recap" and not (isinstance(payload.get("text"), str) and payload["text"].strip()):
+            raise ValueError("session.recap facts need non-empty text")
+        if kind == "session.title" and not (isinstance(payload.get("title"), str) and payload["title"].strip()):
+            raise ValueError("session.title facts need a non-empty title")
         key = (position, str(kind))
         if key in seen:
             raise ValueError("provider_facts must not repeat a source position and kind")

@@ -150,6 +150,7 @@ def resolve_title_provenance(
     user_messages: int | None,
     title_retry_at: object | None,
     title_last_error: str | None = None,
+    anchor_title_source: str | None = None,
 ) -> tuple[str, str]:
     """Return the API-visible title state and source.
 
@@ -161,7 +162,7 @@ def resolve_title_provenance(
     # write-once anchor column. It is still useful transcript text, but it is
     # not an AI title and must not be reported as ready.
     if sanitize_timeline_title(anchor_title) and not str(title_last_error or "").strip():
-        return "ready", "ai"
+        return "ready", ("provider" if anchor_title_source == "provider" else "ai")
     if (user_messages or 0) > 0:
         prompt_title = sanitize_timeline_title(first_user_message)
         return (

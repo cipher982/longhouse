@@ -1785,6 +1785,11 @@ fn normalize_git_branch(branch: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
+/// Provider text bounded by characters, never splitting a UTF-8 scalar.
+fn bounded_text(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
+}
+
 /// Provider facts live on lines the transcript surface never renders. Match
 /// on the cheap discriminators first; only a matched line is re-parsed as a
 /// JSON tree, so the hot path pays nothing for ordinary user/assistant rows.
@@ -1796,13 +1801,19 @@ fn extract_provider_facts(
 ) {
     let kind = match (obj.r#type.as_deref(), obj.subtype.as_deref()) {
         (Some("system"), Some("turn_duration")) => "turn.duration",
+        (Some("system"), Some("away_summary")) => "session.recap",
+        (Some("ai-title"), _) => "session.title",
         _ => return,
     };
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(trimmed) else {
         return;
     };
-    let Some(at) = obj.timestamp.as_deref().and_then(parse_timestamp) else {
-        return;
+    // `ai-title` lines carry no timestamp of their own; the shipper orders
+    // facts by source position anyway, and the title has no clock semantics.
+    let at = match obj.timestamp.as_deref().and_then(parse_timestamp) {
+        Some(at) => at,
+        None if kind == "session.title" => DateTime::<Utc>::UNIX_EPOCH,
+        None => return,
     };
     let payload = match kind {
         "turn.duration" => {
@@ -1826,6 +1837,29 @@ fn extract_provider_facts(
                 }
             }
             serde_json::Value::Object(payload)
+        }
+        "session.recap" => {
+            // "(disable recaps in /config)" is terminal chrome, not the recap.
+            let Some(text) = value
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(|t| t.trim_end_matches("(disable recaps in /config)").trim())
+                .filter(|t| !t.is_empty())
+            else {
+                return;
+            };
+            serde_json::json!({ "text": bounded_text(text, 2_000) })
+        }
+        "session.title" => {
+            let Some(title) = value
+                .get("aiTitle")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+            else {
+                return;
+            };
+            serde_json::json!({ "title": bounded_text(title, 255) })
         }
         _ => return,
     };

@@ -310,6 +310,7 @@ def _title_projection(session: LiveSessionCatalog, card: LiveTimelineCard) -> tu
         user_messages=user_messages,
         title_retry_at=session.title_retry_at,
         title_last_error=session.title_last_error,
+        anchor_title_source=getattr(session, "anchor_title_source", None),
     )
     return title, title_state, title_source
 

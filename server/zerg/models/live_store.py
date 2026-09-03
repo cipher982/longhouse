@@ -323,6 +323,9 @@ class LiveSessionCatalog(LiveBase):
     summary = Column(Text, nullable=True)
     summary_title = Column(String(255), nullable=True)
     anchor_title = Column(String(255), nullable=True)
+    # Who wrote the frozen anchor: "ai" (Longhouse LLM) or "provider" (the
+    # CLI's own title). Absent on rows frozen before provider titles existed.
+    anchor_title_source = Column(String(16), nullable=True)
     title_retry_at = Column(DateTime(timezone=True), nullable=True)
     title_last_error = Column(String(128), nullable=True)
     first_user_message_preview = Column(Text, nullable=True)

@@ -854,6 +854,13 @@ class TurnEndResponse(BaseModel):
     message_count: Optional[int] = Field(None, description="Provider message count at turn end, when reported")
 
 
+class SessionRecapResponse(BaseModel):
+    """The provider's own catch-up note, written when the user was away."""
+
+    text: str = Field(..., description="Recap text as the provider wrote it, terminal chrome removed")
+    at: datetime = Field(..., description="When the provider wrote the recap")
+
+
 class LastTurnResponse(BaseModel):
     """The most recent turn the provider reported as finished."""
 
@@ -985,6 +992,10 @@ class SessionResponse(UTCBaseModel):
         None,
         description="The most recent turn the provider reported as finished, from its own transcript accounting.",
     )
+    recap: Optional[SessionRecapResponse] = Field(
+        None,
+        description="The provider's latest away recap for this session, when it wrote one.",
+    )
     timeline_card: TimelineCardPresentationResponse = Field(
         ...,
         description="Server-derived timeline-card presentation",
@@ -1069,7 +1080,7 @@ class MachineSessionResponse(UTCBaseModel):
     title: Optional[str] = Field(None, description="Resolved headline for this session")
     anchor_title: Optional[str] = Field(None, description="Frozen AI-generated headline when one exists")
     title_state: Optional[str] = Field(None, description="AI-title lifecycle: awaiting_input|pending|degraded|ready")
-    title_source: Optional[str] = Field(None, description="Title provenance: ai|prompt|project")
+    title_source: Optional[str] = Field(None, description="Title provenance: ai|provider|prompt|project")
     hidden_from_default_timeline: bool = Field(
         False,
         description="True when canonical launch provenance excludes the session from the default timeline.",

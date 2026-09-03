@@ -1,0 +1,30 @@
+{
+  "fact_count": 3,
+  "facts": [
+    {
+      "kind": "session.title",
+      "at": "1970-01-01T00:00:00Z",
+      "source_offset": 0,
+      "payload": {
+        "title": "G55 app tablet UI beautification"
+      }
+    },
+    {
+      "kind": "turn.duration",
+      "at": "2026-09-02T23:07:01.645Z",
+      "source_offset": 985,
+      "payload": {
+        "duration_ms": 2439715,
+        "message_count": 502
+      }
+    },
+    {
+      "kind": "session.recap",
+      "at": "2026-09-02T23:10:05.294Z",
+      "source_offset": 1315,
+      "payload": {
+        "text": "Rebuilt the G55 tablet DRIVE page as a center-console instrument showing what the factory cluster can't. v35 is installed and pushed. Next: check it in the truck."
+      }
+    }
+  ]
+}

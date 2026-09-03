@@ -176,6 +176,9 @@ class StorageSession(CatalogBase):
     tool_calls = Column(Integer, nullable=False, server_default=text("0"))
     summary_title = Column(String(255), nullable=True)
     anchor_title = Column(String(255), nullable=True)
+    # Who wrote the frozen anchor: "ai" (Longhouse LLM) or "provider" (the
+    # CLI's own title). Absent on rows frozen before provider titles existed.
+    anchor_title_source = Column(String(16), nullable=True)
     title_attempt_count = Column(Integer, nullable=False, server_default=text("0"))
     title_last_attempt_at = Column(DateTime(timezone=True), nullable=True)
     title_retry_at = Column(DateTime(timezone=True), nullable=True, index=True)

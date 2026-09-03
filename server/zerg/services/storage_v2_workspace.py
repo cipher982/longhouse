@@ -20,6 +20,7 @@ from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.session_input_links import input_origins_by_event
 from zerg.services.session_input_links import session_input_receipts
 from zerg.services.session_provider_facts import last_turn
+from zerg.services.session_provider_facts import recap
 from zerg.services.session_provider_facts import session_provider_facts
 from zerg.services.session_provider_facts import turn_ends_by_event
 from zerg.services.tool_presentation import project_tool_presentation
@@ -142,6 +143,7 @@ def _workspace_envelope(
     session_json = session.model_dump(mode="json")
     session_json["input_receipts"] = receipts
     session_json["last_turn"] = last_turn(facts, turn_ends)
+    session_json["recap"] = recap(facts)
     storage_session = storage.get("session") if storage is not None else None
     return {
         "session": session_json,
@@ -239,17 +241,38 @@ async def build_storage_v2_workspace(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
         if storage_session.get("raw_state") == "retired" or storage_session.get("render_state") == "retired":
             return None
-        page = await read_storage_v2_session_events_page(
-            session_id=session_id,
-            owner_id=str(owner_id),
-            cursor=cursor,
-            anchor=anchor,
-            limit=limit,
-            branch_mode=branch_mode,
-            timing=timing,
+        # Provenance reads overlap the page read: they answer from the same
+        # catalog, and serial one-second waits on a busy catalog added up to
+        # a page that dropped its facts while still returning 200.
+        page, receipts, facts = await asyncio.gather(
+            read_storage_v2_session_events_page(
+                session_id=session_id,
+                owner_id=str(owner_id),
+                cursor=cursor,
+                anchor=anchor,
+                limit=limit,
+                branch_mode=branch_mode,
+                timing=timing,
+            ),
+            session_input_receipts(catalogd, session_id),
+            session_provider_facts(catalogd, session_id),
         )
-    receipts = await session_input_receipts(catalogd, session_id)
-    facts = await session_provider_facts(catalogd, session_id)
+        return _workspace_envelope(
+            session_id=session_id,
+            session=session,
+            session_commit_seq=session_commit_seq,
+            branch_mode=branch_mode,
+            anchor=anchor,
+            cursor=cursor,
+            storage=storage,
+            page=page,
+            receipts=receipts,
+            facts=facts,
+        )
+    receipts, facts = await asyncio.gather(
+        session_input_receipts(catalogd, session_id),
+        session_provider_facts(catalogd, session_id),
+    )
     return _workspace_envelope(
         session_id=session_id,
         session=session,

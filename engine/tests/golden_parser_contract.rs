@@ -348,3 +348,16 @@ fn golden_claude_turn_duration_facts() {
         "turn_duration must not become a render event"
     );
 }
+
+/// The provider's own title and its away recap are facts, not transcript
+/// rows: the title has no clock, the recap sheds its terminal chrome.
+#[test]
+fn golden_claude_recap_and_title_facts() {
+    let base = fixtures_dir().join("golden").join("claude");
+    run_golden_facts_test(
+        &base.join("recap_title.jsonl"),
+        &base.join("recap_title.facts.expected.json"),
+    );
+    let events = parse_to_snapshot(&base.join("recap_title.jsonl"));
+    assert_eq!(events.event_count, 2, "only the user and assistant rows are events");
+}

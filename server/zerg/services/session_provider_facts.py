@@ -21,8 +21,10 @@ from zerg.catalogd.client import CatalogClient
 
 logger = logging.getLogger(__name__)
 
-_LIST_TIMEOUT_SECONDS = 1.0
+_LIST_TIMEOUT_SECONDS = 4.25
 TURN_DURATION = "turn.duration"
+SESSION_RECAP = "session.recap"
+SESSION_TITLE = "session.title"
 
 
 def _parse_at(value: object) -> datetime | None:
@@ -131,4 +133,40 @@ def last_turn(facts: list[dict[str, Any]], decorations: dict[str, dict[str, Any]
     return {"duration_ms": latest["payload"]["duration_ms"], "ended_at": ended_at, "event_id": event_id}
 
 
-__all__ = ["TURN_DURATION", "last_turn", "session_provider_facts", "turn_ends_by_event"]
+def recap(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The provider's newest away recap; never synthesised."""
+    latest = None
+    for fact in facts:
+        if fact.get("kind") != SESSION_RECAP:
+            continue
+        text = fact["payload"].get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        if latest is None or fact["at"] > latest["at"]:
+            latest = fact
+    if latest is None:
+        return None
+    return {"text": latest["payload"]["text"], "at": latest["at"].isoformat()}
+
+
+def provider_titles(facts: list[dict[str, Any]]) -> list[str]:
+    """Provider titles oldest first, so the first one is the one to freeze."""
+    titled = [
+        (int(fact.get("source_position") or 0), fact["payload"]["title"])
+        for fact in facts
+        if fact.get("kind") == SESSION_TITLE and isinstance(fact["payload"].get("title"), str) and fact["payload"]["title"].strip()
+    ]
+    titled.sort(key=lambda item: item[0])
+    return [title for _, title in titled]
+
+
+__all__ = [
+    "SESSION_RECAP",
+    "SESSION_TITLE",
+    "TURN_DURATION",
+    "last_turn",
+    "provider_titles",
+    "recap",
+    "session_provider_facts",
+    "turn_ends_by_event",
+]
