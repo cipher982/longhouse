@@ -515,30 +515,62 @@ private struct PreviewSubtitle: ViewModifier {
 
 // MARK: - Provider facts chrome
 
-#Preview("Recap banner + usage chip · Dark") {
-    VStack(spacing: 0) {
-        SessionRecapBanner(
-            recap: SessionRecap(
-                text: "Rebuilt the G55 tablet DRIVE page as a center-console instrument showing what the factory cluster can't. v35 is installed and pushed. Next: check it in the truck.",
-                at: "2026-09-02T23:10:05.294000+00:00"
-            ),
-            usage: SessionUsageLatest(model: "claude-opus-5", effort: "high", contextTokens: 501_447, outputTokens: 177, thinkingTokens: 0, at: "2026-09-02T23:07:00Z")
-        )
-        Divider()
-        Spacer()
+/// The session screen's top inset, in the same shell the real screen uses:
+/// a navigation bar above, a scrolling transcript below. A bare view over a
+/// transparent canvas renders the bar material and secondary text as nothing.
+private struct ProviderChromePreview: View {
+    let recap: SessionRecap?
+    let usage: SessionUsageLatest?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Rebuilt the DRIVE page as a console instrument and pushed v35.").font(.body)
+                    Text("Next: check it in the truck, then pick up a1ac834 for v40.").font(.body)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let recap {
+                    VStack(spacing: 0) {
+                        SessionRecapBanner(recap: recap, usage: usage)
+                        Divider()
+                    }
+                } else if let usage {
+                    VStack(spacing: 0) {
+                        SessionUsageChip(usage: usage)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 4)
+                            .background(.bar)
+                        Divider()
+                    }
+                }
+            }
+            .navigationTitle("G55 DRIVE page")
+            .navigationBarTitleDisplayMode(.inline)
+            .modifier(PreviewSubtitle(subtitle: "Claude · g55 · cinder"))
+        }
     }
+}
+
+#Preview("Recap banner + usage chip · Dark") {
+    ProviderChromePreview(
+        recap: SessionRecap(
+            text: "Rebuilt the G55 tablet DRIVE page as a center-console instrument showing what the factory cluster can't. v35 is installed and pushed. Next: check it in the truck.",
+            at: "2026-09-02T23:10:05.294000+00:00"
+        ),
+        usage: SessionUsageLatest(model: "claude-opus-5", effort: "high", contextTokens: 501_447, outputTokens: 177, thinkingTokens: 0, at: "2026-09-02T23:07:00Z")
+    )
     .preferredColorScheme(.dark)
 }
 
 #Preview("Usage chip alone · Light") {
-    VStack(spacing: 0) {
-        SessionUsageChip(usage: SessionUsageLatest(model: "openai/gpt-5.6-sol", effort: "xhigh", contextTokens: 258_400, outputTokens: 80, thinkingTokens: 33, at: "2026-09-02T23:07:00Z"))
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 4)
-            .background(.bar)
-        Divider()
-        Spacer()
-    }
+    ProviderChromePreview(
+        recap: nil,
+        usage: SessionUsageLatest(model: "openai/gpt-5.6-sol", effort: "xhigh", contextTokens: 258_400, outputTokens: 80, thinkingTokens: 33, at: "2026-09-02T23:07:00Z")
+    )
     .preferredColorScheme(.light)
 }
