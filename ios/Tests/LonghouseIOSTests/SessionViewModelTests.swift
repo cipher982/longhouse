@@ -896,7 +896,7 @@ struct SessionViewModelTests {
 
         model.recordTranscriptLifecycle("transcript_frame_rendered")
         #expect(model.isTranscriptFrameReady == true)
-        await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
+        await waitForTailRequestCount(api, atLeast: 2)
         #expect(model.items.map(\.id) == ["user:1", "user:51"])
         let afterFirstFill = await api.tailRequestCount()
 
@@ -906,6 +906,21 @@ struct SessionViewModelTests {
         await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
         #expect(await api.tailRequestCount() == afterFirstFill + 1)
         #expect(model.items.map(\.id) == ["user:1", "user:51"])
+    }
+
+    @Test
+    func failedTranscriptFrameStopsRestoringAndSurfacesRetryableError() async throws {
+        let workspace = try makeWorkspace(eventId: 1, content: "Visible content")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        model.recordTranscriptLifecycle("transcript_frame_failed")
+
+        #expect(model.isTranscriptFrameReady == false)
+        #expect(model.transcriptRendererErrorMessage == "Transcript rendering was interrupted.")
     }
 
     @Test

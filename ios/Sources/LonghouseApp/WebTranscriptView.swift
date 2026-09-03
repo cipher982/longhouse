@@ -1271,6 +1271,9 @@ struct WebTranscriptView: UIViewRepresentable {
                     onDiagnostics: onDiagnostics
                 )
                 guard error == nil else {
+                    Task { @MainActor in
+                        self.onLifecycle?("transcript_frame_failed")
+                    }
                     self.emitDiagnostics(
                         stage: "failed",
                         payload: payload,
@@ -1292,8 +1295,23 @@ struct WebTranscriptView: UIViewRepresentable {
                     guard let self else { return }
                     let frameMetrics: WebTranscriptJavaScriptMetrics?
                     switch frameResult {
-                    case .success(let value): frameMetrics = WebTranscriptJavaScriptMetrics(value)
-                    case .failure: frameMetrics = nil
+                    case .success(let value):
+                        frameMetrics = WebTranscriptJavaScriptMetrics(value)
+                    case .failure(let error):
+                        Task { @MainActor in
+                            self.onLifecycle?("transcript_frame_failed")
+                        }
+                        self.emitDiagnostics(
+                            stage: "failed",
+                            payload: payload,
+                            sequence: sequence,
+                            error: error,
+                            renderDurationMs: renderDurationMs,
+                            javaScriptMetrics: synchronousMetrics,
+                            diagnosticsEnabled: diagnosticsEnabled,
+                            onDiagnostics: onDiagnostics
+                        )
+                        return
                     }
                     Task { @MainActor in
                         self.onLifecycle?("transcript_frame_rendered")

@@ -40,6 +40,9 @@ final class SessionViewModel: ObservableObject {
     /// True only after the mounted transcript document has presented a frame.
     /// Having cached rows is not the same thing as having pixels on screen.
     @Published private(set) var isTranscriptFrameReady = false
+    /// A failed frame acknowledgement must reveal a retryable native error,
+    /// not leave the restoring surface spinning forever.
+    @Published private(set) var transcriptRendererErrorMessage: String?
     @Published var isSending = false
     @Published var isRespondingToPauseRequest = false
     /// Frames received on the workspace stream, for the dock's activity strip.
@@ -105,6 +108,9 @@ final class SessionViewModel: ObservableObject {
     /// Stops a server that answers "older" with the same window from being
     /// asked again on every render; any change to the loaded count re-arms it.
     private var historyFillStalledAtLoadedCount: Int?
+    /// WebKit can measure a short document in the same callback that reports
+    /// its first frame. Remember that request until MainActor records the frame.
+    private var historyFillPendingFirstFrame = false
     /// In-flight coalesced refresh for stream wakes, and whether another wake
     /// landed while it ran.
     private var realtimeRefreshTask: Task<Void, Never>?
@@ -160,6 +166,7 @@ final class SessionViewModel: ObservableObject {
             activeServerURL = appState.serverURL
             isInitialLoading = true
             isTranscriptFrameReady = false
+            transcriptRendererErrorMessage = nil
             detail = nil
             items = []
             subagents = []
@@ -171,6 +178,7 @@ final class SessionViewModel: ObservableObject {
             loadedProjectionItemCount = 0
             totalProjectionItemCount = 0
             historyFillStalledAtLoadedCount = nil
+            historyFillPendingFirstFrame = false
             realtimeRefreshTask?.cancel()
             realtimeRefreshTask = nil
             realtimeRefreshPending = false
@@ -633,16 +641,28 @@ final class SessionViewModel: ObservableObject {
         openWaterfall?.mark(stage)
         switch stage {
         case "transcript_frame_rendered":
-            guard !isTranscriptFrameReady else { return }
+            let wasReady = isTranscriptFrameReady
             isTranscriptFrameReady = true
+            transcriptRendererErrorMessage = nil
+            guard !wasReady else { return }
             guard
                 let sessionId = activeSessionId,
                 let serverURL = activeServerURL,
                 let api = apiFactory(serverURL)
             else { return }
-            scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            if historyFillPendingFirstFrame {
+                historyFillPendingFirstFrame = false
+                Task { [weak self] in
+                    await self?.fillHistoryForShortViewport(api: api, sessionId: sessionId)
+                }
+            } else {
+                scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            }
+        case "transcript_frame_failed":
+            transcriptRendererErrorMessage = "Transcript rendering was interrupted."
         case "webview_content_process_terminated":
             isTranscriptFrameReady = false
+            transcriptRendererErrorMessage = nil
         default:
             break
         }
@@ -950,16 +970,22 @@ final class SessionViewModel: ObservableObject {
     /// next render measures again, so this repeats until the viewport fills,
     /// history runs out, or a page adds nothing.
     func fillHistoryForShortViewport(sessionId: String, appState: AppState) async {
+        guard let api = apiFactory(appState.serverURL) else { return }
+        await fillHistoryForShortViewport(api: api, sessionId: sessionId)
+    }
+
+    private func fillHistoryForShortViewport(api: SessionWorkspaceClient, sessionId: String) async {
         guard activeSessionId == sessionId else { return }
         guard isTranscriptFrameReady else {
+            historyFillPendingFirstFrame = true
             openWaterfall?.mark("history_fill_deferred", "reason=first_frame_pending")
             return
         }
+        historyFillPendingFirstFrame = false
         // WebKit reconciles twice per render; the second ask must not read
         // the first page's in-flight state as "added nothing" and stall.
         guard !isLoadingOlder else { return }
         guard historyFillStalledAtLoadedCount != loadedProjectionItemCount else { return }
-        guard let api = apiFactory(appState.serverURL) else { return }
         let before = loadedProjectionItemCount
         openWaterfall?.mark("history_fill", "loaded=\(before) total=\(totalProjectionItemCount)")
         if await loadOlder(api: api, sessionId: sessionId) == 0, loadedProjectionItemCount == before {

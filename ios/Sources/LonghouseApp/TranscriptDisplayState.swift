@@ -39,12 +39,16 @@ enum TranscriptDisplayState: Equatable {
         errorMessage: String?,
         refreshErrorMessage: String?,
         isSyncing: Bool = false,
-        rendererReady: Bool = true
+        rendererReady: Bool = true,
+        rendererErrorMessage: String? = nil
     ) -> TranscriptDisplayState {
         if isInitialLoading {
             return .loading
         }
         if hasContent {
+            if let rendererErrorMessage {
+                return .contentWithRefreshError(rendererErrorMessage)
+            }
             if !rendererReady {
                 return .restoring
             }

@@ -280,7 +280,8 @@ struct SessionView: View {
             errorMessage: viewModel.errorMessage,
             refreshErrorMessage: viewModel.refreshErrorMessage,
             isSyncing: viewModel.detail?.isTranscriptSyncing == true,
-            rendererReady: viewModel.isTranscriptFrameReady
+            rendererReady: viewModel.isTranscriptFrameReady,
+            rendererErrorMessage: viewModel.transcriptRendererErrorMessage
         )
     }
 
