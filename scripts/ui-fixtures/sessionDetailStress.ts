@@ -368,6 +368,18 @@ export function buildSessionDetailStressFixture(): {
     summary_title: "Session Page Density Direction",
     summary:
       "Explored a denser session layout and identified the need for a deterministic session-detail QA fixture before doing more visual iteration.",
+    recap: {
+      text: "Workshopped a denser session layout and pinned the QA fixture. Next: capture the timeline pane and compare against the phone.",
+      at: "2026-04-15T15:20:00Z",
+    },
+    usage_latest: {
+      model: "claude-opus-5",
+      effort: "high",
+      context_tokens: 501_447,
+      output_tokens: 177,
+      thinking_tokens: 0,
+      at: "2026-04-15T14:44:20Z",
+    },
     first_user_message: "Let's workshop the session page layout.",
     thread_root_session_id: ROOT_SESSION_ID,
     thread_head_session_id: SESSION_DETAIL_STRESS_SESSION_ID,
@@ -465,6 +477,18 @@ export function buildSessionDetailStressFixture(): {
     assistant_messages: 8,
     tool_calls: 14,
     summary_title: "UI Workbench Fixture for Session Detail",
+    recap: {
+      text: "Workshopped a denser session layout and pinned the QA fixture. Next: capture the timeline pane and compare against the phone.",
+      at: "2026-04-15T15:30:00Z",
+    },
+    usage_latest: {
+      model: "claude-opus-5",
+      effort: "high",
+      context_tokens: 501_447,
+      output_tokens: 177,
+      thinking_tokens: 0,
+      at: "2026-04-15T15:22:34Z",
+    },
     summary:
       "Fixture-backed session detail capture with branch seam, dense transcript rows, completed tools, a failing command, and one currently running shell command.",
     first_user_message:
@@ -504,6 +528,7 @@ export function buildSessionDetailStressFixture(): {
     makeEvent(102, "assistant", "2026-04-15T14:44:20Z", {
       content_text:
         "The strongest direction is a dense workbench: compact turn blocks, fixed runtime strip, keyboardable filters, and a mode that jumps between user prompts.",
+      turn_end: { duration_ms: 129_299, ended_at: "2026-04-15T14:44:21Z", message_count: 42 },
     }),
     makeEvent(103, "assistant", "2026-04-15T14:45:10Z", {
       tool_name: "exec_command",
@@ -639,6 +664,7 @@ export function buildSessionDetailStressFixture(): {
     makeEvent(214, "assistant", "2026-04-15T15:22:34Z", {
       content_text:
         "Agreed. This fixture should stress the parts you actually judge by eye: who said what, what is running now, how much work happened, and whether managed control is obvious.",
+      turn_end: { duration_ms: 129_299, ended_at: "2026-04-15T15:22:35Z", message_count: 42 },
     }),
     makeEvent(215, "assistant", "2026-04-15T16:11:35Z", {
       tool_name: "exec_command",

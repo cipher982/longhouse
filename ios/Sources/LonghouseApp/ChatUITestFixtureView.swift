@@ -725,13 +725,21 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         } else if fixture.name == "marketing" {
             seedEvents = Self.marketingFixtureEvents()
         } else {
+            // Every assistant reply ends a turn, and the provider stamps each
+            // one; the fixture carries that so the footer is part of what the
+            // captures and UI tests see. Benchmarks keep the bare shape.
+            let stampsTurns = !fixture.name.hasPrefix("benchmark") && fixture.name != "render-storm"
             for index in 0..<fixture.eventCount {
                 let role = index.isMultiple(of: 2) ? "user" : "assistant"
+                let timestamp = Self.fixedTimestamp(offset: index)
                 seedEvents.append(Self.makeEvent(
                     id: index + 1,
                     role: role,
                     content: Self.messageText(index: index, role: role, fixtureName: fixture.name),
-                    timestamp: Self.fixedTimestamp(offset: index)
+                    timestamp: timestamp,
+                    turnEnd: role == "assistant" && stampsTurns
+                        ? SessionTurnEnd(durationMs: 129_299, endedAt: timestamp, messageCount: nil)
+                        : nil
                 ))
             }
         }

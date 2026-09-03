@@ -512,3 +512,33 @@ private struct PreviewSubtitle: ViewModifier {
     }
     .preferredColorScheme(.dark)
 }
+
+// MARK: - Provider facts chrome
+
+#Preview("Recap banner + usage chip · Dark") {
+    VStack(spacing: 0) {
+        SessionRecapBanner(
+            recap: SessionRecap(
+                text: "Rebuilt the G55 tablet DRIVE page as a center-console instrument showing what the factory cluster can't. v35 is installed and pushed. Next: check it in the truck.",
+                at: "2026-09-02T23:10:05.294000+00:00"
+            ),
+            usage: SessionUsageLatest(model: "claude-opus-5", effort: "high", contextTokens: 501_447, outputTokens: 177, thinkingTokens: 0, at: "2026-09-02T23:07:00Z")
+        )
+        Divider()
+        Spacer()
+    }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Usage chip alone · Light") {
+    VStack(spacing: 0) {
+        SessionUsageChip(usage: SessionUsageLatest(model: "openai/gpt-5.6-sol", effort: "xhigh", contextTokens: 258_400, outputTokens: 80, thinkingTokens: 33, at: "2026-09-02T23:07:00Z"))
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+            .background(.bar)
+        Divider()
+        Spacer()
+    }
+    .preferredColorScheme(.light)
+}

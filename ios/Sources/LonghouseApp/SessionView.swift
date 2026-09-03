@@ -59,14 +59,22 @@ struct SessionView: View {
         // trying to focus the composer.
         transcript
         .safeAreaInset(edge: .top, spacing: 0) {
+            // A bar over a scrolling transcript needs its own bottom edge, or
+            // the text sliding under it reads as part of the banner.
             if let recap = viewModel.detail?.recap {
-                SessionRecapBanner(recap: recap, usage: viewModel.detail?.usageLatest)
+                VStack(spacing: 0) {
+                    SessionRecapBanner(recap: recap, usage: viewModel.detail?.usageLatest)
+                    Divider()
+                }
             } else if let usage = viewModel.detail?.usageLatest {
-                SessionUsageChip(usage: usage)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                    .background(.bar)
+                VStack(spacing: 0) {
+                    SessionUsageChip(usage: usage)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                        .background(.bar)
+                    Divider()
+                }
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {

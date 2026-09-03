@@ -87,14 +87,24 @@ extension SessionUsageLatest {
         return parts.joined(separator: " · ")
     }
 
-    /// "claude-opus-5" → "opus 5", "gpt-5.6-sol" → "gpt 5.6 sol". Vendor prefixes
-    /// are chrome; the phone already knows which provider this is.
+    /// "claude-opus-5" → "opus 5", "claude-fable-5-1" → "fable 5.1",
+    /// "gpt-5.6-sol" → "gpt 5.6 sol". Vendor prefixes are chrome; the phone
+    /// already knows which provider this is. A dash between two digits is a
+    /// version separator and reads as a dot.
     static func shortModelName(_ raw: String?) -> String? {
         guard var name = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !name.isEmpty else { return nil }
         for prefix in ["claude-", "anthropic/", "openai/"] where name.hasPrefix(prefix) {
             name.removeFirst(prefix.count)
         }
-        return name.replacingOccurrences(of: "-", with: " ")
+        var out = ""
+        let chars = Array(name)
+        for (index, char) in chars.enumerated() {
+            guard char == "-" else { out.append(char); continue }
+            let previous = index > 0 ? chars[index - 1] : " "
+            let next = index + 1 < chars.count ? chars[index + 1] : " "
+            out.append(previous.isNumber && next.isNumber ? "." : " ")
+        }
+        return out
     }
 
     /// 501447 → "501k", 12_800 → "13k", 900 → "900", 1_200_000 → "1.2M".

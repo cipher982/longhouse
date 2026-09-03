@@ -118,6 +118,25 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Working..."].exists)
     }
 
+    /// The provider's turn accounting renders as a footer inside the reply row.
+    /// The fixture stamps every assistant reply with a 2m 9s turn, the way
+    /// Claude writes `turn_duration` after each interactive turn.
+    func testTurnFooterRendersUnderTheProviderReply() {
+        let app = launchChatFixture(eventCount: 9)
+        XCTAssertTrue(
+            app.staticTexts["Assistant fixture message 7: streaming-style response with enough body to exercise row layout."]
+                .waitForExistence(timeout: Self.webTranscriptTimeout)
+        )
+        let footer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Worked for 2m 9s")).firstMatch
+        XCTAssertTrue(footer.waitForExistence(timeout: Self.webTranscriptTimeout), "the reply row carries the provider's turn footer")
+        XCTAssertTrue(footer.label.contains("done"), "the footer names when the turn finished")
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "turn-footer"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     func testKeyboardFocusKeepsLatestTranscriptMessageVisible() {
         let app = launchChatFixture(eventCount: 40)
         let composer = app.textFields["session-chat-composer"]
