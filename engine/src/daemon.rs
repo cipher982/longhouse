@@ -1004,6 +1004,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
         JoinSet::new();
+    let mut storage_maintenance_tasks: JoinSet<()> = JoinSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let runtime_events_outbox_dir = config::get_agent_runtime_events_outbox_dir()?;
@@ -1539,6 +1540,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     None => {}
                 }
             }
+            _ = storage_maintenance_tasks.join_next(), if !storage_maintenance_tasks.is_empty() => {}
+
 
             unmanaged_binding_refresh_result = unmanaged_binding_refresh_tasks.join_next(), if !unmanaged_binding_refresh_tasks.is_empty() => {
                 match unmanaged_binding_refresh_result {
@@ -2336,6 +2339,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_run_window entries", n),
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Session run window prune error: {}", e),
+                }
+                if storage_maintenance_tasks.is_empty() {
+                    let db_path = projection_db_path.clone();
+                    storage_maintenance_tasks.spawn_blocking(move || {
+                        crate::state::recover::run_daily_storage_maintenance(&db_path);
+                    });
                 }
             }
 

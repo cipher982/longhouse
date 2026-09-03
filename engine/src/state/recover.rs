@@ -44,12 +44,12 @@
 //! the shape its table actually requires before it is kept, and the counts of
 //! what was rejected are reported rather than swallowed.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
 use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// SQLite's file magic, including its terminating NUL.
 const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
@@ -83,7 +83,8 @@ pub struct RecoveredTable {
 pub struct RecoveryReport {
     pub dry_run: bool,
     pub source_db: PathBuf,
-    /// Where the unreadable original was moved. Never deleted.
+    /// Where the unreadable original was moved. Retained for forensics
+    /// and pruned by the daemon's daily retention lifecycle.
     pub quarantined_to: Option<PathBuf>,
     pub tables: Vec<RecoveredTable>,
     pub notes: Vec<String>,
@@ -646,7 +647,10 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     // recovered on-disk shape up to the current schema.
     crate::state::db::open_db(Some(db_path)).context("opening the recovered database")?;
 
-    notes.push(format!("corrupt database kept at {}", quarantine.display()));
+    notes.push(format!(
+        "corrupt database quarantined to {}",
+        quarantine.display()
+    ));
     Ok(RecoveryReport {
         dry_run: false,
         source_db: db_path.to_path_buf(),
@@ -724,6 +728,247 @@ fn quarantine_path(db_path: &Path) -> PathBuf {
         attempt += 1;
     }
     candidate
+}
+pub const MAX_QUARANTINE_AGE_DAYS: u64 = 7;
+pub const MIN_PRESERVED_QUARANTINES: usize = 2;
+pub const MAX_QUARANTINE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct QuarantinePruneReport {
+    pub deleted_files: usize,
+    pub reclaimed_bytes: u64,
+    pub retained_files: usize,
+    pub retained_bytes: u64,
+}
+
+/// Identifies whether a directory entry is a quarantine/snapshot artifact for the target database.
+pub fn is_quarantine_artifact_for(db_name: &str, file_name: &str) -> bool {
+    if file_name == db_name
+        || file_name == format!("{db_name}-wal")
+        || file_name == format!("{db_name}-shm")
+    {
+        return false;
+    }
+    if !file_name.starts_with(db_name) {
+        return false;
+    }
+    let suffix = &file_name[db_name.len()..];
+    suffix.starts_with(".corrupt-")
+        || suffix.starts_with(".pre-")
+        || suffix.starts_with(".recovered-")
+        || suffix.contains(".stale-")
+}
+
+pub fn prune_stale_quarantines(db_path: &Path) -> Result<QuarantinePruneReport> {
+    let parent = match db_path.parent() {
+        Some(dir) if dir.as_os_str().is_empty() => Path::new("."),
+        Some(dir) => dir,
+        None => Path::new("."),
+    };
+    let Some(db_name) = db_path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(QuarantinePruneReport::default());
+    };
+
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(QuarantinePruneReport::default());
+        }
+        Err(err) => return Err(err).context("scanning directory for stale quarantines"),
+    };
+
+    let now = std::time::SystemTime::now();
+    let max_age = Duration::from_secs(MAX_QUARANTINE_AGE_DAYS * 86400);
+
+    struct Candidate {
+        path: PathBuf,
+        size: u64,
+        mtime: std::time::SystemTime,
+        age_eligible: bool,
+    }
+
+    let mut candidates = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(name_str) = file_name.to_str() else {
+            continue;
+        };
+        if !is_quarantine_artifact_for(db_name, name_str) {
+            continue;
+        }
+
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let size = meta.len();
+        let mtime = meta.modified().unwrap_or(now);
+        let age_eligible = match now.duration_since(mtime) {
+            Ok(age) => age > max_age,
+            Err(_) => false,
+        };
+
+        candidates.push(Candidate {
+            path: entry.path(),
+            size,
+            mtime,
+            age_eligible,
+        });
+    }
+
+    candidates.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+
+    let mut to_delete = Vec::new();
+    let mut retained = Vec::new();
+    let mut total_retained_bytes = 0u64;
+
+    for (index, candidate) in candidates.into_iter().enumerate() {
+        if index < MIN_PRESERVED_QUARANTINES {
+            total_retained_bytes = total_retained_bytes.saturating_add(candidate.size);
+            retained.push(candidate);
+        } else if candidate.age_eligible {
+            to_delete.push(candidate);
+        } else {
+            total_retained_bytes = total_retained_bytes.saturating_add(candidate.size);
+            retained.push(candidate);
+        }
+    }
+
+    while total_retained_bytes > MAX_QUARANTINE_TOTAL_BYTES
+        && retained.len() > MIN_PRESERVED_QUARANTINES
+    {
+        if let Some(oldest) = retained.pop() {
+            total_retained_bytes = total_retained_bytes.saturating_sub(oldest.size);
+            to_delete.push(oldest);
+        } else {
+            break;
+        }
+    }
+
+    let mut report = QuarantinePruneReport {
+        deleted_files: 0,
+        reclaimed_bytes: 0,
+        retained_files: retained.len(),
+        retained_bytes: total_retained_bytes,
+    };
+
+    for item in to_delete {
+        match std::fs::remove_file(&item.path) {
+            Ok(()) => {
+                report.deleted_files += 1;
+                report.reclaimed_bytes = report.reclaimed_bytes.saturating_add(item.size);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                tracing::warn!(
+                    path = %item.path.display(),
+                    error = %err,
+                    "failed to delete stale quarantine file"
+                );
+                report.retained_files += 1;
+                report.retained_bytes = report.retained_bytes.saturating_add(item.size);
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+pub const VACUUM_FREELIST_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompactionReport {
+    pub freelist_bytes_before: u64,
+    pub freelist_bytes_after: u64,
+    pub wal_checkpoint_busy: bool,
+}
+
+pub fn maybe_compact_database(db_path: &Path) -> Result<Option<CompactionReport>> {
+    maybe_compact_database_with_threshold(db_path, VACUUM_FREELIST_THRESHOLD_BYTES)
+}
+
+pub fn maybe_compact_database_with_threshold(
+    db_path: &Path,
+    threshold_bytes: u64,
+) -> Result<Option<CompactionReport>> {
+    let conn = match crate::state::db::open_client_connection(db_path, Duration::from_millis(50)) {
+        Ok(conn) => conn,
+        Err(err) => {
+            return Err(err).context("opening maintenance connection for vacuum");
+        }
+    };
+
+    let freelist_pages: i64 = conn
+        .query_row("PRAGMA freelist_count;", [], |row| row.get(0))
+        .context("querying freelist_count")?;
+    let page_size: i64 = conn
+        .query_row("PRAGMA page_size;", [], |row| row.get(0))
+        .context("querying page_size")?;
+
+    let freelist_bytes = (freelist_pages.max(0) as u64).saturating_mul(page_size.max(0) as u64);
+    if freelist_bytes < threshold_bytes {
+        return Ok(None);
+    }
+    conn.execute("VACUUM;", []).context("executing VACUUM")?;
+
+    let wal_checkpoint_busy = conn
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE);", [], |row| {
+            let busy: i32 = row.get(0)?;
+            Ok(busy != 0)
+        })
+        .unwrap_or(false);
+
+    let freelist_pages_after: i64 = conn
+        .query_row("PRAGMA freelist_count;", [], |row| row.get(0))
+        .unwrap_or(0);
+    let freelist_bytes_after =
+        (freelist_pages_after.max(0) as u64).saturating_mul(page_size.max(0) as u64);
+
+    Ok(Some(CompactionReport {
+        freelist_bytes_before: freelist_bytes,
+        freelist_bytes_after,
+        wal_checkpoint_busy,
+    }))
+}
+
+pub fn run_daily_storage_maintenance(db_path: &Path) {
+    match prune_stale_quarantines(db_path) {
+        Ok(report) if report.deleted_files > 0 => {
+            tracing::info!(
+                deleted_files = report.deleted_files,
+                reclaimed_bytes = report.reclaimed_bytes,
+                retained_files = report.retained_files,
+                retained_bytes = report.retained_bytes,
+                "Daily maintenance: pruned stale database quarantine snapshots"
+            );
+        }
+        Ok(_) => {}
+        Err(err) => {
+            tracing::warn!(error = %err, "Daily maintenance: quarantine prune error");
+        }
+    }
+
+    match maybe_compact_database(db_path) {
+        Ok(Some(report)) => {
+            let reclaimed = report
+                .freelist_bytes_before
+                .saturating_sub(report.freelist_bytes_after);
+            tracing::info!(
+                reclaimed_bytes = reclaimed,
+                wal_checkpoint_busy = report.wal_checkpoint_busy,
+                "Daily maintenance: compacted shipper database"
+            );
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(error = %err, "Daily maintenance: database compaction deferred");
+        }
+    }
 }
 
 /// Recreate one table from its on-disk DDL and load its validated rows.
@@ -1101,5 +1346,146 @@ mod tests {
         file.flush().unwrap();
 
         assert!(needs_recovery(&path));
+    }
+
+    #[test]
+    fn quarantine_artifact_matcher_identifies_matching_files() {
+        let db = "longhouse-shipper.db";
+        assert!(!is_quarantine_artifact_for(db, "longhouse-shipper.db"));
+        assert!(!is_quarantine_artifact_for(db, "longhouse-shipper.db-wal"));
+        assert!(!is_quarantine_artifact_for(db, "longhouse-shipper.db-shm"));
+        assert!(!is_quarantine_artifact_for(db, "other.db.corrupt-123"));
+        assert!(!is_quarantine_artifact_for(db, "random-file.txt"));
+
+        assert!(is_quarantine_artifact_for(
+            db,
+            "longhouse-shipper.db.corrupt-1787804634"
+        ));
+        assert!(is_quarantine_artifact_for(
+            db,
+            "longhouse-shipper.db.corrupt-1788242433141423000"
+        ));
+        assert!(is_quarantine_artifact_for(
+            db,
+            "longhouse-shipper.db.pre-epoch-rebind-20260831T2043Z"
+        ));
+        assert!(is_quarantine_artifact_for(
+            db,
+            "longhouse-shipper.db.pre-final-reconcile-20260831T2256Z"
+        ));
+        assert!(is_quarantine_artifact_for(
+            db,
+            "longhouse-shipper.db-shm.stale-20260831T2047Z"
+        ));
+        assert!(is_quarantine_artifact_for(
+            db,
+            "longhouse-shipper.db-wal.stale-20260831T2047Z"
+        ));
+    }
+
+    #[test]
+    fn prune_stale_quarantines_preserves_newest_and_deletes_aged_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("state.db");
+        std::fs::write(&db_path, b"active database").unwrap();
+
+        let now = std::time::SystemTime::now();
+        let old_time = now - Duration::from_secs(10 * 86400); // 10 days old
+        let recent_time = now - Duration::from_secs(1 * 86400); // 1 day old
+
+        let old_1 = dir.path().join("state.db.corrupt-old1");
+        std::fs::write(&old_1, &[1u8; 1000]).unwrap();
+        let times = std::fs::FileTimes::new().set_modified(old_time);
+        std::fs::File::options()
+            .write(true)
+            .open(&old_1)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+
+        let old_2 = dir.path().join("state.db.corrupt-old2");
+        std::fs::write(&old_2, &[2u8; 2000]).unwrap();
+        let times = std::fs::FileTimes::new().set_modified(old_time);
+        std::fs::File::options()
+            .write(true)
+            .open(&old_2)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+
+        let old_3 = dir.path().join("state.db.corrupt-old3");
+        std::fs::write(&old_3, &[3u8; 3000]).unwrap();
+        let times = std::fs::FileTimes::new().set_modified(old_time);
+        std::fs::File::options()
+            .write(true)
+            .open(&old_3)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+
+        let recent = dir.path().join("state.db.corrupt-recent");
+        std::fs::write(&recent, &[4u8; 4000]).unwrap();
+        let times = std::fs::FileTimes::new().set_modified(recent_time);
+        std::fs::File::options()
+            .write(true)
+            .open(&recent)
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+
+        let report = prune_stale_quarantines(&db_path).unwrap();
+
+        // The 2 newest files are preserved (recent and one of the old ones)
+        // The remaining 2 old files (> 7 days) are deleted.
+        assert_eq!(report.deleted_files, 2);
+        assert_eq!(report.retained_files, 2);
+        assert!(db_path.is_file(), "active database must never be deleted");
+        assert!(recent.is_file(), "recent file must be preserved");
+    }
+
+    #[test]
+    fn maybe_compact_database_reports_none_below_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("clean.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("CREATE TABLE t (x TEXT); INSERT INTO t VALUES ('hello');")
+            .unwrap();
+        drop(conn);
+
+        let report = maybe_compact_database(&db_path).unwrap();
+        assert!(
+            report.is_none(),
+            "clean database with small freelist should not trigger vacuum"
+        );
+    }
+    #[test]
+    fn maybe_compact_database_vacuums_when_above_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("bloated.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE t (x TEXT);",
+        )
+        .unwrap();
+
+        for i in 0..500 {
+            conn.execute(
+                "INSERT INTO t VALUES (?1)",
+                [format!("row-{i}-padding-{}", "x".repeat(200))],
+            )
+            .unwrap();
+        }
+        conn.execute("DELETE FROM t WHERE rowid > 5", []).unwrap();
+        drop(conn);
+
+        let report = maybe_compact_database_with_threshold(&db_path, 1000).unwrap();
+        assert!(
+            report.is_some(),
+            "expected compaction to trigger above threshold"
+        );
+        let report = report.unwrap();
+        assert!(report.freelist_bytes_before > 0);
+        assert!(report.freelist_bytes_after <= report.freelist_bytes_before);
     }
 }
