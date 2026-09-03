@@ -12,6 +12,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 IOS_DIR="$REPO_ROOT/ios"
 OUT_DIR="${1:-/tmp/lh-previews}"
+# The script changes directory below; a relative output path would land
+# beside the Xcode project instead of where the caller asked.
+mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 RESULT_BUNDLE="/tmp/lh-previews.xcresult"
 DERIVED_DATA_PATH="${LH_DERIVED_DATA_PATH:-/tmp/lh-previews-derived-data}"
 SIM_NAME="${LH_SIM_NAME:-iPhone 17 Pro}"

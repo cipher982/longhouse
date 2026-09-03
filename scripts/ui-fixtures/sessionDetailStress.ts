@@ -28,6 +28,7 @@ type AgentEvent = {
   id: number;
   role: string;
   content_text: string | null;
+  turn_end?: { duration_ms: number; ended_at: string; message_count?: number | null } | null;
   tool_name: string | null;
   tool_input_json: unknown;
   tool_output_text: string | null;

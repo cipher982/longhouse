@@ -611,7 +611,9 @@ async function main() {
   console.log("====================================\n");
 
   // Check if dev is running
-  const backendUp = await checkDevRunning(opts.backendUrl);
+  // Fixture-backed scenes answer every API call from Playwright routes, so
+  // they need only the Vite server; the backend gate is for demo-data scenes.
+  const backendUp = sceneUsesMockApi(opts.scene) || (await checkDevRunning(opts.backendUrl));
   if (!backendUp) {
     console.error(`Dev server not running at ${opts.backendUrl}`);
     console.error("Start with: make dev");

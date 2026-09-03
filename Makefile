@@ -16,7 +16,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: help check-push-readiness dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-e2e test-e2e-core qa-landing-live test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
-.PHONY: phone-shot phone-deploy phone-logs sim-deploy sim-shot sim-logs simlab-run
+.PHONY: phone-shot phone-deploy phone-logs sim-deploy sim-shot sim-logs simlab-run ios-ui-shot ios-previews
 .PHONY: validate-playwright-install
 .PHONY: test-engine-single build-health build-clean
 .PHONY: provider-interaction-probe
@@ -107,6 +107,17 @@ test-ios: ## iOS unit + smoke tests (simulator) — the merge gate
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
 	IOS_TEST_SCHEMES="$(IOS_MERGE_TEST_SCHEMES)" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+
+ios-ui-shot: ## Run one iOS UI test and export its screenshots (TEST=SessionChatUITests/testName)
+	@test -n "$(TEST)" || (echo "TEST is required, e.g. TEST=SessionChatUITests/testTurnFooterRendersUnderTheProviderReply" >&2; exit 2)
+	@python3 scripts/build/generate_build_identity.py
+	@bash scripts/build/stage_ios_build_identity.sh
+	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@scripts/ci/ios_ui_shot.sh "$(TEST)"
+
+ios-previews: ## Render every SwiftUI #Preview to PNG under artifacts/ios-previews/<timestamp>/
+	@out="$(CURDIR)/artifacts/ios-previews/$$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$$out"; ios/scripts/render-previews.sh "$$out" >/dev/null 2>&1 || true; \
+	ls "$$out"/*.png >/dev/null 2>&1 && echo "Previews in $$out" && ls "$$out" | grep -v manifest || (echo "no previews rendered; run ios/scripts/render-previews.sh $$out to see why" >&2; exit 1)
 
 test-ios-perf: ## iOS wall-clock benchmarks (simulator) — never gates a merge
 	@python3 scripts/build/generate_build_identity.py
