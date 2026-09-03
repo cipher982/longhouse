@@ -288,10 +288,14 @@ struct SessionStreamResumeTests {
         for seq in 1...6 {
             recorder.emitChanged(latestEventId: 10 + seq, pubsubSeq: 700 + seq)
         }
-        try? await Task.sleep(nanoseconds: 700_000_000)
 
         // One refresh was in flight when the burst arrived; the burst marked
-        // it dirty once, and exactly one follow-up ran when it landed.
+        // it dirty once, and exactly one follow-up ran when it landed. Wait
+        // for that follow-up rather than a fixed budget: a loaded CI runner
+        // finishes the in-flight refresh later than a laptop does, and the
+        // bound that matters is the ceiling, not the wall clock.
+        await waitForTailRequests(api, atLeast: baseline + 1)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let requests = await api.tailRequestCount() - baseline
         #expect(requests >= 1 && requests <= 2, "expected 1-2 coalesced tail reads, got \(requests)")
         model.stop()
@@ -437,6 +441,17 @@ struct SessionStreamResumeTests {
         let deadline = clock.now.advanced(by: waitBudget)
         while clock.now < deadline {
             if model.items.map(\.id) == expected {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    private func waitForTailRequests(_ api: FakeStreamResumeClient, atLeast count: Int) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: waitBudget)
+        while clock.now < deadline {
+            if await api.tailRequestCount() >= count {
                 return
             }
             try? await Task.sleep(nanoseconds: 20_000_000)
