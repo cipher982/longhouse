@@ -6,6 +6,12 @@
 
 import Foundation
 
+struct APILastTurnResponse: Codable, Hashable, Sendable {
+    let durationMs: Int
+    let endedAt: String
+    let eventId: String?
+}
+
 struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let liveControlAvailable: Bool?
     let hostReattachAvailable: Bool?
@@ -395,6 +401,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let runtimeDisplay: APISessionRuntimeDisplayResponse
     let transcriptPreview: APISessionTranscriptPreviewResponse?
     let inputReceipts: [APISessionInputReceiptResponse]?
+    let lastTurn: APILastTurnResponse?
     let timelineCard: APITimelineCardPresentationResponse
     let userState: String?
     let userHiddenFromTimeline: Bool?
@@ -507,12 +514,19 @@ struct APIToolPresentationResponse: Codable, Hashable, Sendable {
     let shellSummary: APIShellCommandSummaryResponse?
 }
 
+struct APITurnEndResponse: Codable, Hashable, Sendable {
+    let durationMs: Int
+    let endedAt: String
+    let messageCount: Int?
+}
+
 struct APIEventResponse: Codable, Hashable, Sendable {
     let id: JSONValue
     let role: String
     let contentText: String?
     let rawContentText: String?
     let inputOrigin: APIInputOriginResponse?
+    let turnEnd: APITurnEndResponse?
     let toolName: String?
     let toolInputJson: JSONValue?
     let toolOutputText: String?

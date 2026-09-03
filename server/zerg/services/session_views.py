@@ -846,6 +846,22 @@ class SessionSharerResponse(UTCBaseModel):
     display_name: Optional[str] = Field(None, description="Display name (null falls back to email local on the client)")
 
 
+class TurnEndResponse(BaseModel):
+    """The provider's own accounting for the turn that ended on this event."""
+
+    duration_ms: int = Field(..., description="Wall-clock milliseconds the provider reported for the turn")
+    ended_at: datetime = Field(..., description="When the provider reported the turn done")
+    message_count: Optional[int] = Field(None, description="Provider message count at turn end, when reported")
+
+
+class LastTurnResponse(BaseModel):
+    """The most recent turn the provider reported as finished."""
+
+    duration_ms: int = Field(..., description="Wall-clock milliseconds of the last finished turn")
+    ended_at: datetime = Field(..., description="When the last turn finished")
+    event_id: Optional[str] = Field(None, description="The event the turn ended on, when it is known")
+
+
 class SessionInputReceiptResponse(BaseModel):
     """A send Longhouse accepted for this session, and the durable event it became.
 
@@ -964,6 +980,10 @@ class SessionResponse(UTCBaseModel):
     input_receipts: list[SessionInputReceiptResponse] = Field(
         default_factory=list,
         description="Recent sends Longhouse accepted for this session, with the durable event each became once linked.",
+    )
+    last_turn: Optional[LastTurnResponse] = Field(
+        None,
+        description="The most recent turn the provider reported as finished, from its own transcript accounting.",
     )
     timeline_card: TimelineCardPresentationResponse = Field(
         ...,
@@ -1425,6 +1445,10 @@ class EventResponse(UTCBaseModel):
     input_origin: Optional[InputOriginResponse] = Field(
         None,
         description="Semantic origin for user-authored input events",
+    )
+    turn_end: Optional[TurnEndResponse] = Field(
+        None,
+        description="Set on the event a provider-reported turn ended on: 'Worked for 2m 9s · done 9:15 AM'",
     )
     tool_name: Optional[str] = Field(None, description="Tool name")
     tool_input_json: Any = Field(None, description="Lossless JSON tool input; may be an object, string, or scalar")

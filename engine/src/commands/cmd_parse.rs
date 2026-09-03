@@ -9,6 +9,7 @@ pub fn cmd_parse(
     path: &PathBuf,
     offset: u64,
     dump_events: bool,
+    dump_facts: bool,
     compress: bool,
 ) -> anyhow::Result<()> {
     let start = Instant::now();
@@ -47,6 +48,13 @@ pub fn cmd_parse(
     if dump_events {
         for event in &result.events {
             let json = serde_json::to_string(event)?;
+            println!("{}", json);
+        }
+    }
+
+    if dump_facts {
+        for fact in &result.provider_facts {
+            let json = serde_json::to_string(fact)?;
             println!("{}", json);
         }
     }
@@ -112,7 +120,7 @@ pub fn cmd_parse(
             "ended_at": result.metadata.ended_at.map(|t| t.to_rfc3339()),
         }
     });
-    if dump_events {
+    if dump_events || dump_facts {
         eprintln!("{}", serde_json::to_string_pretty(&summary)?);
     } else {
         println!("{}", serde_json::to_string_pretty(&summary)?);

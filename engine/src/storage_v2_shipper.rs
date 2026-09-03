@@ -25,8 +25,8 @@ use crate::raw_records::{
 };
 use crate::shipping::client::ShipperClient;
 use crate::shipping::storage_v2::{
-    StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef, StorageV2Record,
-    StorageV2SourceManifest,
+    StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef, StorageV2ProviderFact,
+    StorageV2Record, StorageV2SourceManifest,
 };
 use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, StorageV2SessionFacts};
 use crate::state::cursor_store_records;
@@ -377,6 +377,19 @@ fn prepare_next_envelope_with_limit(
         })
         .cloned()
         .collect::<Vec<_>>();
+    let facts = parse_result
+        .provider_facts
+        .iter()
+        .filter(|fact| {
+            fact.source_offset >= raw_batch.range_start && fact.source_offset < raw_batch.range_end
+        })
+        .map(|fact| StorageV2ProviderFact {
+            kind: fact.kind.clone(),
+            at: fact.at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+            source_position: fact.source_offset,
+            payload: fact.payload.clone(),
+        })
+        .collect::<Vec<_>>();
     if position == 0
         && render_records.is_empty()
         && media_objects.is_empty()
@@ -446,6 +459,7 @@ fn prepare_next_envelope_with_limit(
                     data_b64: BASE64_STANDARD.encode(record.bytes),
                 })
                 .collect(),
+            facts,
             expected_envelope_id,
         },
         source_epoch: resolution.source_epoch,
@@ -2556,6 +2570,7 @@ pub(crate) fn prepare_next_opencode_envelope(
                             data_b64: BASE64_STANDARD.encode(bytes),
                         })
                         .collect(),
+                    facts: Vec::new(),
                     expected_envelope_id,
                 },
                 source_epoch: resolution.source_epoch,
@@ -3590,6 +3605,7 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
                     data_b64: BASE64_STANDARD.encode(record.bytes),
                 })
                 .collect(),
+            facts: Vec::new(),
             expected_envelope_id: hex_hash(storage_v2_contract::envelope_id(&identity)?),
         },
         source_epoch: resolution.source_epoch,
@@ -3718,6 +3734,7 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
                     data_b64: BASE64_STANDARD.encode(record.bytes),
                 })
                 .collect(),
+            facts: Vec::new(),
             expected_envelope_id: hex_hash(storage_v2_contract::envelope_id(&identity)?),
         },
         source_epoch: resolution.source_epoch,
@@ -4644,7 +4661,9 @@ mod tests {
 
     #[test]
     fn fresh_cursor_source_waits_for_launch_reservation_before_materializing_shadow() {
-        let _guard = CURSOR_BINDING_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CURSOR_BINDING_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().unwrap();
         let state_root = dir
             .path()

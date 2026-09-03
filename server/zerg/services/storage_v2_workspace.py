@@ -19,6 +19,9 @@ from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.session_input_links import input_origins_by_event
 from zerg.services.session_input_links import session_input_receipts
+from zerg.services.session_provider_facts import last_turn
+from zerg.services.session_provider_facts import session_provider_facts
+from zerg.services.session_provider_facts import turn_ends_by_event
 from zerg.services.tool_presentation import project_tool_presentation
 from zerg.utils.server_timing import ServerTimingRecorder
 
@@ -33,6 +36,7 @@ def _event_projection(
     provider: str | None,
     completed_tool_call_ids: set[str],
     input_origin: dict[str, object] | None = None,
+    turn_end: dict[str, object] | None = None,
 ) -> dict[str, object]:
     event_id = str(event["event_id"])
     tool_call_id = str(event["tool_call_id"]) if event.get("tool_call_id") else None
@@ -50,6 +54,7 @@ def _event_projection(
             "content_text": event.get("content_text"),
             "raw_content_text": None,
             "input_origin": input_origin,
+            "turn_end": turn_end,
             "tool_name": event.get("tool_name"),
             "tool_input_json": event.get("tool_input_json"),
             "tool_output_text": event.get("tool_output_text"),
@@ -94,11 +99,13 @@ def _workspace_envelope(
     storage: dict[str, object] | None,
     page: dict[str, object] | None,
     receipts: list[dict[str, object]],
+    facts: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Build one workspace shape; archive readiness only controls its event page."""
 
     control_only = storage is None
     input_origins = input_origins_by_event(receipts)
+    facts = facts or []
     events = page.get("events") if page is not None else []
     if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The render projection is invalid.")
@@ -106,6 +113,7 @@ def _workspace_envelope(
     if branch_mode == "head":
         events = [event for event in events if event.get("branch_kind") != "abandoned"]
     completed_tool_call_ids = {str(event["tool_call_id"]) for event in events if event.get("role") == "tool" and event.get("tool_call_id")}
+    turn_ends = turn_ends_by_event(facts, events)
     items = [
         _event_projection(
             event,
@@ -114,6 +122,7 @@ def _workspace_envelope(
             provider=getattr(session, "provider", None),
             completed_tool_call_ids=completed_tool_call_ids,
             input_origin=input_origins.get(str(event["event_id"])),
+            turn_end=turn_ends.get(str(event["event_id"])),
         )
         for event in events
     ]
@@ -132,6 +141,7 @@ def _workspace_envelope(
     fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     session_json = session.model_dump(mode="json")
     session_json["input_receipts"] = receipts
+    session_json["last_turn"] = last_turn(facts, turn_ends)
     storage_session = storage.get("session") if storage is not None else None
     return {
         "session": session_json,
@@ -239,6 +249,7 @@ async def build_storage_v2_workspace(
             timing=timing,
         )
     receipts = await session_input_receipts(catalogd, session_id)
+    facts = await session_provider_facts(catalogd, session_id)
     return _workspace_envelope(
         session_id=session_id,
         session=session,
@@ -249,6 +260,7 @@ async def build_storage_v2_workspace(
         storage=storage,
         page=page,
         receipts=receipts,
+        facts=facts,
     )
 
 

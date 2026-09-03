@@ -592,6 +592,10 @@ class CatalogDaemon:
             return await self._list_recent_input_receipts(request)
         if request.method == "session.input.receipts.list.v2":
             return await self._list_session_input_receipts(request)
+        if request.method == "session.provider_facts.list.v2":
+            return await self._list_session_provider_facts(request)
+        if request.method == "session.provider_facts.insert.v2":
+            return await self._insert_session_provider_facts(request)
         if request.method == "session.input.link_events.v2":
             return await self._link_input_receipts_to_events(request)
         if request.method == "session.input.cancel.v2":
@@ -2113,6 +2117,36 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _list_session_provider_facts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id"} or not _is_canonical_uuid(request.params.get("session_id")):
+            return self._error(request, "invalid_request", "session.provider_facts.list.v2 requires a canonical session_id")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.list_session_provider_facts,
+            session_id=request.params["session_id"],
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _insert_session_provider_facts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        """Facts for an envelope the catalog already holds: an exact replay or a backfill."""
+        expected = {"session_id", "source_epoch", "provider_facts"}
+        if set(request.params) != expected or not _is_canonical_uuid(request.params.get("session_id")):
+            return self._error(request, "invalid_request", "session.provider_facts.insert.v2 has invalid parameters")
+        if not _is_canonical_uuid(request.params.get("source_epoch")):
+            return self._error(request, "invalid_request", "session.provider_facts.insert.v2 requires a canonical source_epoch")
+        try:
+            facts = _validate_provider_facts(request.params["provider_facts"])
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.insert_session_provider_facts,
+            session_id=request.params["session_id"],
+            source_epoch=request.params["source_epoch"],
+            provider_facts=facts,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _link_input_receipts_to_events(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {"session_id", "candidates", "observed_at"}
         if set(request.params) != expected or not _is_canonical_uuid(request.params.get("session_id")):
@@ -2563,15 +2597,20 @@ class CatalogDaemon:
             "sealed_at",
         }
         # Optional so pre-rotation callers (legacy replay, direct commits) stay
-        # valid; absent means the envelope carried no conversation_reset records.
-        optional = {"conversation_resets"}
+        # valid; absent means the envelope carried no conversation_reset records
+        # and no provider facts.
+        optional = {"conversation_resets", "provider_facts"}
         provided = set(request.params)
         if provided - expected - optional or expected - provided:
             return self._error(request, "invalid_request", "storage.raw_object.commit.v2 has invalid parameters")
         params = dict(request.params)
         params.setdefault("conversation_resets", [])
+        params.setdefault("provider_facts", [])
         try:
             _validate_raw_object_commit(params)
+            params["provider_facts"] = _validate_provider_facts(
+                params["provider_facts"], range_start=params["range_start"], range_end=params["range_end"]
+            )
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
@@ -4114,6 +4153,49 @@ def _validate_storage_identity_fields(params: dict) -> None:
         raise ValueError("provider must be canonical lowercase ASCII")
     if params["range_kind"] not in {"byte_offset", "record_ordinal"}:
         raise ValueError("range_kind must be byte_offset or record_ordinal")
+
+
+PROVIDER_FACT_KINDS = frozenset({"turn.duration"})
+_PROVIDER_FACT_PAYLOAD_MAX_BYTES = 8_192
+
+
+def _validate_provider_facts(
+    value: object, *, range_start: int | None = None, range_end: int | None = None
+) -> tuple[dict[str, object], ...]:
+    """Typed provider facts beside the raw bytes; strict on shape, bounded on size."""
+    if not isinstance(value, list) or len(value) > 1_000:
+        raise ValueError("provider_facts must contain at most 1000 facts")
+    parsed: list[dict[str, object]] = []
+    seen: set[tuple[int, str]] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"kind", "at", "source_position", "payload"}:
+            raise ValueError("each provider fact needs kind, at, source_position and payload")
+        kind = item["kind"]
+        if kind not in PROVIDER_FACT_KINDS:
+            raise ValueError(f"provider fact kind {kind!r} is not catalogued")
+        position = item["source_position"]
+        if type(position) is not int or not 0 <= position < 1 << 64:
+            raise ValueError("provider fact source_position must be an unsigned 64-bit integer")
+        if range_start is not None and range_end is not None and not range_start <= position < range_end:
+            raise ValueError("provider fact source_position is outside the envelope")
+        payload = item["payload"]
+        if not isinstance(payload, dict) or len(json.dumps(payload, separators=(",", ":"))) > _PROVIDER_FACT_PAYLOAD_MAX_BYTES:
+            raise ValueError("provider fact payload must be a small JSON object")
+        if kind == "turn.duration" and type(payload.get("duration_ms")) is not int:
+            raise ValueError("turn.duration facts need an integer duration_ms")
+        key = (position, str(kind))
+        if key in seen:
+            raise ValueError("provider_facts must not repeat a source position and kind")
+        seen.add(key)
+        parsed.append(
+            {
+                "kind": str(kind),
+                "at": _parse_datetime(item["at"], "provider fact at"),
+                "source_position": position,
+                "payload": payload,
+            }
+        )
+    return tuple(parsed)
 
 
 def _validate_raw_object_commit(params: dict) -> None:

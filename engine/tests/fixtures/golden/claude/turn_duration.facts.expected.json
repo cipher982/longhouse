@@ -1,0 +1,14 @@
+{
+  "fact_count": 1,
+  "facts": [
+    {
+      "kind": "turn.duration",
+      "at": "2026-09-03T14:20:39.100Z",
+      "source_offset": 1266,
+      "payload": {
+        "duration_ms": 129299,
+        "message_count": 898
+      }
+    }
+  ]
+}

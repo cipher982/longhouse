@@ -108,6 +108,10 @@ _EXPECTED_ENVELOPE_FIELDS = {
     "records",
     "expected_envelope_id",
 }
+# `facts` is optional so an engine that predates provider facts keeps
+# shipping; when present it is validated as strictly as the rest.
+_OPTIONAL_ENVELOPE_FIELDS = {"facts"}
+_EXPECTED_PROVIDER_FACT_FIELDS = {"kind", "at", "source_position", "payload"}
 _EXPECTED_RECORD_FIELDS = {"source_position", "data_b64"}
 _EXPECTED_MEDIA_REF_FIELDS = {"sha256", "source_position", "ref_key", "availability"}
 _EXPECTED_SESSION_FIELDS = {
@@ -539,7 +543,7 @@ def _parse_envelope(
     machine_id: str,
     lane: str,
 ) -> tuple[RawObjectSpec, dict[str, Any]]:
-    if set(payload) != _EXPECTED_ENVELOPE_FIELDS:
+    if set(payload) - _OPTIONAL_ENVELOPE_FIELDS != _EXPECTED_ENVELOPE_FIELDS:
         raise ValueError("storage-v2 envelope fields do not match protocol v2")
     if payload["protocol_version"] != 2:
         raise ValueError("protocol_version must be 2")
@@ -615,8 +619,10 @@ def _parse_envelope(
     if envelope_id(identity) != expected_envelope:
         raise ValueError("expected_envelope_id does not match the exact source bytes")
     render_spec = _parse_render_spec(payload["render"], raw_spec=spec, source_envelope_id=expected_envelope)
+    provider_facts = _parse_provider_facts(payload.get("facts"), range_start=range_start, range_end=range_end)
     return spec, {
         "lane": lane,
+        "provider_facts": provider_facts,
         "predecessor_source_epoch": predecessor,
         "opened_at": opened_at,
         "expected_envelope_id": expected_envelope,
@@ -624,6 +630,30 @@ def _parse_envelope(
         "render_spec": render_spec,
         "media_refs": media_refs,
     }
+
+
+def _parse_provider_facts(value: object, *, range_start: int, range_end: int) -> list[dict[str, Any]]:
+    """Wire facts as catalogd expects them; shape errors reject the envelope."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 1_000:
+        raise ValueError("facts must contain at most 1000 items")
+    facts: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != _EXPECTED_PROVIDER_FACT_FIELDS:
+            raise ValueError("each fact must contain kind, at, source_position and payload")
+        kind = item["kind"]
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("fact kind must be a non-empty string")
+        position = item["source_position"]
+        if type(position) is not int or not range_start <= position < range_end:
+            raise ValueError("fact source_position must fall inside the envelope range")
+        at = _aware_datetime(item["at"], "fact at")
+        payload = item["payload"]
+        if not isinstance(payload, dict):
+            raise ValueError("fact payload must be an object")
+        facts.append({"kind": kind, "at": at.isoformat(), "source_position": position, "payload": payload})
+    return facts
 
 
 def _conversation_resets(render_spec: RenderObjectSpec | None) -> list[dict[str, str | None]]:
@@ -1070,6 +1100,18 @@ async def _commit_admitted_envelope(
         if not isinstance(objects, list) or len(objects) != 1 or not isinstance(objects[0], dict):
             raise CatalogUnavailable("catalog returned an invalid raw-object existence result")
         if objects[0].get("receipt") is not None:
+            if parsed["provider_facts"]:
+                # The bytes are already durable; facts a pre-facts engine never
+                # shipped (or a backfill re-sends) still need their rows.
+                await catalogd.call(
+                    "session.provider_facts.insert.v2",
+                    {
+                        "session_id": str(spec.session_id),
+                        "source_epoch": str(spec.source_epoch),
+                        "provider_facts": parsed["provider_facts"],
+                    },
+                    timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
+                )
             return _validated_receipt(objects[0]["receipt"])
 
         owner_value = getattr(auth_token, "owner_id", None)
@@ -1179,6 +1221,7 @@ async def _commit_admitted_envelope(
                 "render_manifest": render_manifest,
                 "session_facts": parsed["session_facts"],
                 "conversation_resets": _conversation_resets(render_spec),
+                "provider_facts": parsed["provider_facts"],
                 "sealed_at": datetime.now(UTC).isoformat(),
             },
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,

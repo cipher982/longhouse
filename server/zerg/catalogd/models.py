@@ -602,6 +602,33 @@ class LegacyMigrationRun(CatalogBase):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class SessionProviderFact(CatalogBase):
+    """A provider-authored fact beside the transcript, keyed by its source line.
+
+    Turn durations, recaps, titles and usage arrive on transcript lines the
+    render surface never shows. The engine parses them into typed facts and
+    ships them in the envelope that carries their bytes; the catalog keeps one
+    immutable row per (session, epoch, position, kind) so an exact replay is a
+    no-op and a source replacement cannot collide with the epoch it replaced.
+    """
+
+    __tablename__ = "session_provider_facts"
+    __table_args__ = (
+        UniqueConstraint("session_id", "source_epoch", "source_position", "kind", name="uq_session_provider_facts_source"),
+        Index("ix_session_provider_facts_session_kind_at", "session_id", "kind", "at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    kind = Column(String(64), nullable=False)
+    at = Column(DateTime(timezone=True), nullable=False)
+    source_epoch = Column(String(36), nullable=False)
+    source_position = Column(BigInteger, nullable=False)
+    payload_json = Column(Text, nullable=False)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+
 class LegacyMigrationSession(CatalogBase):
     """One resumable proof row per legacy session in a frozen migration run."""
 

@@ -4157,6 +4157,8 @@ export interface components {
             raw_content_text?: string | null;
             /** @description Semantic origin for user-authored input events */
             input_origin?: components["schemas"]["InputOriginResponse"] | null;
+            /** @description Set on the event a provider-reported turn ended on: 'Worked for 2m 9s · done 9:15 AM' */
+            turn_end?: components["schemas"]["TurnEndResponse"] | null;
             /**
              * Tool Name
              * @description Tool name
@@ -4625,6 +4627,28 @@ export interface components {
              * @description Client idempotency key when supplied by the Longhouse client
              */
             client_request_id?: string | null;
+        };
+        /**
+         * LastTurnResponse
+         * @description The most recent turn the provider reported as finished.
+         */
+        LastTurnResponse: {
+            /**
+             * Duration Ms
+             * @description Wall-clock milliseconds of the last finished turn
+             */
+            duration_ms: number;
+            /**
+             * Ended At
+             * Format: date-time
+             * @description When the last turn finished
+             */
+            ended_at: string;
+            /**
+             * Event Id
+             * @description The event the turn ended on, when it is known
+             */
+            event_id?: string | null;
         };
         /**
          * Lifecycle
@@ -8578,6 +8602,8 @@ export interface components {
              * @description Recent sends Longhouse accepted for this session, with the durable event each became once linked.
              */
             input_receipts?: components["schemas"]["SessionInputReceiptResponse"][];
+            /** @description The most recent turn the provider reported as finished, from its own transcript accounting. */
+            last_turn?: components["schemas"]["LastTurnResponse"] | null;
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
             /**
@@ -10093,6 +10119,28 @@ export interface components {
          * @enum {string}
          */
         TruthTier: "none" | "stale" | "fresh" | "managed-local";
+        /**
+         * TurnEndResponse
+         * @description The provider's own accounting for the turn that ended on this event.
+         */
+        TurnEndResponse: {
+            /**
+             * Duration Ms
+             * @description Wall-clock milliseconds the provider reported for the turn
+             */
+            duration_ms: number;
+            /**
+             * Ended At
+             * Format: date-time
+             * @description When the provider reported the turn done
+             */
+            ended_at: string;
+            /**
+             * Message Count
+             * @description Provider message count at turn end, when reported
+             */
+            message_count?: number | null;
+        };
         /** TurnLatencyPercentilesResponse */
         TurnLatencyPercentilesResponse: {
             /** P50 */

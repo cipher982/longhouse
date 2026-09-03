@@ -100,6 +100,17 @@ pub struct ParsedMediaObject {
     pub bytes: Vec<u8>,
 }
 
+/// A provider-authored fact beside the transcript (turn duration, recap,
+/// title). Emitted for lines the render surface does not show; never widens
+/// `ParsedEvent`. `payload` is the provider's own fields, bounded per kind.
+#[derive(Debug, Clone, Serialize)]
+pub struct ParsedProviderFact {
+    pub kind: String,
+    pub at: DateTime<Utc>,
+    pub source_offset: u64,
+    pub payload: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct SessionMetadata {
     pub session_id: String,
@@ -167,6 +178,8 @@ pub struct ParseResult {
     pub source_lines: Vec<ParsedSourceLine>,
     #[allow(dead_code)] // Phase 2 media store/upload consumes this parser side channel.
     pub media_objects: Vec<ParsedMediaObject>,
+    /// Provider facts parsed from non-transcript lines (see `ParsedProviderFact`).
+    pub provider_facts: Vec<ParsedProviderFact>,
     pub last_good_offset: u64,
     pub metadata: SessionMetadata,
     /// Number of records that appeared to contain parseable content.
@@ -632,6 +645,7 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
             events: Vec::new(),
             source_lines: Vec::new(),
             media_objects: Vec::new(),
+            provider_facts: Vec::new(),
             last_good_offset: offset,
             candidate_records: 0,
             metadata: SessionMetadata {
@@ -996,6 +1010,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                             events: Vec::new(),
                             source_lines: Vec::new(),
                             media_objects: Vec::new(),
+                            provider_facts: Vec::new(),
                             last_good_offset: file_size,
                             candidate_records: 0,
                             metadata: SessionMetadata {
@@ -1011,6 +1026,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                     events: Vec::new(),
                     source_lines: Vec::new(),
                     media_objects: Vec::new(),
+                    provider_facts: Vec::new(),
                     last_good_offset: file_size,
                     candidate_records: 0,
                     metadata: SessionMetadata {
@@ -1192,6 +1208,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
         events,
         source_lines,
         media_objects,
+        provider_facts: Vec::new(),
         last_good_offset: file_size,
         candidate_records,
         metadata,
@@ -1345,6 +1362,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
             events: Vec::new(),
             source_lines: Vec::new(),
             media_objects: Vec::new(),
+            provider_facts: Vec::new(),
             last_good_offset: offset,
             candidate_records: 0,
             metadata: SessionMetadata {
@@ -1357,6 +1375,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     let mut events = Vec::new();
     let mut source_lines = Vec::new();
     let mut media_objects = Vec::new();
+    let mut provider_facts: Vec<ParsedProviderFact> = Vec::new();
     let mut metadata = SessionMetadata::default();
     let mut min_ts: Option<DateTime<Utc>> = None;
     let mut max_ts: Option<DateTime<Utc>> = None;
@@ -1436,6 +1455,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
             &mut antigravity_pending,
             &mut codex_pending,
         );
+        extract_provider_facts(&obj, trimmed, line_offset, &mut provider_facts);
     }
 
     // Finalize metadata
@@ -1450,6 +1470,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         events,
         source_lines,
         media_objects,
+        provider_facts,
         last_good_offset,
         candidate_records: candidate_lines,
         metadata,
@@ -1474,6 +1495,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     let mut events = Vec::new();
     let mut source_lines = Vec::new();
     let mut media_objects = Vec::new();
+    let mut provider_facts: Vec<ParsedProviderFact> = Vec::new();
     let mut metadata = SessionMetadata::default();
     let mut min_ts: Option<DateTime<Utc>> = None;
     let mut max_ts: Option<DateTime<Utc>> = None;
@@ -1550,6 +1572,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
             &mut antigravity_pending,
             &mut codex_pending,
         );
+        extract_provider_facts(&obj, trimmed.as_bytes(), line_offset, &mut provider_facts);
     }
 
     metadata.started_at = min_ts;
@@ -1563,6 +1586,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
         events,
         source_lines,
         media_objects,
+        provider_facts,
         last_good_offset: current_offset,
         candidate_records: candidate_lines,
         metadata,
@@ -1759,6 +1783,58 @@ fn normalize_git_branch(branch: &str) -> Option<String> {
         return None;
     }
     Some(trimmed.to_string())
+}
+
+/// Provider facts live on lines the transcript surface never renders. Match
+/// on the cheap discriminators first; only a matched line is re-parsed as a
+/// JSON tree, so the hot path pays nothing for ordinary user/assistant rows.
+fn extract_provider_facts(
+    obj: &RawLine,
+    trimmed: &[u8],
+    line_offset: u64,
+    facts: &mut Vec<ParsedProviderFact>,
+) {
+    let kind = match (obj.r#type.as_deref(), obj.subtype.as_deref()) {
+        (Some("system"), Some("turn_duration")) => "turn.duration",
+        _ => return,
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(trimmed) else {
+        return;
+    };
+    let Some(at) = obj.timestamp.as_deref().and_then(parse_timestamp) else {
+        return;
+    };
+    let payload = match kind {
+        "turn.duration" => {
+            let Some(duration_ms) = value.get("durationMs").and_then(|v| v.as_u64()) else {
+                return;
+            };
+            let mut payload = serde_json::Map::new();
+            payload.insert(
+                "duration_ms".to_string(),
+                serde_json::Value::from(duration_ms),
+            );
+            if let Some(count) = value.get("messageCount").and_then(|v| v.as_u64()) {
+                payload.insert("message_count".to_string(), serde_json::Value::from(count));
+            }
+            for (wire, ours) in [
+                ("pendingBackgroundAgentCount", "pending_background_agents"),
+                ("pendingWorkflowCount", "pending_workflows"),
+            ] {
+                if let Some(count) = value.get(wire).and_then(|v| v.as_u64()) {
+                    payload.insert(ours.to_string(), serde_json::Value::from(count));
+                }
+            }
+            serde_json::Value::Object(payload)
+        }
+        _ => return,
+    };
+    facts.push(ParsedProviderFact {
+        kind: kind.to_string(),
+        at,
+        source_offset: line_offset,
+        payload,
+    });
 }
 
 fn extract_events(

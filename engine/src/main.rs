@@ -271,6 +271,10 @@ enum Commands {
         #[arg(long)]
         dump_events: bool,
 
+        /// Print parsed provider facts (turn durations, recaps, titles) as JSON
+        #[arg(long)]
+        dump_facts: bool,
+
         /// Also build + gzip-compress the ingest payload
         #[arg(long)]
         compress: bool,
@@ -1490,9 +1494,10 @@ fn main() -> anyhow::Result<()> {
             path,
             offset,
             dump_events,
+            dump_facts,
             compress,
         } => {
-            commands::cmd_parse::cmd_parse(&path, offset, dump_events, compress)?;
+            commands::cmd_parse::cmd_parse(&path, offset, dump_events, dump_facts, compress)?;
         }
         Commands::RecoverState { db, dry_run, json } => {
             let db_path = state::db::resolve_db_path(db.as_deref())?;

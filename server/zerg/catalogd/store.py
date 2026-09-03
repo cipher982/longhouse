@@ -19,6 +19,7 @@ from uuid import UUID
 from uuid import uuid4
 from uuid import uuid5
 
+from sqlalchemy import Connection
 from sqlalchemy import Engine
 from sqlalchemy import Float
 from sqlalchemy import MetaData
@@ -61,6 +62,7 @@ from zerg.catalogd.models import RenderGeneration
 from zerg.catalogd.models import RenderObject
 from zerg.catalogd.models import RuntimeDependencyState
 from zerg.catalogd.models import SessionMediaRef
+from zerg.catalogd.models import SessionProviderFact
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
 from zerg.catalogd.models import StorageSession
@@ -714,6 +716,39 @@ def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, 
     for field in ("created_at", "started_at", "finished_at"):
         payload[field] = _encode_datetime(payload[field])
     return payload
+
+
+def _insert_provider_facts(
+    connection: Connection,
+    *,
+    session_id: str,
+    source_epoch: str,
+    provider_facts: tuple[dict[str, Any], ...],
+    commit_seq: int,
+    now: datetime,
+) -> int:
+    """One immutable row per (session, epoch, position, kind); repeats are no-ops."""
+    if not provider_facts:
+        return 0
+    table = SessionProviderFact.__table__
+    inserted = 0
+    for fact in provider_facts:
+        result = connection.execute(
+            sqlite_insert(table)
+            .values(
+                session_id=session_id,
+                kind=str(fact["kind"]),
+                at=fact["at"],
+                source_epoch=source_epoch,
+                source_position=int(fact["source_position"]),
+                payload_json=json.dumps(fact["payload"], sort_keys=True, separators=(",", ":")),
+                commit_seq=commit_seq,
+                created_at=now,
+            )
+            .on_conflict_do_nothing(index_elements=["session_id", "source_epoch", "source_position", "kind"])
+        )
+        inserted += int(result.rowcount or 0)
+    return inserted
 
 
 class CatalogStore:
@@ -5058,6 +5093,53 @@ class CatalogStore:
             receipts = [_input_receipt_dto(_RowReceipt(row)) for row in rows]
             return {"receipts": receipts, "commit_seq": str(_current_commit_seq(connection))}
 
+    def list_session_provider_facts(self, *, session_id: str, limit: int = 200) -> dict[str, Any]:
+        """The newest provider facts for a session, newest first."""
+        table = SessionProviderFact.__table__
+        with _read_snapshot(self.engine) as connection:
+            rows = (
+                connection.execute(
+                    select(table)
+                    .where(table.c.session_id == session_id)
+                    .order_by(table.c.at.desc(), table.c.source_position.desc(), table.c.id.desc())
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            facts = [
+                {
+                    "kind": row["kind"],
+                    "at": (row["at"].isoformat() if isinstance(row["at"], datetime) else str(row["at"])),
+                    "source_epoch": row["source_epoch"],
+                    "source_position": int(row["source_position"]),
+                    "payload": row["payload_json"],
+                    "commit_seq": str(row["commit_seq"]),
+                }
+                for row in rows
+            ]
+            return {"facts": facts, "commit_seq": str(_current_commit_seq(connection))}
+
+    def insert_session_provider_facts(
+        self,
+        *,
+        session_id: str,
+        source_epoch: str,
+        provider_facts: tuple[dict[str, Any], ...],
+    ) -> dict[str, Any]:
+        """Facts for bytes the catalog already holds: replay or backfill. Idempotent."""
+        timer = _StageTimer("insert_session_provider_facts")
+        with _write_transaction(self.engine, timer=timer) as connection:
+            inserted = _insert_provider_facts(
+                connection,
+                session_id=session_id,
+                source_epoch=source_epoch,
+                provider_facts=provider_facts,
+                commit_seq=int(_current_commit_seq(connection)),
+                now=datetime.now(UTC),
+            )
+            return {"inserted": inserted, "commit_seq": str(_current_commit_seq(connection))}
+
     def link_input_receipts_to_events(
         self,
         *,
@@ -6947,6 +7029,7 @@ class CatalogStore:
         session_facts: dict[str, Any],
         sealed_at: datetime,
         conversation_resets: tuple[dict[str, Any], ...] = (),
+        provider_facts: tuple[dict[str, Any], ...] = (),
     ) -> dict[str, Any]:
         del protocol_version  # validated as v2 by the RPC boundary
         timer = _StageTimer("commit_raw_object")
@@ -7045,6 +7128,16 @@ class CatalogStore:
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 if not _raw_object_matches(existing, replay_identity):
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                # An exact replay may carry facts a pre-facts engine never
+                # shipped; keep them without moving the raw receipt.
+                _insert_provider_facts(
+                    connection,
+                    session_id=session_key,
+                    source_epoch=str(source_epoch),
+                    provider_facts=provider_facts,
+                    commit_seq=int(_current_commit_seq(connection)),
+                    now=datetime.now(UTC),
+                )
                 return {
                     "created": False,
                     "exact_replay": True,
@@ -8070,6 +8163,14 @@ class CatalogStore:
                             updated_at=commit_time,
                         )
                     )
+            _insert_provider_facts(
+                connection,
+                session_id=session_key,
+                source_epoch=str(source_epoch),
+                provider_facts=provider_facts,
+                commit_seq=commit_seq,
+                now=commit_time,
+            )
             timer.mark("projector_state")
             row = connection.execute(select(raw).where(raw.c.envelope_id == envelope_id)).mappings().one()
             title_generation_required = bool(

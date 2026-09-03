@@ -538,6 +538,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
         events,
         source_lines,
         media_objects,
+        provider_facts: Vec::new(),
         last_good_offset: session_version.max(last_source_offset.saturating_add(1)),
         metadata: SessionMetadata {
             session_id: longhouse_session_id,
@@ -1873,7 +1874,9 @@ mod tests {
 
     #[test]
     fn parse_opencode_session_reads_hatch_origin_sidecar_from_metadata_root() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("opencode.db");
         create_fixture_db(&db_path);

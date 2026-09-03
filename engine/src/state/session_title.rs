@@ -123,6 +123,7 @@ mod tests {
             }],
             source_lines: Vec::new(),
             media_objects: Vec::new(),
+            provider_facts: Vec::new(),
             last_good_offset: 1,
             metadata: SessionMetadata::default(),
             candidate_records: 1,

@@ -140,6 +140,19 @@ pub struct StorageV2Render {
     pub records: Vec<StorageV2RenderRecord>,
 }
 
+/// One provider-authored fact beside the transcript: a turn duration, a
+/// recap, a title. Parsed from lines the render surface does not show and
+/// shipped in the same envelope as the bytes that carry them, so ordering and
+/// idempotency ride the raw commit sequence. Excluded from envelope identity.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct StorageV2ProviderFact {
+    pub kind: String,
+    /// Provider wall-clock time the fact describes, RFC 3339.
+    pub at: String,
+    pub source_position: u64,
+    pub payload: serde_json::Value,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageV2Envelope {
     pub protocol_version: u8,
@@ -158,6 +171,8 @@ pub struct StorageV2Envelope {
     pub media: Vec<StorageV2MediaRef>,
     pub session: StorageV2SessionFacts,
     pub records: Vec<StorageV2Record>,
+    #[serde(default)]
+    pub facts: Vec<StorageV2ProviderFact>,
     pub expected_envelope_id: String,
 }
 
