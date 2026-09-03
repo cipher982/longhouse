@@ -361,3 +361,20 @@ fn golden_claude_recap_and_title_facts() {
     let events = parse_to_snapshot(&base.join("recap_title.jsonl"));
     assert_eq!(events.event_count, 2, "only the user and assistant rows are events");
 }
+
+/// Usage lands once per turn on the line that ends it, never on tool-use
+/// hops; API retries and compaction accounting are facts beside the same
+/// compaction system event the transcript already shows.
+#[test]
+fn golden_claude_usage_error_and_compaction_facts() {
+    let base = fixtures_dir().join("golden").join("claude");
+    run_golden_facts_test(
+        &base.join("usage_errors_compaction.jsonl"),
+        &base.join("usage_errors_compaction.facts.expected.json"),
+    );
+    let events = parse_to_snapshot(&base.join("usage_errors_compaction.jsonl"));
+    assert!(
+        events.events.iter().any(|event| event.raw_type == "compact_boundary"),
+        "the compaction boundary stays a visible system event"
+    );
+}

@@ -23,6 +23,7 @@ from zerg.services.session_provider_facts import last_turn
 from zerg.services.session_provider_facts import recap
 from zerg.services.session_provider_facts import session_provider_facts
 from zerg.services.session_provider_facts import turn_ends_by_event
+from zerg.services.session_provider_facts import usage_latest
 from zerg.services.tool_presentation import project_tool_presentation
 from zerg.utils.server_timing import ServerTimingRecorder
 
@@ -144,6 +145,7 @@ def _workspace_envelope(
     session_json["input_receipts"] = receipts
     session_json["last_turn"] = last_turn(facts, turn_ends)
     session_json["recap"] = recap(facts)
+    session_json["usage_latest"] = usage_latest(facts)
     storage_session = storage.get("session") if storage is not None else None
     return {
         "session": session_json,

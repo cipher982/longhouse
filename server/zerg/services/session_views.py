@@ -861,6 +861,17 @@ class SessionRecapResponse(BaseModel):
     at: datetime = Field(..., description="When the provider wrote the recap")
 
 
+class UsageLatestResponse(BaseModel):
+    """The provider's usage on the last turn-ending response: model, effort, context size."""
+
+    model: Optional[str] = Field(None, description="Model id the provider reported")
+    effort: Optional[str] = Field(None, description="Reasoning effort the provider reported")
+    context_tokens: int = Field(..., description="Input + cached tokens on the last turn-ending response: the live context size")
+    output_tokens: int = Field(..., description="Output tokens on that response")
+    thinking_tokens: Optional[int] = Field(None, description="Thinking tokens on that response, when reported")
+    at: datetime = Field(..., description="When that response was written")
+
+
 class LastTurnResponse(BaseModel):
     """The most recent turn the provider reported as finished."""
 
@@ -995,6 +1006,10 @@ class SessionResponse(UTCBaseModel):
     recap: Optional[SessionRecapResponse] = Field(
         None,
         description="The provider's latest away recap for this session, when it wrote one.",
+    )
+    usage_latest: Optional[UsageLatestResponse] = Field(
+        None,
+        description="Model, effort and context size from the provider's last turn-ending response.",
     )
     timeline_card: TimelineCardPresentationResponse = Field(
         ...,

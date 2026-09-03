@@ -4160,7 +4160,7 @@ def _validate_storage_identity_fields(params: dict) -> None:
         raise ValueError("range_kind must be byte_offset or record_ordinal")
 
 
-PROVIDER_FACT_KINDS = frozenset({"turn.duration", "session.recap", "session.title"})
+PROVIDER_FACT_KINDS = frozenset({"turn.duration", "session.recap", "session.title", "turn.usage", "turn.api_error", "context.compaction"})
 _PROVIDER_FACT_PAYLOAD_MAX_BYTES = 8_192
 
 
@@ -4192,6 +4192,10 @@ def _validate_provider_facts(
             raise ValueError("session.recap facts need non-empty text")
         if kind == "session.title" and not (isinstance(payload.get("title"), str) and payload["title"].strip()):
             raise ValueError("session.title facts need a non-empty title")
+        if kind == "turn.usage" and type(payload.get("output_tokens")) is not int:
+            raise ValueError("turn.usage facts need integer output_tokens")
+        if kind == "context.compaction" and not any(type(payload.get(key)) is int for key in ("pre_tokens", "post_tokens")):
+            raise ValueError("context.compaction facts need pre_tokens or post_tokens")
         key = (position, str(kind))
         if key in seen:
             raise ValueError("provider_facts must not repeat a source position and kind")

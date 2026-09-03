@@ -343,6 +343,15 @@ struct APITimelineCardPresentationResponse: Codable, Hashable, Sendable {
     let borderTone: String?
 }
 
+struct APIUsageLatestResponse: Codable, Hashable, Sendable {
+    let model: String?
+    let effort: String?
+    let contextTokens: Int
+    let outputTokens: Int
+    let thinkingTokens: Int?
+    let at: String
+}
+
 struct APISessionResponse: Codable, Hashable, Sendable {
     let id: String
     let originKind: String?
@@ -408,6 +417,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let inputReceipts: [APISessionInputReceiptResponse]?
     let lastTurn: APILastTurnResponse?
     let recap: APISessionRecapResponse?
+    let usageLatest: APIUsageLatestResponse?
     let timelineCard: APITimelineCardPresentationResponse
     let userState: String?
     let userHiddenFromTimeline: Bool?

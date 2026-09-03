@@ -1,0 +1,43 @@
+{
+  "fact_count": 3,
+  "facts": [
+    {
+      "kind": "turn.api_error",
+      "at": "2026-09-03T14:18:31Z",
+      "source_offset": 299,
+      "payload": {
+        "error": "API Error: 529 Overloaded",
+        "max_retries": 10,
+        "retry_attempt": 1,
+        "retry_in_ms": 1000
+      }
+    },
+    {
+      "kind": "turn.usage",
+      "at": "2026-09-03T14:18:40Z",
+      "source_offset": 1791,
+      "payload": {
+        "cache_creation_input_tokens": 300,
+        "cache_read_input_tokens": 401000,
+        "effort": "high",
+        "input_tokens": 2,
+        "model": "claude-opus-5",
+        "output_tokens": 177,
+        "service_tier": "standard",
+        "speed": "standard",
+        "thinking_tokens": 12
+      }
+    },
+    {
+      "kind": "context.compaction",
+      "at": "2026-09-03T14:19:00Z",
+      "source_offset": 2443,
+      "payload": {
+        "duration_ms": 144947,
+        "post_tokens": 15694,
+        "pre_tokens": 269584,
+        "trigger": "manual"
+      }
+    }
+  ]
+}

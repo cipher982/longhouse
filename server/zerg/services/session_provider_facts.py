@@ -25,6 +25,7 @@ _LIST_TIMEOUT_SECONDS = 4.25
 TURN_DURATION = "turn.duration"
 SESSION_RECAP = "session.recap"
 SESSION_TITLE = "session.title"
+TURN_USAGE = "turn.usage"
 
 
 def _parse_at(value: object) -> datetime | None:
@@ -149,6 +150,32 @@ def recap(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"text": latest["payload"]["text"], "at": latest["at"].isoformat()}
 
 
+def usage_latest(facts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The newest turn-ending usage: what the next prompt starts from."""
+    latest = None
+    for fact in facts:
+        if fact.get("kind") != TURN_USAGE or type(fact["payload"].get("output_tokens")) is not int:
+            continue
+        if latest is None or fact["at"] > latest["at"]:
+            latest = fact
+    if latest is None:
+        return None
+    payload = latest["payload"]
+    context_tokens = sum(
+        int(payload[key])
+        for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+        if type(payload.get(key)) is int
+    )
+    return {
+        "model": payload.get("model") if isinstance(payload.get("model"), str) else None,
+        "effort": payload.get("effort") if isinstance(payload.get("effort"), str) else None,
+        "context_tokens": context_tokens,
+        "output_tokens": int(payload["output_tokens"]),
+        "thinking_tokens": int(payload["thinking_tokens"]) if type(payload.get("thinking_tokens")) is int else None,
+        "at": latest["at"].isoformat(),
+    }
+
+
 def provider_titles(facts: list[dict[str, Any]]) -> list[str]:
     """Provider titles oldest first, so the first one is the one to freeze."""
     titled = [
@@ -164,9 +191,11 @@ __all__ = [
     "SESSION_RECAP",
     "SESSION_TITLE",
     "TURN_DURATION",
+    "TURN_USAGE",
     "last_turn",
     "provider_titles",
     "recap",
     "session_provider_facts",
     "turn_ends_by_event",
+    "usage_latest",
 ]

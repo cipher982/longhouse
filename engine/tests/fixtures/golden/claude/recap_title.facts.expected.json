@@ -1,5 +1,5 @@
 {
-  "fact_count": 3,
+  "fact_count": 4,
   "facts": [
     {
       "kind": "session.title",
@@ -7,6 +7,18 @@
       "source_offset": 0,
       "payload": {
         "title": "G55 app tablet UI beautification"
+      }
+    },
+    {
+      "kind": "turn.usage",
+      "at": "2026-09-02T23:07:00Z",
+      "source_offset": 418,
+      "payload": {
+        "cache_creation_input_tokens": 261,
+        "cache_read_input_tokens": 501447,
+        "input_tokens": 2,
+        "model": "claude-opus-5",
+        "output_tokens": 177
       }
     },
     {

@@ -223,6 +223,8 @@ struct RawLine {
     attribution_agent: Option<String>,
     #[serde(rename = "attributionSkill")]
     attribution_skill: Option<String>,
+    /// Claude assistant lines: the effort the request ran at.
+    effort: Option<String>,
     /// Claude summary title/body line written during/after compaction.
     summary: Option<String>,
     /// Claude system-message subtype (e.g. compact_boundary).
@@ -253,6 +255,11 @@ struct RawMessage {
     /// message:{role, content}}`. Claude encodes it as the line type and Cursor
     /// puts it at the top level, so this is the third of three placements.
     role: Option<String>,
+    /// Claude assistant lines: the provider's own model/usage accounting.
+    /// Kept raw; only turn-ending lines are turned into a usage fact.
+    model: Option<String>,
+    stop_reason: Option<String>,
+    usage: Option<Box<RawValue>>,
 }
 
 #[derive(Deserialize)]
@@ -1802,11 +1809,31 @@ fn extract_provider_facts(
     let kind = match (obj.r#type.as_deref(), obj.subtype.as_deref()) {
         (Some("system"), Some("turn_duration")) => "turn.duration",
         (Some("system"), Some("away_summary")) => "session.recap",
+        (Some("system"), Some("api_error")) => "turn.api_error",
+        (Some("system"), Some("compact_boundary")) => "context.compaction",
         (Some("ai-title"), _) => "session.title",
+        // One usage fact per turn, on the assistant line that ends it. Every
+        // assistant line carries usage; the turn-ending one is the context
+        // size the next prompt will start from.
+        (Some("assistant"), _)
+            if obj
+                .message
+                .as_ref()
+                .is_some_and(|m| m.usage.is_some() && m.stop_reason.as_deref() == Some("end_turn")) =>
+        {
+            "turn.usage"
+        }
         _ => return,
     };
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(trimmed) else {
-        return;
+    // Assistant lines are the hot path; their fact comes from the fields serde
+    // already split off, never from re-parsing the (often large) line.
+    let value = if kind == "turn.usage" {
+        serde_json::Value::Null
+    } else {
+        match serde_json::from_slice::<serde_json::Value>(trimmed) {
+            Ok(value) => value,
+            Err(_) => return,
+        }
     };
     // `ai-title` lines carry no timestamp of their own; the shipper orders
     // facts by source position anyway, and the title has no clock semantics.
@@ -1849,6 +1876,90 @@ fn extract_provider_facts(
                 return;
             };
             serde_json::json!({ "text": bounded_text(text, 2_000) })
+        }
+        "turn.usage" => {
+            let Some(message) = obj.message.as_ref() else { return };
+            let Some(usage) = message
+                .usage
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok())
+            else {
+                return;
+            };
+            let mut payload = serde_json::Map::new();
+            if let Some(model) = message.model.as_deref() {
+                payload.insert("model".to_string(), serde_json::Value::from(model));
+            }
+            if let Some(effort) = obj.effort.as_deref() {
+                payload.insert("effort".to_string(), serde_json::Value::from(effort));
+            }
+            for key in [
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+                "output_tokens",
+            ] {
+                if let Some(count) = usage.get(key).and_then(|v| v.as_u64()) {
+                    payload.insert(key.to_string(), serde_json::Value::from(count));
+                }
+            }
+            if let Some(thinking) = usage
+                .get("output_tokens_details")
+                .and_then(|d| d.get("thinking_tokens"))
+                .and_then(|v| v.as_u64())
+            {
+                payload.insert("thinking_tokens".to_string(), serde_json::Value::from(thinking));
+            }
+            for key in ["service_tier", "speed"] {
+                if let Some(text) = usage.get(key).and_then(|v| v.as_str()) {
+                    payload.insert(key.to_string(), serde_json::Value::from(text));
+                }
+            }
+            if !payload.contains_key("output_tokens") {
+                return;
+            }
+            serde_json::Value::Object(payload)
+        }
+        "turn.api_error" => {
+            let mut payload = serde_json::Map::new();
+            if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+                payload.insert("error".to_string(), serde_json::Value::from(bounded_text(error, 500)));
+            }
+            for (wire, ours) in [
+                ("retryAttempt", "retry_attempt"),
+                ("maxRetries", "max_retries"),
+                ("retryInMs", "retry_in_ms"),
+            ] {
+                if let Some(count) = value.get(wire).and_then(|v| v.as_u64()) {
+                    payload.insert(ours.to_string(), serde_json::Value::from(count));
+                }
+            }
+            if payload.is_empty() {
+                return;
+            }
+            serde_json::Value::Object(payload)
+        }
+        "context.compaction" => {
+            let Some(meta) = value.get("compactMetadata").and_then(|v| v.as_object()) else {
+                return;
+            };
+            let mut payload = serde_json::Map::new();
+            if let Some(trigger) = meta.get("trigger").and_then(|v| v.as_str()) {
+                payload.insert("trigger".to_string(), serde_json::Value::from(trigger));
+            }
+            for (wire, ours) in [
+                ("preTokens", "pre_tokens"),
+                ("postTokens", "post_tokens"),
+                ("durationMs", "duration_ms"),
+            ] {
+                if let Some(count) = meta.get(wire).and_then(|v| v.as_u64()) {
+                    payload.insert(ours.to_string(), serde_json::Value::from(count));
+                }
+            }
+            if payload.is_empty() {
+                return;
+            }
+            serde_json::Value::Object(payload)
         }
         "session.title" => {
             let Some(title) = value

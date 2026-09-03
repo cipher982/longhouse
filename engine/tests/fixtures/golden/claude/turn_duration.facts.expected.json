@@ -1,6 +1,18 @@
 {
-  "fact_count": 1,
+  "fact_count": 2,
   "facts": [
+    {
+      "kind": "turn.usage",
+      "at": "2026-09-03T14:20:38Z",
+      "source_offset": 292,
+      "payload": {
+        "cache_creation_input_tokens": 261,
+        "cache_read_input_tokens": 501447,
+        "input_tokens": 2,
+        "model": "claude-opus-5",
+        "output_tokens": 177
+      }
+    },
     {
       "kind": "turn.duration",
       "at": "2026-09-03T14:20:39.100Z",

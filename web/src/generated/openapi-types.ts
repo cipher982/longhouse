@@ -8623,6 +8623,8 @@ export interface components {
             last_turn?: components["schemas"]["LastTurnResponse"] | null;
             /** @description The provider's latest away recap for this session, when it wrote one. */
             recap?: components["schemas"]["SessionRecapResponse"] | null;
+            /** @description Model, effort and context size from the provider's last turn-ending response. */
+            usage_latest?: components["schemas"]["UsageLatestResponse"] | null;
             /** @description Server-derived timeline-card presentation */
             timeline_card: components["schemas"]["TimelineCardPresentationResponse"];
             /**
@@ -10206,6 +10208,43 @@ export interface components {
              * Format: date-time
              */
             observed_at: string;
+        };
+        /**
+         * UsageLatestResponse
+         * @description The provider's usage on the last turn-ending response: model, effort, context size.
+         */
+        UsageLatestResponse: {
+            /**
+             * Model
+             * @description Model id the provider reported
+             */
+            model?: string | null;
+            /**
+             * Effort
+             * @description Reasoning effort the provider reported
+             */
+            effort?: string | null;
+            /**
+             * Context Tokens
+             * @description Input + cached tokens on the last turn-ending response: the live context size
+             */
+            context_tokens: number;
+            /**
+             * Output Tokens
+             * @description Output tokens on that response
+             */
+            output_tokens: number;
+            /**
+             * Thinking Tokens
+             * @description Thinking tokens on that response, when reported
+             */
+            thinking_tokens?: number | null;
+            /**
+             * At
+             * Format: date-time
+             * @description When that response was written
+             */
+            at: string;
         };
         /** UserClientPresenceHeartbeat */
         UserClientPresenceHeartbeat: {

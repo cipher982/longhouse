@@ -19,6 +19,7 @@ import pytest
 from zerg.config import get_settings
 from zerg.services.session_provider_facts import last_turn
 from zerg.services.session_provider_facts import recap
+from zerg.services.session_provider_facts import usage_latest
 from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_provider_facts import turn_ends_by_event
 from zerg.services.storage_v2_workspace import _workspace_envelope
@@ -262,3 +263,75 @@ def test_workspace_envelope_serves_the_recap():
     )
     assert envelope["session"]["recap"] == {"text": "Next: check it in the truck.", "at": t0.isoformat()}
     assert envelope["session"]["last_turn"] is None
+
+
+def test_usage_latest_is_the_newest_turn_ending_usage_with_context_size():
+    t0 = datetime(2026, 9, 3, 14, 18, 40, tzinfo=UTC)
+    facts = [
+        {
+            "kind": "turn.usage",
+            "at": t0,
+            "payload": {
+                "model": "claude-opus-5",
+                "effort": "high",
+                "input_tokens": 2,
+                "cache_read_input_tokens": 401_000,
+                "cache_creation_input_tokens": 300,
+                "output_tokens": 177,
+                "thinking_tokens": 12,
+            },
+        },
+        {
+            "kind": "turn.usage",
+            "at": t0 - timedelta(minutes=5),
+            "payload": {"model": "claude-opus-5", "input_tokens": 2, "cache_read_input_tokens": 300_000, "output_tokens": 40},
+        },
+        {"kind": "turn.usage", "at": t0 + timedelta(minutes=1), "payload": {"model": "claude-opus-5", "output_tokens": "many"}},
+    ]
+    assert usage_latest(facts) == {
+        "model": "claude-opus-5",
+        "effort": "high",
+        "context_tokens": 401_302,
+        "output_tokens": 177,
+        "thinking_tokens": 12,
+        "at": t0.isoformat(),
+    }
+    assert usage_latest([]) is None
+
+
+@pytest.mark.asyncio
+async def test_usage_error_and_compaction_facts_are_accepted_and_listed(monkeypatch):
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-usage-") as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        session_id = uuid4()
+        payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4())
+        payload["session_id"] = str(session_id)
+        at = datetime(2026, 9, 3, 14, 18, 40, tzinfo=UTC).isoformat()
+        payload["facts"] = [
+            {
+                "kind": "turn.usage",
+                "at": at,
+                "source_position": 1,
+                "payload": {"model": "claude-opus-5", "effort": "high", "cache_read_input_tokens": 401_000, "output_tokens": 177},
+            },
+            {
+                "kind": "turn.api_error",
+                "at": at,
+                "source_position": 2,
+                "payload": {"error": "API Error: 529 Overloaded", "retry_attempt": 1, "max_retries": 10, "retry_in_ms": 1000},
+            },
+            {
+                "kind": "context.compaction",
+                "at": at,
+                "source_position": 3,
+                "payload": {"trigger": "manual", "pre_tokens": 269_584, "post_tokens": 15_694, "duration_ms": 144_947},
+            },
+        ]
+        response = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert response.status_code == 200, response.text
+        listed = await stack.catalog.call("session.provider_facts.list.v2", {"session_id": str(session_id)})
+        assert sorted(fact["kind"] for fact in listed["facts"]) == ["context.compaction", "turn.api_error", "turn.usage"]
+
+        payload["facts"] = [{"kind": "turn.usage", "at": at, "source_position": 4, "payload": {"model": "x"}}]
+        rejected = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert rejected.status_code == 422, rejected.text
