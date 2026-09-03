@@ -409,6 +409,57 @@ providers:
   - codex.run_once
   - codex.resume_run_once
   - codex.turn_start
+  transcript_signals:
+    turn.duration:
+      disposition: not_implemented
+      raw_source: event_msg/task_complete
+      first_seen_version: "0.142.2"
+      canary: codex_transcript_signals
+      trigger: turn_end
+      owner_action: "parse task_complete duration_ms and turn_aborted duration_ms into turn.duration"
+    session.recap:
+      disposition: upstream_absent
+      raw_source: none
+      canary: codex_transcript_signals
+      trigger: idle_after_turn
+    session.title:
+      disposition: not_implemented
+      raw_source: sidecar:state_5.sqlite/threads.title
+      canary: codex_transcript_signals
+      trigger: first_turn
+      owner_action: "read the thread title from the Codex state store the way Cursor and OpenCode stores are read"
+    turn.usage:
+      disposition: not_implemented
+      raw_source: event_msg/token_count
+      first_seen_version: "0.142.2"
+      canary: codex_transcript_signals
+      trigger: turn_end
+      owner_action: "parse token_count last_token_usage and model_context_window into turn.usage"
+    turn.api_error:
+      disposition: upstream_absent
+      raw_source: none
+      canary: codex_transcript_signals
+      trigger: none_reliable
+    context.compaction:
+      disposition: not_implemented
+      raw_source: compacted
+      first_seen_version: "0.142.2"
+      canary: codex_transcript_signals
+      trigger: slash_compact
+      owner_action: "parse compacted window records into context.compaction"
+    input.queue:
+      disposition: not_implemented
+      raw_source: sidecar:queue_1.sqlite/queued_items
+      canary: codex_transcript_signals
+      trigger: send_while_working
+      owner_action: "read queued items from the Codex queue store"
+    turn.thinking:
+      disposition: not_implemented
+      raw_source: response_item/reasoning
+      first_seen_version: "0.142.2"
+      canary: codex_transcript_signals
+      trigger: turn_end
+      owner_action: "render reasoning as collapsed thinking records"
 - provider: claude
   display_name: Claude
   marketing_name: Claude Code
@@ -748,6 +799,76 @@ providers:
   - claude.answer_pause
   - claude.turn_start
   - claude.turn_interrupt
+  # Transcript signals: what the provider's own terminal shows that lives on
+  # transcript lines the render surface never renders. Each cell names the raw
+  # source, the golden fixture that proves the parser, the live canary that
+  # proves the provider still writes it, and the trigger that canary must
+  # perform. Signal ids are shared vocabulary across providers.
+  transcript_signals:
+    turn.duration:
+      disposition: implemented
+      raw_source: system/turn_duration
+      entrypoints: [cli]
+      first_seen_version: "2.1.150"
+      fixture: engine/tests/fixtures/golden/claude/turn_duration.jsonl
+      canary: claude_transcript_signals
+      trigger: turn_end
+    session.recap:
+      disposition: implemented
+      raw_source: system/away_summary
+      entrypoints: [cli]
+      first_seen_version: "2.1.158"
+      fixture: engine/tests/fixtures/golden/claude/recap_title.jsonl
+      canary: claude_transcript_signals
+      trigger: idle_after_turn
+    session.title:
+      disposition: implemented
+      raw_source: ai-title
+      entrypoints: [cli]
+      first_seen_version: "2.1.150"
+      fixture: engine/tests/fixtures/golden/claude/recap_title.jsonl
+      canary: claude_transcript_signals
+      trigger: first_turn
+    turn.usage:
+      disposition: implemented
+      raw_source: assistant.message.usage
+      entrypoints: [cli, sdk-cli]
+      first_seen_version: "2.1.121"
+      fixture: engine/tests/fixtures/golden/claude/usage_errors_compaction.jsonl
+      canary: claude_transcript_signals
+      trigger: turn_end
+    turn.api_error:
+      disposition: implemented
+      raw_source: system/api_error
+      entrypoints: [cli]
+      first_seen_version: "2.1.152"
+      fixture: engine/tests/fixtures/golden/claude/usage_errors_compaction.jsonl
+      canary: claude_transcript_signals
+      trigger: none_reliable
+    context.compaction:
+      disposition: implemented
+      raw_source: system/compact_boundary
+      entrypoints: [cli, sdk-cli]
+      first_seen_version: "2.1.150"
+      fixture: engine/tests/fixtures/golden/claude/usage_errors_compaction.jsonl
+      canary: claude_transcript_signals
+      trigger: slash_compact
+    input.queue:
+      disposition: not_implemented
+      raw_source: queue-operation
+      entrypoints: [cli]
+      first_seen_version: "2.1.150"
+      canary: claude_transcript_signals
+      trigger: send_while_working
+      owner_action: "project absorbed_mid_turn beside the receipt-based send reconciliation"
+    turn.thinking:
+      disposition: not_implemented
+      raw_source: assistant.content.thinking
+      entrypoints: [cli, sdk-cli]
+      first_seen_version: "2.1.121"
+      canary: claude_transcript_signals
+      trigger: turn_end
+      owner_action: "render as collapsed thinking records with a thinking interaction kind"
 - provider: opencode
   display_name: OpenCode
   marketing_name: OpenCode
@@ -1000,6 +1121,53 @@ providers:
   - opencode.terminate
   - opencode.turn_start
   - opencode.turn_interrupt
+  transcript_signals:
+    turn.duration:
+      disposition: not_implemented
+      raw_source: sidecar:opencode.db/message.data.time
+      canary: opencode_transcript_signals
+      trigger: turn_end
+      owner_action: "derive turn.duration from message.data.time.created and completed"
+    session.recap:
+      disposition: upstream_absent
+      raw_source: none
+      canary: opencode_transcript_signals
+      trigger: idle_after_turn
+    session.title:
+      disposition: not_implemented
+      raw_source: sidecar:opencode.db/session.title
+      canary: opencode_transcript_signals
+      trigger: first_turn
+      owner_action: "freeze session.title from the OpenCode session row"
+    turn.usage:
+      disposition: not_implemented
+      raw_source: sidecar:opencode.db/message.data.tokens
+      canary: opencode_transcript_signals
+      trigger: turn_end
+      owner_action: "parse message.data.tokens, modelID and cost into turn.usage"
+    turn.api_error:
+      disposition: not_implemented
+      raw_source: sidecar:opencode.db/message.data.error
+      canary: opencode_transcript_signals
+      trigger: none_reliable
+      owner_action: "surface message.data.error as turn.api_error"
+    context.compaction:
+      disposition: not_implemented
+      raw_source: sidecar:opencode.db/session.time_compacting
+      canary: opencode_transcript_signals
+      trigger: slash_compact
+      owner_action: "surface session.time_compacting as context.compaction"
+    input.queue:
+      disposition: upstream_absent
+      raw_source: none
+      canary: opencode_transcript_signals
+      trigger: send_while_working
+    turn.thinking:
+      disposition: not_implemented
+      raw_source: sidecar:opencode.db/message.data.reasoning
+      canary: opencode_transcript_signals
+      trigger: turn_end
+      owner_action: "render reasoning parts as collapsed thinking records"
 - provider: antigravity
   display_name: Antigravity
   marketing_name: Antigravity CLI
@@ -1278,6 +1446,57 @@ providers:
   # bind. Shadow sessions have no launcher, therefore no identity, therefore no
   # control fact -- observe-only by construction rather than by special case.
   machine_control_supports: ["antigravity.send", "antigravity.turn_start"]
+  # Unsurveyed provider: every signal starts as work, and the census lane is
+  # the canary that characterises which lines this provider writes at all.
+  transcript_signals:
+    turn.duration:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: antigravity_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for antigravity and name the raw source"
+    session.recap:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: antigravity_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for antigravity and name the raw source"
+    session.title:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: antigravity_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for antigravity and name the raw source"
+    turn.usage:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: antigravity_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for antigravity and name the raw source"
+    turn.api_error:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: antigravity_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for antigravity and name the raw source"
+    context.compaction:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: antigravity_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for antigravity and name the raw source"
+    input.queue:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: antigravity_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for antigravity and name the raw source"
+    turn.thinking:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: antigravity_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for antigravity and name the raw source"
 - provider: cursor
   display_name: Cursor
   marketing_name: Cursor Agent
@@ -1519,6 +1738,57 @@ providers:
   - cursor.terminate
   - cursor.turn_start
   - cursor.turn_interrupt
+  # Unsurveyed provider: every signal starts as work, and the census lane is
+  # the canary that characterises which lines this provider writes at all.
+  transcript_signals:
+    turn.duration:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: cursor_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for cursor and name the raw source"
+    session.recap:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: cursor_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for cursor and name the raw source"
+    session.title:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: cursor_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for cursor and name the raw source"
+    turn.usage:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: cursor_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for cursor and name the raw source"
+    turn.api_error:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: cursor_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for cursor and name the raw source"
+    context.compaction:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: cursor_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for cursor and name the raw source"
+    input.queue:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: cursor_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for cursor and name the raw source"
+    turn.thinking:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: cursor_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for cursor and name the raw source"
 - provider: pi
   display_name: Pi
   marketing_name: Pi Agent
@@ -1698,3 +1968,54 @@ providers:
   machine_control_supports:
   - pi.turn_start
   - pi.turn_interrupt
+  # Unsurveyed provider: every signal starts as work, and the census lane is
+  # the canary that characterises which lines this provider writes at all.
+  transcript_signals:
+    turn.duration:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: pi_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for pi and name the raw source"
+    session.recap:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: pi_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for pi and name the raw source"
+    session.title:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: pi_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for pi and name the raw source"
+    turn.usage:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: pi_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for pi and name the raw source"
+    turn.api_error:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: pi_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for pi and name the raw source"
+    context.compaction:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: pi_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for pi and name the raw source"
+    input.queue:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: pi_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for pi and name the raw source"
+    turn.thinking:
+      disposition: not_implemented
+      raw_source: unsurveyed
+      canary: pi_transcript_signals
+      trigger: census
+      owner_action: "run the transcript census for pi and name the raw source"

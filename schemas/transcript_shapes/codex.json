@@ -1,0 +1,700 @@
+{
+ "provider": "codex",
+ "shapes": {
+  "compacted": {
+   "classification": "signal:context.compaction",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "first_window_id",
+    "message",
+    "previous_window_id",
+    "replacement_history",
+    "window_id",
+    "window_number"
+   ]
+  },
+  "event_msg/agent_message": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.146.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "memory_citation",
+    "message",
+    "phase",
+    "type"
+   ]
+  },
+  "event_msg/context_compacted": {
+   "classification": "signal:context.compaction",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.146.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "type"
+   ]
+  },
+  "event_msg/item_completed/AgentMessage": {
+   "classification": "transcript",
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "content",
+    "id",
+    "phase",
+    "type"
+   ]
+  },
+  "event_msg/item_completed/CommandExecution": {
+   "classification": "transcript",
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "aggregated_output",
+    "command",
+    "cwd",
+    "duration",
+    "exit_code",
+    "formatted_output",
+    "id",
+    "parsed_cmd",
+    "process_id",
+    "source",
+    "status",
+    "stderr",
+    "stdout",
+    "type"
+   ]
+  },
+  "event_msg/item_completed/ContextCompaction": {
+   "classification": "signal:context.compaction",
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "id",
+    "type"
+   ]
+  },
+  "event_msg/item_completed/Extension": {
+   "classification": "transcript",
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "action",
+    "id",
+    "kind",
+    "query",
+    "results",
+    "type"
+   ]
+  },
+  "event_msg/item_completed/FileChange": {
+   "classification": "transcript",
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "changes",
+    "id",
+    "status",
+    "stderr",
+    "stdout",
+    "type"
+   ]
+  },
+  "event_msg/item_completed/ImageView": {
+   "classification": "transcript",
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "id",
+    "path",
+    "type"
+   ]
+  },
+  "event_msg/item_completed/McpToolCall": {
+   "classification": "transcript",
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "arguments",
+    "duration",
+    "id",
+    "result",
+    "server",
+    "status",
+    "tool",
+    "type"
+   ]
+  },
+  "event_msg/item_completed/Plan": {
+   "classification": "transcript",
+   "first_seen_version": "0.144.1",
+   "last_seen_version": "0.144.1",
+   "entrypoints": [
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "id",
+    "text",
+    "type"
+   ]
+  },
+  "event_msg/item_completed/Reasoning": {
+   "classification": "signal:turn.thinking",
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "id",
+    "raw_content",
+    "summary_text",
+    "type"
+   ]
+  },
+  "event_msg/item_completed/UserMessage": {
+   "classification": "transcript",
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "content",
+    "id",
+    "type"
+   ]
+  },
+  "event_msg/mcp_tool_call_end": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.146.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "call_id",
+    "duration",
+    "invocation",
+    "result",
+    "type"
+   ]
+  },
+  "event_msg/patch_apply_end": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.146.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "call_id",
+    "changes",
+    "status",
+    "stderr",
+    "stdout",
+    "success",
+    "turn_id",
+    "type"
+   ]
+  },
+  "event_msg/sub_agent_activity": {
+   "classification": "transcript",
+   "first_seen_version": "0.144.1",
+   "last_seen_version": "0.146.0",
+   "entrypoints": [
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "agent_path",
+    "agent_thread_id",
+    "event_id",
+    "kind",
+    "occurred_at_ms",
+    "type"
+   ]
+  },
+  "event_msg/task_complete": {
+   "classification": "signal:turn.duration",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "completed_at",
+    "duration_ms",
+    "last_agent_message",
+    "time_to_first_token_ms",
+    "turn_id",
+    "type"
+   ]
+  },
+  "event_msg/task_started": {
+   "classification": "signal:turn.usage",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "collaboration_mode_kind",
+    "model_context_window",
+    "started_at",
+    "turn_id",
+    "type"
+   ]
+  },
+  "event_msg/thread_goal_updated": {
+   "classification": "state:thread goal",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "goal",
+    "threadId",
+    "type"
+   ]
+  },
+  "event_msg/thread_rolled_back": {
+   "classification": "state:thread",
+   "first_seen_version": "0.144.1",
+   "last_seen_version": "0.144.6",
+   "entrypoints": [
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "num_turns",
+    "type"
+   ]
+  },
+  "event_msg/thread_settings_applied": {
+   "classification": "state:thread settings",
+   "first_seen_version": "0.144.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "thread_settings",
+    "type"
+   ]
+  },
+  "event_msg/token_count": {
+   "classification": "signal:turn.usage",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "info",
+    "rate_limits",
+    "type"
+   ]
+  },
+  "event_msg/turn_aborted": {
+   "classification": "signal:turn.duration",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "completed_at",
+    "duration_ms",
+    "reason",
+    "turn_id",
+    "type"
+   ]
+  },
+  "event_msg/user_message": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.146.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "images",
+    "local_images",
+    "message",
+    "text_elements",
+    "type"
+   ]
+  },
+  "event_msg/web_search_end": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.146.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "action",
+    "call_id",
+    "query",
+    "type"
+   ]
+  },
+  "inter_agent_communication_metadata": {
+   "classification": "state:agents",
+   "first_seen_version": "0.144.1",
+   "last_seen_version": "0.146.0",
+   "entrypoints": [
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "trigger_turn"
+   ]
+  },
+  "response_item/agent_message": {
+   "classification": "transcript",
+   "first_seen_version": "0.144.1",
+   "last_seen_version": "0.146.0",
+   "entrypoints": [
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "author",
+    "content",
+    "internal_chat_message_metadata_passthrough",
+    "recipient",
+    "type"
+   ]
+  },
+  "response_item/custom_tool_call": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "call_id",
+    "id",
+    "input",
+    "internal_chat_message_metadata_passthrough",
+    "name",
+    "status",
+    "type"
+   ]
+  },
+  "response_item/custom_tool_call_output": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "call_id",
+    "internal_chat_message_metadata_passthrough",
+    "output",
+    "type"
+   ]
+  },
+  "response_item/function_call": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "arguments",
+    "call_id",
+    "id",
+    "internal_chat_message_metadata_passthrough",
+    "name",
+    "type"
+   ]
+  },
+  "response_item/function_call_output": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "call_id",
+    "internal_chat_message_metadata_passthrough",
+    "output",
+    "type"
+   ]
+  },
+  "response_item/message/assistant": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "content",
+    "id",
+    "internal_chat_message_metadata_passthrough",
+    "phase",
+    "role",
+    "type"
+   ]
+  },
+  "response_item/message/developer": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "content",
+    "internal_chat_message_metadata_passthrough",
+    "role",
+    "type"
+   ]
+  },
+  "response_item/message/user": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "content",
+    "internal_chat_message_metadata_passthrough",
+    "role",
+    "type"
+   ]
+  },
+  "response_item/reasoning": {
+   "classification": "signal:turn.thinking",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "encrypted_content",
+    "id",
+    "internal_chat_message_metadata_passthrough",
+    "summary",
+    "type"
+   ]
+  },
+  "response_item/tool_search_call": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.142.5",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "arguments",
+    "call_id",
+    "execution",
+    "id",
+    "internal_chat_message_metadata_passthrough",
+    "status",
+    "type"
+   ]
+  },
+  "response_item/tool_search_output": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.142.5",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "call_id",
+    "execution",
+    "internal_chat_message_metadata_passthrough",
+    "status",
+    "tools",
+    "type"
+   ]
+  },
+  "response_item/web_search_call": {
+   "classification": "transcript",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.142.5",
+   "entrypoints": [
+    "codex-tui",
+    "longhouse_codex_bridge"
+   ],
+   "keys": [
+    "action",
+    "id",
+    "internal_chat_message_metadata_passthrough",
+    "status",
+    "type"
+   ]
+  },
+  "session_meta": {
+   "classification": "state:session meta",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "base_instructions",
+    "cli_version",
+    "cwd",
+    "git",
+    "id",
+    "model_provider",
+    "originator",
+    "session_id",
+    "source",
+    "thread_source",
+    "timestamp"
+   ]
+  },
+  "turn_context": {
+   "classification": "state:turn settings",
+   "first_seen_version": "0.142.2",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "approval_policy",
+    "collaboration_mode",
+    "current_date",
+    "cwd",
+    "effort",
+    "model",
+    "multi_agent_version",
+    "permission_profile",
+    "personality",
+    "realtime_active",
+    "sandbox_policy",
+    "summary",
+    "timezone",
+    "turn_id",
+    "workspace_roots"
+   ]
+  },
+  "world_state": {
+   "classification": "state:world state",
+   "first_seen_version": "0.144.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex-tui",
+    "codex_exec",
+    "longhouse_codex_bridge",
+    "longhouse_console"
+   ],
+   "keys": [
+    "full",
+    "state"
+   ]
+  }
+ }
+}

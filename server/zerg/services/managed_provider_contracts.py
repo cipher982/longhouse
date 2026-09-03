@@ -133,6 +133,7 @@ class ManagedProviderContract:
     # level until scheduled live canaries promote the evidence.
     operation_evidence: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     capabilities: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
+    transcript_signals: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
 
     @property
     def control_planes(self) -> tuple[str, ...]:
@@ -300,6 +301,9 @@ def managed_provider_contract_from_item(item: dict[str, object]) -> ManagedProvi
             for capability, declaration in dict(item.get("capabilities") or {}).items()
             if isinstance(declaration, dict)
         },
+        transcript_signals={
+            str(signal): dict(cell) for signal, cell in dict(item.get("transcript_signals") or {}).items() if isinstance(cell, dict)
+        },
     )
 
 
@@ -385,6 +389,21 @@ def outstanding_factory_work() -> tuple[dict[str, str], ...]:
                     "owner_action": str(evidence.get("owner_action") or ""),
                     "blocker": str(evidence.get("blocker") or "none"),
                     "reason": str(evidence.get("reason") or ""),
+                }
+            )
+        # Transcript signals are the same kind of promise: a provider writes
+        # something its terminal shows and Longhouse has not projected it yet.
+        for signal, cell in sorted(contract.transcript_signals.items()):
+            if cell.get("disposition") != "not_implemented":
+                continue
+            work.append(
+                {
+                    "provider": contract.provider,
+                    "operation": f"transcript_signal:{signal}",
+                    "support_tier": contract.support_tier,
+                    "owner_action": str(cell.get("owner_action") or ""),
+                    "blocker": str(cell.get("canary") or "none"),
+                    "reason": str(cell.get("raw_source") or ""),
                 }
             )
     return tuple(work)

@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 250,
+  "file_count": 252,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -583,6 +583,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/transcript_census.py",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {
@@ -1551,6 +1558,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_transcript_census.py",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {

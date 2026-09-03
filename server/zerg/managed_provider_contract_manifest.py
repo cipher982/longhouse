@@ -421,6 +421,69 @@ def _validate_capabilities(item: dict[str, Any]) -> None:
                 raise ValueError(f"{prefix}.required_assertions assurance_priority must be release_gate, sampled, or ordinary_ci")
 
 
+TRANSCRIPT_SIGNAL_IDS = frozenset(
+    {
+        "turn.duration",
+        "session.recap",
+        "session.title",
+        "turn.usage",
+        "turn.api_error",
+        "context.compaction",
+        "input.queue",
+        "turn.thinking",
+    }
+)
+_TRANSCRIPT_SIGNAL_TRIGGERS = frozenset(
+    {"turn_end", "first_turn", "idle_after_turn", "send_while_working", "slash_compact", "none_reliable", "census"}
+)
+_TRANSCRIPT_SIGNAL_KEYS = frozenset(
+    {"disposition", "raw_source", "entrypoints", "first_seen_version", "fixture", "canary", "trigger", "owner_action"}
+)
+
+
+def _validate_transcript_signals(item: dict[str, Any]) -> None:
+    """The transcript-signal axis: one cell per shared signal id, per provider.
+
+    A cell says what the provider writes (raw_source), how proven our side is
+    (fixture) and theirs (canary + trigger), and what is left (owner_action on
+    not_implemented). Every provider must declare every signal so absence is
+    a decision, never an omission.
+    """
+    provider = str(item.get("provider") or "<unknown>")
+    signals = item.get("transcript_signals")
+    if not isinstance(signals, dict):
+        raise ValueError(f"managed provider contract {provider}: transcript_signals must be an object")
+    missing = TRANSCRIPT_SIGNAL_IDS - set(signals)
+    if missing:
+        raise ValueError(f"managed provider contract {provider}: transcript_signals missing {', '.join(sorted(missing))}")
+    for signal_id, cell in signals.items():
+        prefix = f"managed provider contract {provider}: transcript_signals.{signal_id}"
+        if signal_id not in TRANSCRIPT_SIGNAL_IDS:
+            raise ValueError(f"{prefix} is not a shared signal id")
+        if not isinstance(cell, dict):
+            raise ValueError(f"{prefix} must be an object")
+        unknown = set(cell) - _TRANSCRIPT_SIGNAL_KEYS
+        if unknown:
+            raise ValueError(f"{prefix} has unknown keys {', '.join(sorted(unknown))}")
+        disposition = cell.get("disposition")
+        if disposition not in _CAPABILITY_DISPOSITIONS:
+            raise ValueError(f"{prefix}.disposition must be one of {sorted(_CAPABILITY_DISPOSITIONS)}")
+        _validate_capability_string(prefix, cell, "raw_source")
+        _validate_capability_string(prefix, cell, "canary")
+        if cell.get("trigger") not in _TRANSCRIPT_SIGNAL_TRIGGERS:
+            raise ValueError(f"{prefix}.trigger must be one of {sorted(_TRANSCRIPT_SIGNAL_TRIGGERS)}")
+        entrypoints = cell.get("entrypoints", [])
+        if not isinstance(entrypoints, list) or not all(isinstance(value, str) and value for value in entrypoints):
+            raise ValueError(f"{prefix}.entrypoints must be a string list")
+        if disposition == "implemented" and not (isinstance(cell.get("fixture"), str) and cell["fixture"].strip()):
+            raise ValueError(f"{prefix} is implemented but names no fixture")
+        if disposition == "not_implemented" and not (isinstance(cell.get("owner_action"), str) and cell["owner_action"].strip()):
+            raise ValueError(f"{prefix} is not_implemented but names no owner_action")
+        version = cell.get("first_seen_version")
+        if version is not None and (not isinstance(version, str) or not version.strip()):
+            raise ValueError(f"{prefix}.first_seen_version must be a non-empty string when present")
+
+
 def _validate_factory_contract(item: dict[str, Any]) -> None:
     provider = str(item.get("provider") or "<unknown>")
     for field in _FACTORY_STRING_FIELDS:
@@ -614,6 +677,7 @@ def _validated_contract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
         _validate_machine_control_supports(item)
         _validate_auth_probe(item)
         _validate_capabilities(item)
+        _validate_transcript_signals(item)
         _validate_factory_contract(item)
         items.append(deepcopy(item))
     return items

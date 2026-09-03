@@ -1,0 +1,1499 @@
+{
+ "provider": "claude",
+ "shapes": {
+  "agent-name": {
+   "classification": "state:agent name",
+   "first_seen_version": "2.1.158",
+   "last_seen_version": "2.1.161",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "agentName",
+    "sessionId",
+    "type"
+   ]
+  },
+  "ai-title": {
+   "classification": "signal:session.title",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "aiTitle",
+    "sessionId",
+    "type"
+   ]
+  },
+  "artifact-autoreact-ledger": {
+   "classification": "state:artifacts",
+   "first_seen_version": "2.1.241",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "accountUuid",
+    "artifacts",
+    "sessionId",
+    "type",
+    "v"
+   ]
+  },
+  "artifact-comment-monitor": {
+   "classification": "state:artifacts",
+   "first_seen_version": "2.1.241",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "artifacts",
+    "sessionId",
+    "type",
+    "v"
+   ]
+  },
+  "assistant/fallback": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.198",
+   "last_seen_version": "2.1.219",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "requestId",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version",
+    "usage.cache_creation",
+    "usage.cache_creation_input_tokens",
+    "usage.cache_read_input_tokens",
+    "usage.inference_geo",
+    "usage.input_tokens",
+    "usage.iterations",
+    "usage.output_tokens",
+    "usage.server_tool_use",
+    "usage.service_tier",
+    "usage.speed"
+   ]
+  },
+  "assistant/text": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.121",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "cwd",
+    "effort",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "requestId",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version",
+    "usage.cache_creation",
+    "usage.cache_creation_input_tokens",
+    "usage.cache_read_input_tokens",
+    "usage.inference_geo",
+    "usage.input_tokens",
+    "usage.iterations",
+    "usage.output_tokens",
+    "usage.output_tokens_details",
+    "usage.server_tool_use",
+    "usage.service_tier",
+    "usage.speed"
+   ]
+  },
+  "assistant/text+thinking+tool_use": {
+   "classification": "signal:turn.thinking",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version",
+    "usage.cache_creation",
+    "usage.cache_creation_input_tokens",
+    "usage.cache_read_input_tokens",
+    "usage.inference_geo",
+    "usage.input_tokens",
+    "usage.iterations",
+    "usage.output_tokens",
+    "usage.server_tool_use",
+    "usage.service_tier",
+    "usage.speed"
+   ]
+  },
+  "assistant/text+tool_use": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.154",
+   "last_seen_version": "2.1.161",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "agentId",
+    "attributionAgent",
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "sessionId",
+    "slug",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version",
+    "usage.cache_creation",
+    "usage.cache_creation_input_tokens",
+    "usage.cache_read_input_tokens",
+    "usage.inference_geo",
+    "usage.input_tokens",
+    "usage.iterations",
+    "usage.output_tokens",
+    "usage.server_tool_use",
+    "usage.service_tier",
+    "usage.speed"
+   ]
+  },
+  "assistant/thinking": {
+   "classification": "signal:turn.thinking",
+   "first_seen_version": "2.1.121",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version",
+    "usage.cache_creation",
+    "usage.cache_creation_input_tokens",
+    "usage.cache_read_input_tokens",
+    "usage.inference_geo",
+    "usage.input_tokens",
+    "usage.iterations",
+    "usage.output_tokens",
+    "usage.server_tool_use",
+    "usage.service_tier",
+    "usage.speed"
+   ]
+  },
+  "assistant/thinking+tool_use": {
+   "classification": "signal:turn.thinking",
+   "first_seen_version": "2.1.233",
+   "last_seen_version": "2.1.241",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "agentId",
+    "attributionAgent",
+    "cwd",
+    "effort",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "requestId",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version",
+    "usage.cache_creation",
+    "usage.cache_creation_input_tokens",
+    "usage.cache_read_input_tokens",
+    "usage.inference_geo",
+    "usage.input_tokens",
+    "usage.iterations",
+    "usage.output_tokens",
+    "usage.output_tokens_details",
+    "usage.server_tool_use",
+    "usage.service_tier",
+    "usage.speed"
+   ]
+  },
+  "assistant/tool_use": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.128",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version",
+    "usage.cache_creation",
+    "usage.cache_creation_input_tokens",
+    "usage.cache_read_input_tokens",
+    "usage.inference_geo",
+    "usage.input_tokens",
+    "usage.iterations",
+    "usage.output_tokens",
+    "usage.server_tool_use",
+    "usage.service_tier",
+    "usage.speed"
+   ]
+  },
+  "atis-latch": {
+   "classification": "state:internal",
+   "first_seen_version": "2.1.235",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "atis",
+    "sessionId",
+    "type"
+   ]
+  },
+  "attachment/agent_listing_delta": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.161",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "addedLines",
+    "addedTypes",
+    "isInitial",
+    "removedTypes",
+    "showConcurrencyNote",
+    "type"
+   ]
+  },
+  "attachment/auto_mode": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.161",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "type"
+   ]
+  },
+  "attachment/bash_output_audience_note": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.258",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "toolUseID",
+    "type"
+   ]
+  },
+  "attachment/batching_reminder_sent": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.258",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "model",
+    "text",
+    "type"
+   ]
+  },
+  "attachment/command_permissions": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "allowedTools",
+    "type"
+   ]
+  },
+  "attachment/compact_file_reference": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "displayPath",
+    "filename",
+    "type"
+   ]
+  },
+  "attachment/date_change": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.128",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "claude-desktop",
+    "cli"
+   ],
+   "keys": [
+    "newDate",
+    "type"
+   ]
+  },
+  "attachment/deferred_tools_delta": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.121",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "addedLines",
+    "addedNames",
+    "needsAuthMcpServers",
+    "pendingMcpServers",
+    "readdedNames",
+    "removedNames",
+    "type"
+   ]
+  },
+  "attachment/diagnostics": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.246",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "files",
+    "isNew",
+    "type"
+   ]
+  },
+  "attachment/dynamic_skill": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.235",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "displayPath",
+    "skillDir",
+    "skillNames",
+    "type"
+   ]
+  },
+  "attachment/edited_text_file": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "filename",
+    "snippet",
+    "type"
+   ]
+  },
+  "attachment/file": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "content",
+    "displayPath",
+    "filename",
+    "type"
+   ]
+  },
+  "attachment/goal_status": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.154",
+   "last_seen_version": "2.1.246",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "condition",
+    "met",
+    "sentinel",
+    "type"
+   ]
+  },
+  "attachment/hook_additional_context": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.198",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "content",
+    "hookEvent",
+    "hookName",
+    "toolUseID",
+    "type"
+   ]
+  },
+  "attachment/hook_cancelled": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.219",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "command",
+    "durationMs",
+    "hookEvent",
+    "hookName",
+    "timedOut",
+    "timeoutMs",
+    "toolUseID",
+    "type"
+   ]
+  },
+  "attachment/hook_non_blocking_error": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.161",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "command",
+    "durationMs",
+    "exitCode",
+    "hookEvent",
+    "hookName",
+    "stderr",
+    "stdout",
+    "toolUseID",
+    "type"
+   ]
+  },
+  "attachment/hook_success": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.121",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "command",
+    "content",
+    "durationMs",
+    "exitCode",
+    "hookEvent",
+    "hookName",
+    "stderr",
+    "stdout",
+    "toolUseID",
+    "type"
+   ]
+  },
+  "attachment/hook_system_message": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.121",
+   "last_seen_version": "2.1.233",
+   "entrypoints": [
+    "claude-desktop",
+    "cli"
+   ],
+   "keys": [
+    "content",
+    "hookEvent",
+    "hookName",
+    "toolUseID",
+    "type"
+   ]
+  },
+  "attachment/invoked_skills": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "skills",
+    "type"
+   ]
+  },
+  "attachment/mcp_instructions_delta": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.121",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "addedBlocks",
+    "addedNames",
+    "removedNames",
+    "type"
+   ]
+  },
+  "attachment/nested_memory": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.241",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "content",
+    "displayPath",
+    "path",
+    "type"
+   ]
+  },
+  "attachment/plan_mode": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.161",
+   "last_seen_version": "2.1.161",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "isSubAgent",
+    "planExists",
+    "planFilePath",
+    "reminderType",
+    "type"
+   ]
+  },
+  "attachment/plan_mode_exit": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.154",
+   "last_seen_version": "2.1.219",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "planExists",
+    "planFilePath",
+    "type"
+   ]
+  },
+  "attachment/queued_command": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "commandMode",
+    "prompt",
+    "timestamp",
+    "type"
+   ]
+  },
+  "attachment/read_truncation_notice": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.219",
+   "last_seen_version": "2.1.241",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "banner",
+    "toolUseID",
+    "type"
+   ]
+  },
+  "attachment/remote_session_change": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.258",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "commit",
+    "pr",
+    "sendUserFileHint",
+    "type",
+    "url"
+   ]
+  },
+  "attachment/silent_turn_reminder": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.258",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "text",
+    "type"
+   ]
+  },
+  "attachment/skill_listing": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.121",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "content",
+    "isInitial",
+    "names",
+    "skillCount",
+    "type"
+   ]
+  },
+  "attachment/task_reminder": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.232",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "content",
+    "itemCount",
+    "type"
+   ]
+  },
+  "attachment/total_tokens_reminder": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.231",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "text",
+    "type"
+   ]
+  },
+  "attachment/ultra_effort_enter": {
+   "classification": "chrome:attachment",
+   "first_seen_version": "2.1.161",
+   "last_seen_version": "2.1.251",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "reminderType",
+    "type"
+   ]
+  },
+  "bridge-session": {
+   "classification": "state:remote control",
+   "first_seen_version": "2.1.198",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "bridgeSessionId",
+    "lastSequenceNum",
+    "sessionId",
+    "type"
+   ]
+  },
+  "cost-state": {
+   "classification": "state:cost",
+   "first_seen_version": "2.1.246",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "hasUnknownModelCost",
+    "modelUsage",
+    "sessionId",
+    "startTime",
+    "totalAPIDuration",
+    "totalAPIDurationWithoutRetries",
+    "totalCostUSD",
+    "totalDuration",
+    "totalLinesAdded",
+    "totalLinesRemoved",
+    "totalToolDuration",
+    "type"
+   ]
+  },
+  "failed": {
+   "classification": "state:workflow agent ledger",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "agentId",
+    "key",
+    "type"
+   ]
+  },
+  "file-history-delta": {
+   "classification": "state:file history",
+   "first_seen_version": "2.1.219",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "backup",
+    "messageId",
+    "snapshotMessageId",
+    "timestamp",
+    "trackingPath",
+    "type"
+   ]
+  },
+  "file-history-snapshot": {
+   "classification": "state:file history",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "isSnapshotUpdate",
+    "messageId",
+    "snapshot",
+    "type"
+   ]
+  },
+  "fork-context-ref": {
+   "classification": "state:fork context",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "agentId",
+    "contextLength",
+    "parentLastUuid",
+    "parentSessionId",
+    "type"
+   ]
+  },
+  "frame-link": {
+   "classification": "state:frame link",
+   "first_seen_version": "2.1.198",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "frameUrl",
+    "path",
+    "sessionId",
+    "timestamp",
+    "title",
+    "type"
+   ]
+  },
+  "last-prompt": {
+   "classification": "state:resume picker",
+   "first_seen_version": "2.1.121",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "lastPrompt",
+    "leafUuid",
+    "sessionId",
+    "type"
+   ]
+  },
+  "mode": {
+   "classification": "state:mode",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "mode",
+    "sessionId",
+    "type"
+   ]
+  },
+  "permission-mode": {
+   "classification": "state:permission mode",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "permissionMode",
+    "sessionId",
+    "type"
+   ]
+  },
+  "pr-link": {
+   "classification": "state:pr link",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.219",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "prNumber",
+    "prRepository",
+    "prUrl",
+    "sessionId",
+    "timestamp",
+    "type"
+   ]
+  },
+  "queue-operation": {
+   "classification": "signal:input.queue",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "content",
+    "operation",
+    "sessionId",
+    "timestamp",
+    "type"
+   ]
+  },
+  "relocated": {
+   "classification": "state:relocated",
+   "first_seen_version": "2.1.198",
+   "last_seen_version": "2.1.198",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "relocatedCwd",
+    "sessionId",
+    "type"
+   ]
+  },
+  "result": {
+   "classification": "state:workflow agent ledger",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "agentId",
+    "key",
+    "result",
+    "type"
+   ]
+  },
+  "started": {
+   "classification": "state:workflow agent ledger",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "agentId",
+    "key",
+    "type"
+   ]
+  },
+  "system/api_error": {
+   "classification": "signal:turn.api_error",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.161",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "error",
+    "gitBranch",
+    "isSidechain",
+    "level",
+    "maxRetries",
+    "parentUuid",
+    "retryAttempt",
+    "retryInMs",
+    "sessionId",
+    "subtype",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "system/away_summary": {
+   "classification": "signal:session.recap",
+   "first_seen_version": "2.1.158",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "content",
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "parentUuid",
+    "sessionId",
+    "subtype",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "system/compact_boundary": {
+   "classification": "signal:context.compaction",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "compactMetadata",
+    "content",
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "level",
+    "logicalParentUuid",
+    "parentUuid",
+    "sessionId",
+    "slug",
+    "subtype",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "system/informational": {
+   "classification": "chrome:informational",
+   "first_seen_version": "2.1.161",
+   "last_seen_version": "2.1.246",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "content",
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "level",
+    "parentUuid",
+    "sessionId",
+    "subtype",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "system/local_command": {
+   "classification": "chrome:local command echo",
+   "first_seen_version": "2.1.154",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "content",
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "level",
+    "parentUuid",
+    "sessionId",
+    "subtype",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "system/model_consent_fallback": {
+   "classification": "chrome:model fallback",
+   "first_seen_version": "2.1.198",
+   "last_seen_version": "2.1.198",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "choice",
+    "content",
+    "cwd",
+    "entrypoint",
+    "fallbackModel",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "level",
+    "originalModel",
+    "parentUuid",
+    "persistedAsDefault",
+    "sessionId",
+    "subtype",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "system/model_refusal_fallback": {
+   "classification": "chrome:model fallback",
+   "first_seen_version": "2.1.198",
+   "last_seen_version": "2.1.219",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "apiRefusalCategory",
+    "apiRefusalExplanation",
+    "content",
+    "cwd",
+    "direction",
+    "entrypoint",
+    "fallbackModel",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "level",
+    "originalModel",
+    "parentUuid",
+    "refusedUserMessageUuid",
+    "requestId",
+    "sessionId",
+    "subtype",
+    "timestamp",
+    "trigger",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "system/scheduled_task_fire": {
+   "classification": "chrome:scheduled task",
+   "first_seen_version": "2.1.161",
+   "last_seen_version": "2.1.219",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "content",
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "parentUuid",
+    "sessionId",
+    "subtype",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "system/stop_hook_summary": {
+   "classification": "chrome:hook result",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "hasOutput",
+    "hookCount",
+    "hookErrors",
+    "hookInfos",
+    "isSidechain",
+    "level",
+    "parentUuid",
+    "preventedContinuation",
+    "sessionId",
+    "stopReason",
+    "subtype",
+    "timestamp",
+    "toolUseID",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "system/turn_duration": {
+   "classification": "signal:turn.duration",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "durationMs",
+    "entrypoint",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "messageCount",
+    "parentUuid",
+    "sessionId",
+    "subtype",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "user/compact_summary+string": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isCompactSummary",
+    "isSidechain",
+    "isVisibleInTranscriptOnly",
+    "message",
+    "parentUuid",
+    "promptId",
+    "sessionId",
+    "session_id",
+    "slug",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "user/image+meta": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.161",
+   "last_seen_version": "2.1.219",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "promptId",
+    "sessionId",
+    "session_id",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "user/image+text": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "imagePasteIds",
+    "isSidechain",
+    "message",
+    "origin",
+    "parentUuid",
+    "permissionMode",
+    "promptId",
+    "promptSource",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "user/meta+string": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.153",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "promptId",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "user/meta+text": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.150",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isMeta",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "promptId",
+    "sessionId",
+    "sourceToolUseID",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "user/string": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.121",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "permissionMode",
+    "promptId",
+    "promptSource",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "user/text": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "interruptedMessageId",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "promptId",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "user/text+tool_result": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.258",
+   "last_seen_version": "2.1.258",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "agentId",
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "promptId",
+    "sessionId",
+    "timestamp",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "user/tool_result": {
+   "classification": "transcript",
+   "first_seen_version": "2.1.128",
+   "last_seen_version": "2.1.259",
+   "entrypoints": [
+    "claude-desktop",
+    "cli",
+    "sdk-cli"
+   ],
+   "keys": [
+    "cwd",
+    "entrypoint",
+    "gitBranch",
+    "isSidechain",
+    "message",
+    "parentUuid",
+    "promptId",
+    "sessionId",
+    "sourceToolAssistantUUID",
+    "timestamp",
+    "toolUseResult",
+    "type",
+    "userType",
+    "uuid",
+    "version"
+   ]
+  },
+  "worktree-state": {
+   "classification": "state:worktree",
+   "first_seen_version": "2.1.152",
+   "last_seen_version": "2.1.198",
+   "entrypoints": [
+    "cli"
+   ],
+   "keys": [
+    "sessionId",
+    "type",
+    "worktreeSession"
+   ]
+  }
+ }
+}

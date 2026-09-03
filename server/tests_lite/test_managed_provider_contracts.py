@@ -9,10 +9,10 @@ import pytest
 import yaml
 
 from zerg.managed_provider_contract_manifest import _validate_auth_probe
-from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
+from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.managed_provider_contract_manifest import normalize_contract_manifest
 from zerg.managed_provider_contract_manifest import render_contract_manifest_json
 from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
@@ -934,7 +934,11 @@ def test_outstanding_factory_work_reads_dispositions_not_reality() -> None:
         assert contract is not None
         # Only `not_implemented` is backlog. policy_disabled and
         # upstream_absent are settled decisions, not work.
-        assert contract.operation_evidence_for(row["operation"])["disposition"] == "not_implemented"
+        if row["operation"].startswith("transcript_signal:"):
+            cell = contract.transcript_signals[row["operation"].removeprefix("transcript_signal:")]
+            assert cell["disposition"] == "not_implemented"
+        else:
+            assert contract.operation_evidence_for(row["operation"])["disposition"] == "not_implemented"
 
 
 def test_support_decisions_carry_no_provider_name_checks() -> None:
@@ -1058,3 +1062,95 @@ def test_fork_capability_reaches_the_runtime_contract():
     assert codex.can_resume is True and claude.can_resume is True
     assert codex.fork_thread is True
     assert claude.fork_thread is False
+
+
+def test_transcript_signals_axis_is_declared_for_every_provider_and_signal():
+    """Absence is a decision: every provider declares every shared signal id."""
+    from zerg.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
+
+    for contract in all_managed_provider_contracts():
+        assert set(contract.transcript_signals) == TRANSCRIPT_SIGNAL_IDS, contract.provider
+        for signal, cell in contract.transcript_signals.items():
+            assert cell["disposition"] in {"implemented", "not_implemented", "upstream_absent", "policy_disabled"}, (
+                contract.provider,
+                signal,
+            )
+    claude = contract_for_provider("claude")
+    assert claude is not None
+    implemented = sorted(signal for signal, cell in claude.transcript_signals.items() if cell["disposition"] == "implemented")
+    assert implemented == ["context.compaction", "session.recap", "session.title", "turn.api_error", "turn.duration", "turn.usage"]
+    assert claude.transcript_signals["turn.duration"]["entrypoints"] == ["cli"], "print-mode Claude never writes turn_duration"
+
+
+def test_transcript_signal_cells_are_validated_strictly():
+    from zerg.managed_provider_contract_manifest import TRANSCRIPT_SIGNAL_IDS
+    from zerg.managed_provider_contract_manifest import _validate_transcript_signals
+
+    def cells(**overrides: dict) -> dict:
+        base = {
+            signal: {"disposition": "upstream_absent", "raw_source": "none", "canary": "test_signals", "trigger": "census"}
+            for signal in TRANSCRIPT_SIGNAL_IDS
+        }
+        base.update(overrides)
+        return base
+
+    _validate_transcript_signals({"provider": "test", "transcript_signals": cells()})
+    with pytest.raises(ValueError, match="missing"):
+        _validate_transcript_signals({"provider": "test", "transcript_signals": {}})
+    with pytest.raises(ValueError, match="unknown keys"):
+        _validate_transcript_signals(
+            {
+                "provider": "test",
+                "transcript_signals": cells(
+                    **{
+                        "turn.duration": {
+                            "disposition": "upstream_absent",
+                            "raw_source": "x",
+                            "canary": "c",
+                            "trigger": "census",
+                            "surprise": 1,
+                        }
+                    }
+                ),
+            }
+        )
+    with pytest.raises(ValueError, match="names no fixture"):
+        _validate_transcript_signals(
+            {
+                "provider": "test",
+                "transcript_signals": cells(
+                    **{"turn.duration": {"disposition": "implemented", "raw_source": "x", "canary": "c", "trigger": "turn_end"}}
+                ),
+            }
+        )
+    with pytest.raises(ValueError, match="names no owner_action"):
+        _validate_transcript_signals(
+            {
+                "provider": "test",
+                "transcript_signals": cells(
+                    **{"turn.usage": {"disposition": "not_implemented", "raw_source": "x", "canary": "c", "trigger": "turn_end"}}
+                ),
+            }
+        )
+    with pytest.raises(ValueError, match="trigger"):
+        _validate_transcript_signals(
+            {
+                "provider": "test",
+                "transcript_signals": cells(
+                    **{"turn.usage": {"disposition": "upstream_absent", "raw_source": "x", "canary": "c", "trigger": "whenever"}}
+                ),
+            }
+        )
+
+
+def test_outstanding_factory_work_names_unprojected_transcript_signals():
+    from zerg.services.managed_provider_contracts import outstanding_factory_work
+
+    rows = [row for row in outstanding_factory_work() if row["operation"].startswith("transcript_signal:")]
+    assert {(row["provider"], row["operation"]) for row in rows} >= {
+        ("codex", "transcript_signal:turn.duration"),
+        ("claude", "transcript_signal:input.queue"),
+        ("claude", "transcript_signal:turn.thinking"),
+    }
+    assert all(row["owner_action"] for row in rows), "every open signal names the work that closes it"
+    assert not any(row["provider"] == "claude" and row["operation"] == "transcript_signal:turn.duration" for row in rows)
