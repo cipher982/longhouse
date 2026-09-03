@@ -25,8 +25,7 @@ export {
   getSessionOriginLabel,
   getTimelineMessagePreview,
   normalizeSessionOriginLabel,
-  truncatePath,
-} from "./formatters";
+  truncatePath, formatTurnDuration } from "./formatters";
 
 export {
   buildTimelineModel,

@@ -442,6 +442,18 @@ export type AgentSessionStatus =
 export type PresenceState = components["schemas"]["PresenceState"];
 
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
+export interface AgentEventTurnEnd {
+  duration_ms: number;
+  ended_at: string;
+  message_count?: number | null;
+}
+
+export interface AgentSessionLastTurn {
+  duration_ms: number;
+  ended_at: string;
+  event_id?: string | null;
+}
+
 export interface AgentEventInputOrigin {
   authored_via: "longhouse" | "terminal";
   session_input_id?: number | null;
@@ -523,6 +535,8 @@ export interface AgentEvent {
   content_text: string | null;
   raw_content_text?: string | null;
   input_origin?: AgentEventInputOrigin | null;
+  /** Provider turn accounting stamped on the event the turn ended on. */
+  turn_end?: AgentEventTurnEnd | null;
   tool_name?: string | null;
   /** Provider-native tool input; free-form tools may emit a JSON string. */
   tool_input_json: unknown;

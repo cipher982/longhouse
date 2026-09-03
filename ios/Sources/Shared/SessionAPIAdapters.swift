@@ -231,7 +231,8 @@ extension APISessionResponse {
             ),
             transcriptPreview: transcriptPreview?.sessionTranscriptPreview,
             deviceId: deviceId,
-            inputReceipts: inputReceipts?.map(\.sessionInputReceipt)
+            inputReceipts: inputReceipts?.map(\.sessionInputReceipt),
+            lastTurn: lastTurn?.sessionLastTurn
         )
     }
 }
@@ -254,7 +255,8 @@ extension APIEventResponse {
             isHeadBranch: isHeadBranch ?? true,
             inputOrigin: inputOrigin?.sessionInputOrigin,
             eventOrigin: eventOrigin,
-            mediaRefs: mediaRefs ?? []
+            mediaRefs: mediaRefs ?? [],
+            turnEnd: turnEnd?.sessionTurnEnd
         )
     }
 }
@@ -350,6 +352,18 @@ private extension JSONValue {
         case .array, .object, .null: nil
         default: sessionEventIdentifier
         }
+    }
+}
+
+extension APITurnEndResponse {
+    var sessionTurnEnd: SessionTurnEnd {
+        SessionTurnEnd(durationMs: durationMs, endedAt: endedAt, messageCount: messageCount)
+    }
+}
+
+extension APILastTurnResponse {
+    var sessionLastTurn: SessionLastTurn {
+        SessionLastTurn(durationMs: durationMs, endedAt: endedAt, eventId: eventId)
     }
 }
 

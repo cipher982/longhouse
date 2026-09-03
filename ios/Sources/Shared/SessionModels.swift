@@ -884,6 +884,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     /// event it became once ingest linked it. Clients resolve optimistic rows by
     /// this identity, whether or not that event is on the page they loaded.
     var inputReceipts: [SessionInputReceipt]? = nil
+    /// The most recent turn the provider reported as finished.
+    var lastTurn: SessionLastTurn? = nil
 
     var displayTitle: String {
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
@@ -1198,7 +1200,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             stateFacts: DefaultUnknownSessionStateFacts(wrappedValue: stateFacts),
             transcriptPreview: transcriptPreview,
             deviceId: deviceId,
-            inputReceipts: inputReceipts
+            inputReceipts: inputReceipts,
+            lastTurn: lastTurn
         )
     }
 
@@ -1374,6 +1377,21 @@ enum SessionInputAuthoredVia: Codable, Hashable, Sendable {
     }
 }
 
+/// The provider's own accounting for the turn that ended on an event:
+/// "Worked for 2m 9s · done 9:15 AM". Served on the anchor event only.
+struct SessionTurnEnd: Codable, Hashable, Sendable {
+    let durationMs: Int
+    let endedAt: String
+    let messageCount: Int?
+}
+
+/// The most recent turn the provider reported as finished, for the session chrome.
+struct SessionLastTurn: Codable, Hashable, Sendable {
+    let durationMs: Int
+    let endedAt: String
+    let eventId: String?
+}
+
 struct SessionInputReceipt: Codable, Hashable, Sendable {
     let clientRequestId: String?
     let intent: String
@@ -1516,6 +1534,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let inputOrigin: SessionInputOrigin?
     let eventOrigin: String?
     let mediaRefs: [SessionEventMediaRef]
+    /// Set on the event a provider-reported turn ended on.
+    let turnEnd: SessionTurnEnd?
 
     init(
         id: String,
@@ -1534,6 +1554,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         inputOrigin: SessionInputOrigin?,
         eventOrigin: String? = nil,
         mediaRefs: [SessionEventMediaRef] = [],
+        turnEnd: SessionTurnEnd? = nil,
         cursor: String? = nil,
         orderTimeUs: Int64? = nil,
         threadId: String? = nil,
@@ -1559,6 +1580,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         self.inputOrigin = inputOrigin
         self.eventOrigin = eventOrigin
         self.mediaRefs = mediaRefs
+        self.turnEnd = turnEnd
     }
 
     /// Source-compatibility convenience while fixtures and the legacy API
@@ -1580,6 +1602,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         inputOrigin: SessionInputOrigin?,
         eventOrigin: String? = nil,
         mediaRefs: [SessionEventMediaRef] = [],
+        turnEnd: SessionTurnEnd? = nil,
         cursor: String? = nil,
         orderTimeUs: Int64? = nil,
         threadId: String? = nil,
@@ -1602,6 +1625,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
             inputOrigin: inputOrigin,
             eventOrigin: eventOrigin,
             mediaRefs: mediaRefs,
+            turnEnd: turnEnd,
             cursor: cursor,
             orderTimeUs: orderTimeUs,
             threadId: threadId,
@@ -1642,6 +1666,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         isHeadBranch = try container.decodeIfPresent(Bool.self, forKey: .isHeadBranch)
             ?? (branchKind == nil || branchKind == "head")
         inputOrigin = try container.decodeIfPresent(SessionInputOrigin.self, forKey: .inputOrigin)
+        turnEnd = try container.decodeIfPresent(SessionTurnEnd.self, forKey: .turnEnd)
         eventOrigin = try container.decodeIfPresent(String.self, forKey: .eventOrigin)
         mediaRefs = try container.decodeIfPresent([SessionEventMediaRef].self, forKey: .mediaRefs) ?? []
     }
@@ -1690,6 +1715,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case inputOrigin
         case eventOrigin
         case mediaRefs
+        case turnEnd
     }
 
     var legacyNumericId: Int? { Int(id) }

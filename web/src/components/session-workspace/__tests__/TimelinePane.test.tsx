@@ -786,3 +786,34 @@ describe("TimelinePane", () => {
     expect(container.querySelectorAll(".tl-diff").length).toBe(2);
   });
 });
+
+describe("TimelinePane turn footers", () => {
+  it("renders the provider's turn accounting under the row the turn ended on", () => {
+    const stamped: TimelineItem = {
+      kind: "message",
+      event: {
+        ...messageItem.event,
+        id: 40,
+        content_text: "Shipped.",
+        turn_end: { duration_ms: 129_299, ended_at: "2026-03-19T16:50:00Z", message_count: 898 },
+      },
+    };
+    const tool = makeToolWithMediaItem();
+    const toolStamped: TimelineItem = {
+      ...tool,
+      interaction: {
+        ...tool.interaction,
+        resultEvent: {
+          ...tool.interaction.resultEvent!,
+          turn_end: { duration_ms: 58_459, ended_at: "2026-03-19T16:52:00Z" },
+        },
+      },
+    };
+    renderPane([makeMessageItem("plain reply"), stamped, toolStamped]);
+    const footers = screen.getAllByTestId("session-turn-end").map((node) => node.textContent);
+    expect(footers).toHaveLength(2);
+    expect(footers[0]).toContain("Worked for 2m 9s");
+    expect(footers[0]).toContain("done ");
+    expect(footers[1]).toContain("Worked for 58s");
+  });
+});

@@ -842,11 +842,15 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     func appendAssistantMessage(_ text: String) {
+        let endedAt = ISO8601DateFormatter().string(from: Date())
         events.append(Self.makeEvent(
             id: nextEventID,
             role: "assistant",
             content: text,
-            timestamp: ISO8601DateFormatter().string(from: Date())
+            timestamp: endedAt,
+            // Every provider turn ends with its own accounting; the fixture
+            // reply carries one so the footer is part of the served shape.
+            turnEnd: SessionTurnEnd(durationMs: 129_299, endedAt: endedAt, messageCount: nil)
         ))
         nextEventID += 1
     }
@@ -1199,7 +1203,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         role: String,
         content: String,
         timestamp: String,
-        inputOrigin: SessionInputOrigin? = nil
+        inputOrigin: SessionInputOrigin? = nil,
+        turnEnd: SessionTurnEnd? = nil
     ) -> SessionEvent {
         SessionEvent(
             id: id,
@@ -1213,7 +1218,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             timestamp: timestamp,
             inActiveContext: true,
             isHeadBranch: true,
-            inputOrigin: inputOrigin
+            inputOrigin: inputOrigin,
+            turnEnd: turnEnd
         )
     }
 

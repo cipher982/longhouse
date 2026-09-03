@@ -1446,6 +1446,7 @@
   .tl-msg--user .tl-msg__who { color: rgba(233, 211, 163, 0.92); }
   .tl-msg--assistant .tl-msg__who { color: var(--color-brand-primary); }
   .tl-msg__time { color: var(--color-text-muted); font-family: var(--font-family-mono); font-size: 11px; }
+  .tl-turn-end { margin-top: 8px; color: var(--color-text-muted); font-family: var(--font-family-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
   .tl-msg__body {
     color: rgba(250, 245, 236, 0.96);
     line-height: 1.65;

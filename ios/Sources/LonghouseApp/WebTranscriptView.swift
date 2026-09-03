@@ -345,6 +345,37 @@ struct WebTranscriptView: UIViewRepresentable {
         serverURL: String?,
         subagents: [SessionSubagent] = []
     ) -> WebTranscriptPayloadItem {
+        var payload = payloadItemBody(item, serverURL: serverURL, subagents: subagents)
+        payload.turnEnd = turnEndPayload(for: item)
+        return payload
+    }
+
+    /// The provider stamps its turn accounting on one durable event; the
+    /// footer belongs under whichever row carries that event.
+    nonisolated static func turnEndPayload(for item: TimelineItem, now: Date = Date()) -> WebTranscriptTurnEnd? {
+        let turnEnd: SessionTurnEnd?
+        switch item {
+        case .user(let event), .assistant(let event), .orphanTool(let event):
+            turnEnd = event.turnEnd
+        case .tool(let call, let result, _):
+            turnEnd = result?.turnEnd ?? call.turnEnd
+        case .activityGroup(let calls):
+            turnEnd = calls.reversed().lazy.compactMap { $0.result?.turnEnd ?? $0.call.turnEnd }.first
+        case .action:
+            turnEnd = nil
+        }
+        guard let turnEnd else { return nil }
+        return WebTranscriptTurnEnd(
+            label: "Worked for \(TurnEndCopy.duration(milliseconds: turnEnd.durationMs))",
+            doneAt: TurnEndCopy.doneAt(turnEnd.endedAt, now: now)
+        )
+    }
+
+    private nonisolated static func payloadItemBody(
+        _ item: TimelineItem,
+        serverURL: String?,
+        subagents: [SessionSubagent] = []
+    ) -> WebTranscriptPayloadItem {
         switch item {
         case .user(let event):
             return messagePayload(
@@ -1559,6 +1590,13 @@ struct WebTranscriptPayloadItem: Encodable {
     var subagents: [WebTranscriptSubagent]? = nil
     /// "22 agents · 4m12s" — the shape of the work while still collapsed.
     var subagentSummary: String? = nil
+    /// "Worked for 2m 9s · done 9:15 AM" under the item a turn ended on.
+    var turnEnd: WebTranscriptTurnEnd? = nil
+}
+
+struct WebTranscriptTurnEnd: Encodable, Equatable {
+    let label: String
+    let doneAt: String
 }
 
 struct WebTranscriptSubagent: Encodable {
@@ -1760,6 +1798,12 @@ private extension WebTranscriptView {
       font-weight: 650;
     }
 
+    .turn-end {
+      margin-top: 8px;
+      color: var(--secondary);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
     .origin {
       margin-top: 6px;
       color: var(--secondary);
@@ -2640,6 +2684,22 @@ private extension WebTranscriptView {
     }
 
     function renderItem(item, index) {
+      const html = renderItemBody(item, index);
+      if (!html || !item.turnEnd) return html;
+      // Each item renders as one root node (retained-node reconciliation
+      // relies on it), so the footer lives inside that root.
+      const template = document.createElement('template');
+      template.innerHTML = html.trim();
+      const root = template.content.firstElementChild;
+      if (!root) return html;
+      root.insertAdjacentHTML(
+        'beforeend',
+        `<div class="turn-end" data-testid="session-turn-end">✻ ${escapeHtml(item.turnEnd.label)} · ${escapeHtml(item.turnEnd.doneAt)}</div>`
+      );
+      return template.innerHTML;
+    }
+
+    function renderItemBody(item, index) {
       if (item.kind === 'message') return message(item, index);
       if (item.kind === 'submitted') return submitted(item);
       if (item.kind === 'action') return action(item);
@@ -2818,4 +2878,35 @@ private extension WebTranscriptView {
 </body>
 </html>
 """#
+}
+
+/// Copy for the provider's turn accounting. Pure so tests pin the wording.
+enum TurnEndCopy {
+    /// "2m 9s", "58s", "1h 2m": the terminal's own compaction of a duration.
+    nonisolated static func duration(milliseconds: Int) -> String {
+        let total = max(0, milliseconds) / 1000
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 { return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h" }
+        if minutes > 0 { return seconds > 0 ? "\(minutes)m \(seconds)s" : "\(minutes)m" }
+        return "\(seconds)s"
+    }
+
+    /// "done 9:15 AM" today, "done Tue 9:15 AM" within a week, else with the date.
+    nonisolated static func doneAt(_ endedAt: String, now: Date = Date(), calendar: Calendar = .current) -> String {
+        guard let date = LonghouseDateParser.parse(endedAt) else { return "done" }
+        let time = DateFormatter()
+        time.calendar = calendar
+        time.dateStyle = .none
+        time.timeStyle = .short
+        if calendar.isDate(date, inSameDayAs: now) {
+            return "done \(time.string(from: date))"
+        }
+        let day = DateFormatter()
+        day.calendar = calendar
+        let withinWeek = now.timeIntervalSince(date) < 7 * 24 * 3600
+        day.setLocalizedDateFormatFromTemplate(withinWeek ? "EEE" : "MMM d")
+        return "done \(day.string(from: date)) \(time.string(from: date))"
+    }
 }

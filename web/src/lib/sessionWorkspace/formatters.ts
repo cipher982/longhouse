@@ -67,3 +67,14 @@ export function getSessionOriginLabel(session: Pick<AgentSession, "origin_label"
 export function getTimelineMessagePreview(event: AgentEvent): string {
   return event.content_text || "(empty message)";
 }
+
+/** "2m 9s", "58s", "1h 2m": the terminal's own compaction of a turn duration. */
+export function formatTurnDuration(durationMs: number): string {
+  const total = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  return `${seconds}s`;
+}

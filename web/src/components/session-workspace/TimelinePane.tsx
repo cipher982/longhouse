@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
@@ -17,6 +17,7 @@ import {
   formatEditStat,
   formatToolInput,
   formatTime,
+  formatTurnDuration,
   getEditStat,
   getFailurePreview,
   getTimelineMessagePreview,
@@ -45,7 +46,7 @@ import { useScrollToLoad } from "../../hooks/useScrollToLoad";
 import { collapseUnchanged, lineDiff, type DiffLine } from "../../lib/sessionWorkspace/diff";
 import type { EditStat } from "../../lib/sessionWorkspace/editSummary";
 import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
-import type { AgentEvent, AgentEventMediaRef } from "../../services/api/agents";
+import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "../../services/api/agents";
 
 type EventFilter = "all" | "messages" | "tools";
 
@@ -281,6 +282,19 @@ function truncateMarkdown(text: string): string {
   ].join("\n");
 }
 
+function TurnEndRow({ turnEnd }: { turnEnd: AgentEventTurnEnd | null | undefined }) {
+  if (!turnEnd) return null;
+  return (
+    <div className="tl-turn-end" data-testid="session-turn-end">
+      ✻ Worked for {formatTurnDuration(turnEnd.duration_ms)} · done {formatTime(turnEnd.ended_at)}
+    </div>
+  );
+}
+
+function turnEndForInteraction(interaction: ToolInteraction): AgentEventTurnEnd | null | undefined {
+  return interaction.resultEvent?.turn_end ?? interaction.callEvent?.turn_end;
+}
+
 function MessageRow({
   event,
   renderMedia,
@@ -355,6 +369,7 @@ function MessageRow({
           </button>
         ) : null}
       </div>
+      <TurnEndRow turnEnd={event.turn_end} />
     </div>
   );
 }
@@ -1371,16 +1386,18 @@ export function TimelinePane({
             if (item.kind === "tool") {
               const selectionKey = `tool:${item.interaction.key}`;
               return (
-                <ToolRow
-                  key={item.interaction.key}
-                  interaction={item.interaction}
-                  rowId={`event-${item.interaction.anchorId}`}
-                  expanded={expandedTools.has(item.interaction.key)}
-                  isSelected={selectedKey === selectionKey}
-                  onSelect={() => onSelectKey(selectionKey)}
-                  onToggleExpand={() => toggleTool(item.interaction.key)}
-                  renderMedia={renderMedia}
-                />
+                <Fragment key={item.interaction.key}>
+                  <ToolRow
+                    interaction={item.interaction}
+                    rowId={`event-${item.interaction.anchorId}`}
+                    expanded={expandedTools.has(item.interaction.key)}
+                    isSelected={selectedKey === selectionKey}
+                    onSelect={() => onSelectKey(selectionKey)}
+                    onToggleExpand={() => toggleTool(item.interaction.key)}
+                    renderMedia={renderMedia}
+                  />
+                  <TurnEndRow turnEnd={turnEndForInteraction(item.interaction)} />
+                </Fragment>
               );
             }
 
