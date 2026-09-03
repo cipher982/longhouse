@@ -126,6 +126,7 @@ struct SessionViewModelTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
+        model.recordTranscriptLifecycle("transcript_frame_rendered")
         await waitForTailRequestCount(api, atLeast: 2)
         await model.reload(sessionId: "session-1", appState: appState)
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -167,6 +168,7 @@ struct SessionViewModelTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
+        model.recordTranscriptLifecycle("transcript_frame_rendered")
         await waitForTailRequestCount(api, atLeast: 2)
         model.handleMemoryWarning()
         await api.resumePausedTailResponses()
@@ -888,6 +890,12 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
 
         await model.start(sessionId: "session-1", appState: appState)
+        #expect(model.isTranscriptFrameReady == false)
+        await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
+        #expect(model.items.map(\.id) == ["user:51"])
+
+        model.recordTranscriptLifecycle("transcript_frame_rendered")
+        #expect(model.isTranscriptFrameReady == true)
         await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
         #expect(model.items.map(\.id) == ["user:1", "user:51"])
         let afterFirstFill = await api.tailRequestCount()

@@ -274,8 +274,24 @@ def claude_sequence_dependent_control_candidate(
     if prompt_id is None and _raw_identifier(raw, "uuid") is None and _raw_identifier(raw, "parentUuid") is None:
         return False
     raw_text = _raw_content(raw)
-    values = [value for value in (str(content_text or ""), raw_text) if value]
-    return any(_CLAUDE_COMMAND_RECORD_RE.fullmatch(value) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(value) for value in values)
+    return claude_sequence_dependent_control_content_candidate(content_text) or (
+        bool(raw_text) and bool(_CLAUDE_COMMAND_RECORD_RE.fullmatch(raw_text) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(raw_text))
+    )
+
+
+def claude_sequence_dependent_control_content_candidate(content_text: str | None) -> bool:
+    """Whether rendered Claude text could change meaning after a later caveat.
+
+    This is deliberately a superset of
+    :func:`claude_sequence_dependent_control_candidate`: render objects do not
+    retain Claude's prompt/UUID envelope fields, so the immutable raw companion
+    still decides the fact.  The exact full-record markup is enough to decide
+    whether that raw read could possibly matter, keeping ordinary prompts and
+    assistant output on the render-only user path.
+    """
+
+    value = str(content_text or "")
+    return bool(value) and bool(_CLAUDE_COMMAND_RECORD_RE.fullmatch(value) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(value))
 
 
 def _advance_claude_sequence_context(

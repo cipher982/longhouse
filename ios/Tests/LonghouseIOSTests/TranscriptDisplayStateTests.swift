@@ -30,6 +30,19 @@ struct TranscriptDisplayStateTests {
     }
 
     @Test
+    func contentWithoutFirstRendererFrameStaysMountedBehindRestoringSurface() {
+        let state = TranscriptDisplayState.derive(
+            isInitialLoading: false,
+            hasContent: true,
+            errorMessage: nil,
+            refreshErrorMessage: nil,
+            rendererReady: false
+        )
+        #expect(state == .restoring)
+        #expect(state.showsTranscript == true)
+    }
+
+    @Test
     func contentWithFailedRefreshDegradesToBannerNotErase() {
         let state = TranscriptDisplayState.derive(
             isInitialLoading: false,

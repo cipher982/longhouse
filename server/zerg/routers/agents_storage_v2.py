@@ -14,6 +14,7 @@ from datetime import datetime
 from time import monotonic
 from typing import Any
 from uuid import UUID
+from weakref import WeakValueDictionary
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -46,6 +47,7 @@ from zerg.services.render_object_workers import RenderObjectWorkerBusy
 from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
+from zerg.services.storage_v2_semantics import SemanticRecoveryStats
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryPermanentError
 from zerg.services.storage_v2_semantics import enrich_render_interaction_kinds
@@ -163,6 +165,7 @@ _RENDER_MANIFEST_LIMIT = 1_000
 _RENDER_READ_BATCH = 2
 _MAX_MEDIA_REFS = 1_000
 _MAX_MEDIA_CLAIMS = 512
+_SESSION_DETAIL_READ_LOCKS: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
 
 def _http_error(
@@ -1711,6 +1714,22 @@ async def read_storage_v2_session_raw(
     return result
 
 
+def _session_detail_read_lock(session_id: UUID) -> asyncio.Lock:
+    """Return one process-local user-read lane for a session.
+
+    Creating the lock contains no await, so lookup/install is atomic on the
+    Runtime Host event loop.  Weak storage drops idle session identities while
+    active and waiting tasks retain the lock they use.
+    """
+
+    key = str(session_id)
+    lock = _SESSION_DETAIL_READ_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SESSION_DETAIL_READ_LOCKS[key] = lock
+    return lock
+
+
 async def read_storage_v2_session_events_page(
     *,
     session_id: UUID,
@@ -1720,6 +1739,37 @@ async def read_storage_v2_session_events_page(
     limit: int,
     branch_mode: str = "all",
     timing: ServerTimingRecorder | None = None,
+) -> dict[str, object]:
+    """Serialize immutable object reads for one session within this host."""
+
+    timing = timing or ServerTimingRecorder()
+    lock = _session_detail_read_lock(session_id)
+    admission_started_at = monotonic()
+    await lock.acquire()
+    timing.record("read_admission", (monotonic() - admission_started_at) * 1000.0)
+    try:
+        return await _read_storage_v2_session_events_page_admitted(
+            session_id=session_id,
+            owner_id=owner_id,
+            cursor=cursor,
+            anchor=anchor,
+            limit=limit,
+            branch_mode=branch_mode,
+            timing=timing,
+        )
+    finally:
+        lock.release()
+
+
+async def _read_storage_v2_session_events_page_admitted(
+    *,
+    session_id: UUID,
+    owner_id: str,
+    cursor: str | None,
+    anchor: str,
+    limit: int,
+    branch_mode: str = "all",
+    timing: ServerTimingRecorder,
 ) -> dict[str, object]:
     """Read one verified render page for a known owner.
 
@@ -1753,7 +1803,6 @@ async def read_storage_v2_session_events_page(
         )
     cursor_order_key = json.dumps(_cursor_order_key(decoded_cursor), separators=(",", ":")) if decoded_cursor is not None else None
     retain_product_metrics = timing is not None and timing.product_surface is not None
-    timing = timing or ServerTimingRecorder()
     try:
         with timing.span("render_manifest"):
             manifest = await catalogd.call(
@@ -1819,6 +1868,8 @@ async def read_storage_v2_session_events_page(
     next_object_index = 0
     cursor_key = _cursor_order_key(decoded_cursor) if decoded_cursor is not None else None
     object_read_duration_ms = 0.0
+    semantic_recovery_duration_ms = 0.0
+    semantic_recovery_stats = SemanticRecoveryStats()
     try:
         while next_object_index < len(objects):
             batch_manifests = objects[next_object_index : next_object_index + _RENDER_READ_BATCH]
@@ -1849,18 +1900,23 @@ async def read_storage_v2_session_events_page(
                     or decoded.object_hash != item.get("object_hash")
                 ):
                     raise ValueError("render object does not match its catalog manifest")
-                recovered_kinds = await recover_render_interaction_kinds(
-                    catalog=catalogd,
-                    raw_workers=raw_workers,
-                    session_id=str(session_id),
-                    owner_id=owner_id,
-                    provider=spec.provider,
-                    records=spec.records,
-                    source_envelope_id=spec.source_envelope_id,
-                    manifest_cache=raw_manifest_cache,
-                    sequence_context_cache=sequence_context_cache,
-                    reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
-                )
+                semantic_recovery_started_at = monotonic()
+                try:
+                    recovered_kinds = await recover_render_interaction_kinds(
+                        catalog=catalogd,
+                        raw_workers=raw_workers,
+                        session_id=str(session_id),
+                        owner_id=owner_id,
+                        provider=spec.provider,
+                        records=spec.records,
+                        source_envelope_id=spec.source_envelope_id,
+                        manifest_cache=raw_manifest_cache,
+                        sequence_context_cache=sequence_context_cache,
+                        reclassify_sequence_controls=spec.provider.strip().lower() == "claude",
+                        stats=semantic_recovery_stats,
+                    )
+                finally:
+                    semantic_recovery_duration_ms += (monotonic() - semantic_recovery_started_at) * 1000.0
                 for ordinal, record in enumerate(spec.records):
                     key = _render_record_order_key(decoded, record)
                     if claude_generation:
@@ -1905,9 +1961,18 @@ async def read_storage_v2_session_events_page(
                         ordered_events.append((key, wire))
             next_object_index += len(batch_manifests)
             ordered_events.sort(key=lambda item: item[0])
-            if len(ordered_events) > limit:
+            if claude_generation and anchor == "tail":
+                visible_events = ordered_events
+                if branch_mode == "head":
+                    seen_abandoned_ids = _claude_abandoned_event_ids(claude_branch_records)
+                    visible_events = [(key, wire) for key, wire in ordered_events if wire.get("event_id") not in seen_abandoned_ids]
+                if len(visible_events) >= limit:
+                    cutoff = visible_events[-limit][0]
+                    if next_object_index >= len(objects) or _manifest_last_key(objects[next_object_index]) < cutoff:
+                        break
+            elif not claude_generation and len(ordered_events) > limit:
                 cutoff = ordered_events[limit][0] if anchor == "start" else ordered_events[-limit - 1][0]
-                if not claude_generation and (
+                if (
                     next_object_index >= len(objects)
                     or (anchor == "start" and _manifest_first_key(objects[next_object_index]) > cutoff)
                     or (anchor == "tail" and _manifest_last_key(objects[next_object_index]) < cutoff)
@@ -1947,6 +2012,13 @@ async def read_storage_v2_session_events_page(
         ) from exc
     finally:
         timing.record("render_object_read", object_read_duration_ms)
+        timing.record("semantic_recover", semantic_recovery_duration_ms)
+        if semantic_recovery_stats.raw_manifest_duration_ms > 0:
+            timing.record("raw_manifest_read", semantic_recovery_stats.raw_manifest_duration_ms)
+        if semantic_recovery_stats.raw_companion_duration_ms > 0:
+            timing.record("raw_companion_read", semantic_recovery_stats.raw_companion_duration_ms)
+        if semantic_recovery_stats.sequence_context_duration_ms > 0:
+            timing.record("sequence_context_seed", semantic_recovery_stats.sequence_context_duration_ms)
 
     abandoned_ids = _claude_abandoned_event_ids(claude_branch_records) if claude_generation else set()
     abandoned_events = len(abandoned_ids & claude_semantic_event_ids)
@@ -1958,6 +2030,19 @@ async def read_storage_v2_session_events_page(
 
     page = ordered_events[:limit] if anchor == "start" else ordered_events[-limit:]
     has_more = len(ordered_events) > limit or next_object_index < len(objects) or manifest.get("objects_truncated") is True
+    logger.info(
+        "storage-v2 session detail read session_id=%s generation_id=%s anchor=%s branch_mode=%s "
+        "objects_read=%s events_kept=%s semantic_candidates=%s raw_companions=%s has_more=%s",
+        session_id,
+        generation_id,
+        anchor,
+        branch_mode,
+        next_object_index,
+        len(page),
+        semantic_recovery_stats.selected_records,
+        semantic_recovery_stats.raw_companions_read,
+        has_more,
+    )
     if retain_product_metrics:
         from zerg.metrics import product_read_bytes
         from zerg.metrics import product_read_objects

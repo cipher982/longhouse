@@ -16,6 +16,7 @@ import OSLog
 /// trigger was never under test. `layoutSubviews` is the one trigger UIKit
 /// guarantees on a frame change.
 final class TranscriptWebView: WKWebView {
+    let transcriptInstanceID = UUID().uuidString.prefix(8)
     /// (previousHeight, newHeight). Only fires on a real height change.
     var onViewportHeightChange: ((CGFloat, CGFloat) -> Void)?
     /// Seeded to zero rather than "unset": treating the first layout as a
@@ -136,6 +137,7 @@ struct WebTranscriptView: UIViewRepresentable {
         coordinator.webView = webView
         coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
         let lifecycleStage = pooled.reused ? "webview_reused" : "webview_make"
+        WebTranscriptWebViewPool.logAdoption(webView, reused: pooled.reused, loaded: pooled.isLoaded)
         Task { @MainActor in
             onLifecycle?(lifecycleStage)
         }
@@ -203,12 +205,11 @@ struct WebTranscriptView: UIViewRepresentable {
         coordinator.onOpenSubagent = nil
         let documentIsLoaded = coordinator.isLoaded
         coordinator.prepareForReuse()
-        // Only a WebView still showing a transcript document we loaded ourselves
-        // is worth keeping. Pooling anything else makes the next session adopt a
-        // document it never loaded and fire `window.renderTranscript` — the whole
-        // transcript — into it.
-        guard documentIsLoaded else { return }
-        WebTranscriptWebViewPool.recycle(webView)
+        // The only navigation this coordinator permits is our transcript
+        // document. Preserve an in-flight load too: dropping it during a SwiftUI
+        // representable transition starts a second WebContent process and loses
+        // the prewarm precisely on the cold-open path.
+        WebTranscriptWebViewPool.recycle(webView, documentIsLoaded: documentIsLoaded)
     }
 
     private func preparedPayload() -> WebTranscriptPreparedPayload {
@@ -1294,6 +1295,9 @@ struct WebTranscriptView: UIViewRepresentable {
                     case .success(let value): frameMetrics = WebTranscriptJavaScriptMetrics(value)
                     case .failure: frameMetrics = nil
                     }
+                    Task { @MainActor in
+                        self.onLifecycle?("transcript_frame_rendered")
+                    }
                     self.emitDiagnostics(
                         stage: "rendered",
                         payload: payload,
@@ -1445,12 +1449,12 @@ enum WebTranscriptWebViewPool {
         guard warmedWebView == nil else { return }
         let startedAt = Date()
         logger.info("webkit prewarm requested")
-        let delegate = WebTranscriptSpareDelegate(allowsDocumentLoad: true) {
+        let delegate = WebTranscriptSpareDelegate(allowsDocumentLoad: true, onLoaded: {
             Task { @MainActor in
                 warmedWebViewLoaded = true
                 logger.info("webkit prewarm loaded")
             }
-        }
+        })
         let webView = configuredWebView()
         spareDelegate = delegate
         webView.navigationDelegate = delegate
@@ -1466,27 +1470,54 @@ enum WebTranscriptWebViewPool {
             spareDelegate = nil
             let loaded = warmedWebViewLoaded
             warmedWebViewLoaded = false
-            logger.info("webkit prewarm reused loaded=\(loaded, privacy: .public)")
+            logger.info(
+                "webkit prewarm reused id=\(webView.transcriptInstanceID, privacy: .public) loaded=\(loaded, privacy: .public)"
+            )
             return PooledWebView(webView: webView, reused: true, isLoaded: loaded)
         }
         logger.info("webkit prewarm miss")
         return PooledWebView(webView: configuredWebView(), reused: false, isLoaded: false)
     }
 
-    static func recycle(_ webView: TranscriptWebView) {
+    static func logAdoption(_ webView: TranscriptWebView, reused: Bool, loaded: Bool) {
+        logger.info(
+            "webkit adopted id=\(webView.transcriptInstanceID, privacy: .public) reused=\(reused, privacy: .public) loaded=\(loaded, privacy: .public)"
+        )
+    }
+
+    static func recycle(_ webView: TranscriptWebView, documentIsLoaded: Bool) {
         // A just-popped transcript is a better warm spare than a new WebView
         // still starting its content process. Keep one globally bounded spare.
         webView.prepareForTranscriptReuse()
-        // An idle spare still runs a live content process, and the session
-        // coordinator that gated its navigation is gone. Keep a delegate on it
-        // that refuses everything, so nothing the previous document scheduled can
-        // replace the document the next session adopts.
-        let delegate = WebTranscriptSpareDelegate(allowsDocumentLoad: false)
+        // A loaded spare refuses navigation. An in-flight spare allows only the
+        // document navigation already started by Longhouse and reports whether
+        // it completed before the next session adopts it.
+        let delegate = WebTranscriptSpareDelegate(
+            allowsDocumentLoad: !documentIsLoaded,
+            onLoaded: documentIsLoaded ? nil : {
+                Task { @MainActor in
+                    guard warmedWebView === webView else { return }
+                    warmedWebViewLoaded = true
+                    logger.info("webkit recycled load completed id=\(webView.transcriptInstanceID, privacy: .public)")
+                }
+            },
+            onFailed: documentIsLoaded ? nil : {
+                Task { @MainActor in
+                    guard warmedWebView === webView else { return }
+                    warmedWebView = nil
+                    warmedWebViewLoaded = false
+                    spareDelegate = nil
+                    logger.error("webkit recycled load failed id=\(webView.transcriptInstanceID, privacy: .public)")
+                }
+            }
+        )
         spareDelegate = delegate
         webView.navigationDelegate = delegate
         warmedWebView = webView
-        warmedWebViewLoaded = true
-        logger.info("webkit recycled")
+        warmedWebViewLoaded = documentIsLoaded
+        logger.info(
+            "webkit recycled id=\(webView.transcriptInstanceID, privacy: .public) loaded=\(documentIsLoaded, privacy: .public)"
+        )
     }
 
     private static func configuredWebView() -> TranscriptWebView {
@@ -1506,11 +1537,13 @@ enum WebTranscriptWebViewPool {
 /// from the transcript document while it waits to be adopted.
 private final class WebTranscriptSpareDelegate: NSObject, WKNavigationDelegate {
     private let onLoaded: (() -> Void)?
+    private let onFailed: (() -> Void)?
     private var allowsDocumentLoad: Bool
 
-    init(allowsDocumentLoad: Bool, onLoaded: (() -> Void)? = nil) {
+    init(allowsDocumentLoad: Bool, onLoaded: (() -> Void)? = nil, onFailed: (() -> Void)? = nil) {
         self.allowsDocumentLoad = allowsDocumentLoad
         self.onLoaded = onLoaded
+        self.onFailed = onFailed
     }
 
     func webView(
@@ -1528,6 +1561,14 @@ private final class WebTranscriptSpareDelegate: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         onLoaded?()
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        onFailed?()
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        onFailed?()
     }
 }
 

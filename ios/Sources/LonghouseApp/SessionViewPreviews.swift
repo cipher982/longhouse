@@ -513,6 +513,14 @@ private struct PreviewSubtitle: ViewModifier {
     .preferredColorScheme(.dark)
 }
 
+#Preview("Transcript · restoring · Dark") {
+    ZStack {
+        Color(.systemBackground).ignoresSafeArea()
+        TranscriptStateOverlay(state: .restoring, onRetry: {})
+    }
+    .preferredColorScheme(.dark)
+}
+
 // MARK: - Provider facts chrome
 
 /// The session screen's top inset, in the same shell the real screen uses:

@@ -886,8 +886,8 @@ async def test_storage_semantic_recovery_skips_full_stream_scan_without_sequence
         reclassify_sequence_controls=True,
     )
 
-    assert reader.reads == 1
-    assert recovered == {0: "durable_user_message"}
+    assert reader.reads == 0
+    assert recovered == {}
 
 
 @pytest.mark.asyncio

@@ -415,6 +415,103 @@ async def test_storage_v2_render_reader_surfaces_semantic_recovery_pending(monke
 
 
 @pytest.mark.asyncio
+async def test_storage_v2_claude_tail_stops_after_requested_head_window_without_raw_replay(monkeypatch):
+    session_id = uuid4()
+    generation_id = uuid4()
+    source_epoch = uuid4()
+    decoded_by_path = {}
+    manifests = []
+
+    for position in range(120, 0, -1):
+        object_hash = f"{position:064x}"
+        source_envelope_id = f"{position + 1000:064x}"
+        record = RenderRecord(
+            event_id=f"event-{position}",
+            order_time_us=position,
+            source_position=position,
+            event_subordinal=0,
+            role="user",
+            content_text=f"message {position}",
+            interaction_kind="durable_user_message",
+        )
+        spec = RenderObjectSpec(
+            session_id=session_id,
+            render_generation=generation_id,
+            parser_revision="engine-parser-v2",
+            ordering_revision="semantic-order-v2",
+            machine_id="cinder",
+            provider="claude",
+            opaque_source_id="history.jsonl",
+            source_epoch=source_epoch,
+            source_envelope_id=source_envelope_id,
+            records=(record,),
+        )
+        object_path = f"render-{position}.zst"
+        decoded_by_path[object_path] = SimpleNamespace(spec=spec, object_hash=object_hash)
+        order_key = json.dumps(
+            [position, "cinder", "claude", "history.jsonl", str(source_epoch), position, 0],
+            separators=(",", ":"),
+        )
+        manifests.append(
+            {
+                "object_path": object_path,
+                "object_hash": object_hash,
+                "source_envelope_id": source_envelope_id,
+                "first_order_key": order_key,
+                "last_order_key": order_key,
+                "compressed_size": 64,
+            }
+        )
+
+    class _Catalog:
+        async def call(self, method, params, *, timeout_seconds=None):
+            assert method == "storage.session.render_manifest.v2"
+            assert params["anchor"] == "tail"
+            assert params["limit"] == 1_000
+            return {
+                "found": True,
+                "current_generation_id": str(generation_id),
+                "generation": {"generation_id": str(generation_id), "event_count": 120},
+                "objects": manifests,
+                "objects_truncated": False,
+            }
+
+    class _RenderPool:
+        def __init__(self):
+            self.reads = 0
+
+        async def read(self, object_path, *_args, **_kwargs):
+            self.reads += 1
+            return decoded_by_path[object_path]
+
+    class _RawPool:
+        async def read(self, *_args, **_kwargs):
+            raise AssertionError("settled ordinary Claude rows must not read raw companions")
+
+    render_pool = _RenderPool()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: _Catalog())
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_pool)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: _RawPool())
+    timing = storage_router.ServerTimingRecorder()
+
+    page = await storage_router.read_storage_v2_session_events_page(
+        session_id=session_id,
+        owner_id="1",
+        cursor=None,
+        anchor="tail",
+        limit=10,
+        branch_mode="head",
+        timing=timing,
+    )
+
+    assert render_pool.reads == 10
+    assert [event["event_id"] for event in page["events"]] == [f"event-{position}" for position in range(111, 121)]
+    assert page["has_more"] is True
+    assert "read_admission" in (timing.header_value() or "")
+    assert "semantic_recover" in (timing.header_value() or "")
+
+
+@pytest.mark.asyncio
 async def test_storage_v2_timeline_read_does_not_repair_stale_semantic_projection(monkeypatch):
     session_id = uuid4()
     generation_id = uuid4()

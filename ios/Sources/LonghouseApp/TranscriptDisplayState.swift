@@ -24,6 +24,9 @@ enum TranscriptDisplayState: Equatable {
     case contentWithRefreshError(String)
     /// Content is on screen and healthy.
     case content
+    /// Cached/network content exists, but WebKit has not presented its first
+    /// frame. Keep the renderer mounted behind an honest native surface.
+    case restoring
     /// Cold load failed with nothing cached. Full-screen, actionable error.
     case hardError(String)
 
@@ -35,12 +38,16 @@ enum TranscriptDisplayState: Equatable {
         hasContent: Bool,
         errorMessage: String?,
         refreshErrorMessage: String?,
-        isSyncing: Bool = false
+        isSyncing: Bool = false,
+        rendererReady: Bool = true
     ) -> TranscriptDisplayState {
         if isInitialLoading {
             return .loading
         }
         if hasContent {
+            if !rendererReady {
+                return .restoring
+            }
             if let refreshErrorMessage {
                 return .contentWithRefreshError(refreshErrorMessage)
             }
@@ -63,7 +70,7 @@ enum TranscriptDisplayState: Equatable {
         switch self {
         case .loading, .empty, .syncing, .hardError:
             return false
-        case .content, .contentWithRefreshError:
+        case .content, .contentWithRefreshError, .restoring:
             return true
         }
     }
@@ -83,6 +90,8 @@ struct TranscriptStateOverlay: View {
             ProgressView()
                 .controlSize(.large)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .restoring:
+            restoring
         case .hardError(let message):
             hardError(message)
         case .syncing:
@@ -101,6 +110,19 @@ struct TranscriptStateOverlay: View {
         case .content:
             EmptyView()
         }
+    }
+
+    private var restoring: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.regular)
+            Text("Restoring transcript…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+        .accessibilityIdentifier("session-transcript-restoring")
     }
 
     private var syncing: some View {

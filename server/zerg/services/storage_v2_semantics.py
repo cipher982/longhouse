@@ -6,15 +6,18 @@ import hashlib
 import json
 from collections.abc import Mapping
 from collections.abc import MutableMapping
+from dataclasses import dataclass
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
+from time import monotonic
 from typing import Any
 from uuid import UUID
 
 from zerg.catalogd.client import CatalogClient
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import claude_sequence_dependent_control_candidate
+from zerg.services.provider_interaction_semantics import claude_sequence_dependent_control_content_candidate
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.storage_v2.raw_objects import RawObjectSpec
@@ -46,6 +49,17 @@ _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
 _SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS = 4.25
 
 
+@dataclass(slots=True)
+class SemanticRecoveryStats:
+    """Bounded per-request evidence for storage-v2 semantic recovery."""
+
+    selected_records: int = 0
+    raw_companions_read: int = 0
+    raw_manifest_duration_ms: float = 0.0
+    raw_companion_duration_ms: float = 0.0
+    sequence_context_duration_ms: float = 0.0
+
+
 async def recover_render_interaction_kinds(
     *,
     catalog: CatalogClient,
@@ -59,6 +73,7 @@ async def recover_render_interaction_kinds(
     sequence_context_cache: MutableMapping[tuple[str, str, str, str, str], dict[str, object]] | None = None,
     reclassify_sequence_controls: bool = False,
     projector_read: bool = False,
+    stats: SemanticRecoveryStats | None = None,
 ) -> dict[int, str]:
     """Return semantic kinds for render records from the immutable raw companion.
 
@@ -71,8 +86,11 @@ async def recover_render_interaction_kinds(
     selected = {
         ordinal: record
         for ordinal, record in enumerate(records)
-        if reclassify_sequence_controls or getattr(record, "interaction_kind", None) is None
+        if getattr(record, "interaction_kind", None) is None
+        or (reclassify_sequence_controls and claude_sequence_dependent_control_content_candidate(getattr(record, "content_text", None)))
     }
+    if stats is not None:
+        stats.selected_records += len(selected)
     if not selected:
         return {}
     if raw_workers is None:
@@ -80,12 +98,17 @@ async def recover_render_interaction_kinds(
 
     manifests = manifest_cache.get(session_id)
     if manifests is None:
-        manifests = await _load_raw_manifests(
-            catalog,
-            session_id=session_id,
-            owner_id=owner_id,
-            projector_read=projector_read,
-        )
+        started_at = monotonic()
+        try:
+            manifests = await _load_raw_manifests(
+                catalog,
+                session_id=session_id,
+                owner_id=owner_id,
+                projector_read=projector_read,
+            )
+        finally:
+            if stats is not None:
+                stats.raw_manifest_duration_ms += (monotonic() - started_at) * 1000.0
         manifest_cache[session_id] = manifests
     manifest = manifests.get(source_envelope_id)
     if manifest is None:
@@ -95,6 +118,7 @@ async def recover_render_interaction_kinds(
         manifest_cache.pop(session_id, None)
         raise StorageV2SemanticRecoveryError(f"raw companion {source_envelope_id} is missing for storage session {session_id}")
 
+    raw_read_started_at = monotonic()
     try:
         decoded = await raw_workers.read(
             str(manifest["object_path"]),
@@ -104,37 +128,47 @@ async def recover_render_interaction_kinds(
         )
     except Exception as exc:  # worker errors are provider-independent recovery failures
         raise StorageV2SemanticRecoveryError(f"raw companion {source_envelope_id} could not be read") from exc
+    finally:
+        if stats is not None:
+            stats.raw_companion_duration_ms += (monotonic() - raw_read_started_at) * 1000.0
+    if stats is not None:
+        stats.raw_companions_read += 1
 
     if str(decoded.envelope_id) != source_envelope_id:
         raise StorageV2SemanticRecoveryError("raw companion envelope identity does not match render object")
 
     raw_records = decoded.spec.records
-    if reclassify_sequence_controls and _render_records_need_claude_sequence_context(
-        raw_records=raw_records,
-        records=records,
-    ):
-        sequence_context = await _seed_sequence_context_from_all_raw(
-            raw_workers=raw_workers,
-            session_id=session_id,
-            provider=provider,
-            current_raw_spec=decoded.spec,
-            current_envelope_id=source_envelope_id,
-            manifests=manifests,
-            sequence_context_cache=sequence_context_cache,
-        )
-    elif reclassify_sequence_controls:
-        sequence_context = {}
-    else:
-        sequence_context = await _seed_sequence_context_from_prior_raw(
-            catalog=catalog,
-            raw_workers=raw_workers,
-            session_id=session_id,
-            owner_id=owner_id,
-            provider=provider,
-            current_raw_spec=decoded.spec,
-            current_envelope_id=source_envelope_id,
-            manifests=manifests,
-        )
+    context_started_at = monotonic()
+    try:
+        if reclassify_sequence_controls and _render_records_need_claude_sequence_context(
+            raw_records=raw_records,
+            records=records,
+        ):
+            sequence_context = await _seed_sequence_context_from_all_raw(
+                raw_workers=raw_workers,
+                session_id=session_id,
+                provider=provider,
+                current_raw_spec=decoded.spec,
+                current_envelope_id=source_envelope_id,
+                manifests=manifests,
+                sequence_context_cache=sequence_context_cache,
+            )
+        elif reclassify_sequence_controls:
+            sequence_context = {}
+        else:
+            sequence_context = await _seed_sequence_context_from_prior_raw(
+                catalog=catalog,
+                raw_workers=raw_workers,
+                session_id=session_id,
+                owner_id=owner_id,
+                provider=provider,
+                current_raw_spec=decoded.spec,
+                current_envelope_id=source_envelope_id,
+                manifests=manifests,
+            )
+    finally:
+        if stats is not None:
+            stats.sequence_context_duration_ms += (monotonic() - context_started_at) * 1000.0
     return _classify_render_records_in_raw_order(
         provider=provider,
         raw_records=raw_records,
@@ -781,6 +815,7 @@ def _repaired_interaction_kind(existing: str | None, recovered: str | None) -> s
 
 
 __all__ = [
+    "SemanticRecoveryStats",
     "StorageV2SemanticRecoveryError",
     "StorageV2SemanticRecoveryPermanentError",
     "enrich_render_interaction_kinds",
