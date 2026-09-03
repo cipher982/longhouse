@@ -93,7 +93,11 @@ async def session_input_receipts(catalogd: CatalogClient, session_id: UUID | str
     except Exception:  # noqa: BLE001 - a page without provenance still renders
         logger.warning("Failed to list input receipts for session %s", session_id, exc_info=True)
         return []
-    receipts = result.get("receipts") if isinstance(result, dict) else None
+    return input_receipts_from_rows(result.get("receipts") if isinstance(result, dict) else None)
+
+
+def input_receipts_from_rows(receipts: object) -> list[dict[str, Any]]:
+    """Catalog receipt rows (from the list RPC or the session read) as the API projects them."""
     if not isinstance(receipts, list):
         return []
     projected: list[dict[str, Any]] = []

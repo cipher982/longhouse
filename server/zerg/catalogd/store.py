@@ -718,6 +718,45 @@ def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, 
     return payload
 
 
+def _provider_fact_rows(connection: Connection, *, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    """Newest provider facts for a session, as the RPC and session read both serve them."""
+    table = SessionProviderFact.__table__
+    rows = (
+        connection.execute(
+            select(table)
+            .where(table.c.session_id == session_id)
+            .order_by(table.c.at.desc(), table.c.source_position.desc(), table.c.id.desc())
+            .limit(limit)
+        )
+        .mappings()
+        .all()
+    )
+    return [
+        {
+            "kind": row["kind"],
+            "at": (row["at"].isoformat() if isinstance(row["at"], datetime) else str(row["at"])),
+            "source_epoch": row["source_epoch"],
+            "source_position": int(row["source_position"]),
+            "payload": row["payload_json"],
+            "commit_seq": str(row["commit_seq"]),
+        }
+        for row in rows
+    ]
+
+
+def _input_receipt_rows(connection: Connection, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Newest input receipts for a session regardless of status, for provenance."""
+    table = LiveSessionInputReceipt.__table__
+    rows = (
+        connection.execute(
+            select(table).where(table.c.session_id == session_id).order_by(table.c.created_at.desc(), table.c.id.desc()).limit(limit)
+        )
+        .mappings()
+        .all()
+    )
+    return [_input_receipt_dto(_RowReceipt(row)) for row in rows]
+
+
 def _insert_provider_facts(
     connection: Connection,
     *,
@@ -5078,46 +5117,14 @@ class CatalogStore:
 
     def list_session_input_receipts(self, *, session_id: str, limit: int = 50) -> dict[str, Any]:
         """The newest receipts for a session regardless of status, for provenance."""
-        table = LiveSessionInputReceipt.__table__
         with _read_snapshot(self.engine) as connection:
-            rows = (
-                connection.execute(
-                    select(table)
-                    .where(table.c.session_id == session_id)
-                    .order_by(table.c.created_at.desc(), table.c.id.desc())
-                    .limit(limit)
-                )
-                .mappings()
-                .all()
-            )
-            receipts = [_input_receipt_dto(_RowReceipt(row)) for row in rows]
+            receipts = _input_receipt_rows(connection, session_id=session_id, limit=limit)
             return {"receipts": receipts, "commit_seq": str(_current_commit_seq(connection))}
 
     def list_session_provider_facts(self, *, session_id: str, limit: int = 200) -> dict[str, Any]:
         """The newest provider facts for a session, newest first."""
-        table = SessionProviderFact.__table__
         with _read_snapshot(self.engine) as connection:
-            rows = (
-                connection.execute(
-                    select(table)
-                    .where(table.c.session_id == session_id)
-                    .order_by(table.c.at.desc(), table.c.source_position.desc(), table.c.id.desc())
-                    .limit(limit)
-                )
-                .mappings()
-                .all()
-            )
-            facts = [
-                {
-                    "kind": row["kind"],
-                    "at": (row["at"].isoformat() if isinstance(row["at"], datetime) else str(row["at"])),
-                    "source_epoch": row["source_epoch"],
-                    "source_position": int(row["source_position"]),
-                    "payload": row["payload_json"],
-                    "commit_seq": str(row["commit_seq"]),
-                }
-                for row in rows
-            ]
+            facts = _provider_fact_rows(connection, session_id=session_id, limit=limit)
             return {"facts": facts, "commit_seq": str(_current_commit_seq(connection))}
 
     def insert_session_provider_facts(
@@ -8752,11 +8759,17 @@ class CatalogStore:
                 select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
             ).scalar_one_or_none()
             row = connection.execute(select(table).where(table.c.session_id == session_key)).mappings().first()
+            found = row is not None and deleted is None
             return {
-                "found": row is not None and deleted is None,
+                "found": found,
                 "deleted": deleted is not None,
                 "deletion_revision": str(deleted) if deleted is not None else None,
-                "session": _storage_session_dto(row) if row is not None and deleted is None else None,
+                "session": _storage_session_dto(row) if found else None,
+                # Provenance rides the coalesced, lane-exempt session read: the
+                # workspace needs both on every page and a busy catalog's read
+                # lane rejected them as separate calls.
+                "provider_facts": _provider_fact_rows(connection, session_id=session_key) if found else [],
+                "input_receipts": _input_receipt_rows(connection, session_id=session_key) if found else [],
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
             }

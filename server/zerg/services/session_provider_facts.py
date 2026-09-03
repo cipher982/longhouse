@@ -51,7 +51,11 @@ async def session_provider_facts(catalogd: CatalogClient, session_id: UUID | str
     except Exception:  # noqa: BLE001 - a page without provider facts still renders
         logger.warning("Failed to list provider facts for session %s", session_id, exc_info=True)
         return []
-    facts = result.get("facts") if isinstance(result, dict) else None
+    return provider_facts_from_rows(result.get("facts") if isinstance(result, dict) else None)
+
+
+def provider_facts_from_rows(facts: object) -> list[dict[str, Any]]:
+    """Catalog fact rows (from the list RPC or the session read) as the API projects them."""
     if not isinstance(facts, list):
         return []
     projected: list[dict[str, Any]] = []
@@ -193,6 +197,7 @@ __all__ = [
     "TURN_DURATION",
     "TURN_USAGE",
     "last_turn",
+    "provider_facts_from_rows",
     "provider_titles",
     "recap",
     "session_provider_facts",

@@ -18,8 +18,10 @@ from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.session_input_links import input_origins_by_event
+from zerg.services.session_input_links import input_receipts_from_rows
 from zerg.services.session_input_links import session_input_receipts
 from zerg.services.session_provider_facts import last_turn
+from zerg.services.session_provider_facts import provider_facts_from_rows
 from zerg.services.session_provider_facts import recap
 from zerg.services.session_provider_facts import session_provider_facts
 from zerg.services.session_provider_facts import turn_ends_by_event
@@ -243,22 +245,27 @@ async def build_storage_v2_workspace(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
         if storage_session.get("raw_state") == "retired" or storage_session.get("render_state") == "retired":
             return None
-        # Provenance reads overlap the page read: they answer from the same
-        # catalog, and serial one-second waits on a busy catalog added up to
-        # a page that dropped its facts while still returning 200.
-        page, receipts, facts = await asyncio.gather(
-            read_storage_v2_session_events_page(
-                session_id=session_id,
-                owner_id=str(owner_id),
-                cursor=cursor,
-                anchor=anchor,
-                limit=limit,
-                branch_mode=branch_mode,
-                timing=timing,
-            ),
-            session_input_receipts(catalogd, session_id),
-            session_provider_facts(catalogd, session_id),
+        # Provenance rides the session read above (coalesced and exempt from
+        # the catalog read lane); separate list calls were rejected as "read
+        # lane is full" on a busy hosted catalog and the page silently lost
+        # its facts. Older catalogs without the keys fall back to the RPCs.
+        page = await read_storage_v2_session_events_page(
+            session_id=session_id,
+            owner_id=str(owner_id),
+            cursor=cursor,
+            anchor=anchor,
+            limit=limit,
+            branch_mode=branch_mode,
+            timing=timing,
         )
+        if "provider_facts" in storage_result and "input_receipts" in storage_result:
+            facts = provider_facts_from_rows(storage_result.get("provider_facts"))
+            receipts = input_receipts_from_rows(storage_result.get("input_receipts"))
+        else:
+            receipts, facts = await asyncio.gather(
+                session_input_receipts(catalogd, session_id),
+                session_provider_facts(catalogd, session_id),
+            )
         return _workspace_envelope(
             session_id=session_id,
             session=session,

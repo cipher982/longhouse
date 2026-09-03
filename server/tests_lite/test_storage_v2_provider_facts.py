@@ -16,17 +16,16 @@ from uuid import uuid4
 
 import pytest
 
-from zerg.config import get_settings
-from zerg.services.session_provider_facts import last_turn
-from zerg.services.session_provider_facts import recap
-from zerg.services.session_provider_facts import usage_latest
-from zerg.services.session_title import resolve_title_provenance
-from zerg.services.session_provider_facts import turn_ends_by_event
-from zerg.services.storage_v2_workspace import _workspace_envelope
-
 from tests_lite.test_agents_storage_v2 import _InlineRenderPool
 from tests_lite.test_agents_storage_v2 import _payload
 from tests_lite.test_agents_storage_v2 import _storage_v2_stack
+from zerg.config import get_settings
+from zerg.services.session_provider_facts import last_turn
+from zerg.services.session_provider_facts import recap
+from zerg.services.session_provider_facts import turn_ends_by_event
+from zerg.services.session_provider_facts import usage_latest
+from zerg.services.session_title import resolve_title_provenance
+from zerg.services.storage_v2_workspace import _workspace_envelope
 
 
 def _fact(at: datetime, *, position: int = 3, duration_ms: int = 129_299) -> dict:
@@ -335,3 +334,47 @@ async def test_usage_error_and_compaction_facts_are_accepted_and_listed(monkeypa
         payload["facts"] = [{"kind": "turn.usage", "at": at, "source_position": 4, "payload": {"model": "x"}}]
         rejected = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
         assert rejected.status_code == 422, rejected.text
+
+
+@pytest.mark.asyncio
+async def test_session_read_carries_provenance_so_the_workspace_needs_no_extra_reads(monkeypatch):
+    """A busy catalog rejected the separate list calls; the session read carries both now."""
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-provenance-") as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        session_id = uuid4()
+        payload = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4())
+        payload["session_id"] = str(session_id)
+        payload["facts"] = [_fact(datetime(2026, 9, 3, 14, 20, 39, tzinfo=UTC))]
+        response = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers={"X-Longhouse-Storage-Lane": "live"})
+        assert response.status_code == 200, response.text
+
+        read = await stack.catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert read["found"] is True
+        assert [fact["kind"] for fact in read["provider_facts"]] == ["turn.duration"]
+        assert read["input_receipts"] == []
+
+        calls: list[str] = []
+        original = stack.catalog.call
+
+        async def recording(method, params=None, **kwargs):
+            calls.append(method)
+            return await original(method, params, **kwargs)
+
+        monkeypatch.setattr(stack.catalog, "call", recording)
+        from zerg.services import storage_v2_workspace
+
+        live_session = SimpleNamespace(
+            provider="codex",
+            origin_kind=None,
+            runtime_display=SimpleNamespace(lifecycle="open"),
+            capabilities=SimpleNamespace(live_control_available=True, can_start_turn=True),
+            model_dump=lambda mode: {"id": str(session_id)},
+        )
+        monkeypatch.setattr(storage_v2_workspace, "get_catalogd_client", lambda: stack.catalog)
+        monkeypatch.setattr(storage_v2_workspace, "read_live_catalog_session", lambda sid, owner_id: (live_session, None, "1"))
+
+        workspace = await storage_v2_workspace.build_storage_v2_workspace(session_id=session_id, owner_id=1, branch_mode="head", limit=50)
+        assert workspace is not None
+        assert workspace["session"]["last_turn"]["duration_ms"] == 129_299
+        assert "session.provider_facts.list.v2" not in calls
+        assert "session.input.receipts.list.v2" not in calls

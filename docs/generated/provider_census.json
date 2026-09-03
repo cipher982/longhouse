@@ -1517,6 +1517,7 @@
       "path": "server/tests_lite/test_storage_v2_provider_facts.py",
       "providers": [
         "claude",
+        "codex",
         "cursor"
       ]
     },
