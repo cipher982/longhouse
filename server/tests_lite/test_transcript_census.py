@@ -7,6 +7,7 @@ tool makes that a failing check instead of a thing the human notices later.
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -25,9 +26,40 @@ def _check(provider: str, *paths: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_golden_fixtures_contain_only_classified_shapes():
-    for provider in ("claude", "codex"):
-        result = _check(provider, REPO_ROOT / "engine" / "tests" / "fixtures" / "golden" / provider)
+    golden = REPO_ROOT / "engine" / "tests" / "fixtures" / "golden"
+    checks = {
+        "claude": (golden / "claude",),
+        "codex": (golden / "codex",),
+        "cursor": (golden / "cursor",),
+        "antigravity": (golden / "antigravity", golden / "antigravity_legacy_json" / "basic.json"),
+        "opencode": (golden / "opencode",),
+        "pi": (golden / "pi",),
+    }
+    for provider, paths in checks.items():
+        result = _check(provider, *paths)
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_opencode_sqlite_census_reads_message_and_part_shapes(tmp_path: Path):
+    database = tmp_path / "opencode.db"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE part (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL,
+                data TEXT NOT NULL
+            );
+            INSERT INTO message (id, data) VALUES ('message-1', '{"role":"assistant"}');
+            INSERT INTO part (id, message_id, time_created, data)
+            VALUES ('part-1', 'message-1', 1, '{"type":"future_text","text":"future"}');
+            """
+        )
+
+    result = _check("opencode", database)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_every_implemented_claude_signal_has_a_classified_shape():
@@ -58,12 +90,12 @@ def test_every_implemented_codex_signal_has_a_classified_shape():
         "compacted": "context.compaction",
     }.items():
         assert shapes[raw_source]["classification"] == f"signal:{signal}", raw_source
-        # A shape taken from the protocol crate rather than a corpus says so,
-        # instead of claiming a version it was never seen in.
+        # Protocol-backed shapes may start with no corpus version, but the current
+        # checked-in rollout fixture has now observed stream_error in 0.151.0.
         assert shapes[raw_source]["first_seen_version"] or shapes[raw_source].get("evidence", "").startswith("protocol:"), (
             f"{raw_source} carries neither version history nor protocol evidence"
         )
-    assert shapes["event_msg/stream_error"]["first_seen_version"] is None
+    assert shapes["event_msg/stream_error"]["first_seen_version"] == "0.151.0"
     # Unlike Claude's turn_duration, Codex closes headless turns too.
     assert "codex_exec" in shapes["event_msg/task_complete"]["entrypoints"]
     assert "longhouse_console" in shapes["event_msg/task_complete"]["entrypoints"]
@@ -122,3 +154,18 @@ def test_required_keys_name_what_the_parser_reads():
         for shape, keys in expected.items():
             assert shapes[shape]["required_keys"] == keys, (provider, shape)
             assert set(keys) <= set(shapes[shape]["keys"]), "a required key must be one the provider has actually written"
+
+
+def test_every_launch_provider_has_boundary_and_drift_catalog_rows():
+    expected = {
+        "claude": ("user/origin_task_notification+string", "provider_notification:task_notification"),
+        "codex": ("response_item/message/user/provider_system", "provider_system:context_injection"),
+        "cursor": ("user/provider_context+text", "provider_injection:context"),
+        "antigravity": ("UI/USER_INPUT", "transcript:user"),
+        "opencode": ("part/future_text/assistant", "provider_drift:unknown_text"),
+        "pi": ("message/user/text", "transcript:user"),
+    }
+    for provider, (shape, classification) in expected.items():
+        catalog = json.loads((REPO_ROOT / "schemas" / "transcript_shapes" / f"{provider}.json").read_text())
+        assert catalog["shapes"][shape]["classification"] == classification
+        assert catalog["shapes"][shape]["required_keys"]

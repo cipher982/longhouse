@@ -356,6 +356,12 @@ fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
         return false;
     }
     if provider.name == "antigravity" {
+        if provider.extension == "json" {
+            // Legacy Gemini/Antigravity keeps one rewritten message log at
+            // ~/.gemini/tmp/<project>/logs.json. Other JSON files under tmp
+            // are configuration or sidecars and are not sessions.
+            return path.file_name().and_then(|name| name.to_str()) == Some("logs.json");
+        }
         return path.file_name().and_then(|name| name.to_str()) == Some("transcript.jsonl");
     }
     if provider.name == "claude" && is_workflow_journal(path) {
@@ -623,6 +629,21 @@ mod tests {
             Some("antigravity")
         );
         assert_eq!(provider_for_path(&full_transcript, &providers), None);
+    }
+
+    #[test]
+    fn antigravity_legacy_logs_json_is_discovered_but_other_tmp_json_is_not() {
+        let home = PathBuf::from("/tmp/home");
+        let providers = provider_candidates(&home, Path::new("/tmp/custom-claude"), &home.join(".config"));
+        let logs = home
+            .join(".gemini")
+            .join("tmp")
+            .join("project-hash")
+            .join("logs.json");
+        let config = logs.with_file_name("settings.json");
+
+        assert_eq!(provider_for_path(&logs, &providers), Some("antigravity"));
+        assert_eq!(provider_for_path(&config, &providers), None);
     }
 
     #[test]

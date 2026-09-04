@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
@@ -137,11 +139,17 @@ def reduce_provider_event_observation(
         interaction_kind=_optional_str(payload.get("interaction_kind")),
         sequence_context=sequence_context,
     )
-    interaction_kind = _optional_str(payload.get("interaction_kind")) or interaction["interaction_kind"]
+    # The classifier is the authority at this boundary. In particular, a
+    # replayed observation can carry stale parser facts from before raw
+    # provider envelopes became authoritative; never let those facts demote a
+    # Claude/Codex provider row back into a conversational user message.
+    interaction_kind = interaction["interaction_kind"]
     interaction_context_key = _optional_str(payload.get("interaction_context_key")) or interaction.get("interaction_context_key")
-    title_eligible = payload.get("title_eligible")
-    if not isinstance(title_eligible, bool):
+    payload_title_eligible = payload.get("title_eligible")
+    if interaction_kind in {INTERACTION_PROVIDER_SYSTEM, INTERACTION_PROVIDER_NOTIFICATION} or not isinstance(payload_title_eligible, bool):
         title_eligible = bool(interaction["title_eligible"])
+    else:
+        title_eligible = payload_title_eligible
     # Prefer the structured compaction_kind carried in the payload (derived from
     # raw at ingest). Fall back to classifying raw for older observations that
     # predate the field. Never depends on stored raw at projection time.

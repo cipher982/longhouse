@@ -2991,29 +2991,13 @@ fn classify_cursor_text(role: &str, text: &str) -> (String, String) {
     if role != "user" {
         return (role.to_string(), text.to_string());
     }
-    if let Some(query_start) = text.find("<user_query>") {
-        let inner_start = query_start + "<user_query>".len();
-        if let Some(query_end) = text[inner_start..].find("</user_query>") {
-            return (
-                "user".to_string(),
-                text[inner_start..inner_start + query_end]
-                    .trim()
-                    .to_string(),
-            );
-        }
-    }
-    const INJECTION_MARKERS: [&str; 6] = [
-        "<user_info>",
-        "<agent_transcripts>",
-        "<rules>",
-        "<system_reminder>",
-        "<attached_files>",
-        "<system_notification>",
-    ];
-    if INJECTION_MARKERS.iter().any(|marker| text.contains(marker)) {
-        return ("system".to_string(), text.to_string());
-    }
-    ("user".to_string(), text.to_string())
+    let (effective_text, effective_role) = parser::cursor_user_text(text);
+    let effective_role = match effective_role {
+        Role::System => "system",
+        Role::User => "user",
+        _ => role,
+    };
+    (effective_role.to_string(), effective_text)
 }
 
 #[cfg(test)]
@@ -6078,6 +6062,20 @@ mod tests {
                 "<user_info>darwin</user_info><user_query>  ship it  </user_query>"
             ),
             ("user".to_string(), "ship it".to_string())
+        );
+        assert_eq!(
+            classify_cursor_text(
+                "user",
+                "<agent_transcripts>\n<user_query>old history</user_query>\n</agent_transcripts>\n<user_query>current prompt</user_query>"
+            ),
+            ("user".to_string(), "current prompt".to_string())
+        );
+        assert_eq!(
+            classify_cursor_text("user", "Please explain the literal <rules> marker."),
+            (
+                "user".to_string(),
+                "Please explain the literal <rules> marker.".to_string()
+            )
         );
         assert_eq!(
             classify_cursor_text("user", "plain follow-up"),

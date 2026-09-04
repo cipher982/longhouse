@@ -1,0 +1,57 @@
+{
+ "provider": "cursor",
+ "shapes": {
+  "assistant/text+tool-call": {
+   "classification": "transcript:assistant",
+   "first_seen_version": "1.0.0",
+   "last_seen_version": "1.0.0",
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "message.content",
+    "role",
+    "version"
+   ],
+   "required_keys": ["role", "message.content"]
+  },
+  "user/provider_context+text": {
+   "classification": "provider_injection:context",
+   "first_seen_version": "1.0.0",
+   "last_seen_version": "1.0.0",
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "message.content",
+    "role",
+    "version"
+   ],
+   "required_keys": ["role", "message.content"]
+  },
+  "user/text": {
+   "classification": "transcript:user",
+   "first_seen_version": "1.0.0",
+   "last_seen_version": "1.0.0",
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "message.content",
+    "role",
+    "version"
+   ],
+   "required_keys": ["role", "message.content"]
+  },
+  "user/text+user_query": {
+   "classification": "transcript:user_query",
+   "first_seen_version": "1.0.0",
+   "last_seen_version": "1.0.0",
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "message.content",
+    "role",
+    "version"
+   ],
+   "required_keys": ["role", "message.content"]
+  }
+ }
+}

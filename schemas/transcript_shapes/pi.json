@@ -1,0 +1,33 @@
+{
+ "provider": "pi",
+ "shapes": {
+  "message/assistant/text": {
+   "classification": "transcript:assistant",
+   "first_seen_version": "0.1.0",
+   "last_seen_version": "0.1.0",
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "message.content",
+    "message.role",
+    "type",
+    "version"
+   ],
+   "required_keys": ["type", "message.role", "message.content"]
+  },
+  "message/user/text": {
+   "classification": "transcript:user",
+   "first_seen_version": "0.1.0",
+   "last_seen_version": "0.1.0",
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "message.content",
+    "message.role",
+    "type",
+    "version"
+   ],
+   "required_keys": ["type", "message.role", "message.content"]
+  }
+ }
+}

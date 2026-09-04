@@ -1,0 +1,4 @@
+{"version":"1.17.20","message":{"role":"user"},"part":{"type":"text","text":"Reply with exactly OPENCODE_GOLDEN."}}
+{"version":"1.17.20","message":{"role":"assistant"},"part":{"type":"reasoning","text":"internal reasoning"}}
+{"version":"1.17.20","message":{"role":"assistant"},"part":{"type":"tool","tool":"bash","callID":"call-1","state":{"status":"completed","input":{"command":"pwd"},"output":"/tmp"}}}
+{"version":"1.17.20","message":{"role":"assistant"},"part":{"type":"future_text","text":"future provider text"}}

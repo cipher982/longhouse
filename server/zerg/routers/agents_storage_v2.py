@@ -480,11 +480,10 @@ def _parse_render_spec(
                     sequence_context=interaction_sequence_context,
                 )
                 computed_kind = classification["interaction_kind"]
-                # Claude's raw envelope remains authoritative inside
-                # semantic_projection_facts. For other providers the parser
-                # is the only provider-aware source of normalized control
-                # facts, so preserve its explicit fact while still allowing
-                # the shared classifier to validate the shape.
+                # Native Claude and Codex envelopes remain authoritative inside
+                # semantic_projection_facts. For providers without a raw
+                # semantic contract, preserve the parser's explicit fact while
+                # still allowing the shared classifier to validate the shape.
                 if supplied_kind is not None and supplied_kind != computed_kind:
                     logger.warning(
                         "storage-v2 parser semantic fact changed during normalization: "

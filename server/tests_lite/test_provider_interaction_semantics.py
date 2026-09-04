@@ -18,10 +18,12 @@ from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTR
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
+from zerg.services.provider_interaction_semantics import claude_provider_system_record
 from zerg.services.provider_interaction_semantics import claude_task_notification_display
 from zerg.services.provider_interaction_semantics import claude_task_notification_summary
 from zerg.services.provider_interaction_semantics import codex_internal_context_candidate
 from zerg.services.provider_interaction_semantics import codex_internal_context_record
+from zerg.services.provider_interaction_semantics import codex_provider_system_record
 from zerg.services.provider_interaction_semantics import interaction_context_key_parts
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_event_included
@@ -513,9 +515,21 @@ def test_codex_internal_goal_context_is_provider_system_not_user_text() -> None:
             "codex",
             role="user",
             content_text=content,
+            raw_json=raw,
             interaction_kind=INTERACTION_DURABLE_USER_MESSAGE,
         )
         is False
+    )
+    # A render-only lookalike has no raw authorship evidence and must remain
+    # searchable/user-visible rather than being hidden by its text alone.
+    assert (
+        semantic_event_included(
+            "codex",
+            role="user",
+            content_text=content,
+            interaction_kind=INTERACTION_DURABLE_USER_MESSAGE,
+        )
+        is True
     )
 
     lookalike = 'Please quote <codex_internal_context source="goal"> in your answer'
@@ -546,6 +560,98 @@ def test_claude_task_notification_lookalike_without_origin_stays_user_text() -> 
     assert semantics["interaction_kind"] == INTERACTION_DURABLE_USER_MESSAGE
     assert semantics["counts_as_user_message"] is True
     assert semantic_event_included("claude", role="user", content_text=content, raw_json=raw) is True
+
+
+def test_claude_generic_meta_and_compact_summary_are_provider_system() -> None:
+    meta = {
+        "type": "user",
+        "isMeta": True,
+        "message": {"role": "user", "content": "Continue from where you left off."},
+    }
+    compact = {
+        "type": "user",
+        "isCompactSummary": True,
+        "isVisibleInTranscriptOnly": True,
+        "message": {"role": "user", "content": "This session is being continued from a summary."},
+    }
+    channel = {
+        "type": "user",
+        "isMeta": True,
+        "origin": {"kind": "channel"},
+        "message": {"role": "user", "content": "A real Longhouse channel message."},
+    }
+
+    assert claude_provider_system_record(meta) is True
+    assert claude_provider_system_record(compact) is True
+    assert claude_provider_system_record(channel) is False
+    assert (
+        classify_provider_interaction("claude", role="user", content_text="Continue from where you left off.", raw_json=meta)[
+            "interaction_kind"
+        ]
+        == INTERACTION_PROVIDER_SYSTEM
+    )
+    assert semantic_event_included("claude", role="user", content_text="Continue from where you left off.", raw_json=meta) is False
+    assert (
+        semantic_event_included(
+            "claude",
+            role="system",
+            content_text="Continue from where you left off.",
+            interaction_kind=INTERACTION_PROVIDER_SYSTEM,
+        )
+        is False
+    )
+    # Non-user assistant/tool rows historically carry the default
+    # provider_system kind; keep those ordinary transcript events visible.
+    assert (
+        semantic_event_included(
+            "codex",
+            role="assistant",
+            content_text="The answer",
+            interaction_kind=INTERACTION_PROVIDER_SYSTEM,
+        )
+        is True
+    )
+
+
+def test_codex_provider_system_requires_complete_envelope() -> None:
+    complete = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "<environment_context>\nPWD=/tmp\n</environment_context>"}],
+        },
+    }
+    quoted = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": 'Please quote "<environment_context>" for me.'}],
+        },
+    }
+    lookalike_tag = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "<codex_internal_context_evil>not provider context</codex_internal_context>"}],
+        },
+    }
+
+    assert codex_provider_system_record(complete) is True
+    assert codex_provider_system_record(quoted) is False
+    assert codex_provider_system_record(lookalike_tag) is False
+    assert (
+        classify_provider_interaction(
+            "codex",
+            role="user",
+            content_text="<environment_context>\nPWD=/tmp\n</environment_context>",
+            raw_json=complete,
+            interaction_kind=INTERACTION_DURABLE_USER_MESSAGE,
+        )["interaction_kind"]
+        == INTERACTION_PROVIDER_SYSTEM
+    )
 
 
 def test_captured_claude_effort_jsonl_classifies_real_command_rows() -> None:

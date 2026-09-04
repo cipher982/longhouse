@@ -744,10 +744,16 @@ def _latest_semantic_user_event_map(
     latest: dict[UUID, tuple[int, datetime | None, str | None]] = {}
     known_rows = (
         db.query(AgentEvent.session_id, AgentEvent.id, AgentEvent.timestamp, AgentEvent.content_text)
+        .join(AgentSession, AgentSession.id == AgentEvent.session_id)
         .filter(AgentEvent.session_id.in_(ordered_ids))
         .filter(durable_transcript_event_predicate())
         .filter(AgentEvent.role == "user")
         .filter(AgentEvent.title_eligible == 1)
+        # Claude and Codex raw envelopes can prove that a row carrying a
+        # stale title bit is provider context. Replay those providers through
+        # the raw-aware path below instead of letting this indexed shortcut
+        # promote their metadata as the latest real prompt.
+        .filter(func.lower(AgentSession.provider).notin_(("claude", "codex")))
         .order_by(AgentEvent.session_id.asc(), AgentEvent.id.desc())
         .yield_per(256)
     )
@@ -768,11 +774,13 @@ def _latest_semantic_user_event_map(
             AgentEvent.interaction_kind,
             AgentEvent.title_eligible,
         )
+        .join(AgentSession, AgentSession.id == AgentEvent.session_id)
         .filter(AgentEvent.session_id.in_(ordered_ids))
         .filter(durable_transcript_event_predicate())
         .filter(AgentEvent.role == "user")
         .filter(
             or_(
+                func.lower(AgentSession.provider).in_(("claude", "codex")),
                 AgentEvent.title_eligible.is_(None),
                 AgentEvent.title_eligible == 0,
                 AgentEvent.interaction_kind.in_(

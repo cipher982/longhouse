@@ -953,16 +953,46 @@ fn extract_events_from_part(
             }
         }
         "reasoning" | "step-start" | "step-finish" => {}
-        _ => {}
+        _ => {
+            // OpenCode adds part types independently of the message schema.
+            // Preserve a future textual part as conservative system context;
+            // silently dropping it makes provider drift look like a clean
+            // transcript, while guessing assistant/user would invent role.
+            let text = part_data
+                .get("text")
+                .and_then(Value::as_str)
+                .or_else(|| part_data.get("content").and_then(Value::as_str))
+                .unwrap_or("");
+            if text.trim().is_empty() {
+                return Ok(());
+            }
+            events.push(ParsedEvent {
+                uuid: stable_event_uuid(provider_session_id, &part.id, "unknown_text"),
+                parent_uuid: None,
+                session_id: longhouse_session_id.to_string(),
+                timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
+                role: Role::System,
+                content_text: Some(text.to_string()),
+                tool_name: None,
+                tool_input_json: None,
+                tool_output_text: None,
+                tool_call_id: None,
+                source_offset,
+                raw_type: format!("opencode_unknown_{part_type}"),
+                raw_line: Some(part.data.clone()),
+            });
+        }
     }
     Ok(())
 }
 
 fn event_role(role: &str) -> Role {
-    if role == "user" {
-        Role::User
-    } else {
-        Role::Assistant
+    match role {
+        "user" => Role::User,
+        "assistant" => Role::Assistant,
+        "system" | "developer" => Role::System,
+        "tool" => Role::Tool,
+        _ => Role::System,
     }
 }
 
@@ -1690,6 +1720,77 @@ mod tests {
         assert_eq!(result.events[3].content_text.as_deref(), Some("done"));
         assert_eq!(result.source_lines.len(), 3);
         assert!(result.last_good_offset > result.events[3].source_offset);
+    }
+
+    #[test]
+    fn parse_opencode_preserves_system_and_unknown_textual_parts() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                "msg_system",
+                "ses_test",
+                1_779_000_000_050_i64,
+                1_779_000_000_050_i64,
+                r#"{"role":"system"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                "prt_system",
+                "msg_system",
+                "ses_test",
+                1_779_000_000_051_i64,
+                1_779_000_000_051_i64,
+                r#"{"type":"text","text":"provider system context"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                "msg_future",
+                "ses_test",
+                1_779_000_000_350_i64,
+                1_779_000_000_350_i64,
+                r#"{"role":"future-role"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                "prt_future",
+                "msg_future",
+                "ses_test",
+                1_779_000_000_351_i64,
+                1_779_000_000_351_i64,
+                r#"{"type":"future_text","text":"future provider context"}"#,
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let result = parse_opencode_session(&db_path, "ses_test").unwrap();
+        assert!(result.events.iter().any(|event| {
+            event.role == Role::System
+                && event.content_text.as_deref() == Some("provider system context")
+        }));
+        assert!(result.events.iter().any(|event| {
+            event.role == Role::System
+                && event.content_text.as_deref() == Some("future provider context")
+                && event.raw_type == "opencode_unknown_future_text"
+        }));
     }
 
     #[test]

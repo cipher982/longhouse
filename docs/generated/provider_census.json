@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 254,
+  "file_count": 257,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -588,8 +588,12 @@
     {
       "path": "scripts/qa/transcript_census.py",
       "providers": [
+        "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "cursor",
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1392,6 +1396,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_session_observation_payload_storage.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_session_pause_requests.py",
       "providers": [
         "claude",
@@ -1450,6 +1461,13 @@
     },
     {
       "path": "server/tests_lite/test_session_title.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_turns.py",
       "providers": [
         "claude",
         "codex"
@@ -1564,8 +1582,12 @@
     {
       "path": "server/tests_lite/test_transcript_census.py",
       "providers": [
+        "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "cursor",
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1980,6 +2002,13 @@
       "path": "server/zerg/services/session_runtime_display.py",
       "providers": [
         "antigravity",
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/zerg/services/session_turns.py",
+      "providers": [
         "claude",
         "codex"
       ]

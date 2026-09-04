@@ -63,6 +63,48 @@ def test_provider_event_observation_payload_is_compressed_and_reduced(tmp_path):
         assert event.raw_json_z is not None
 
 
+def test_provider_event_reduction_does_not_trust_stale_semantic_facts(tmp_path):
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+    raw_json = json.dumps(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "<environment_context>\nPWD=/tmp\n</environment_context>"}],
+            },
+        }
+    )
+
+    with factory() as db:
+        _seed_session(db, session_id, provider="codex")
+        result = record_provider_event_observation(
+            db,
+            session_id=session_id,
+            provider="codex",
+            device_id="device-1",
+            source="agents_ingest",
+            branch_id=1,
+            role="user",
+            timestamp=_ts(),
+            event_hash="hash-codex-context",
+            content_text="<environment_context>\nPWD=/tmp\n</environment_context>",
+            source_path="/tmp/codex.jsonl",
+            source_offset=10,
+            raw_json=raw_json,
+            interaction_kind="durable_user_message",
+            title_eligible=True,
+        )
+        assert result.observation is not None
+
+        reduction = reduce_provider_event_observation(db, result.observation)
+        assert reduction.inserted is True
+        event = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).one()
+        assert event.interaction_kind == "provider_system"
+        assert event.title_eligible == 0
+
+
 def test_source_line_observation_payload_is_compressed_and_reduced(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid4()
@@ -158,10 +200,10 @@ def _factory(tmp_path):
     return make_sessionmaker(engine)
 
 
-def _seed_session(db, session_id: UUID) -> AgentSession:
+def _seed_session(db, session_id: UUID, *, provider: str = "claude") -> AgentSession:
     session = AgentSession(
         id=session_id,
-        provider="claude",
+        provider=provider,
         environment="test",
         project="longhouse",
         device_id="device-1",

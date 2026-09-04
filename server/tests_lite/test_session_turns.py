@@ -50,10 +50,10 @@ def _make_db(tmp_path):
     return make_sessionmaker(engine)
 
 
-def _seed_session(db):
+def _seed_session(db, provider="claude"):
     session = AgentSession(
         id=uuid4(),
-        provider="claude",
+        provider=provider,
         environment="development",
         project="zerg",
         cwd="/Users/example/git/zerg",
@@ -120,6 +120,46 @@ def test_semantic_turn_rederives_claude_raw_control_over_stale_eligible_bit(tmp_
         db.commit()
 
         assert session_turns_service._semantic_turn_event(event, provider="claude") is False
+
+
+def test_latest_semantic_user_event_replays_stale_codex_context_before_title_fast_path(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, provider="codex")
+        event = AgentEvent(
+            session_id=session.id,
+            role="user",
+            content_text="<environment_context>\nPWD=/tmp\n</environment_context>",
+            raw_json=json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "<environment_context>\nPWD=/tmp\n</environment_context>",
+                            }
+                        ],
+                    },
+                }
+            ),
+            title_eligible=1,
+            interaction_kind="durable_user_message",
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(event)
+        db.commit()
+
+        latest = session_turns_service._latest_semantic_user_event_map(
+            db,
+            [session.id],
+            {session.id: "codex"},
+        )
+
+        assert session.id not in latest
 
 
 def test_session_turn_lifecycle_tracks_active_terminal_and_durable_events(tmp_path):

@@ -26,6 +26,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Iterator
 
+from zerg.services.provider_interaction_semantics import claude_provider_system_record
 from zerg.services.provider_interaction_semantics import claude_task_notification_display
 
 try:
@@ -478,6 +479,23 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
                         )
                         continue
 
+                    if claude_provider_system_record(obj):
+                        text = _extract_user_content(message)
+                        if text and text.strip():
+                            timestamp = _parse_timestamp(obj.get("timestamp")) or datetime.now(timezone.utc)
+                            raw_type = "claude_compact_summary" if obj.get("isCompactSummary") is True else "claude_meta"
+                            yield ParsedEvent(
+                                uuid=obj.get("uuid", str(uuid.uuid4())),
+                                session_id=session_id,
+                                timestamp=timestamp,
+                                role="system",
+                                content_text=text,
+                                source_offset=line_offset,
+                                raw_type=raw_type,
+                                raw_line=line_text,
+                            )
+                        continue
+
                     has_tool_result = False
                     if isinstance(content, list):
                         for item in content:
@@ -632,6 +650,25 @@ def _parse_with_offset_tracking(
                                 raw_line=line_text,
                             )
                         )
+                        continue
+
+                    if claude_provider_system_record(obj):
+                        text = _extract_user_content(message)
+                        if text and text.strip():
+                            timestamp = _parse_timestamp(obj.get("timestamp")) or datetime.now(timezone.utc)
+                            raw_type = "claude_compact_summary" if obj.get("isCompactSummary") is True else "claude_meta"
+                            events.append(
+                                ParsedEvent(
+                                    uuid=obj.get("uuid", str(uuid.uuid4())),
+                                    session_id=session_id,
+                                    timestamp=timestamp,
+                                    role="system",
+                                    content_text=text,
+                                    source_offset=line_offset,
+                                    raw_type=raw_type,
+                                    raw_line=line_text,
+                                )
+                            )
                         continue
 
                     has_tool_result = False

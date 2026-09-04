@@ -258,6 +258,16 @@ class TestStripNoise:
         text = "Just normal text with no XML"
         assert strip_noise(text) == text
 
+    def test_provider_looking_xml_in_code_is_preserved(self):
+        text = "Explain the literal `<system-reminder>keep this</system-reminder>` tag."
+        result = strip_noise(text)
+        assert "<system-reminder>keep this</system-reminder>" in result
+
+    def test_provider_looking_xml_in_quotes_is_preserved(self):
+        text = 'The user quoted "<function_results>keep this</function_results>".'
+        result = strip_noise(text)
+        assert "<function_results>keep this</function_results>" in result
+
 
 # =====================================================================
 # content.py — redact_secrets

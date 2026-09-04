@@ -228,6 +228,12 @@ struct RawLine {
     version: Option<String>,
     #[serde(rename = "isSidechain")]
     is_sidechain: Option<bool>,
+    /// Claude user rows carry these flags for provider-authored metadata such
+    /// as compaction summaries and local-command caveats.
+    #[serde(rename = "isMeta")]
+    is_meta: Option<bool>,
+    #[serde(rename = "isCompactSummary")]
+    is_compact_summary: Option<bool>,
     /// Workflow subagent attribution (assistant lines): agent kind + skill.
     #[serde(rename = "attributionAgent")]
     attribution_agent: Option<String>,
@@ -380,12 +386,18 @@ struct GeminiSession {
 #[derive(Deserialize)]
 struct GeminiMessage {
     id: Option<String>,
+    #[serde(rename = "messageId")]
+    message_id: Option<serde_json::Value>,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
     timestamp: Option<String>,
     /// Common observed values: "user", "gemini", "info", "error"
     r#type: Option<String>,
     /// Content is normally a string but may be an object/array in newer Gemini
     /// CLI versions. Accept any JSON value and extract text defensively.
     content: Option<serde_json::Value>,
+    /// Legacy Antigravity/Gemini `logs.json` calls this field `message`.
+    message: Option<serde_json::Value>,
     #[serde(rename = "toolCalls")]
     tool_calls: Option<Vec<GeminiToolCall>>,
 }
@@ -997,24 +1009,39 @@ fn capture_text_source_lines(content: &str) -> (Vec<ParsedSourceLine>, Vec<Parse
     (source_lines, media_objects)
 }
 
+fn empty_gemini_result(session_id: &str, file_size: u64) -> ParseResult {
+    ParseResult {
+        events: Vec::new(),
+        source_lines: Vec::new(),
+        media_objects: Vec::new(),
+        provider_facts: Vec::new(),
+        last_good_offset: file_size,
+        candidate_records: 0,
+        metadata: SessionMetadata {
+            session_id: session_id.to_string(),
+            ..Default::default()
+        },
+    }
+}
+
 fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
     let file_size = content.len() as u64;
     let (source_lines, media_objects) = capture_text_source_lines(&content);
 
-    let session: GeminiSession = match serde_json::from_str(&content) {
-        Ok(s) => s,
+    let document: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(value) => value,
         Err(primary_error) => {
             if let Some(sanitized) = sanitize_invalid_surrogate_escapes(&content) {
                 match serde_json::from_str(&sanitized) {
-                    Ok(s) => {
+                    Ok(value) => {
                         tracing::debug!(
                             path = %path.display(),
                             error = %primary_error,
                             "Recovered Gemini JSON after surrogate-escape repair"
                         );
-                        s
+                        value
                     }
                     Err(repaired_error) => {
                         tracing::debug!(
@@ -1023,41 +1050,42 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                             repaired_error = %repaired_error,
                             "Failed to parse Gemini JSON (including repaired payload)"
                         );
-                        return Ok(ParseResult {
-                            events: Vec::new(),
-                            source_lines: Vec::new(),
-                            media_objects: Vec::new(),
-                            provider_facts: Vec::new(),
-                            last_good_offset: file_size,
-                            candidate_records: 0,
-                            metadata: SessionMetadata {
-                                session_id: session_id.to_string(),
-                                ..Default::default()
-                            },
-                        });
+                        return Ok(empty_gemini_result(session_id, file_size));
                     }
                 }
             } else {
                 tracing::debug!(path = %path.display(), error = %primary_error, "Failed to parse Gemini JSON");
-                return Ok(ParseResult {
-                    events: Vec::new(),
-                    source_lines: Vec::new(),
-                    media_objects: Vec::new(),
-                    provider_facts: Vec::new(),
-                    last_good_offset: file_size,
-                    candidate_records: 0,
-                    metadata: SessionMetadata {
-                        session_id: session_id.to_string(),
-                        ..Default::default()
-                    },
-                });
+                return Ok(empty_gemini_result(session_id, file_size));
             }
         }
     };
 
+    let (document_session_id, document_start_time, messages) = if document.is_array() {
+        let messages: Vec<GeminiMessage> = match serde_json::from_value(document) {
+            Ok(messages) => messages,
+            Err(error) => {
+                tracing::debug!(path = %path.display(), error = %error, "Failed to parse Gemini logs array");
+                return Ok(empty_gemini_result(session_id, file_size));
+            }
+        };
+        (
+            messages.iter().find_map(|message| message.session_id.clone()),
+            None,
+            messages,
+        )
+    } else {
+        let session: GeminiSession = match serde_json::from_value(document) {
+            Ok(session) => session,
+            Err(error) => {
+                tracing::debug!(path = %path.display(), error = %error, "Failed to parse Gemini session document");
+                return Ok(empty_gemini_result(session_id, file_size));
+            }
+        };
+        (session.session_id, session.start_time, session.messages.unwrap_or_default())
+    };
+
     // Use the sessionId from the document if it's a valid UUID; otherwise keep stem-derived.
-    let canonical_session_id = session
-        .session_id
+    let canonical_session_id = document_session_id
         .as_deref()
         .filter(|id| Uuid::parse_str(id).is_ok())
         .unwrap_or(session_id)
@@ -1069,21 +1097,35 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
         ..Default::default()
     };
 
-    if let Some(start_time) = session.start_time.as_deref() {
+    if let Some(start_time) = document_start_time.as_deref() {
         metadata.started_at = parse_timestamp(start_time);
     }
-
-    let messages = session.messages.unwrap_or_default();
     let mut candidate_records = 0;
 
-    for msg in messages {
+    for (message_index, msg) in messages.into_iter().enumerate() {
         let msg_type = msg.r#type.as_deref().unwrap_or("");
-        let msg_id = msg
+        let msg_id = if let Some(id) = msg
             .id
             .as_deref()
             .filter(|id| Uuid::parse_str(id).is_ok())
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        {
+            id.to_string()
+        } else {
+            let key = msg
+                .message_id
+                .as_ref()
+                .and_then(|value| match value {
+                    serde_json::Value::String(value) => (!value.is_empty()).then_some(value.clone()),
+                    serde_json::Value::Number(value) => Some(value.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| message_index.to_string());
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("gemini:{}:{}", canonical_session_id, key).as_bytes(),
+            )
+            .to_string()
+        };
 
         let timestamp = msg
             .timestamp
@@ -1101,7 +1143,11 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
         match msg_type {
             "user" => {
                 candidate_records += 1;
-                let text = msg.content.as_ref().and_then(extract_gemini_text);
+                let text = msg
+                    .content
+                    .as_ref()
+                    .or(msg.message.as_ref())
+                    .and_then(extract_gemini_text);
                 if let Some(text) = text {
                     events.push(ParsedEvent {
                         uuid: msg_id.clone(),
@@ -1123,7 +1169,11 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
             "gemini" => {
                 candidate_records += 1;
                 // Assistant text response
-                let text = msg.content.as_ref().and_then(extract_gemini_text);
+                let text = msg
+                    .content
+                    .as_ref()
+                    .or(msg.message.as_ref())
+                    .and_then(extract_gemini_text);
                 if let Some(text) = text {
                     events.push(ParsedEvent {
                         uuid: msg_id.clone(),
@@ -1874,6 +1924,85 @@ fn claude_task_notification_display(obj: &RawLine) -> Option<String> {
     claude_task_notification_summary(&content)
 }
 
+fn claude_native_meta_record(obj: &RawLine) -> bool {
+    obj.is_meta == Some(true)
+        && matches!(obj.r#type.as_deref(), None | Some("user"))
+        && obj
+            .message
+            .as_ref()
+            .and_then(|message| message.role.as_deref())
+            .is_none_or(|role| role == "user")
+}
+
+fn claude_command_record_text(content: &str) -> bool {
+    let mut remainder = content.trim();
+    let Some(after_open) = remainder.strip_prefix("<command-name>") else {
+        return false;
+    };
+    let Some(command_end) = after_open.find("</command-name>") else {
+        return false;
+    };
+    remainder = &after_open[command_end + "</command-name>".len()..];
+    for (open, close) in [
+        ("<command-message>", "</command-message>"),
+        ("<command-args>", "</command-args>"),
+    ] {
+        let candidate = remainder.trim_start();
+        if !candidate.starts_with(open) {
+            continue;
+        }
+        let Some(body) = candidate.strip_prefix(open) else {
+            return false;
+        };
+        let Some(end) = body.find(close) else {
+            return false;
+        };
+        remainder = &body[end + close.len()..];
+    }
+    remainder.trim().is_empty()
+}
+
+fn claude_native_local_command_meta_record(obj: &RawLine) -> bool {
+    if !claude_native_meta_record(obj) {
+        return false;
+    }
+    let Some(content) = obj
+        .message
+        .as_ref()
+        .and_then(|message| extract_text_from_raw_content(message.content.get()))
+    else {
+        return false;
+    };
+    let content = content.trim();
+    if claude_command_record_text(content) {
+        return true;
+    }
+    if content.starts_with("<local-command-stdout>") && content.ends_with("</local-command-stdout>") {
+        return true;
+    }
+    let Some(caveat_end) = content.find("</local-command-caveat>") else {
+        return false;
+    };
+    let tail = content[caveat_end + "</local-command-caveat>".len()..].trim();
+    content.starts_with("<local-command-caveat>")
+        && (tail.is_empty() || tail.starts_with("<command-name>"))
+}
+
+fn claude_provider_system_record(obj: &RawLine) -> bool {
+    if claude_task_notification_display(obj).is_some() {
+        return false;
+    }
+    let origin = obj
+        .origin
+        .as_ref()
+        .and_then(|raw| serde_json::from_str::<RawOrigin>(raw.get()).ok());
+    if origin.as_ref().and_then(|value| value.kind.as_deref()) == Some("channel") {
+        return false;
+    }
+    obj.is_compact_summary == Some(true)
+        || (claude_native_meta_record(obj) && !claude_native_local_command_meta_record(obj))
+}
+
 /// Provider facts live on lines the transcript surface never renders. Match
 /// on the cheap discriminators first; only a matched line is re-parsed as a
 /// JSON tree, so the hot path pays nothing for ordinary user/assistant rows.
@@ -2233,6 +2362,38 @@ fn extract_events(
         other => other,
     };
 
+    // Claude's compact summaries and other `isMeta` user rows are provider
+    // context, not user prompts. Preserve their raw source line while keeping
+    // them out of the conversational timeline. Local-command caveats are
+    // intentionally excluded here and continue through semantic classification
+    // because their sibling command/output rows establish the control record.
+    if effective_role == "user" && claude_provider_system_record(obj) {
+        if let Some(content) = extract_text_from_raw_content(content_str) {
+            if !content.trim().is_empty() {
+                events.push(ParsedEvent {
+                    uuid: msg_uuid,
+                    parent_uuid: obj.parent_uuid.clone(),
+                    session_id: session_id.to_string(),
+                    timestamp,
+                    role: Role::System,
+                    content_text: Some(content),
+                    tool_name: None,
+                    tool_input_json: None,
+                    tool_output_text: None,
+                    tool_call_id: None,
+                    source_offset: line_offset,
+                    raw_type: if obj.is_compact_summary == Some(true) {
+                        "claude_compact_summary".to_string()
+                    } else {
+                        "claude_meta".to_string()
+                    },
+                    raw_line: Some(raw_line.to_string()),
+                });
+            }
+        }
+        return;
+    }
+
     match effective_role {
         "user" => {
             let event_start = events.len();
@@ -2270,25 +2431,74 @@ fn extract_events(
     }
 }
 
-fn cursor_user_text(text: &str) -> (String, Role) {
-    if let Some(start) = text.find("<user_query>") {
-        let body_start = start + "<user_query>".len();
-        if let Some(end) = text[body_start..].find("</user_query>") {
-            return (
-                text[body_start..body_start + end].trim().to_string(),
-                Role::User,
-            );
+const CURSOR_INJECTION_TAGS: [(&str, &str); 6] = [
+    ("<user_info>", "</user_info>"),
+    ("<agent_transcripts>", "</agent_transcripts>"),
+    ("<rules>", "</rules>"),
+    ("<system_reminder>", "</system_reminder>"),
+    ("<attached_files>", "</attached_files>"),
+    ("<system_notification>", "</system_notification>"),
+];
+
+fn cursor_query_is_inside_injection(text: &str, query_start: usize) -> bool {
+    CURSOR_INJECTION_TAGS.iter().any(|(open, close)| {
+        let Some(open_start) = text[..query_start].rfind(open) else {
+            return false;
+        };
+        text[open_start + open.len()..]
+            .find(close)
+            .is_some_and(|close_offset| open_start + open.len() + close_offset >= query_start)
+    })
+}
+
+fn cursor_user_query_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let mut search_from = 0;
+    while let Some(relative_start) = trimmed[search_from..].find("<user_query>") {
+        let start = search_from + relative_start;
+        search_from = start + "<user_query>".len();
+        if cursor_query_is_inside_injection(trimmed, start) {
+            continue;
         }
+        let prefix = trimmed[..start].trim();
+        if !prefix.is_empty()
+            && !((prefix.starts_with("<timestamp>") && prefix.ends_with("</timestamp>"))
+                || CURSOR_INJECTION_TAGS
+                    .iter()
+                    .any(|(marker, _)| prefix.starts_with(marker)))
+        {
+            continue;
+        }
+        let Some(end) = trimmed.rfind("</user_query>") else {
+            continue;
+        };
+        if end <= start || !trimmed[end + "</user_query>".len()..].trim().is_empty() {
+            continue;
+        }
+        return Some(trimmed[start + "<user_query>".len()..end].trim().to_string());
     }
-    const INJECTION_MARKERS: [&str; 6] = [
-        "<user_info>",
-        "<agent_transcripts>",
-        "<rules>",
-        "<system_reminder>",
-        "<attached_files>",
-        "<system_notification>",
-    ];
-    if INJECTION_MARKERS.iter().any(|marker| text.contains(marker)) {
+    None
+}
+
+fn cursor_has_injection_marker(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    lines.iter().enumerate().any(|(index, line)| {
+        let line = line.trim_start();
+        CURSOR_INJECTION_TAGS.iter().any(|(marker, close)| {
+            line.starts_with(marker)
+                && (line[marker.len()..].contains(close)
+                    || lines[index + 1..]
+                        .iter()
+                        .any(|next| CURSOR_INJECTION_TAGS.iter().any(|(other, _)| next.trim_start().starts_with(other))))
+        })
+    })
+}
+
+pub(crate) fn cursor_user_text(text: &str) -> (String, Role) {
+    if let Some(body) = cursor_user_query_text(text) {
+        return (body, Role::User);
+    }
+    if cursor_has_injection_marker(text) {
         return (text.to_string(), Role::System);
     }
     (text.to_string(), Role::User)
@@ -2525,16 +2735,17 @@ fn antigravity_uuid(obj: &RawLine, line_offset: u64, suffix: &str) -> String {
 fn antigravity_user_text(content: &str) -> String {
     let start_tag = "<USER_REQUEST>";
     let end_tag = "</USER_REQUEST>";
-    if let Some(start) = content.find(start_tag) {
-        let after_start = start + start_tag.len();
-        if let Some(end) = content[after_start..].find(end_tag) {
-            let text = content[after_start..after_start + end].trim();
-            if !text.is_empty() {
-                return text.to_string();
-            }
+    let trimmed = content.trim();
+    if trimmed.starts_with(start_tag) && trimmed.ends_with(end_tag) {
+        let body = trimmed[start_tag.len()..trimmed.len() - end_tag.len()].trim();
+        if !body.is_empty() {
+            return body.to_string();
         }
     }
-    content.trim().to_string()
+    // A tag-looking substring can be quoted in an ordinary request. Without
+    // an exact outer envelope, preserve the provider text and let the UI show
+    // the evidence rather than silently deleting surrounding prose.
+    trimmed.to_string()
 }
 
 fn antigravity_tool_name_from_type(event_type: &str) -> String {
@@ -2892,10 +3103,47 @@ struct CodexPending {
 
 fn codex_text_is_internal_context(text: &str) -> bool {
     let trimmed = text.trim_start();
-    let Some(rest) = trimmed.strip_prefix(CODEX_INTERNAL_CONTEXT_PREFIX) else {
+    let Some(opening_end) = trimmed.find('>') else {
         return false;
     };
-    matches!(rest.chars().next(), Some(' ' | '\t' | '\r' | '\n' | '>'))
+    if !trimmed[..=opening_end].starts_with(CODEX_INTERNAL_CONTEXT_PREFIX) {
+        return false;
+    }
+    if !trimmed[CODEX_INTERNAL_CONTEXT_PREFIX.len()..]
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_whitespace() || character == '>')
+    {
+        return false;
+    }
+    let closing = "</codex_internal_context>";
+    trimmed.ends_with(closing) && trimmed.len() > opening_end + 1 + closing.len()
+}
+
+fn codex_text_is_agents_instructions(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.starts_with("# AGENTS.md instructions")
+        && trimmed.contains("<INSTRUCTIONS>")
+        && trimmed.ends_with("</INSTRUCTIONS>")
+}
+
+fn codex_text_is_provider_system(text: &str) -> bool {
+    if codex_text_is_internal_context(text) || codex_text_is_agents_instructions(text) {
+        return true;
+    }
+    let trimmed = text.trim();
+    [
+        ("<environment_context>", "</environment_context>"),
+        ("<permissions instructions>", "</permissions instructions>"),
+        ("<collaboration_mode>", "</collaboration_mode>"),
+        (CODEX_TURN_ABORTED_PREFIX, "</turn_aborted>"),
+    ]
+    .iter()
+    .any(|(opening, closing)| {
+        trimmed.starts_with(opening)
+            && trimmed.ends_with(closing)
+            && trimmed.len() > opening.len() + closing.len()
+    })
 }
 
 /// Codex spreads one turn's accounting over several lines: `turn_context`
@@ -3264,7 +3512,10 @@ fn extract_codex_event_msg(
 }
 
 fn codex_text_is_turn_aborted_marker(text: &str) -> bool {
-    text.trim_start().starts_with(CODEX_TURN_ABORTED_PREFIX)
+    let trimmed = text.trim();
+    trimmed.starts_with(CODEX_TURN_ABORTED_PREFIX)
+        && trimmed.ends_with("</turn_aborted>")
+        && trimmed.len() > CODEX_TURN_ABORTED_PREFIX.len() + "</turn_aborted>".len()
 }
 
 fn extract_codex_events(
@@ -3306,23 +3557,11 @@ fn extract_codex_events(
             // Codex prepends AGENTS.md, environment context, and permission instructions
             // as role=user (not role=developer), so we detect them by content prefix.
             if role == Role::User {
-                let injected_prefixes = [
-                    "# AGENTS.md instructions",
-                    "<environment_context>",
-                    "<permissions instructions>",
-                    "<collaboration_mode>",
-                ];
-                let first_text = content_items
-                    .iter()
-                    .find_map(|item| {
-                        if item.r#type.as_deref() == Some("input_text") {
-                            item.text.as_deref()
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or("");
-                if codex_text_is_turn_aborted_marker(first_text) {
+                let input_texts = content_items.iter().filter_map(|item| {
+                    (item.r#type.as_deref() == Some("input_text")).then_some(item.text.as_deref().unwrap_or(""))
+                });
+                let input_texts = input_texts.collect::<Vec<_>>();
+                if input_texts.iter().any(|text| codex_text_is_turn_aborted_marker(text)) {
                     if pending.suppress_next_turn_aborted_marker {
                         pending.suppress_next_turn_aborted_marker = false;
                     } else {
@@ -3345,8 +3584,9 @@ fn extract_codex_events(
                     return;
                 }
                 pending.suppress_next_turn_aborted_marker = false;
-                if codex_text_is_internal_context(first_text)
-                    || injected_prefixes.iter().any(|p| first_text.starts_with(p))
+                if input_texts
+                    .iter()
+                    .any(|text| codex_text_is_provider_system(text))
                 {
                     return;
                 }
@@ -3977,6 +4217,49 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_meta_and_compact_rows_are_system_but_channel_stays_user() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "claude-meta.jsonl",
+            &[
+                r#"{"type":"user","uuid":"meta-1","isMeta":true,"message":{"role":"user","content":"Continue from the summary."}}"#,
+                r#"{"type":"user","uuid":"compact-1","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a summary."}}"#,
+                r#"{"type":"user","uuid":"channel-1","isMeta":true,"origin":{"kind":"channel"},"message":{"role":"user","content":"A real channel message."}}"#,
+                r#"{"type":"user","uuid":"command-1","isMeta":true,"message":{"role":"user","content":"<command-name>/effort</command-name>"}}"#,
+                r#"{"type":"user","uuid":"prompt-1","message":{"role":"user","content":"Build the feature."}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 5);
+        let meta = result
+            .events
+            .iter()
+            .find(|event| event.content_text.as_deref() == Some("Continue from the summary."))
+            .unwrap();
+        assert_eq!(meta.role, Role::System);
+        assert_eq!(meta.raw_type, "claude_meta");
+        let compact = result
+            .events
+            .iter()
+            .find(|event| event.content_text.as_deref() == Some("This session is being continued from a summary."))
+            .unwrap();
+        assert_eq!(compact.role, Role::System);
+        assert_eq!(compact.raw_type, "claude_compact_summary");
+        assert!(result.events.iter().any(|event| {
+            event.role == Role::User && event.content_text.as_deref() == Some("A real channel message.")
+        }));
+        assert!(result.events.iter().any(|event| {
+            event.role == Role::User
+                && event.content_text.as_deref() == Some("<command-name>/effort</command-name>")
+        }));
+        assert!(result.events.iter().any(|event| {
+            event.role == Role::User && event.content_text.as_deref() == Some("Build the feature.")
+        }));
+    }
+
+    #[test]
     fn test_parse_pi_message_envelope_yields_events() {
         // Captured from the pi Console turn that served an empty session: the
         // transcript was written and bound, the run completed, and the archive
@@ -4039,6 +4322,29 @@ mod tests {
         assert_eq!(
             result.metadata.session_id,
             "019c638d-0000-0000-0000-000000000099"
+        );
+    }
+
+    #[test]
+    fn test_cursor_nested_history_query_and_quoted_marker_are_fail_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "cursor-boundaries.jsonl",
+            &[
+                r#"{"role":"user","message":{"content":[{"type":"text","text":"<agent_transcripts>\n<user_query>old history</user_query>\n</agent_transcripts>\n<user_query>current prompt</user_query>"}]}}"#,
+                r#"{"role":"user","message":{"content":[{"type":"text","text":"Please explain the literal <rules> marker."}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("current prompt"));
+        assert_eq!(result.events[1].role, Role::User);
+        assert_eq!(
+            result.events[1].content_text.as_deref(),
+            Some("Please explain the literal <rules> marker.")
         );
     }
 
@@ -5434,6 +5740,24 @@ mod tests {
     }
 
     #[test]
+    fn test_gemini_legacy_logs_array_uses_message_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_json = r#"[
+            {"sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","messageId":0,"type":"user","message":"hello from legacy Gemini","timestamp":"2026-01-10T10:00:00Z"},
+            {"sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","messageId":1,"type":"gemini","message":"legacy answer","timestamp":"2026-01-10T10:00:01Z"}
+        ]"#;
+        let path = make_json_file(dir.path(), "logs.json", session_json);
+
+        let result = parse_session_file(&path, 0).unwrap();
+
+        assert_eq!(result.events.len(), 2);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(result.events[0].content_text.as_deref(), Some("hello from legacy Gemini"));
+        assert_eq!(result.events[1].role, Role::Assistant);
+        assert_eq!(result.metadata.session_id, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    }
+
+    #[test]
     fn test_gemini_preserves_full_source_lines_for_lossless_export() {
         let dir = tempfile::tempdir().unwrap();
         let session_json = "{\n  \"sessionId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"messages\": [\n    {\n      \"id\": \"11111111-1111-1111-1111-111111111111\",\n      \"timestamp\": \"2026-01-10T10:00:00Z\",\n      \"type\": \"user\",\n      \"content\": \"What is 2+2?\"\n    }\n  ]\n}\n";
@@ -6195,6 +6519,18 @@ mod tests {
             .events
             .iter()
             .all(|event| event.session_id == conversation_id));
+    }
+
+    #[test]
+    fn test_antigravity_user_request_wrapper_is_fail_open() {
+        assert_eq!(
+            antigravity_user_text("<USER_REQUEST>\nfix it\n</USER_REQUEST>"),
+            "fix it"
+        );
+        assert_eq!(
+            antigravity_user_text("quoted <USER_REQUEST>fix it</USER_REQUEST> text"),
+            "quoted <USER_REQUEST>fix it</USER_REQUEST> text"
+        );
     }
 
     /// Helper: write an antigravity transcript and return its path.

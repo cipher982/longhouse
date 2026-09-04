@@ -104,7 +104,7 @@
   },
   "assistant/text": {
    "classification": "transcript",
-   "first_seen_version": "2.1.121",
+   "first_seen_version": "2.0.76",
    "last_seen_version": "2.1.259",
    "entrypoints": [
     "claude-desktop",
@@ -1091,7 +1091,7 @@
   "system/api_error": {
    "classification": "signal:turn.api_error",
    "first_seen_version": "2.1.152",
-   "last_seen_version": "2.1.161",
+   "last_seen_version": "2.1.258",
    "entrypoints": [
     "cli"
    ],
@@ -1547,9 +1547,24 @@
     "version"
    ]
   },
+  "user/origin_task_notification+string": {
+   "classification": "provider_notification:task_notification",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "message",
+    "origin",
+    "origin.kind",
+    "timestamp",
+    "type",
+    "uuid"
+   ],
+   "required_keys": ["type", "origin.kind", "message"]
+  },
   "user/string": {
    "classification": "transcript",
-   "first_seen_version": "2.1.121",
+   "first_seen_version": "2.0.76",
    "last_seen_version": "2.1.259",
    "entrypoints": [
     "claude-desktop",

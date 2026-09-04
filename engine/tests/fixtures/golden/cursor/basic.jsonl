@@ -1,0 +1,3 @@
+{"role":"user","version":"1.0.0","message":{"content":[{"type":"text","text":"<user_query>Reply with exactly CURSOR_GOLDEN and nothing else.</user_query>"}]}}
+{"role":"user","version":"1.0.0","message":{"content":[{"type":"text","text":"<user_info>workspace context</user_info>\n<rules>follow the workspace rules</rules>"}]}}
+{"role":"assistant","version":"1.0.0","message":{"content":[{"type":"text","text":"CURSOR_GOLDEN"},{"type":"tool-call","toolName":"bash","toolCallId":"call-1","args":{"command":"pwd"}}]}}

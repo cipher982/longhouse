@@ -18,7 +18,6 @@ network or the Longhouse DB. Callers (CLI, ingest wiring) feed the resulting
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from dataclasses import dataclass
 from dataclasses import field
@@ -306,8 +305,43 @@ _CURSOR_INJECTION_MARKERS = (
     "<attached_files>",
     "<system_notification>",
 )
+_CURSOR_INJECTION_TAGS = tuple((marker, marker.replace("<", "</", 1)) for marker in _CURSOR_INJECTION_MARKERS)
 
-_USER_QUERY_RE = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL)
+
+def _cursor_user_query_body(text: str) -> str | None:
+    """Return Cursor's outer user-query body when the record is wrapped.
+
+    A plain prompt may quote ``<user_query>`` or include a code sample with
+    nested copies of the tag. Cursor's envelope is record-shaped: the wrapper
+    starts the content (optionally after a provider metadata prefix) and its
+    final closing tag ends the content. Selecting the outer bounds avoids
+    truncating a prompt at the first literal closing tag.
+    """
+
+    stripped = text.strip()
+    search_from = 0
+    while (relative_start := stripped[search_from:].find("<user_query>")) >= 0:
+        start = search_from + relative_start
+        search_from = start + len("<user_query>")
+        # Agent transcripts and other injected blocks can contain quoted
+        # user_query tags. A matching injection close is the structural
+        # boundary; do not treat the quoted copy as the real prompt.
+        if any(
+            (open_at := stripped.rfind(open_tag, 0, start)) >= 0 and stripped.find(close_tag, open_at + len(open_tag)) >= start
+            for open_tag, close_tag in _CURSOR_INJECTION_TAGS
+        ):
+            continue
+        prefix = stripped[:start].strip()
+        if prefix:
+            is_timestamp_prefix = prefix.startswith("<timestamp>") and prefix.endswith("</timestamp>")
+            is_context_prefix = any(prefix.startswith(marker) for marker in _CURSOR_INJECTION_MARKERS)
+            if not (is_timestamp_prefix or is_context_prefix):
+                continue
+        end = stripped.rfind("</user_query>")
+        if end <= start or stripped[end + len("</user_query>") :].strip():
+            continue
+        return stripped[start + len("<user_query>") : end].strip()
+    return None
 
 
 def _coerce_user_content_to_text(content: Any) -> str | None:
@@ -339,12 +373,30 @@ def _classify_cursor_user_text(text: str) -> tuple[str, str]:
       "system". The caller keeps raw_json as Cursor's original role="user".
     - Plain user turn (no wrapper, no markers): full text, role "user".
     """
-    m = _USER_QUERY_RE.search(text)
-    if m:
-        return m.group(1), "user"
-    if any(marker in text for marker in _CURSOR_INJECTION_MARKERS):
+    query_body = _cursor_user_query_body(text)
+    if query_body is not None:
+        return query_body, "user"
+    if _cursor_context_envelope_at_line_start(text):
         return text, "system"
     return text, "user"
+
+
+def _cursor_context_envelope_at_line_start(text: str) -> bool:
+    """Recognize a Cursor context root, not a quoted mid-sentence marker."""
+
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.lstrip()
+        for marker, close_tag in _CURSOR_INJECTION_TAGS:
+            if not stripped.startswith(marker):
+                continue
+            if close_tag in stripped[len(marker) :] or any(
+                other_line.lstrip().startswith(other_marker)
+                for other_line in lines[index + 1 :]
+                for other_marker in _CURSOR_INJECTION_MARKERS
+            ):
+                return True
+    return False
 
 
 def _classify_cursor_user_content(content: Any) -> tuple[str | None, str] | None:
@@ -412,10 +464,14 @@ def _map_message(
             continue
         btype = block.get("type")
         if btype == "text":
+            effective_role = role
+            text = _coerce_text(block.get("text"))
+            if role == "user":
+                text, effective_role = _classify_cursor_user_text(text)
             events.append(
                 event_cls(
-                    role=role,
-                    content_text=_coerce_text(block.get("text")),
+                    role=effective_role,
+                    content_text=text,
                     timestamp=occurred_at,
                     source_path=source_path,
                     raw_json=raw_json,

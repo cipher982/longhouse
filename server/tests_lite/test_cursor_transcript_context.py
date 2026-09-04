@@ -74,6 +74,17 @@ def test_plain_user_turn_kept_as_user():
     assert ev.content_text == "just a normal follow-up message"
 
 
+def test_plain_user_turn_quoting_cursor_tags_stays_user():
+    msg = {
+        "role": "user",
+        "content": 'Please explain "<user_query>literal</user_query>" and `<rules>`.',
+    }
+    events = _map(msg)
+    assert len(events) == 1
+    assert events[0].role == "user"
+    assert events[0].content_text == msg["content"]
+
+
 def test_combined_injection_plus_query_emits_user_text():
     msg = {
         "role": "user",
@@ -85,6 +96,41 @@ def test_combined_injection_plus_query_emits_user_text():
     # <user_query> wins: this is a real user turn; surrounding injection dropped.
     assert ev.role == "user"
     assert ev.content_text == "do the thing"
+
+
+def test_nested_query_inside_agent_transcript_does_not_replace_current_query():
+    msg = {
+        "role": "user",
+        "content": (
+            "<agent_transcripts>\n"
+            "<user_query>old prompt from history</user_query>\n"
+            "</agent_transcripts>\n"
+            "<user_query>current prompt</user_query>"
+        ),
+    }
+    events = _map(msg)
+    assert len(events) == 1
+    assert events[0].role == "user"
+    assert events[0].content_text == "current prompt"
+
+
+def test_plain_user_turn_quoting_cursor_marker_at_line_start_stays_user():
+    msg = {
+        "role": "user",
+        "content": 'The example starts with "<rules>" but is not provider context.',
+    }
+    events = _map(msg)
+    assert len(events) == 1
+    assert events[0].role == "user"
+
+
+def test_outer_query_wrapper_survives_nested_literal_tags():
+    prompt = 'Review this parser. The code contains `text.find("<user_query>")` and a literal `</user_query>` string.'
+    msg = {"role": "user", "content": f"<user_query>{prompt}</user_query>"}
+    events = _map(msg)
+    assert len(events) == 1
+    assert events[0].role == "user"
+    assert events[0].content_text == prompt
 
 
 def test_system_prompt_still_system():
@@ -125,3 +171,4 @@ def test_user_list_with_image_falls_through_to_block_handling():
     # Default handling emits one event per block; image is an unknown block type
     # but still surfaces as an event (not dropped).
     assert len(events) >= 1
+    assert any(event.role == "user" and event.content_text == "look at this" for event in events)

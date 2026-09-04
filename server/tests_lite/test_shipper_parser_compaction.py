@@ -101,6 +101,40 @@ def test_parse_session_file_projects_claude_task_notification(tmp_path):
     assert last_good_offset == path.stat().st_size
 
 
+def test_parse_session_file_hides_claude_meta_and_compact_summary_as_system(tmp_path):
+    rows = [
+        {
+            "type": "user",
+            "uuid": "meta-1",
+            "isMeta": True,
+            "message": {"role": "user", "content": "Continue from where you left off."},
+        },
+        {
+            "type": "user",
+            "uuid": "compact-1",
+            "isCompactSummary": True,
+            "isVisibleInTranscriptOnly": True,
+            "message": {"role": "user", "content": "This session is being continued from a summary."},
+        },
+        {
+            "type": "user",
+            "uuid": "channel-1",
+            "isMeta": True,
+            "origin": {"kind": "channel"},
+            "message": {"role": "user", "content": "A real channel message."},
+        },
+    ]
+    path = _write_jsonl(tmp_path, "meta-session.jsonl", [json.dumps(row) for row in rows])
+
+    events = list(parse_session_file(path))
+
+    assert [(event.raw_type, event.role, event.content_text) for event in events] == [
+        ("claude_meta", "system", "Continue from where you left off."),
+        ("claude_compact_summary", "system", "This session is being continued from a summary."),
+        ("user", "user", "A real channel message."),
+    ]
+
+
 def test_parse_session_file_full_tracks_offsets_with_compaction_events(tmp_path):
     path = _write_jsonl(
         tmp_path,

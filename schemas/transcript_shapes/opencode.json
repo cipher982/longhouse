@@ -1,0 +1,55 @@
+{
+ "provider": "opencode",
+ "shapes": {
+  "part/future_text/assistant": {
+   "classification": "provider_drift:unknown_text",
+   "first_seen_version": "1.17.20",
+   "last_seen_version": "1.17.20",
+   "entrypoints": [],
+   "keys": [
+    "message.role",
+    "text",
+    "type"
+   ],
+   "required_keys": ["type", "message.role", "text"]
+  },
+  "part/reasoning/assistant": {
+   "classification": "provider_internal:reasoning",
+   "first_seen_version": "1.17.20",
+   "last_seen_version": "1.17.20",
+   "entrypoints": [],
+   "keys": [
+    "message.role",
+    "text",
+    "type"
+   ],
+   "required_keys": ["type", "message.role", "text"]
+  },
+  "part/text/user": {
+   "classification": "transcript:user",
+   "first_seen_version": "1.17.20",
+   "last_seen_version": "1.17.20",
+   "entrypoints": [],
+   "keys": [
+    "message.role",
+    "text",
+    "type"
+   ],
+   "required_keys": ["type", "message.role", "text"]
+  },
+  "part/tool/assistant": {
+   "classification": "provider_tool:tool",
+   "first_seen_version": "1.17.20",
+   "last_seen_version": "1.17.20",
+   "entrypoints": [],
+   "keys": [
+    "callID",
+    "message.role",
+    "state",
+    "tool",
+    "type"
+   ],
+   "required_keys": ["type", "message.role", "tool", "state"]
+  }
+ }
+}

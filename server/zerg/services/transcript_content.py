@@ -16,6 +16,22 @@ _NOISE_PATTERNS = [
     re.compile(r"<fast_mode_info>[\s\S]*?</fast_mode_info>", re.IGNORECASE),
 ]
 
+_QUOTED_CONTENT_PATTERNS = (
+    re.compile(r"```[\s\S]*?```"),
+    re.compile(r"`[^`\n]*`"),
+    re.compile(r'"(?:\\.|[^"\\])*"'),
+    re.compile(r"'(?:\\.|[^'\\])*'"),
+)
+
+
+def _quoted_content_spans(text: str) -> tuple[tuple[int, int], ...]:
+    """Return code/quoted spans whose provider-looking XML is user text."""
+
+    spans: list[tuple[int, int]] = []
+    for pattern in _QUOTED_CONTENT_PATTERNS:
+        spans.extend((match.start(), match.end()) for match in pattern.finditer(text))
+    return tuple(sorted(spans))
+
 
 def strip_noise(text: str) -> str:
     """Remove XML noise tags from content.
@@ -27,7 +43,14 @@ def strip_noise(text: str) -> str:
         return text
     result = text
     for pattern in _NOISE_PATTERNS:
-        result = pattern.sub("", result)
+        quoted_spans = _quoted_content_spans(result)
+
+        def replace(match: re.Match[str]) -> str:
+            if any(start <= match.start() < end for start, end in quoted_spans):
+                return match.group(0)
+            return ""
+
+        result = pattern.sub(replace, result)
     # Collapse 3+ consecutive newlines to 2
     result = re.sub(r"\n{3,}", "\n\n", result)
     return result.strip()

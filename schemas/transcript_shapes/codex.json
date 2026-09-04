@@ -7,6 +7,7 @@
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_cli_rs",
     "longhouse_codex_bridge",
     "longhouse_console"
    ],
@@ -54,9 +55,11 @@
   },
   "event_msg/error": {
    "classification": "signal:turn.api_error",
-   "first_seen_version": null,
-   "last_seen_version": null,
-   "entrypoints": [],
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex_cli_rs"
+   ],
    "keys": [
     "codex_error_info",
     "message",
@@ -275,9 +278,11 @@
   },
   "event_msg/stream_error": {
    "classification": "signal:turn.api_error",
-   "first_seen_version": null,
-   "last_seen_version": null,
-   "entrypoints": [],
+   "first_seen_version": "0.151.0",
+   "last_seen_version": "0.151.0",
+   "entrypoints": [
+    "codex_cli_rs"
+   ],
    "keys": [
     "additional_details",
     "codex_error_info",
@@ -311,6 +316,7 @@
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_cli_rs",
     "codex_exec",
     "longhouse_codex_bridge",
     "longhouse_console"
@@ -336,6 +342,7 @@
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_cli_rs",
     "codex_exec",
     "longhouse_codex_bridge",
     "longhouse_console"
@@ -393,10 +400,11 @@
   },
   "event_msg/token_count": {
    "classification": "signal:turn.usage",
-   "first_seen_version": "0.142.2",
+   "first_seen_version": "0.133.0",
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_cli_rs",
     "codex_exec",
     "longhouse_codex_bridge",
     "longhouse_console"
@@ -425,10 +433,11 @@
   },
   "event_msg/turn_aborted": {
    "classification": "signal:turn.duration",
-   "first_seen_version": "0.142.2",
+   "first_seen_version": "0.133.0",
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_cli_rs",
     "longhouse_codex_bridge"
    ],
    "keys": [
@@ -582,10 +591,11 @@
   },
   "response_item/message/assistant": {
    "classification": "transcript",
-   "first_seen_version": "0.142.2",
+   "first_seen_version": "0.53.0",
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_cli_rs",
     "codex_exec",
     "longhouse_codex_bridge",
     "longhouse_console"
@@ -619,10 +629,11 @@
   },
   "response_item/message/user": {
    "classification": "transcript",
-   "first_seen_version": "0.142.2",
+   "first_seen_version": "0.53.0",
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_cli_rs",
     "codex_exec",
     "longhouse_codex_bridge",
     "longhouse_console"
@@ -634,6 +645,22 @@
     "role",
     "type"
    ]
+  },
+  "response_item/message/user/provider_system": {
+   "classification": "provider_system:context_injection",
+   "first_seen_version": "0.53.0",
+   "last_seen_version": "0.133.0",
+   "entrypoints": [
+    "codex_cli_rs"
+   ],
+   "keys": [
+    "content",
+    "content[].text",
+    "content[].type",
+    "role",
+    "type"
+   ],
+   "required_keys": ["type", "role", "content", "content[].type", "content[].text"]
   },
   "response_item/reasoning": {
    "classification": "signal:turn.thinking",
@@ -707,10 +734,11 @@
   },
   "session_meta": {
    "classification": "state:session meta",
-   "first_seen_version": "0.142.2",
+   "first_seen_version": "0.53.0",
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_cli_rs",
     "codex_exec",
     "longhouse_codex_bridge",
     "longhouse_console"
@@ -743,6 +771,7 @@
    "last_seen_version": "0.151.0",
    "entrypoints": [
     "codex-tui",
+    "codex_cli_rs",
     "codex_exec",
     "longhouse_codex_bridge",
     "longhouse_console"

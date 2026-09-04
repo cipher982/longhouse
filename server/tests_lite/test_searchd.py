@@ -1971,6 +1971,95 @@ def test_searchd_semantic_projection_hides_claude_control_from_search_and_counts
         connection.close()
 
 
+def test_searchd_provider_system_filter_preserves_legacy_null_kind_rows(tmp_path):
+    connection = open_search_database(tmp_path / "search-null-kind.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"legacy-null-kind-search").hexdigest()
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    records = [
+        {
+            "event_id": "legacy-user",
+            "record_ordinal": 0,
+            "order_time_us": now_us,
+            "source_position": 0,
+            "event_subordinal": 0,
+            "role": "user",
+            "interaction_kind": None,
+            "content_text": "legacy null user needle",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+        {
+            "event_id": "legacy-assistant",
+            "record_ordinal": 1,
+            "order_time_us": now_us + 1,
+            "source_position": 1,
+            "event_subordinal": 0,
+            "role": "assistant",
+            "interaction_kind": None,
+            "content_text": "legacy null assistant needle",
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": None,
+        },
+    ]
+    try:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=1,
+            provider="codex",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            opaque_source_id="codex/session.jsonl",
+            source_epoch=str(uuid4()),
+            records=records,
+        )
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=1,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=len(records),
+            project="longhouse",
+            provider="codex",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo="cipher982/longhouse",
+            started_at=datetime.now(UTC).isoformat(),
+        )
+        for query, event_id in (
+            ("legacy null user", "legacy-user"),
+            ("legacy null assistant", "legacy-assistant"),
+        ):
+            result = store.search(
+                owner_id="42",
+                query=query,
+                project=None,
+                provider=None,
+                environment=None,
+                window_start_us=None,
+                window_end_us=None,
+                limit=10,
+            )
+            assert [row["event_id"] for row in result["results"]] == [event_id]
+    finally:
+        connection.close()
+
+
 def test_searchd_replays_late_semantic_correction_without_identity_conflict(tmp_path):
     connection = open_search_database(tmp_path / "search-semantic-repair.db")
     store = SearchStore(connection)

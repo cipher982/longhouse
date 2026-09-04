@@ -1,0 +1,79 @@
+{
+ "provider": "antigravity",
+ "shapes": {
+  "MODEL/PLANNER_RESPONSE": {
+   "classification": "provider_tool:planner",
+   "first_seen_version": "1.0.0",
+   "last_seen_version": "1.0.0",
+   "entrypoints": [],
+   "keys": [
+    "created_at",
+    "source",
+    "step_index",
+    "tool_calls",
+    "type",
+    "version"
+   ],
+   "required_keys": ["type", "source", "step_index"]
+  },
+  "MODEL/TOOL_RESULT": {
+   "classification": "provider_tool:result",
+   "first_seen_version": "1.0.0",
+   "last_seen_version": "1.0.0",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "created_at",
+    "source",
+    "step_index",
+    "type",
+    "version"
+   ],
+   "required_keys": ["type", "source", "step_index", "content"]
+  },
+  "UI/USER_INPUT": {
+   "classification": "transcript:user",
+   "first_seen_version": "1.0.0",
+   "last_seen_version": "1.0.0",
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "created_at",
+    "source",
+    "step_index",
+    "type",
+    "version"
+   ],
+   "required_keys": ["type", "source", "step_index"]
+  },
+  "legacy/gemini": {
+   "classification": "transcript:assistant",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "id",
+    "model",
+    "thoughts",
+    "timestamp",
+    "tokens",
+    "type"
+   ],
+   "required_keys": ["type", "content"]
+  },
+  "legacy/user": {
+   "classification": "transcript:user",
+   "first_seen_version": null,
+   "last_seen_version": null,
+   "entrypoints": [],
+   "keys": [
+    "content",
+    "id",
+    "timestamp",
+    "type"
+   ],
+   "required_keys": ["type", "content"]
+  }
+ }
+}

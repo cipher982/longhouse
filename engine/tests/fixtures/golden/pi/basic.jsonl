@@ -1,0 +1,2 @@
+{"type":"message","version":"0.1.0","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly PI_GOLDEN."}]}}
+{"type":"message","version":"0.1.0","message":{"role":"assistant","content":[{"type":"text","text":"PI_GOLDEN"}]}}

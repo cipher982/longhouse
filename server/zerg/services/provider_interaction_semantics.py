@@ -72,15 +72,56 @@ def _raw_content(raw: Mapping[str, Any] | None) -> str:
     return ""
 
 
-_CODEX_INTERNAL_CONTEXT_PREFIX = "<codex_internal_context"
+_CODEX_INTERNAL_CONTEXT_OPEN = "<codex_internal_context"
+_CODEX_PROVIDER_SYSTEM_ENVELOPES = (
+    ("<environment_context>", "</environment_context>"),
+    ("<permissions instructions>", "</permissions instructions>"),
+    ("<collaboration_mode>", "</collaboration_mode>"),
+    ("<turn_aborted>", "</turn_aborted>"),
+)
+
+
+def _full_xml_envelope(text: str, opening: str, closing: str) -> bool:
+    trimmed = text.strip()
+    if not trimmed.startswith(opening) or not trimmed.endswith(closing):
+        return False
+    body = trimmed[len(opening) : -len(closing)]
+    return bool(body.strip())
 
 
 def _codex_internal_context_text(content_text: str | None) -> bool:
-    trimmed = str(content_text or "").lstrip()
-    if not trimmed.startswith(_CODEX_INTERNAL_CONTEXT_PREFIX):
+    """Recognize a complete Codex internal-context envelope.
+
+    A prefix is not enough: users can quote provider XML in an ordinary
+    prompt. The raw Codex record is the authority; this text-only predicate is
+    only a conservative candidate used to decide which archived rows deserve
+    raw replay.
+    """
+
+    text = str(content_text or "")
+    trimmed = text.strip()
+    if not trimmed.startswith(_CODEX_INTERNAL_CONTEXT_OPEN):
         return False
-    rest = trimmed[len(_CODEX_INTERNAL_CONTEXT_PREFIX) :]
-    return not rest or rest[0] in " \t\r\n>"
+    suffix = trimmed[len(_CODEX_INTERNAL_CONTEXT_OPEN) :]
+    if not suffix or suffix[0] not in " \t\r\n>":
+        return False
+    opening_end = trimmed.find(">")
+    if opening_end < len(_CODEX_INTERNAL_CONTEXT_OPEN):
+        return False
+    opening = trimmed[: opening_end + 1]
+    return _full_xml_envelope(trimmed, opening, "</codex_internal_context>")
+
+
+def _codex_agents_instructions_text(content_text: str | None) -> bool:
+    trimmed = str(content_text or "").strip()
+    return trimmed.startswith("# AGENTS.md instructions") and "<INSTRUCTIONS>" in trimmed and trimmed.endswith("</INSTRUCTIONS>")
+
+
+def _codex_provider_system_text(content_text: str | None) -> bool:
+    text = str(content_text or "")
+    if _codex_internal_context_text(text) or _codex_agents_instructions_text(text):
+        return True
+    return any(_full_xml_envelope(text, opening, closing) for opening, closing in _CODEX_PROVIDER_SYSTEM_ENVELOPES)
 
 
 def codex_internal_context_record(raw_json: Any) -> bool:
@@ -110,6 +151,38 @@ def codex_internal_context_candidate(content_text: str | None) -> bool:
     """Recognize the normalized Codex context prefix for legacy rows."""
 
     return _codex_internal_context_text(content_text)
+
+
+def codex_provider_system_record(raw_json: Any) -> bool:
+    """Recognize a complete Codex provider-authored user envelope.
+
+    Codex writes several pieces of startup context as ``response_item`` user
+    messages. Every ``input_text`` block is checked so a provider can add an
+    image or a second context block without changing the boundary rule.
+    """
+
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return False
+    payload = raw.get("payload")
+    if not isinstance(payload, Mapping) or payload.get("type") != "message" or payload.get("role") != "user":
+        return False
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(item, Mapping)
+        and item.get("type") == "input_text"
+        and isinstance(item.get("text"), str)
+        and _codex_provider_system_text(item["text"])
+        for item in content
+    )
+
+
+def codex_provider_system_candidate(content_text: str | None) -> bool:
+    """Return whether a render value merits Codex raw-envelope recovery."""
+
+    return _codex_provider_system_text(content_text)
 
 
 def _raw_identifier(raw: Mapping[str, Any] | None, field: str) -> str | None:
@@ -257,11 +330,54 @@ _CLAUDE_COMMAND_RECORD_RE = re.compile(
     re.DOTALL,
 )
 _CLAUDE_COMMAND_OUTPUT_RE = re.compile(r"^\s*<local-command-stdout>.*?</local-command-stdout>\s*$", re.DOTALL)
+_CLAUDE_LOCAL_COMMAND_CAVEAT_RE = re.compile(r"<local-command-caveat>.*?</local-command-caveat>", re.DOTALL)
 _CLAUDE_TASK_NOTIFICATION_RE = re.compile(
     r"^\s*<task-notification>\s*(?P<body>.*?)\s*</task-notification>"
     r"(?:\s*<system-reminder>.*?</system-reminder>\s*)*\s*$",
     re.DOTALL,
 )
+
+
+def _claude_native_local_command_meta_record(raw: Mapping[str, Any] | None) -> bool:
+    """Whether an ``isMeta`` row is one of Claude's local-command records."""
+
+    if not _claude_native_meta_record(raw):
+        return False
+    content = _raw_content(raw).strip()
+    if not content:
+        return False
+    if _CLAUDE_COMMAND_RECORD_RE.fullmatch(content) or _CLAUDE_COMMAND_OUTPUT_RE.fullmatch(content):
+        return True
+    caveat = _CLAUDE_LOCAL_COMMAND_CAVEAT_RE.search(content)
+    if caveat is None:
+        return False
+    # A native caveat may be accompanied by the command envelope in the same
+    # row. Remove only the exact known envelopes; prose surrounding a quoted
+    # tag is deliberately not accepted as provider evidence.
+    remainder = _CLAUDE_LOCAL_COMMAND_CAVEAT_RE.sub("", content)
+    return not remainder.strip() or bool(_CLAUDE_COMMAND_RECORD_RE.fullmatch(remainder))
+
+
+def claude_provider_system_record(raw_json: Any) -> bool:
+    """Recognize Claude metadata that is not a conversational user turn.
+
+    ``isMeta`` is broader than local commands: it also carries compaction
+    summaries, image placeholders, continuation text, and injected control
+    messages. A Longhouse channel row is an intentional exception because it
+    is a real user message routed through Claude's transcript.
+    """
+
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return False
+    if claude_task_notification_display(raw) is not None:
+        return False
+    origin = raw.get("origin")
+    if isinstance(origin, Mapping) and origin.get("kind") == "channel":
+        return False
+    if raw.get("isCompactSummary") is True:
+        return True
+    return raw.get("isMeta") is True and not _claude_native_local_command_meta_record(raw)
 
 
 def _claude_task_tag_value(body: str, tag: str) -> str | None:
@@ -329,7 +445,7 @@ def _claude_native_command_record(
     that merely quotes one of the tags does not match these full-record shapes.
     """
 
-    if _claude_native_meta_record(raw):
+    if _claude_native_local_command_meta_record(raw):
         return True
     if raw is None or raw.get("type") not in {None, "user"}:
         return False
@@ -398,7 +514,7 @@ def _advance_claude_sequence_context(
     raw_text: str,
     sequence_context: MutableMapping[str, Any] | None,
 ) -> None:
-    if sequence_context is None or not _claude_native_meta_record(raw) or "<local-command-caveat>" not in raw_text:
+    if sequence_context is None or not _claude_native_local_command_meta_record(raw) or "<local-command-caveat>" not in raw_text:
         return
     prompt_id = _raw_identifier(raw, "promptId")
     if prompt_id is not None:
@@ -642,8 +758,9 @@ def classify_provider_interaction(
         and normalized_role == "user"
         and any(_claude_native_image_placeholder(raw, value) for value in (text, raw_text) if value)
     )
-    codex_internal_context = normalized_provider == "codex" and codex_internal_context_record(raw)
-    if codex_internal_context:
+    codex_provider_system = normalized_provider == "codex" and codex_provider_system_record(raw)
+    claude_provider_system = normalized_provider == "claude" and claude_provider_system_record(raw)
+    if codex_provider_system or claude_provider_system:
         kind = INTERACTION_PROVIDER_SYSTEM
         changes_provider_state = False
         starts_model_turn = False
@@ -675,7 +792,7 @@ def classify_provider_interaction(
     # ``interaction_kind`` is parser-owned normalized data. Never accept a
     # Longhouse semantic override from provider raw JSON: raw provider text is
     # evidence to classify, not an authority that can demote itself.
-    explicit_kind = None if codex_internal_context else interaction_kind
+    explicit_kind = None if codex_provider_system or claude_provider_system else interaction_kind
     if explicit_kind in _INTERACTION_KINDS:
         kind = str(explicit_kind)
         if kind in {INTERACTION_LOCAL_CONTROL, INTERACTION_CONVERSATION_BOUNDARY}:
@@ -733,7 +850,7 @@ def semantic_projection_facts(
     """
 
     normalized_provider = str(provider or "").strip().lower()
-    codex_raw_is_authoritative = normalized_provider == "codex" and codex_internal_context_record(raw_json)
+    codex_raw_is_authoritative = normalized_provider == "codex" and codex_provider_system_record(raw_json)
     raw_is_authoritative = (normalized_provider == "claude" and _raw_mapping(raw_json) is not None) or codex_raw_is_authoritative
 
     classification = classify_provider_interaction(
@@ -774,7 +891,7 @@ def title_eligible_provider_event(
     """Whether an event can be the first conversational title candidate."""
 
     normalized_provider = str(provider or "").strip().lower()
-    codex_raw_is_authoritative = normalized_provider == "codex" and codex_internal_context_record(raw_json)
+    codex_raw_is_authoritative = normalized_provider == "codex" and codex_provider_system_record(raw_json)
     raw_is_authoritative = (normalized_provider == "claude" and _raw_mapping(raw_json) is not None) or codex_raw_is_authoritative
     if not raw_is_authoritative and str(role or "").strip().lower() == "user" and title_eligible is not None:
         return bool(title_eligible)
@@ -811,14 +928,18 @@ def semantic_event_included(
 
     if interaction_kind == INTERACTION_PROVIDER_NOTIFICATION:
         return False
+    if interaction_kind == INTERACTION_PROVIDER_SYSTEM and str(role or "").strip().lower() in {"user", "system"}:
+        return False
     normalized_provider = str(provider or "").strip().lower()
     if normalized_provider == "claude" and claude_task_notification_display(raw_json) is not None:
         return False
-    if normalized_provider == "codex" and codex_internal_context_candidate(content_text):
+    if normalized_provider == "claude" and claude_provider_system_record(raw_json):
+        return False
+    if normalized_provider == "codex" and codex_provider_system_record(raw_json):
         return False
     if str(role or "").strip().lower() != "user":
         return True
-    return title_eligible_provider_event(
+    included = title_eligible_provider_event(
         provider,
         role=role,
         content_text=content_text,
@@ -827,6 +948,9 @@ def semantic_event_included(
         title_eligible=title_eligible,
         sequence_context=sequence_context,
     )
+    if included:
+        return True
+    return False
 
 
 def interaction_contract_snapshot(provider: str) -> tuple[dict[str, Any], ...]:
@@ -871,6 +995,9 @@ __all__ = [
     "classify_provider_interaction",
     "codex_internal_context_candidate",
     "codex_internal_context_record",
+    "codex_provider_system_candidate",
+    "codex_provider_system_record",
+    "claude_provider_system_record",
     "claude_task_notification_display",
     "claude_task_notification_summary",
     "interaction_context_key_parts",

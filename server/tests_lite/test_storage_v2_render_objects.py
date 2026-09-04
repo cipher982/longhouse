@@ -340,6 +340,66 @@ def test_storage_wire_preserves_non_claude_parser_semantic_kind():
     assert parsed.records[0].interaction_kind == "local_control"
 
 
+def test_storage_wire_repairs_stale_codex_provider_context_from_raw():
+    content = "<environment_context>\nPWD=/Users/davidrose/git/zerg\n</environment_context>"
+    raw = RawObjectSpec(
+        tenant_id="tenant-a",
+        machine_id="cinder",
+        session_id=UUID("018f0c3a-7b2d-7f10-8a11-123456789abc"),
+        provider="codex",
+        opaque_source_id="history.jsonl",
+        source_epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
+        range_kind="record_ordinal",
+        range_start=0,
+        range_end=1,
+        records=(
+            RawRecord(
+                source_position=0,
+                data=json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": content}],
+                        },
+                    }
+                ).encode(),
+            ),
+        ),
+    )
+    parsed = _parse_render_spec(
+        {
+            "generation_id": "018f0c3a-7b2d-7f10-8a11-423456789abc",
+            "parser_revision": "engine-parser-v2",
+            "ordering_revision": "semantic-order-v2",
+            "records": [
+                {
+                    "event_id": "codex-context",
+                    "order_time_us": 1,
+                    "source_position": 0,
+                    "event_subordinal": 0,
+                    "role": "user",
+                    "content_text": content,
+                    "tool_name": None,
+                    "tool_input_json": None,
+                    "tool_output_text": None,
+                    "tool_call_id": None,
+                    "thread_id": None,
+                    "branch_kind": None,
+                    "raw_record_ordinal": 0,
+                    "interaction_kind": "durable_user_message",
+                }
+            ],
+        },
+        raw_spec=raw,
+        source_envelope_id="a" * 64,
+    )
+
+    assert parsed is not None
+    assert parsed.records[0].interaction_kind == "provider_system"
+
+
 @pytest.mark.asyncio
 async def test_multi_page_semantic_repair_uses_final_catalog_completion(monkeypatch) -> None:
     first = _spec()
