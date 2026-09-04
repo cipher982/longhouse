@@ -597,7 +597,7 @@
           "disposition": "implemented",
           "raw_source": "event_msg/task_complete + event_msg/turn_aborted",
           "first_seen_version": "0.142.2",
-          "fixture": "engine/tests/fixtures/golden/codex/turn_signals.jsonl",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl",
           "canary": "codex_transcript_signals",
           "trigger": "turn_end"
         },
@@ -619,14 +619,14 @@
           "disposition": "implemented",
           "raw_source": "event_msg/token_count + turn_context, stamped on the turn's closing line",
           "first_seen_version": "0.142.2",
-          "fixture": "engine/tests/fixtures/golden/codex/turn_signals.jsonl",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl",
           "canary": "codex_transcript_signals",
           "trigger": "turn_end"
         },
         "turn.api_error": {
           "disposition": "implemented",
           "raw_source": "event_msg/error + event_msg/stream_error",
-          "fixture": "engine/tests/fixtures/golden/codex/turn_signals.jsonl",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl",
           "canary": "codex_transcript_signals",
           "trigger": "none_reliable",
           "owner_action": "shapes taken from the 0.151.0 protocol crate (ErrorEvent, StreamErrorEvent); neither has appeared in the reference corpus yet"
@@ -635,7 +635,7 @@
           "disposition": "implemented",
           "raw_source": "compacted",
           "first_seen_version": "0.142.2",
-          "fixture": "engine/tests/fixtures/golden/codex/turn_signals.jsonl",
+          "fixture": "engine/tests/fixtures/golden/codex/rollout-turn_signals.jsonl",
           "canary": "codex_transcript_signals",
           "trigger": "slash_compact"
         },

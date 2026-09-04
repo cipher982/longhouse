@@ -385,10 +385,10 @@ fn golden_claude_recap_and_title_facts() {
 fn golden_codex_turn_signal_facts() {
     let base = fixtures_dir().join("golden").join("codex");
     run_golden_facts_test(
-        &base.join("turn_signals.jsonl"),
-        &base.join("turn_signals.facts.expected.json"),
+        &base.join("rollout-turn_signals.jsonl"),
+        &base.join("rollout-turn_signals.facts.expected.json"),
     );
-    let events = parse_to_snapshot(&base.join("turn_signals.jsonl"));
+    let events = parse_to_snapshot(&base.join("rollout-turn_signals.jsonl"));
     assert!(
         events
             .events
@@ -399,6 +399,22 @@ fn golden_codex_turn_signal_facts() {
             )),
         "signal lines must not become render events"
     );
+    // The third turn was stopped before any model call reported tokens: it
+    // closes with a duration and no usage, never the previous turn's counts
+    // relabelled with this turn's model.
+    let facts = parse_to_facts_snapshot(&base.join("rollout-turn_signals.jsonl"));
+    let durations = facts.facts.iter().filter(|f| f.kind == "turn.duration").count();
+    let usages = facts.facts.iter().filter(|f| f.kind == "turn.usage").count();
+    assert_eq!((durations, usages), (3, 2));
+    let stopped = facts
+        .facts
+        .iter()
+        .find(|f| f.kind == "turn.duration" && f.payload["duration_ms"] == 4800)
+        .expect("the stopped third turn has a duration");
+    assert!(
+        !facts.facts.iter().any(|f| f.kind == "turn.usage" && f.source_offset == stopped.source_offset),
+        "a turn without token_count yields no usage fact"
+    );
 }
 
 /// The engine resumes mid-file. When the batch starts on the closing line,
@@ -407,7 +423,7 @@ fn golden_codex_turn_signal_facts() {
 #[test]
 fn golden_codex_facts_survive_incremental_resume() {
     let base = fixtures_dir().join("golden").join("codex");
-    let path = base.join("turn_signals.jsonl");
+    let path = base.join("rollout-turn_signals.jsonl");
     let bytes = std::fs::read(&path).expect("read fixture");
     let needle = b"\"type\":\"task_complete\"";
     let hit = bytes

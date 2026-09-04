@@ -1403,7 +1403,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     // the prior batch, so seed from the record before `offset`.
     let mut antigravity_pending = seed_antigravity_pending(path, offset);
     let mut codex_pending = CodexPending::default();
-    let mut codex_facts = seed_codex_fact_state(path, offset);
+    let mut codex_facts = codex_fact_state_for(path, offset);
 
     let mut pos: usize = 0;
     while pos < data.len() {
@@ -1528,7 +1528,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     // See parse_mmap: seed antigravity call/result pairing across the resume boundary.
     let mut antigravity_pending = seed_antigravity_pending(path, offset);
     let mut codex_pending = CodexPending::default();
-    let mut codex_facts = seed_codex_fact_state(path, offset);
+    let mut codex_facts = codex_fact_state_for(path, offset);
     let mut line = String::new();
 
     loop {
@@ -2886,6 +2886,11 @@ struct CodexPending {
 /// line, so the parser carries the latest settings and usage forward.
 #[derive(Default)]
 struct CodexFactState {
+    /// The turn the carried usage belongs to. A new turn starts with no
+    /// usage of its own: a turn that closes before any model call reports
+    /// tokens yields no usage fact rather than the previous turn's counts
+    /// under this turn's model.
+    turn_id: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     /// `info.last_token_usage` from the most recent `token_count` line.
@@ -2894,7 +2899,24 @@ struct CodexFactState {
 }
 
 impl CodexFactState {
+    fn begin_turn(&mut self, turn_id: Option<&str>) {
+        let turn_id = turn_id.map(str::to_string);
+        if turn_id.is_some() && turn_id == self.turn_id {
+            return;
+        }
+        self.turn_id = turn_id;
+        self.last_usage = None;
+    }
+
+    fn note_task_started(&mut self, payload: &serde_json::Map<String, serde_json::Value>) {
+        self.begin_turn(payload.get("turn_id").and_then(|v| v.as_str()));
+        if let Some(window) = payload.get("model_context_window").and_then(|v| v.as_u64()) {
+            self.context_window = Some(window);
+        }
+    }
+
     fn note_turn_context(&mut self, payload: &serde_json::Map<String, serde_json::Value>) {
+        self.begin_turn(payload.get("turn_id").and_then(|v| v.as_str()));
         if let Some(model) = payload.get("model").and_then(|v| v.as_str()) {
             self.model = Some(model.to_string());
         }
@@ -2992,8 +3014,10 @@ fn seed_codex_fact_state(path: &Path, offset: u64) -> CodexFactState {
         if line.is_empty() {
             continue;
         }
-        let is_turn_context = contains_bytes(line, b"\"turn_context\"");
-        if !is_turn_context && !contains_bytes(line, b"\"token_count\"") {
+        if !contains_bytes(line, b"\"turn_context\"")
+            && !contains_bytes(line, b"\"token_count\"")
+            && !contains_bytes(line, b"\"task_started\"")
+        {
             continue;
         }
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
@@ -3002,15 +3026,31 @@ fn seed_codex_fact_state(path: &Path, offset: u64) -> CodexFactState {
         let Some(payload) = value.get("payload").and_then(|v| v.as_object()) else {
             continue;
         };
+        let payload_type = payload.get("type").and_then(|v| v.as_str());
         match value.get("type").and_then(|v| v.as_str()) {
             Some("turn_context") => state.note_turn_context(payload),
-            Some("event_msg") if payload.get("type").and_then(|v| v.as_str()) == Some("token_count") => {
-                state.note_token_count(payload)
-            }
+            Some("event_msg") if payload_type == Some("task_started") => state.note_task_started(payload),
+            Some("event_msg") if payload_type == Some("token_count") => state.note_token_count(payload),
             _ => {}
         }
     }
     state
+}
+
+/// Codex rollouts are the only transcripts that carry the turn signals the
+/// seed replays; every other provider's incremental parse skips the read.
+fn is_codex_rollout_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
+}
+
+fn codex_fact_state_for(path: &Path, offset: u64) -> CodexFactState {
+    if is_codex_rollout_path(path) {
+        seed_codex_fact_state(path, offset)
+    } else {
+        CodexFactState::default()
+    }
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
@@ -3039,7 +3079,7 @@ fn extract_codex_provider_facts(
             | ("compacted", _)
             | (
                 "event_msg",
-                "token_count" | "task_complete" | "turn_aborted" | "error" | "stream_error"
+                "task_started" | "token_count" | "task_complete" | "turn_aborted" | "error" | "stream_error"
             )
     );
     if !wanted {
@@ -3054,6 +3094,10 @@ fn extract_codex_provider_facts(
     match (line_type, payload_type) {
         ("turn_context", _) => {
             state.note_turn_context(payload);
+            return;
+        }
+        ("event_msg", "task_started") => {
+            state.note_task_started(payload);
             return;
         }
         ("event_msg", "token_count") => {

@@ -1,5 +1,5 @@
 {
-  "fact_count": 7,
+  "fact_count": 8,
   "facts": [
     {
       "kind": "turn.duration",
@@ -81,6 +81,17 @@
       "payload": {
         "error": "You've hit your usage limit. Try again at 6pm.",
         "kind": "error"
+      }
+    },
+    {
+      "kind": "turn.duration",
+      "at": "2026-09-03T17:30:05Z",
+      "source_offset": 6034,
+      "payload": {
+        "duration_ms": 4800,
+        "outcome": "aborted",
+        "reason": "interrupted",
+        "turn_id": "01a06704-3333-75c0-b532-a2e5db03a420"
       }
     }
   ]
