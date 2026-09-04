@@ -26,6 +26,9 @@
     "aiTitle",
     "sessionId",
     "type"
+   ],
+   "required_keys": [
+    "aiTitle"
    ]
   },
   "artifact-autoreact-ledger": {
@@ -65,7 +68,10 @@
     "cli"
    ],
    "keys": [
+    "agentId",
+    "attributionAgent",
     "cwd",
+    "effort",
     "entrypoint",
     "gitBranch",
     "isSidechain",
@@ -73,11 +79,10 @@
     "parentUuid",
     "requestId",
     "sessionId",
+    "session_id",
+    "slug",
     "timestamp",
     "type",
-    "userType",
-    "uuid",
-    "version",
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
@@ -87,7 +92,14 @@
     "usage.output_tokens",
     "usage.server_tool_use",
     "usage.service_tier",
-    "usage.speed"
+    "usage.speed",
+    "userType",
+    "uuid",
+    "version"
+   ],
+   "required_keys": [
+    "usage.input_tokens",
+    "usage.output_tokens"
    ]
   },
   "assistant/text": {
@@ -100,20 +112,32 @@
     "sdk-cli"
    ],
    "keys": [
+    "agentId",
+    "apiBlockIndex",
+    "apiErrorStatus",
+    "attributionAgent",
+    "attributionMcpServer",
+    "attributionMcpTool",
+    "attributionPlugin",
+    "attributionSkill",
     "cwd",
     "effort",
     "entrypoint",
+    "error",
+    "errorDetails",
     "gitBranch",
+    "isApiErrorMessage",
     "isSidechain",
     "message",
     "parentUuid",
+    "quotaLimits",
     "requestId",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
     "timestamp",
     "type",
-    "userType",
-    "uuid",
-    "version",
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
@@ -124,7 +148,14 @@
     "usage.output_tokens_details",
     "usage.server_tool_use",
     "usage.service_tier",
-    "usage.speed"
+    "usage.speed",
+    "userType",
+    "uuid",
+    "version"
+   ],
+   "required_keys": [
+    "usage.input_tokens",
+    "usage.output_tokens"
    ]
   },
   "assistant/text+thinking+tool_use": {
@@ -135,18 +166,21 @@
     "cli"
    ],
    "keys": [
+    "apiBlockIndex",
+    "attributionSkill",
     "cwd",
+    "effort",
     "entrypoint",
     "gitBranch",
     "isSidechain",
     "message",
     "parentUuid",
+    "requestId",
     "sessionId",
+    "session_id",
+    "slug",
     "timestamp",
     "type",
-    "userType",
-    "uuid",
-    "version",
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
@@ -154,9 +188,17 @@
     "usage.input_tokens",
     "usage.iterations",
     "usage.output_tokens",
+    "usage.output_tokens_details",
     "usage.server_tool_use",
     "usage.service_tier",
-    "usage.speed"
+    "usage.speed",
+    "userType",
+    "uuid",
+    "version"
+   ],
+   "required_keys": [
+    "usage.input_tokens",
+    "usage.output_tokens"
    ]
   },
   "assistant/text+tool_use": {
@@ -169,6 +211,9 @@
    "keys": [
     "agentId",
     "attributionAgent",
+    "attributionMcpServer",
+    "attributionMcpTool",
+    "attributionSkill",
     "cwd",
     "entrypoint",
     "gitBranch",
@@ -179,9 +224,6 @@
     "slug",
     "timestamp",
     "type",
-    "userType",
-    "uuid",
-    "version",
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
@@ -191,7 +233,14 @@
     "usage.output_tokens",
     "usage.server_tool_use",
     "usage.service_tier",
-    "usage.speed"
+    "usage.speed",
+    "userType",
+    "uuid",
+    "version"
+   ],
+   "required_keys": [
+    "usage.input_tokens",
+    "usage.output_tokens"
    ]
   },
   "assistant/thinking": {
@@ -204,18 +253,27 @@
     "sdk-cli"
    ],
    "keys": [
+    "agentId",
+    "apiBlockIndex",
+    "attributionAgent",
+    "attributionMcpServer",
+    "attributionMcpTool",
+    "attributionPlugin",
+    "attributionSkill",
     "cwd",
+    "effort",
     "entrypoint",
     "gitBranch",
     "isSidechain",
     "message",
     "parentUuid",
+    "requestId",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
     "timestamp",
     "type",
-    "userType",
-    "uuid",
-    "version",
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
@@ -223,9 +281,17 @@
     "usage.input_tokens",
     "usage.iterations",
     "usage.output_tokens",
+    "usage.output_tokens_details",
     "usage.server_tool_use",
     "usage.service_tier",
-    "usage.speed"
+    "usage.speed",
+    "userType",
+    "uuid",
+    "version"
+   ],
+   "required_keys": [
+    "usage.input_tokens",
+    "usage.output_tokens"
    ]
   },
   "assistant/thinking+tool_use": {
@@ -247,11 +313,9 @@
     "parentUuid",
     "requestId",
     "sessionId",
+    "session_id",
     "timestamp",
     "type",
-    "userType",
-    "uuid",
-    "version",
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
@@ -262,7 +326,14 @@
     "usage.output_tokens_details",
     "usage.server_tool_use",
     "usage.service_tier",
-    "usage.speed"
+    "usage.speed",
+    "userType",
+    "uuid",
+    "version"
+   ],
+   "required_keys": [
+    "usage.input_tokens",
+    "usage.output_tokens"
    ]
   },
   "assistant/tool_use": {
@@ -275,18 +346,27 @@
     "sdk-cli"
    ],
    "keys": [
+    "agentId",
+    "apiBlockIndex",
+    "attributionAgent",
+    "attributionMcpServer",
+    "attributionMcpTool",
+    "attributionPlugin",
+    "attributionSkill",
     "cwd",
+    "effort",
     "entrypoint",
     "gitBranch",
     "isSidechain",
     "message",
     "parentUuid",
+    "requestId",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
     "timestamp",
     "type",
-    "userType",
-    "uuid",
-    "version",
     "usage.cache_creation",
     "usage.cache_creation_input_tokens",
     "usage.cache_read_input_tokens",
@@ -294,9 +374,17 @@
     "usage.input_tokens",
     "usage.iterations",
     "usage.output_tokens",
+    "usage.output_tokens_details",
     "usage.server_tool_use",
     "usage.service_tier",
-    "usage.speed"
+    "usage.speed",
+    "userType",
+    "uuid",
+    "version"
+   ],
+   "required_keys": [
+    "usage.input_tokens",
+    "usage.output_tokens"
    ]
   },
   "atis-latch": {
@@ -339,6 +427,10 @@
     "sdk-cli"
    ],
    "keys": [
+    "autoModeConsentFlow",
+    "bashFirst",
+    "bypass",
+    "steerOnly",
     "type"
    ]
   },
@@ -418,11 +510,13 @@
    "keys": [
     "addedLines",
     "addedNames",
+    "failedMcpServers",
     "needsAuthMcpServers",
     "pendingMcpServers",
     "readdedNames",
     "removedNames",
-    "type"
+    "type",
+    "wireHiddenNames"
    ]
   },
   "attachment/diagnostics": {
@@ -460,6 +554,7 @@
     "cli"
    ],
    "keys": [
+    "displayPath",
     "filename",
     "snippet",
     "type"
@@ -488,8 +583,12 @@
    ],
    "keys": [
     "condition",
+    "durationMs",
+    "iterations",
     "met",
+    "reason",
     "sentinel",
+    "tokens",
     "type"
    ]
   },
@@ -663,7 +762,11 @@
    ],
    "keys": [
     "commandMode",
+    "imagePasteIds",
+    "isMeta",
+    "origin",
     "prompt",
+    "source_uuid",
     "timestamp",
     "type"
    ]
@@ -773,6 +876,8 @@
    "keys": [
     "bridgeSessionId",
     "lastSequenceNum",
+    "ownerAccountUuid",
+    "ownerOrganizationUuid",
     "sessionId",
     "type"
    ]
@@ -861,6 +966,7 @@
     "cli"
    ],
    "keys": [
+    "artifactCount",
     "frameUrl",
     "path",
     "sessionId",
@@ -940,6 +1046,7 @@
    "keys": [
     "content",
     "operation",
+    "reason",
     "sessionId",
     "timestamp",
     "type"
@@ -1000,12 +1107,16 @@
     "retryAttempt",
     "retryInMs",
     "sessionId",
+    "slug",
     "subtype",
     "timestamp",
     "type",
     "userType",
     "uuid",
     "version"
+   ],
+   "required_keys": [
+    "error"
    ]
   },
   "system/away_summary": {
@@ -1024,12 +1135,17 @@
     "isSidechain",
     "parentUuid",
     "sessionId",
+    "sessionKind",
+    "slug",
     "subtype",
     "timestamp",
     "type",
     "userType",
     "uuid",
     "version"
+   ],
+   "required_keys": [
+    "content"
    ]
   },
   "system/compact_boundary": {
@@ -1041,10 +1157,19 @@
    ],
    "keys": [
     "compactMetadata",
+    "compactMetadata.cumulativeDroppedTokens",
+    "compactMetadata.durationMs",
+    "compactMetadata.postTokens",
+    "compactMetadata.preCompactDiscoveredTools",
+    "compactMetadata.preTokens",
+    "compactMetadata.preservedMessages",
+    "compactMetadata.preservedSegment",
+    "compactMetadata.trigger",
     "content",
     "cwd",
     "entrypoint",
     "gitBranch",
+    "isMeta",
     "isSidechain",
     "level",
     "logicalParentUuid",
@@ -1057,6 +1182,10 @@
     "userType",
     "uuid",
     "version"
+   ],
+   "required_keys": [
+    "compactMetadata",
+    "compactMetadata.trigger"
    ]
   },
   "system/informational": {
@@ -1076,6 +1205,8 @@
     "level",
     "parentUuid",
     "sessionId",
+    "session_id",
+    "slug",
     "subtype",
     "timestamp",
     "type",
@@ -1102,6 +1233,9 @@
     "level",
     "parentUuid",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
     "subtype",
     "timestamp",
     "type",
@@ -1162,7 +1296,9 @@
     "parentUuid",
     "refusedUserMessageUuid",
     "requestId",
+    "retractedMessageUuids",
     "sessionId",
+    "slug",
     "subtype",
     "timestamp",
     "trigger",
@@ -1181,6 +1317,7 @@
    ],
    "keys": [
     "content",
+    "cronKind",
     "cwd",
     "entrypoint",
     "gitBranch",
@@ -1188,6 +1325,7 @@
     "isSidechain",
     "parentUuid",
     "sessionId",
+    "slug",
     "subtype",
     "timestamp",
     "type",
@@ -1208,6 +1346,7 @@
     "entrypoint",
     "gitBranch",
     "hasOutput",
+    "hookAdditionalContext",
     "hookCount",
     "hookErrors",
     "hookInfos",
@@ -1216,6 +1355,9 @@
     "parentUuid",
     "preventedContinuation",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
     "stopReason",
     "subtype",
     "timestamp",
@@ -1242,13 +1384,20 @@
     "isSidechain",
     "messageCount",
     "parentUuid",
+    "pendingBackgroundAgentCount",
+    "pendingWorkflowCount",
     "sessionId",
+    "sessionKind",
+    "slug",
     "subtype",
     "timestamp",
     "type",
     "userType",
     "uuid",
     "version"
+   ],
+   "required_keys": [
+    "durationMs"
    ]
   },
   "user/compact_summary+string": {
@@ -1286,6 +1435,7 @@
     "cli"
    ],
    "keys": [
+    "agentId",
     "cwd",
     "entrypoint",
     "gitBranch",
@@ -1323,6 +1473,8 @@
     "promptId",
     "promptSource",
     "sessionId",
+    "sessionKind",
+    "slug",
     "timestamp",
     "type",
     "userType",
@@ -1338,16 +1490,26 @@
     "cli"
    ],
    "keys": [
+    "agentId",
     "cwd",
     "entrypoint",
     "gitBranch",
     "isMeta",
     "isSidechain",
     "message",
+    "origin",
     "parentUuid",
+    "permissionMode",
     "promptId",
+    "promptSource",
+    "queuePriority",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
+    "sourceToolUseID",
     "timestamp",
+    "turnCompanion",
     "type",
     "userType",
     "uuid",
@@ -1363,6 +1525,7 @@
     "sdk-cli"
    ],
    "keys": [
+    "agentId",
     "cwd",
     "entrypoint",
     "gitBranch",
@@ -1372,8 +1535,12 @@
     "parentUuid",
     "promptId",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
     "sourceToolUseID",
     "timestamp",
+    "turnCompanion",
     "type",
     "userType",
     "uuid",
@@ -1390,16 +1557,24 @@
     "sdk-cli"
    ],
    "keys": [
+    "agentId",
     "cwd",
     "entrypoint",
     "gitBranch",
     "isSidechain",
     "message",
+    "origin",
     "parentUuid",
     "permissionMode",
     "promptId",
     "promptSource",
+    "queueOrigin",
+    "queuePriority",
+    "queueSkipAttachments",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
     "timestamp",
     "type",
     "userType",
@@ -1415,6 +1590,7 @@
     "cli"
    ],
    "keys": [
+    "agentId",
     "cwd",
     "entrypoint",
     "gitBranch",
@@ -1424,6 +1600,9 @@
     "parentUuid",
     "promptId",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
     "timestamp",
     "type",
     "userType",
@@ -1465,18 +1644,26 @@
     "sdk-cli"
    ],
    "keys": [
+    "agentId",
     "cwd",
     "entrypoint",
     "gitBranch",
     "isSidechain",
+    "mcpMeta",
     "message",
     "parentUuid",
     "promptId",
     "sessionId",
+    "sessionKind",
+    "session_id",
+    "slug",
     "sourceToolAssistantUUID",
     "timestamp",
+    "toolDenialKind",
+    "toolEndsTurn",
     "toolUseResult",
     "type",
+    "userFeedback",
     "userType",
     "uuid",
     "version"

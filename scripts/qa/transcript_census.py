@@ -2,19 +2,24 @@
 """Census of provider transcript shapes, checked against the shape catalog.
 
 Providers publish no list of what their terminal renders. The only way to
-notice a new or vanished transcript line is to fingerprint what they write
-and compare it with what we have catalogued. A shape is the provider plus
-the entrypoint plus the full discriminator path (`system/turn_duration`,
+notice a new, changed or vanished transcript line is to fingerprint what they
+write and compare it with what we have catalogued. A shape is the provider
+plus the entrypoint plus the full discriminator path (`system/turn_duration`,
 `attachment/hook_success`, `event_msg/item_completed/CommandExecution`),
-never just the top-level type.
+never just the top-level type, and each shape carries the set of keys the
+provider has ever written on it, so a renamed or dropped field under a known
+discriminator is a finding, not a silently ignored line.
 
     transcript_census.py census  --provider claude PATH [PATH ...]
         Fingerprint transcripts (files or directories) and print the census.
     transcript_census.py check   --provider claude PATH [PATH ...]
-        Exit 1 if any observed shape is not classified in the catalog.
+        Exit 1 if any observed shape is not classified in the catalog, if a
+        shape lacks a key the parser requires (`required_keys`), or if a
+        shape carries a key the catalog has never seen.
     transcript_census.py seed    --provider claude PATH [PATH ...]
-        Add every unseen shape to the catalog as `unclassified` and extend
-        first/last seen versions. Rows are never removed.
+        Add every unseen shape to the catalog as `unclassified`, widen each
+        shape's key set and version range. Rows and keys are never removed;
+        `required_keys` is maintained by hand from what the parser reads.
 
 The catalog lives in `schemas/transcript_shapes/<provider>.json` and is
 append-only: `first_seen_version` and `last_seen_version` make it the
@@ -39,6 +44,11 @@ def _sorted_keys(obj: object) -> list[str]:
     return sorted(obj.keys()) if isinstance(obj, dict) else []
 
 
+def _nested_keys(obj: object, prefix: str) -> list[str]:
+    """`prefix.key` for each key of a nested object the parser reads into."""
+    return [f"{prefix}.{key}" for key in _sorted_keys(obj)]
+
+
 def _version_key(value: str) -> tuple:
     return tuple(int(part) if part.isdigit() else part for part in value.split("."))
 
@@ -49,7 +59,8 @@ def claude_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
     version = entry.get("version") if isinstance(entry.get("version"), str) else None
     entrypoint = entry.get("entrypoint") if isinstance(entry.get("entrypoint"), str) else None
     if kind == "system":
-        return f"system/{entry.get('subtype', '?')}", _sorted_keys(entry), version, entrypoint
+        keys = _sorted_keys(entry) + _nested_keys(entry.get("compactMetadata"), "compactMetadata")
+        return f"system/{entry.get('subtype', '?')}", keys, version, entrypoint
     if kind == "attachment":
         att = entry.get("attachment") or {}
         return f"attachment/{att.get('type', '?')}", _sorted_keys(att), version, entrypoint
@@ -89,11 +100,21 @@ def codex_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
             item = payload.get("item") or {}
             shape += "/" + str(item.get("type", "?"))
             keys = _sorted_keys(item)
+        elif ptype == "token_count":
+            info = payload.get("info") or {}
+            keys += _nested_keys(info, "info") + _nested_keys(
+                info.get("last_token_usage") if isinstance(info, dict) else None, "info.last_token_usage"
+            )
         return shape, keys, version, entrypoint
     if kind == "response_item" and isinstance(payload, dict):
         role = payload.get("role")
         shape = f"response_item/{payload.get('type', '?')}" + (f"/{role}" if role else "")
         return shape, _sorted_keys(payload), version, entrypoint
+    if kind == "turn_context" and isinstance(payload, dict):
+        settings = (
+            (payload.get("collaboration_mode") or {}).get("settings") if isinstance(payload.get("collaboration_mode"), dict) else None
+        )
+        return kind, _sorted_keys(payload) + _nested_keys(settings, "collaboration_mode.settings"), version, entrypoint
     return kind, _sorted_keys(payload) or _sorted_keys(entry), version, entrypoint
 
 
@@ -114,7 +135,7 @@ def iter_files(paths: list[str], provider: str) -> list[Path]:
 def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
     shaper = SHAPERS[provider]
     shapes: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"count": 0, "files": set(), "versions": set(), "entrypoints": set(), "keys": None}
+        lambda: {"count": 0, "files": set(), "versions": set(), "entrypoints": set(), "key_counts": defaultdict(int)}
     )
     for path in files:
         version = None
@@ -144,8 +165,8 @@ def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
                         record["versions"].add(version)
                     if entrypoint:
                         record["entrypoints"].add(entrypoint)
-                    if record["keys"] is None:
-                        record["keys"] = keys
+                    for key in keys:
+                        record["key_counts"][key] += 1
         except OSError:
             continue
     out: dict[str, dict[str, Any]] = {}
@@ -157,7 +178,10 @@ def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
             "first_seen_version": versions[0] if versions else None,
             "last_seen_version": versions[-1] if versions else None,
             "entrypoints": sorted(record["entrypoints"]),
-            "keys": record["keys"] or [],
+            # Every key the shape carried on any line, and on how many lines:
+            # the identity a renamed or dropped field shows up in.
+            "keys": sorted(record["key_counts"]),
+            "key_counts": dict(sorted(record["key_counts"].items())),
         }
     return out
 
@@ -188,10 +212,48 @@ def unclassified(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -
     )
 
 
+def drift(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Catalogued shapes observed without a key the parser requires.
+
+    A signal's parser reads specific keys (`durationMs`, `info.last_token_usage.total_tokens`).
+    A provider that renames or drops one keeps the discriminator, so only the
+    key set can say the fact will silently stop. Reported per shape with how
+    many of its lines lacked each key.
+    """
+    rows = catalog.get("shapes", {})
+    found: dict[str, dict[str, Any]] = {}
+    for shape, record in observed.items():
+        row = rows.get(shape)
+        if row is None:
+            continue
+        required = [key for key in (row.get("required_keys") or []) if isinstance(key, str)]
+        if not required:
+            continue
+        key_counts = record.get("key_counts") or {}
+        missing = {key: record["count"] - int(key_counts.get(key, 0)) for key in required if int(key_counts.get(key, 0)) < record["count"]}
+        if missing:
+            found[shape] = {"missing": missing, "lines": record["count"]}
+    return found
+
+
+def widened(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
+    """Catalogued shapes carrying keys the catalog has never recorded: something new to classify."""
+    rows = catalog.get("shapes", {})
+    found: dict[str, list[str]] = {}
+    for shape, record in observed.items():
+        row = rows.get(shape)
+        if row is None:
+            continue
+        new_keys = sorted(set(record.get("keys") or []) - set(row.get("keys") or []))
+        if new_keys:
+            found[shape] = new_keys
+    return found
+
+
 def seed(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> tuple[int, int]:
-    """Append unseen shapes as unclassified; widen version ranges. Never delete."""
+    """Append unseen shapes as unclassified; widen key sets and version ranges. Never delete."""
     rows = catalog.setdefault("shapes", {})
-    added = widened = 0
+    added = widened_rows = 0
     for shape, record in observed.items():
         row = rows.get(shape)
         if row is None:
@@ -214,8 +276,12 @@ def seed(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> tuple[
         if merged != (row.get("entrypoints") or []):
             row["entrypoints"] = merged
             changed = True
-        widened += int(changed)
-    return added, widened
+        merged_keys = sorted(set(row.get("keys") or []) | set(record.get("keys") or []))
+        if merged_keys != (row.get("keys") or []):
+            row["keys"] = merged_keys
+            changed = True
+        widened_rows += int(changed)
+    return added, widened_rows
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -245,12 +311,14 @@ def main(argv: list[str] | None = None) -> int:
 
     catalog = load_catalog(args.provider)
     if args.command == "seed":
-        added, widened = seed(catalog, observed)
+        added, widened_rows = seed(catalog, observed)
         save_catalog(args.provider, catalog)
-        print(f"{args.provider}: {added} shapes added, {widened} rows widened, {len(catalog['shapes'])} total")
+        print(f"{args.provider}: {added} shapes added, {widened_rows} rows widened, {len(catalog['shapes'])} total")
         return 0
 
     missing = unclassified(catalog, observed)
+    drifted = drift(catalog, observed)
+    new_keys = widened(catalog, observed)
     if missing:
         print(f"{args.provider}: {len(missing)} unclassified shape(s) in {len(files)} file(s):")
         for shape in missing:
@@ -258,8 +326,18 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"  {shape}  count={record['count']} versions={record['first_seen_version']}..{record['last_seen_version']} keys={','.join(record['keys'][:12])}"
             )
+    if drifted:
+        print(f"{args.provider}: {len(drifted)} shape(s) missing a key the parser requires:")
+        for shape, report in drifted.items():
+            gaps = ", ".join(f"{key} absent in {count} of {report['lines']} lines" for key, count in report["missing"].items())
+            print(f"  {shape}  {gaps}")
+    if new_keys:
+        print(f"{args.provider}: {len(new_keys)} shape(s) carry keys the catalog has never seen (seed to accept):")
+        for shape, keys in new_keys.items():
+            print(f"  {shape}  +{','.join(keys)}")
+    if missing or drifted or new_keys:
         return 1
-    print(f"{args.provider}: {len(observed)} shapes, all classified")
+    print(f"{args.provider}: {len(observed)} shapes, all classified, every required key present, no new keys")
     return 0
 
 

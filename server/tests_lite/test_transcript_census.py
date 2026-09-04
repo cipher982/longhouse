@@ -70,3 +70,50 @@ def test_unclassified_shape_fails_the_check(tmp_path: Path):
     result = _check("claude", novel)
     assert result.returncode == 1
     assert "system/brand_new_thing" in result.stdout
+
+
+def test_a_dropped_required_key_is_drift_not_a_clean_census(tmp_path: Path):
+    """A provider that renames durationMs keeps the discriminator; only the key set can say the fact will stop."""
+    renamed = tmp_path / "renamed.jsonl"
+    renamed.write_text(
+        '{"type":"system","subtype":"turn_duration","duration":129299,"messageCount":898,'
+        '"timestamp":"2026-09-03T14:20:39.100Z","version":"9.9.9","uuid":"u","sessionId":"s","cwd":"/","gitBranch":"main"}\n'
+    )
+    result = _check("claude", renamed)
+    assert result.returncode == 1
+    assert "system/turn_duration" in result.stdout
+    assert "durationMs absent in 1 of 1 lines" in result.stdout
+    assert "+duration" in result.stdout, "the new name is reported as a key the catalog has never seen"
+
+
+def test_a_new_key_on_a_known_shape_is_reported_until_seeded(tmp_path: Path):
+    """A field the provider added is something to classify, not something to ignore."""
+    widened = tmp_path / "widened.jsonl"
+    widened.write_text(
+        '{"timestamp":"2026-09-03T11:25:31.445Z","type":"event_msg","payload":{"type":"task_complete",'
+        '"turn_id":"t-1","last_agent_message":"ok","started_at":1,"completed_at":2,"duration_ms":18391,'
+        '"time_to_first_token_ms":8662,"brand_new_field":true}}\n'
+    )
+    result = _check("codex", widened)
+    assert result.returncode == 1
+    assert "event_msg/task_complete  +brand_new_field" in result.stdout
+
+
+def test_required_keys_name_what_the_parser_reads():
+    for provider, expected in {
+        "claude": {"system/turn_duration": ["durationMs"], "ai-title": ["aiTitle"], "system/away_summary": ["content"]},
+        "codex": {
+            "event_msg/task_complete": ["duration_ms", "turn_id"],
+            "event_msg/token_count": [
+                "info",
+                "info.last_token_usage",
+                "info.last_token_usage.total_tokens",
+                "info.last_token_usage.output_tokens",
+                "info.model_context_window",
+            ],
+        },
+    }.items():
+        shapes = json.loads((REPO_ROOT / "schemas" / "transcript_shapes" / f"{provider}.json").read_text())["shapes"]
+        for shape, keys in expected.items():
+            assert shapes[shape]["required_keys"] == keys, (provider, shape)
+            assert set(keys) <= set(shapes[shape]["keys"]), "a required key must be one the provider has actually written"

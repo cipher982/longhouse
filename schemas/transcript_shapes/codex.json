@@ -17,6 +17,9 @@
     "replacement_history",
     "window_id",
     "window_number"
+   ],
+   "required_keys": [
+    "replacement_history"
    ]
   },
   "event_msg/agent_message": {
@@ -58,6 +61,9 @@
     "codex_error_info",
     "message",
     "type"
+   ],
+   "required_keys": [
+    "message"
    ]
   },
   "event_msg/item_completed/AgentMessage": {
@@ -173,7 +179,10 @@
    "keys": [
     "arguments",
     "duration",
+    "error",
     "id",
+    "pluginId",
+    "readOnlyHint",
     "result",
     "server",
     "status",
@@ -238,6 +247,7 @@
     "call_id",
     "duration",
     "invocation",
+    "plugin_id",
     "result",
     "type"
    ]
@@ -272,6 +282,9 @@
     "codex_error_info",
     "message",
     "type"
+   ],
+   "required_keys": [
+    "message"
    ]
   },
   "event_msg/sub_agent_activity": {
@@ -303,10 +316,16 @@
    "keys": [
     "completed_at",
     "duration_ms",
+    "error",
     "last_agent_message",
+    "started_at",
     "time_to_first_token_ms",
     "turn_id",
     "type"
+   ],
+   "required_keys": [
+    "duration_ms",
+    "turn_id"
    ]
   },
   "event_msg/task_started": {
@@ -325,6 +344,9 @@
     "started_at",
     "turn_id",
     "type"
+   ],
+   "required_keys": [
+    "turn_id"
    ]
   },
   "event_msg/thread_goal_updated": {
@@ -379,8 +401,24 @@
    ],
    "keys": [
     "info",
+    "info.last_token_usage",
+    "info.last_token_usage.cache_write_input_tokens",
+    "info.last_token_usage.cached_input_tokens",
+    "info.last_token_usage.input_tokens",
+    "info.last_token_usage.output_tokens",
+    "info.last_token_usage.reasoning_output_tokens",
+    "info.last_token_usage.total_tokens",
+    "info.model_context_window",
+    "info.total_token_usage",
     "rate_limits",
     "type"
+   ],
+   "required_keys": [
+    "info",
+    "info.last_token_usage",
+    "info.last_token_usage.total_tokens",
+    "info.last_token_usage.output_tokens",
+    "info.model_context_window"
    ]
   },
   "event_msg/turn_aborted": {
@@ -395,8 +433,12 @@
     "completed_at",
     "duration_ms",
     "reason",
+    "started_at",
     "turn_id",
     "type"
+   ],
+   "required_keys": [
+    "reason"
    ]
   },
   "event_msg/user_message": {
@@ -410,7 +452,9 @@
     "longhouse_console"
    ],
    "keys": [
+    "audio",
     "images",
+    "local_audio",
     "local_images",
     "message",
     "text_elements",
@@ -454,6 +498,7 @@
    "keys": [
     "author",
     "content",
+    "id",
     "internal_chat_message_metadata_passthrough",
     "recipient",
     "type"
@@ -491,6 +536,7 @@
    ],
    "keys": [
     "call_id",
+    "id",
     "internal_chat_message_metadata_passthrough",
     "output",
     "type"
@@ -511,6 +557,7 @@
     "id",
     "internal_chat_message_metadata_passthrough",
     "name",
+    "namespace",
     "type"
    ]
   },
@@ -525,6 +572,7 @@
    ],
    "keys": [
     "call_id",
+    "id",
     "internal_chat_message_metadata_passthrough",
     "output",
     "type"
@@ -561,6 +609,7 @@
    ],
    "keys": [
     "content",
+    "id",
     "internal_chat_message_metadata_passthrough",
     "role",
     "type"
@@ -578,6 +627,7 @@
    ],
    "keys": [
     "content",
+    "id",
     "internal_chat_message_metadata_passthrough",
     "role",
     "type"
@@ -594,6 +644,7 @@
     "longhouse_console"
    ],
    "keys": [
+    "content",
     "encrypted_content",
     "id",
     "internal_chat_message_metadata_passthrough",
@@ -663,13 +714,21 @@
     "longhouse_console"
    ],
    "keys": [
+    "agent_nickname",
+    "agent_path",
     "base_instructions",
     "cli_version",
+    "context_window",
     "cwd",
+    "dynamic_tools",
+    "forked_from_id",
     "git",
+    "history_mode",
     "id",
     "model_provider",
+    "multi_agent_version",
     "originator",
+    "parent_thread_id",
     "session_id",
     "source",
     "thread_source",
@@ -688,11 +747,18 @@
    ],
    "keys": [
     "approval_policy",
+    "approvals_reviewer",
     "collaboration_mode",
+    "collaboration_mode.settings.developer_instructions",
+    "collaboration_mode.settings.model",
+    "collaboration_mode.settings.reasoning_effort",
+    "comp_hash",
     "current_date",
     "cwd",
     "effort",
+    "file_system_sandbox_policy",
     "model",
+    "multi_agent_mode",
     "multi_agent_version",
     "permission_profile",
     "personality",
@@ -702,6 +768,9 @@
     "timezone",
     "turn_id",
     "workspace_roots"
+   ],
+   "required_keys": [
+    "model"
    ]
   },
   "world_state": {
