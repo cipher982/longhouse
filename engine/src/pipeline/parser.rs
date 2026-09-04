@@ -1832,10 +1832,20 @@ fn claude_task_tag_value(body: &str, tag: &str) -> Option<String> {
 
 fn claude_task_notification_summary(content: &str) -> Option<String> {
     let trimmed = content.trim();
-    let body = trimmed
-        .strip_prefix("<task-notification>")?
-        .strip_suffix("</task-notification>")?
-        .trim();
+    let body_and_tail = trimmed.strip_prefix("<task-notification>")?;
+    let close_tag = "</task-notification>";
+    let close = body_and_tail.find(close_tag)?;
+    let body = body_and_tail[..close].trim();
+    // Claude can append one or more provider-authored system reminders to a
+    // task envelope. Keep this allowlist narrow: arbitrary trailing prose is
+    // not enough to promote pasted XML into a provider notification.
+    let mut tail = body_and_tail[close + close_tag.len()..].trim();
+    while !tail.is_empty() {
+        let reminder = tail.strip_prefix("<system-reminder>")?;
+        let reminder_close = "</system-reminder>";
+        let end = reminder.find(reminder_close)?;
+        tail = reminder[end + reminder_close.len()..].trim();
+    }
     if let Some(summary) = claude_task_tag_value(body, "summary") {
         return Some(summary);
     }
@@ -2870,6 +2880,7 @@ fn compact_metadata_hint(raw: Option<&RawValue>) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 const CODEX_TURN_ABORTED_PREFIX: &str = "<turn_aborted>";
+const CODEX_INTERNAL_CONTEXT_PREFIX: &str = "<codex_internal_context";
 const CODEX_TURN_INTERRUPTED_TEXT: &str = "User interrupted the turn";
 const CODEX_TURN_INTERRUPTED_RAW_TYPE: &str = "codex_turn_interrupted";
 const CODEX_TURN_INTERRUPTED_MARKER_RAW_TYPE: &str = "codex_turn_interrupted_marker";
@@ -2877,6 +2888,14 @@ const CODEX_TURN_INTERRUPTED_MARKER_RAW_TYPE: &str = "codex_turn_interrupted_mar
 #[derive(Debug, Default)]
 struct CodexPending {
     suppress_next_turn_aborted_marker: bool,
+}
+
+fn codex_text_is_internal_context(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let Some(rest) = trimmed.strip_prefix(CODEX_INTERNAL_CONTEXT_PREFIX) else {
+        return false;
+    };
+    matches!(rest.chars().next(), Some(' ' | '\t' | '\r' | '\n' | '>'))
 }
 
 /// Codex spreads one turn's accounting over several lines: `turn_context`
@@ -3326,7 +3345,9 @@ fn extract_codex_events(
                     return;
                 }
                 pending.suppress_next_turn_aborted_marker = false;
-                if injected_prefixes.iter().any(|p| first_text.starts_with(p)) {
+                if codex_text_is_internal_context(first_text)
+                    || injected_prefixes.iter().any(|p| first_text.starts_with(p))
+                {
                     return;
                 }
             }
@@ -5951,10 +5972,19 @@ mod tests {
 
     #[test]
     fn test_codex_context_injection_filtered() {
-        // AGENTS.md and environment context injected as role=user must be dropped
+        // Codex's goal context, AGENTS.md, and environment context injected as
+        // role=user must be dropped.
         let dir = tempfile::tempdir().unwrap();
 
         // Build lines programmatically to avoid backslash escaping issues in raw strings
+        let goal_line = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-03-01T09:59:59Z",
+            "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "<codex_internal_context source=\"goal\">\n<objective>keep working</objective>\n</codex_internal_context>"}]
+            }
+        }).to_string();
         let agents_line = serde_json::json!({
             "type": "response_item",
             "timestamp": "2026-03-01T10:00:00Z",
@@ -5980,6 +6010,14 @@ mod tests {
             }
         })
         .to_string();
+        let lookalike_line = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-03-01T10:00:02Z",
+            "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "Please quote <codex_internal_context source=\"goal\"> in your answer"}]
+            }
+        }).to_string();
 
         let path = {
             let path = dir
@@ -5987,22 +6025,29 @@ mod tests {
                 .join("019c638d-0000-0000-0000-000000000012.jsonl");
             let mut f = std::fs::File::create(&path).unwrap();
             use std::io::Write;
+            writeln!(f, "{}", goal_line).unwrap();
             writeln!(f, "{}", agents_line).unwrap();
             writeln!(f, "{}", env_line).unwrap();
             writeln!(f, "{}", real_line).unwrap();
+            writeln!(f, "{}", lookalike_line).unwrap();
             path
         };
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(
             result.events.len(),
-            1,
-            "only real user message should survive"
+            2,
+            "only real user messages should survive"
         );
         assert_eq!(result.events[0].role, Role::User);
         assert_eq!(
             result.events[0].content_text.as_deref(),
             Some("please help me debug this")
+        );
+        assert_eq!(result.events[1].role, Role::User);
+        assert_eq!(
+            result.events[1].content_text.as_deref(),
+            Some("Please quote <codex_internal_context source=\"goal\"> in your answer")
         );
     }
 

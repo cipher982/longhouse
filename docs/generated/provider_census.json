@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 252,
+  "file_count": 254,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1938,6 +1938,13 @@
       ]
     },
     {
+      "path": "server/zerg/services/provider_interaction_semantics.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
       "path": "server/zerg/services/session_chat_impl.py",
       "providers": [
         "claude",
@@ -1979,6 +1986,13 @@
     },
     {
       "path": "server/zerg/services/shipper/hooks.py",
+      "providers": [
+        "claude",
+        "codex"
+      ]
+    },
+    {
+      "path": "server/zerg/services/storage_v2_semantics.py",
       "providers": [
         "claude",
         "codex"

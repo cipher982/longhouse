@@ -72,6 +72,46 @@ def _raw_content(raw: Mapping[str, Any] | None) -> str:
     return ""
 
 
+_CODEX_INTERNAL_CONTEXT_PREFIX = "<codex_internal_context"
+
+
+def _codex_internal_context_text(content_text: str | None) -> bool:
+    trimmed = str(content_text or "").lstrip()
+    if not trimmed.startswith(_CODEX_INTERNAL_CONTEXT_PREFIX):
+        return False
+    rest = trimmed[len(_CODEX_INTERNAL_CONTEXT_PREFIX) :]
+    return not rest or rest[0] in " \t\r\n>"
+
+
+def codex_internal_context_record(raw_json: Any) -> bool:
+    """Recognize Codex's goal continuation context stored as a user row."""
+
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return False
+    payload = raw.get("payload")
+    if not isinstance(payload, Mapping) or payload.get("type") != "message" or payload.get("role") != "user":
+        return False
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return False
+    first_text = next(
+        (
+            item.get("text")
+            for item in content
+            if isinstance(item, Mapping) and item.get("type") == "input_text" and isinstance(item.get("text"), str)
+        ),
+        None,
+    )
+    return _codex_internal_context_text(first_text)
+
+
+def codex_internal_context_candidate(content_text: str | None) -> bool:
+    """Recognize the normalized Codex context prefix for legacy rows."""
+
+    return _codex_internal_context_text(content_text)
+
+
 def _raw_identifier(raw: Mapping[str, Any] | None, field: str) -> str | None:
     if raw is None:
         return None
@@ -218,7 +258,8 @@ _CLAUDE_COMMAND_RECORD_RE = re.compile(
 )
 _CLAUDE_COMMAND_OUTPUT_RE = re.compile(r"^\s*<local-command-stdout>.*?</local-command-stdout>\s*$", re.DOTALL)
 _CLAUDE_TASK_NOTIFICATION_RE = re.compile(
-    r"^\s*<task-notification>\s*(?P<body>.*?)\s*</task-notification>\s*$",
+    r"^\s*<task-notification>\s*(?P<body>.*?)\s*</task-notification>"
+    r"(?:\s*<system-reminder>.*?</system-reminder>\s*)*\s*$",
     re.DOTALL,
 )
 
@@ -234,7 +275,8 @@ def _claude_task_tag_value(body: str, tag: str) -> str | None:
 def claude_task_notification_summary(content_text: str | None) -> str | None:
     """Return the compact display text from Claude's task notification XML.
 
-    The outer envelope is intentionally exact. This helper may be used on a
+    The outer envelope is intentionally exact, with only Claude's known
+    trailing ``system-reminder`` blocks allowed. This helper may be used on a
     normalized render record that no longer has the raw ``origin`` sidecar, so
     it establishes shape only; callers that classify a provider record must
     also require :func:`claude_task_notification_display`'s structural origin.
@@ -600,7 +642,12 @@ def classify_provider_interaction(
         and normalized_role == "user"
         and any(_claude_native_image_placeholder(raw, value) for value in (text, raw_text) if value)
     )
-    if claude_task_notification:
+    codex_internal_context = normalized_provider == "codex" and codex_internal_context_record(raw)
+    if codex_internal_context:
+        kind = INTERACTION_PROVIDER_SYSTEM
+        changes_provider_state = False
+        starts_model_turn = False
+    elif claude_task_notification:
         kind = INTERACTION_PROVIDER_NOTIFICATION
         changes_provider_state = False
         starts_model_turn = False
@@ -628,7 +675,7 @@ def classify_provider_interaction(
     # ``interaction_kind`` is parser-owned normalized data. Never accept a
     # Longhouse semantic override from provider raw JSON: raw provider text is
     # evidence to classify, not an authority that can demote itself.
-    explicit_kind = interaction_kind
+    explicit_kind = None if codex_internal_context else interaction_kind
     if explicit_kind in _INTERACTION_KINDS:
         kind = str(explicit_kind)
         if kind in {INTERACTION_LOCAL_CONTROL, INTERACTION_CONVERSATION_BOUNDARY}:
@@ -685,7 +732,9 @@ def semantic_projection_facts(
     across every semantic consumer.
     """
 
-    raw_is_authoritative = str(provider or "").strip().lower() == "claude" and _raw_mapping(raw_json) is not None
+    normalized_provider = str(provider or "").strip().lower()
+    codex_raw_is_authoritative = normalized_provider == "codex" and codex_internal_context_record(raw_json)
+    raw_is_authoritative = (normalized_provider == "claude" and _raw_mapping(raw_json) is not None) or codex_raw_is_authoritative
 
     classification = classify_provider_interaction(
         provider,
@@ -724,7 +773,9 @@ def title_eligible_provider_event(
 ) -> bool:
     """Whether an event can be the first conversational title candidate."""
 
-    raw_is_authoritative = str(provider or "").strip().lower() == "claude" and _raw_mapping(raw_json) is not None
+    normalized_provider = str(provider or "").strip().lower()
+    codex_raw_is_authoritative = normalized_provider == "codex" and codex_internal_context_record(raw_json)
+    raw_is_authoritative = (normalized_provider == "claude" and _raw_mapping(raw_json) is not None) or codex_raw_is_authoritative
     if not raw_is_authoritative and str(role or "").strip().lower() == "user" and title_eligible is not None:
         return bool(title_eligible)
 
@@ -760,7 +811,10 @@ def semantic_event_included(
 
     if interaction_kind == INTERACTION_PROVIDER_NOTIFICATION:
         return False
-    if str(provider or "").strip().lower() == "claude" and claude_task_notification_display(raw_json) is not None:
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider == "claude" and claude_task_notification_display(raw_json) is not None:
+        return False
+    if normalized_provider == "codex" and codex_internal_context_candidate(content_text):
         return False
     if str(role or "").strip().lower() != "user":
         return True
@@ -815,6 +869,8 @@ __all__ = [
     "INTERACTION_PROVIDER_SYSTEM",
     "INTERACTION_UNKNOWN_USER_INPUT",
     "classify_provider_interaction",
+    "codex_internal_context_candidate",
+    "codex_internal_context_record",
     "claude_task_notification_display",
     "claude_task_notification_summary",
     "interaction_context_key_parts",

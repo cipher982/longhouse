@@ -73,7 +73,8 @@ def test_parse_session_file_projects_claude_task_notification(tmp_path):
                 "<task-notification>\n"
                 "<status>completed</status>\n"
                 "<summary>Background command finished (exit code 0)</summary>\n"
-                "</task-notification>"
+                "</task-notification>\n"
+                "<system-reminder>provider-authored reminder</system-reminder>"
             ),
         },
     }

@@ -20,9 +20,12 @@ from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SY
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import claude_task_notification_display
 from zerg.services.provider_interaction_semantics import claude_task_notification_summary
+from zerg.services.provider_interaction_semantics import codex_internal_context_candidate
+from zerg.services.provider_interaction_semantics import codex_internal_context_record
 from zerg.services.provider_interaction_semantics import interaction_context_key_parts
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_event_included
+from zerg.services.provider_interaction_semantics import semantic_projection_facts
 from zerg.services.provider_interaction_semantics import title_eligible_provider_event
 
 
@@ -443,7 +446,8 @@ def test_claude_task_notification_is_a_visible_status_not_a_user_message() -> No
 <output-file>/tmp/task.output</output-file>
 <status>completed</status>
 <summary>Background command \"Run the checks\" completed (exit code 0)</summary>
-</task-notification>"""
+</task-notification>
+<system-reminder>provider-authored reminder</system-reminder>"""
     raw = {
         "type": "user",
         "origin": {"kind": "task-notification"},
@@ -467,6 +471,70 @@ def test_claude_task_notification_is_a_visible_status_not_a_user_message() -> No
     assert semantics["starts_model_turn"] is False
     assert semantics["changes_provider_state"] is False
     assert semantic_event_included("claude", role="user", content_text=content, raw_json=raw) is False
+
+
+def test_codex_internal_goal_context_is_provider_system_not_user_text() -> None:
+    content = '<codex_internal_context source="goal">\n<objective>keep working</objective>\n</codex_internal_context>'
+    raw = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": content}],
+        },
+    }
+
+    assert codex_internal_context_record(raw) is True
+    assert codex_internal_context_record(json.dumps(raw)) is True
+    assert codex_internal_context_candidate(content) is True
+    semantics = classify_provider_interaction(
+        "codex",
+        role="user",
+        content_text=content,
+        raw_json=raw,
+        interaction_kind=INTERACTION_DURABLE_USER_MESSAGE,
+    )
+
+    assert semantics["interaction_kind"] == INTERACTION_PROVIDER_SYSTEM
+    assert semantics["counts_as_user_message"] is False
+    assert semantics["title_eligible"] is False
+    projection = semantic_projection_facts(
+        "codex",
+        role="user",
+        content_text=content,
+        raw_json=raw,
+        interaction_kind=INTERACTION_DURABLE_USER_MESSAGE,
+        title_eligible=True,
+    )
+    assert projection["interaction_kind"] == INTERACTION_PROVIDER_SYSTEM
+    assert projection["title_eligible"] is False
+    assert (
+        semantic_event_included(
+            "codex",
+            role="user",
+            content_text=content,
+            interaction_kind=INTERACTION_DURABLE_USER_MESSAGE,
+        )
+        is False
+    )
+
+    lookalike = 'Please quote <codex_internal_context source="goal"> in your answer'
+    assert codex_internal_context_candidate(lookalike) is False
+    lookalike_semantics = classify_provider_interaction(
+        "codex",
+        role="user",
+        content_text=lookalike,
+        raw_json={
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": lookalike}],
+            },
+        },
+    )
+    assert lookalike_semantics["interaction_kind"] == INTERACTION_DURABLE_USER_MESSAGE
+    assert semantic_event_included("codex", role="user", content_text=lookalike) is True
 
 
 def test_claude_task_notification_lookalike_without_origin_stays_user_text() -> None:
