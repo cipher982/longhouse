@@ -15,6 +15,7 @@ from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.routers.agents_storage_v2 import read_storage_v2_session_events_page
 from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalog_read_gateway import resolve_session_alias
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.session_input_links import input_origins_by_event
@@ -39,6 +40,7 @@ def _event_projection(
     closed: bool,
     provider: str | None,
     completed_tool_call_ids: set[str],
+    cursor_run_ended: bool,
     input_origin: dict[str, object] | None = None,
     turn_end: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -46,7 +48,9 @@ def _event_projection(
     tool_call_id = str(event["tool_call_id"]) if event.get("tool_call_id") else None
     tool_call_state = None
     if event.get("tool_name"):
-        tool_call_state = "completed" if tool_call_id in completed_tool_call_ids else ("dropped" if closed else "running")
+        tool_call_state = (
+            "completed" if tool_call_id in completed_tool_call_ids or cursor_run_ended else ("dropped" if closed else "running")
+        )
     return {
         "kind": "event",
         "session_id": str(session_id),
@@ -118,6 +122,8 @@ def _workspace_envelope(
     if branch_mode == "head":
         events = [event for event in events if event.get("branch_kind") != "abandoned"]
     completed_tool_call_ids = {str(event["tool_call_id"]) for event in events if event.get("role") == "tool" and event.get("tool_call_id")}
+    session_run = getattr(getattr(session, "session_state", None), "run", None)
+    cursor_run_ended = getattr(session, "provider", None) == "cursor" and getattr(session_run, "lifecycle", None) == "ended"
     total = int(page.get("total") or 0) if page is not None else 0
     # Only the newest page can vouch that a fact later than all of its events
     # belongs to the turn that ended on its last reply.
@@ -130,6 +136,7 @@ def _workspace_envelope(
             closed=session.runtime_display.lifecycle == "closed",
             provider=getattr(session, "provider", None),
             completed_tool_call_ids=completed_tool_call_ids,
+            cursor_run_ended=cursor_run_ended,
             input_origin=input_origins.get(str(event["event_id"])),
             turn_end=turn_ends.get(str(event["event_id"])),
         )
@@ -218,37 +225,60 @@ async def build_storage_v2_workspace(
             return None
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.")
     timing = timing or ServerTimingRecorder()
-    try:
-        with timing.span("catalog_session"):
-            session, _provider_alias, session_commit_seq = await asyncio.to_thread(
-                read_live_catalog_session,
-                session_id,
-                owner_id=owner_id,
-            )
-    except CatalogReadError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
-    if session is None:
-        return None
-    try:
-        with timing.span("storage_manifest"):
-            storage_result = await catalogd.call(
-                "storage.session.read.v2",
-                {"session_id": str(session_id)},
-                timeout_seconds=_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS,
-            )
-    except (CatalogRemoteError, CatalogUnavailable) as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
-    storage = storage_result if storage_result.get("found") is True else None
+    alias_resolution_attempted = False
+    while True:
+        try:
+            with timing.span("catalog_session"):
+                session, _provider_alias, session_commit_seq = await asyncio.to_thread(
+                    read_live_catalog_session,
+                    session_id,
+                    owner_id=owner_id,
+                )
+        except CatalogReadError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
+        if session is None:
+            storage = None
+        else:
+            try:
+                with timing.span("storage_manifest"):
+                    storage_result = await catalogd.call(
+                        "storage.session.read.v2",
+                        {"session_id": str(session_id)},
+                        timeout_seconds=_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS,
+                    )
+            except (CatalogRemoteError, CatalogUnavailable) as exc:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
+            storage = storage_result if storage_result.get("found") is True else None
+
+        storage_session = storage.get("session") if storage is not None else None
+        retired = isinstance(storage_session, dict) and (
+            storage_session.get("raw_state") == "retired" or storage_session.get("render_state") == "retired"
+        )
+        if (session is None or retired) and not alias_resolution_attempted:
+            alias_resolution_attempted = True
+            try:
+                alias_result = await asyncio.to_thread(resolve_session_alias, str(session_id), owner_id=owner_id)
+            except CatalogReadError:
+                alias_result = {}
+            alias_session_id = alias_result.get("session_id") if alias_result.get("found") is True else None
+            try:
+                resolved_session_id = UUID(str(alias_session_id)) if alias_session_id else None
+            except ValueError:
+                resolved_session_id = None
+            if resolved_session_id is not None and resolved_session_id != session_id:
+                session_id = resolved_session_id
+                continue
+        if session is None or retired:
+            return None
+        break
+
     if storage is None:
         if not (getattr(session, "origin_kind", None) == "console" or session.capabilities.live_control_available):
             return None
         page = None
     else:
-        storage_session = storage.get("session")
         if not isinstance(storage_session, dict) or str(storage_session.get("owner_id")) != str(owner_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
-        if storage_session.get("raw_state") == "retired" or storage_session.get("render_state") == "retired":
-            return None
         # Provenance rides the session read above (coalesced and exempt from
         # the catalog read lane); separate list calls were rejected as "read
         # lane is full" on a busy hosted catalog and the page silently lost

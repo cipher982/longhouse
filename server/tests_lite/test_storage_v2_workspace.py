@@ -121,6 +121,54 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_storage_v2_workspace_completes_cursor_tools_when_helm_run_ended(monkeypatch):
+    session_id = uuid4()
+    session = SimpleNamespace(
+        provider="cursor",
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        session_state=SimpleNamespace(run=SimpleNamespace(lifecycle="ended")),
+        capabilities=SimpleNamespace(live_control_available=False, can_start_turn=False),
+        model_dump=lambda **_kwargs: {"id": str(session_id), "provider": "cursor", "capabilities": {}},
+    )
+
+    async def read_page(**_kwargs):
+        return {
+            "generation_id": str(uuid4()),
+            "events": [
+                {
+                    "event_id": "cursor-tool-1",
+                    "cursor": "cursor-1",
+                    "timestamp": "2026-09-04T12:00:00+00:00",
+                    "role": "assistant",
+                    "content_text": None,
+                    "tool_name": "Shell",
+                    "tool_input_json": {"command": "pwd"},
+                    "tool_output_text": None,
+                    "tool_call_id": None,
+                    "branch_kind": None,
+                }
+            ],
+            "next_cursor": None,
+            "has_more": False,
+            "total": 1,
+        }
+
+    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: _Catalog())
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda *_args, **_kwargs: (session, None, "7"))
+    monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", read_page)
+
+    result = await workspace_module.build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=42,
+        branch_mode="head",
+        limit=50,
+    )
+
+    assert result is not None
+    assert result["projection"]["items"][0]["event"]["tool_call_state"] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_storage_v2_workspace_projects_claude_abandoned_sibling(monkeypatch):
     session_id = uuid4()
     session = SimpleNamespace(
@@ -258,6 +306,7 @@ async def test_storage_v2_workspace_returns_none_for_retired_session(monkeypatch
     )
     monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: RetiredCatalog())
     monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id, **_kwargs: (session, None, "11"))
+    monkeypatch.setattr(workspace_module, "resolve_session_alias", lambda *_args, **_kwargs: {"found": False})
 
     async def unexpected_read(**_kwargs):
         raise AssertionError("retired render objects must not be read")
@@ -272,6 +321,71 @@ async def test_storage_v2_workspace_returns_none_for_retired_session(monkeypatch
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_workspace_follows_alias_away_from_retired_shadow(monkeypatch):
+    shadow_session_id = uuid4()
+    helm_session_id = uuid4()
+    shadow = SimpleNamespace(capabilities=SimpleNamespace(live_control_available=False))
+    helm = SimpleNamespace(
+        provider="cursor",
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        session_state=SimpleNamespace(run=SimpleNamespace(lifecycle="ended")),
+        capabilities=SimpleNamespace(live_control_available=False, can_start_turn=False),
+        model_dump=lambda **_kwargs: {"id": str(helm_session_id), "provider": "cursor", "capabilities": {}},
+    )
+
+    class ReboundCatalog:
+        async def call(self, method, params, *, timeout_seconds=None):
+            assert method == "storage.session.read.v2"
+            assert timeout_seconds == 4.25
+            if params["session_id"] == str(shadow_session_id):
+                return {
+                    "found": True,
+                    "session": {"owner_id": "42", "raw_state": "retired", "render_state": "retired"},
+                }
+            assert params["session_id"] == str(helm_session_id)
+            return {
+                "found": True,
+                "session": {"owner_id": "42", "raw_state": "durable", "render_state": "ready"},
+            }
+
+    def read_session(candidate, **_kwargs):
+        return (shadow if candidate == shadow_session_id else helm), None, "11"
+
+    async def read_page(**kwargs):
+        assert kwargs["session_id"] == helm_session_id
+        return {
+            "generation_id": str(uuid4()),
+            "events": [],
+            "next_cursor": None,
+            "has_more": False,
+            "total": 0,
+        }
+
+    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: ReboundCatalog())
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", read_session)
+    monkeypatch.setattr(
+        workspace_module,
+        "resolve_session_alias",
+        lambda provider_session_id, **_kwargs: {
+            "found": provider_session_id == str(shadow_session_id),
+            "session_id": str(helm_session_id),
+        },
+    )
+    monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", read_page)
+
+    result = await workspace_module.build_storage_v2_workspace(
+        session_id=shadow_session_id,
+        owner_id=42,
+        branch_mode="head",
+        limit=50,
+    )
+
+    assert result is not None
+    assert result["session"]["id"] == str(helm_session_id)
+    assert result["projection"]["focus_session_id"] == str(helm_session_id)
 
 
 @pytest.mark.asyncio
