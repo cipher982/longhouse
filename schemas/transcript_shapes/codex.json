@@ -54,8 +54,8 @@
   },
   "event_msg/error": {
    "classification": "signal:turn.api_error",
-   "first_seen_version": "0.151.0",
-   "last_seen_version": "0.151.0",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": [
     "codex_error_info",
@@ -64,7 +64,8 @@
    ],
    "required_keys": [
     "message"
-   ]
+   ],
+   "evidence": "protocol:rust-v0.151.0 codex-rs/protocol/src/protocol.rs"
   },
   "event_msg/item_completed/AgentMessage": {
    "classification": "transcript",
@@ -274,8 +275,8 @@
   },
   "event_msg/stream_error": {
    "classification": "signal:turn.api_error",
-   "first_seen_version": "0.151.0",
-   "last_seen_version": "0.151.0",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": [
     "additional_details",
@@ -285,7 +286,8 @@
    ],
    "required_keys": [
     "message"
-   ]
+   ],
+   "evidence": "protocol:rust-v0.151.0 codex-rs/protocol/src/protocol.rs"
   },
   "event_msg/sub_agent_activity": {
    "classification": "transcript",

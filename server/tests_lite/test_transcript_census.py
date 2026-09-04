@@ -58,7 +58,12 @@ def test_every_implemented_codex_signal_has_a_classified_shape():
         "compacted": "context.compaction",
     }.items():
         assert shapes[raw_source]["classification"] == f"signal:{signal}", raw_source
-        assert shapes[raw_source]["first_seen_version"], f"{raw_source} carries no version history"
+        # A shape taken from the protocol crate rather than a corpus says so,
+        # instead of claiming a version it was never seen in.
+        assert shapes[raw_source]["first_seen_version"] or shapes[raw_source].get("evidence", "").startswith("protocol:"), (
+            f"{raw_source} carries neither version history nor protocol evidence"
+        )
+    assert shapes["event_msg/stream_error"]["first_seen_version"] is None
     # Unlike Claude's turn_duration, Codex closes headless turns too.
     assert "codex_exec" in shapes["event_msg/task_complete"]["entrypoints"]
     assert "longhouse_console" in shapes["event_msg/task_complete"]["entrypoints"]
