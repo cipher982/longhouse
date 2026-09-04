@@ -471,6 +471,15 @@ fn prepare_next_envelope_with_limit(
                 && event.source_offset < raw_batch.range_end
         })
         .count();
+    let wire_predecessor = if is_cursor_agent_transcript_path(provider, path) {
+        // Cursor rewrites this JSONL projection repeatedly while a turn is in
+        // flight. Revisions with no complete line produce real local epochs
+        // but no durable bytes, so the host must see the nearest admitted
+        // ancestor rather than the immediately previous empty revision.
+        source_epoch::wire_predecessor_for_epoch(conn, resolution.source_epoch)?
+    } else {
+        resolution.predecessor_epoch
+    };
     let prepared = PreparedStorageV2Envelope {
         envelope: StorageV2Envelope {
             protocol_version: 2,
@@ -480,7 +489,7 @@ fn prepare_next_envelope_with_limit(
             provider: provider.to_ascii_lowercase(),
             opaque_source_id,
             source_epoch: resolution.source_epoch.to_string(),
-            predecessor_source_epoch: resolution.predecessor_epoch.map(|value| value.to_string()),
+            predecessor_source_epoch: wire_predecessor.map(|value| value.to_string()),
             epoch_opened_at: resolution.opened_at,
             range_kind: "byte_offset".to_string(),
             range_start: raw_batch.range_start,
@@ -1993,9 +2002,10 @@ async fn reconcile_blocked_cursor_lineage(
         Err(error) => return Err(error),
     }
 
-    // Local proof establishes zero records, receipt-gated durable progress,
-    // and pending request for every skipped epoch. Require matching host
-    // absence before changing the rejected request's wire predecessor.
+    // Local proof establishes no receipt-gated durable progress and no
+    // pending request for every skipped epoch (plus no captured rows for the
+    // SQLite store lane). Require matching host absence before changing the
+    // rejected request's wire predecessor.
     for skipped_epoch in &lineage_proof.skipped_empty_epochs {
         match client
             .storage_v2_source_manifest(&skipped_epoch.to_string(), 0, Some(request_timeout))
@@ -2028,7 +2038,7 @@ async fn reconcile_blocked_cursor_lineage(
                 || admitted.source_epoch.machine_id != prepared.envelope.machine_id
                 || admitted.source_epoch.provider != "cursor"
                 || admitted.source_epoch.opaque_source_id != prepared.envelope.opaque_source_id
-                || admitted.source_epoch.range_kind != "record_ordinal"
+                || admitted.source_epoch.range_kind != prepared.envelope.range_kind
                 || admitted.source_epoch.state != "open"
                 || admitted.source_epoch.replaced_by_source_epoch.is_some()
                 || durable_position == 0
@@ -6297,6 +6307,76 @@ mod tests {
         assert_eq!(
             replacement.envelope.predecessor_source_epoch.as_deref(),
             Some(initial_epoch.as_str())
+        );
+    }
+
+    #[test]
+    fn cursor_agent_transcript_skips_unshipped_rewrite_epochs() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "22a940a2-8256-4042-856e-a3b5ade40bd6";
+        let path = dir
+            .path()
+            .join(".cursor/projects/workspace/agent-transcripts")
+            .join(conversation_id)
+            .join(format!("{conversation_id}.jsonl"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            b"{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let managed_session = "018f0c3a-7b2d-7f10-8a11-123456789abd";
+
+        let initial = prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "cursor",
+            Some(managed_session),
+        )
+        .unwrap()
+        .unwrap();
+        acknowledge_prepared(&mut conn, &initial);
+
+        for partial in [b"{".as_slice(), b"{\"role\":\"assistant\"".as_slice()] {
+            fs::write(&path, partial).unwrap();
+            assert!(prepare_next_envelope(
+                &mut conn,
+                &capabilities(),
+                &path,
+                "cursor",
+                Some(managed_session),
+            )
+            .unwrap()
+            .is_none());
+        }
+
+        fs::write(
+            &path,
+            b"{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"finished\"}]}}\n",
+        )
+        .unwrap();
+        let final_revision = prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "cursor",
+            Some(managed_session),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            final_revision.envelope.predecessor_source_epoch,
+            Some(initial.source_epoch.to_string())
+        );
+        assert_ne!(
+            source_epoch::resolution_for_epoch(&conn, final_revision.source_epoch)
+                .unwrap()
+                .predecessor_epoch,
+            Some(initial.source_epoch),
+            "the wire predecessor differs from the immediate empty revision"
         );
     }
 
