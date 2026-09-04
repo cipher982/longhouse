@@ -7236,11 +7236,19 @@ class CatalogStore:
             live_console_session = (
                 live_catalog_session if live_catalog_session is not None and live_catalog_session["origin_kind"] == "console" else None
             )
-            if existing_session is not None and any(
-                (
-                    existing_session["tenant_id"] != tenant_id,
-                    existing_session["provider"] != provider,
-                )
+            # Gemini was retired as a product provider in favor of
+            # Antigravity, but legacy Gemini JSON imports retain their original
+            # immutable session rows. Let the canonical Antigravity source
+            # converge onto that exact legacy identity. This is intentionally
+            # one-way: a new Antigravity session must not admit an old Gemini
+            # writer, and all unrelated cross-provider collisions stay fenced.
+            legacy_antigravity_alias = (
+                existing_session is not None
+                and str(existing_session["provider"]).strip().lower() == "gemini"
+                and provider.strip().lower() == "antigravity"
+            )
+            if existing_session is not None and (
+                existing_session["tenant_id"] != tenant_id or (existing_session["provider"] != provider and not legacy_antigravity_alias)
             ):
                 return _source_epoch_conflict(
                     connection,
@@ -8156,7 +8164,13 @@ class CatalogStore:
                 commit_time=commit_time,
             )
             timer.mark("project_render")
-            if predecessor_row is not None and render_state == "ready":
+            generation_replaced = bool(
+                render_manifest is not None
+                and existing_session is not None
+                and existing_session.get("current_render_generation") is not None
+                and str(existing_session["current_render_generation"]) != str(render_manifest["generation_id"])
+            )
+            if (predecessor_row is not None or generation_replaced) and render_state == "ready":
                 generation_to_recompute = (
                     str(render_manifest["generation_id"])
                     if render_manifest is not None

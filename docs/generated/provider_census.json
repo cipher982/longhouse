@@ -836,6 +836,7 @@
     {
       "path": "server/tests_lite/test_catalogd_storage_v2.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",
@@ -1632,6 +1633,7 @@
     {
       "path": "server/zerg/catalogd/store.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",

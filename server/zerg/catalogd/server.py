@@ -2672,7 +2672,11 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_read_store(
+        # This manifest is recovery/control evidence used to reconcile a
+        # retained local source after an ingest conflict. It must remain
+        # available while timeline/detail traffic occupies the interactive
+        # readers, otherwise the shipper cannot make the source healthy again.
+        result = await self._run_control_read_store(
             self._store.read_source_epoch_manifest,
             source_epoch=source_epoch,
             after_position=after_position,

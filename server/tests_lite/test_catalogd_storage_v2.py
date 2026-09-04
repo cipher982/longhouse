@@ -777,6 +777,75 @@ async def test_storage_commit_explains_cross_provider_session_collision(daemon_p
 
 
 @pytest.mark.asyncio
+async def test_legacy_gemini_session_accepts_canonical_antigravity_replacement(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    legacy_generation = uuid4()
+    canonical_generation = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        legacy_epoch = uuid4()
+        legacy = _raw_params(
+            epoch=legacy_epoch,
+            session_id=session_id,
+            start=0,
+            end=1,
+            records=(b"a",),
+            sealed_at=now,
+            provider="gemini",
+            provider_session_id=str(session_id),
+            opaque_source_id="legacy-gemini.json",
+        )
+        legacy_render = _render_manifest(
+            legacy_generation,
+            seed=b"legacy-render",
+            source_epoch=legacy_epoch,
+            provider="gemini",
+            opaque_source_id="legacy-gemini.json",
+        )
+        legacy_render["parser_revision"] = "legacy-normalized-v1"
+        legacy.update(render_state="ready", render_manifest=legacy_render)
+        await client.call("storage.raw_object.commit.v2", legacy)
+
+        canonical_epoch = uuid4()
+        canonical = _raw_params(
+            epoch=canonical_epoch,
+            session_id=session_id,
+            start=0,
+            end=1,
+            records=(b"b",),
+            sealed_at=now + timedelta(seconds=1),
+            provider="antigravity",
+            provider_session_id=str(session_id),
+            opaque_source_id="canonical-antigravity.json",
+        )
+        canonical.update(
+            render_state="ready",
+            render_manifest=_render_manifest(
+                canonical_generation,
+                seed=b"canonical-render",
+                source_epoch=canonical_epoch,
+                provider="antigravity",
+                opaque_source_id="canonical-antigravity.json",
+            ),
+        )
+        await client.call("storage.raw_object.commit.v2", canonical)
+
+        session = (await client.call("storage.session.read.v2", {"session_id": str(session_id)}))["session"]
+        assert session["provider"] == "gemini"
+        assert session["current_render_generation"] == str(canonical_generation)
+        assert session["user_messages"] == 1
+        assert session["assistant_messages"] == 0
+        assert session["tool_calls"] == 0
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

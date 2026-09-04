@@ -186,7 +186,7 @@ fn prepare_next_envelope_with_limit(
     let binding = crate::state::session_binding::SessionBinding::new(conn)
         .get_with_thread_for_provider(&path_text, provider)?;
     let binding_thread = binding.as_ref().and_then(|(_, thread)| thread.clone());
-    let durable_session_id = match session_id_override {
+    let mut durable_session_id = match session_id_override {
         Some(value) => Some(value.to_string()),
         None => binding.map(|(session_id, _)| session_id),
     };
@@ -205,6 +205,48 @@ fn prepare_next_envelope_with_limit(
                 )?
             {
                 return pending_to_prepared(pending).map(Some);
+            }
+        }
+    }
+    if durable_session_id.is_none() {
+        if let Some(conversation_uuid) = cursor_agent_transcript_conversation_id(provider, path) {
+            let source_was_seen =
+                source_epoch::active_source_incarnation(conn, "cursor", &opaque_source_id)?
+                    .is_some();
+            let source_is_fresh = path
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age <= Duration::from_secs(5));
+            let launch_reservation_may_be_pending =
+                crate::cursor_launch_binding::launch_reservation_may_be_pending()?;
+            match crate::cursor_launch_binding::launch_binding_state_for_conversation(
+                &conversation_uuid,
+            )? {
+                crate::cursor_launch_binding::CursorLaunchBindingState::Managed(binding) => {
+                    durable_session_id = Some(binding.session_id);
+                }
+                crate::cursor_launch_binding::CursorLaunchBindingState::Pending => {
+                    return Ok(None);
+                }
+                crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed
+                    if should_wait_for_unclaimed_cursor_source(
+                        source_was_seen,
+                        launch_reservation_may_be_pending,
+                        source_is_fresh
+                            && crate::cursor_launch_binding::reset_binding_may_be_pending(
+                                &conversation_uuid,
+                            )?,
+                    ) =>
+                {
+                    // Cursor writes the agent-transcript projection before its
+                    // launch probe or completion wake can persist the managed
+                    // owner. Hold only that bounded claim window so the first
+                    // envelope cannot freeze a duplicate Shadow identity.
+                    return Ok(None);
+                }
+                crate::cursor_launch_binding::CursorLaunchBindingState::Unclaimed => {}
             }
         }
     }
@@ -4447,6 +4489,16 @@ fn is_cursor_agent_transcript_path(provider: &str, path: &Path) -> bool {
             .any(|component| component.as_os_str() == "agent-transcripts")
 }
 
+fn cursor_agent_transcript_conversation_id(provider: &str, path: &Path) -> Option<String> {
+    if !is_cursor_agent_transcript_path(provider, path) {
+        return None;
+    }
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .map(|value| value.to_string())
+}
+
 fn hex_hash(hash: [u8; 32]) -> String {
     hash.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -4685,6 +4737,80 @@ mod tests {
             None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
         }
         assert!(matches!(outcome, CursorPreparationOutcome::WaitingOnClaim));
+    }
+
+    #[test]
+    fn fresh_cursor_agent_transcript_waits_for_and_then_uses_managed_claim() {
+        let _guard = CURSOR_BINDING_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let longhouse_home = dir.path().join("longhouse");
+        let reservation_dir = longhouse_home.join("managed-local/cursor-helm/launch-reservations");
+        let claim_dir = longhouse_home.join("managed-local/cursor-helm/binding-probes");
+        fs::create_dir_all(&reservation_dir).unwrap();
+        fs::create_dir_all(&claim_dir).unwrap();
+        fs::write(
+            reservation_dir.join("session.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "provider": "cursor",
+                "status": "pending",
+                "session_id": "018f0c3a-7b2d-7f10-8a11-123456789abd",
+                "launch_id": "launch-id",
+                "expires_at": "2099-01-01T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let conversation_id = "22a940a2-8256-4042-856e-a3b5ade40bd6";
+        let transcript_dir = dir
+            .path()
+            .join(".cursor/projects/workspace/agent-transcripts")
+            .join(conversation_id);
+        fs::create_dir_all(&transcript_dir).unwrap();
+        let path = transcript_dir.join(format!("{conversation_id}.jsonl"));
+        fs::write(
+            &path,
+            b"{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", &longhouse_home);
+        }
+
+        assert!(
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+
+        let managed_session_id = "018f0c3a-7b2d-7f10-8a11-123456789abd";
+        fs::write(
+            claim_dir.join("claim.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2,
+                "provider": "cursor",
+                "status": "observed",
+                "session_id": managed_session_id,
+                "conversation_uuid": conversation_id,
+                "hook_observed_at": "2026-07-17T00:00:00Z"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
+            .unwrap()
+            .unwrap();
+        match previous_home {
+            Some(value) => unsafe { std::env::set_var("LONGHOUSE_HOME", value) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
+
+        assert_eq!(prepared.envelope.session_id, managed_session_id);
     }
 
     #[test]
