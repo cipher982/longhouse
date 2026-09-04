@@ -718,8 +718,19 @@ def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, 
     return payload
 
 
+def _provider_fact_dto(row: Any) -> dict[str, Any]:
+    return {
+        "kind": row["kind"],
+        "at": (row["at"].isoformat() if isinstance(row["at"], datetime) else str(row["at"])),
+        "source_epoch": row["source_epoch"],
+        "source_position": int(row["source_position"]),
+        "payload": row["payload_json"],
+        "commit_seq": str(row["commit_seq"]),
+    }
+
+
 def _provider_fact_rows(connection: Connection, *, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
-    """Newest provider facts for a session, as the RPC and session read both serve them."""
+    """Newest provider facts for a session, as the list RPC serves them."""
     table = SessionProviderFact.__table__
     rows = (
         connection.execute(
@@ -731,17 +742,40 @@ def _provider_fact_rows(connection: Connection, *, session_id: str, limit: int =
         .mappings()
         .all()
     )
-    return [
-        {
-            "kind": row["kind"],
-            "at": (row["at"].isoformat() if isinstance(row["at"], datetime) else str(row["at"])),
-            "source_epoch": row["source_epoch"],
-            "source_position": int(row["source_position"]),
-            "payload": row["payload_json"],
-            "commit_seq": str(row["commit_seq"]),
-        }
-        for row in rows
-    ]
+    return [_provider_fact_dto(row) for row in rows]
+
+
+# One row each: the newest recap, provider title and usage are what the
+# session chrome shows, and a long session's turn facts must never evict them.
+_SESSION_READ_LATEST_FACT_KINDS = ("session.recap", "session.title", "turn.usage")
+# Every turn duration, newest first, so any loaded page can anchor its footers.
+# Two thousand turns is far beyond a real session; the bound exists so the
+# session read stays a bounded payload rather than a growing one.
+_SESSION_READ_TURN_FACT_LIMIT = 2_000
+
+
+def _session_read_provider_facts(connection: Connection, *, session_id: str) -> list[dict[str, Any]]:
+    """The facts the workspace needs on every page, from the coalesced session read."""
+    table = SessionProviderFact.__table__
+    newest_first = (table.c.at.desc(), table.c.source_position.desc(), table.c.id.desc())
+    rows: list[Any] = []
+    for kind in _SESSION_READ_LATEST_FACT_KINDS:
+        rows.extend(
+            connection.execute(select(table).where(table.c.session_id == session_id, table.c.kind == kind).order_by(*newest_first).limit(1))
+            .mappings()
+            .all()
+        )
+    rows.extend(
+        connection.execute(
+            select(table)
+            .where(table.c.session_id == session_id, table.c.kind == "turn.duration")
+            .order_by(*newest_first)
+            .limit(_SESSION_READ_TURN_FACT_LIMIT)
+        )
+        .mappings()
+        .all()
+    )
+    return [_provider_fact_dto(row) for row in rows]
 
 
 def _input_receipt_rows(connection: Connection, *, session_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -7496,10 +7530,17 @@ class CatalogStore:
                             commit_seq=commit_seq,
                         )
                     ).rowcount
+                    # Facts derive from the predecessor's bytes; a replacement
+                    # that dropped turns must not keep their durations, usage,
+                    # recap or title eligible for the session's projections.
+                    retired_facts = connection.execute(
+                        delete(SessionProviderFact.__table__).where(SessionProviderFact.__table__.c.source_epoch == expected_predecessor)
+                    ).rowcount
                     timer.annotate(
                         retired_raw=int(retired_raw or 0),
                         retired_render=int(retired_render or 0),
                         retired_media=int(retired_media or 0),
+                        retired_facts=int(retired_facts or 0),
                         replaced_sessions=len(replaced_session_ids),
                     )
                     timer.mark("retire_predecessor")
@@ -8768,7 +8809,7 @@ class CatalogStore:
                 # Provenance rides the coalesced, lane-exempt session read: the
                 # workspace needs both on every page and a busy catalog's read
                 # lane rejected them as separate calls.
-                "provider_facts": _provider_fact_rows(connection, session_id=session_key) if found else [],
+                "provider_facts": _session_read_provider_facts(connection, session_id=session_key) if found else [],
                 "input_receipts": _input_receipt_rows(connection, session_id=session_key) if found else [],
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
@@ -9516,6 +9557,7 @@ class CatalogStore:
                 connection.execute(
                     select(
                         table.c.anchor_title,
+                        table.c.anchor_title_source,
                         or_(
                             factory_title_assurance_session_clause(table),
                             title_origin_eligible_clause(table),
@@ -9528,7 +9570,12 @@ class CatalogStore:
             )
             if existing is None:
                 return {"changed": False, "title": title, "missing": True, "commit_seq": str(_current_commit_seq(connection))}
-            if existing["anchor_title"]:
+            # An anchor is frozen once, with one exception: the provider's own
+            # name promotes a Longhouse LLM title that won the race to it. A
+            # provider anchor is never rewritten, by the LLM or a later name.
+            anchored = bool(existing["anchor_title"])
+            promotion = anchored and source == "provider" and existing["anchor_title_source"] != "provider"
+            if anchored and not promotion:
                 return {
                     "changed": False,
                     "title": str(existing["anchor_title"]),
@@ -9537,11 +9584,16 @@ class CatalogStore:
             if not bool(existing["origin_eligible"]) or bool(existing["worker_only"]):
                 return {"changed": False, "title": title, "ineligible": True, "commit_seq": str(_current_commit_seq(connection))}
             commit_seq = _advance_commit_seq(connection, completed_at)
+            anchor_guard = (
+                or_(table.c.anchor_title_source.is_(None), table.c.anchor_title_source != "provider")
+                if promotion
+                else or_(table.c.anchor_title.is_(None), table.c.anchor_title == "")
+            )
             changed = connection.execute(
                 update(table)
                 .where(
                     table.c.session_id == session_key,
-                    or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
+                    anchor_guard,
                     or_(
                         factory_title_assurance_session_clause(table),
                         title_origin_eligible_clause(table),

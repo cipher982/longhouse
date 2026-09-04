@@ -2610,13 +2610,22 @@ class CatalogDaemon:
         params.setdefault("provider_facts", [])
         try:
             _validate_raw_object_commit(params)
-            params["provider_facts"] = _validate_provider_facts(
-                params["provider_facts"], range_start=params["range_start"], range_end=params["range_end"]
-            )
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
+        params["provider_facts"], dropped_facts = _partition_provider_facts(
+            params["provider_facts"], range_start=params["range_start"], range_end=params["range_end"]
+        )
+        if dropped_facts:
+            logger.warning(
+                "storage.raw_object.commit.v2 dropped %d malformed provider fact(s) for session %s: %s",
+                len(dropped_facts),
+                params.get("session_id"),
+                "; ".join(dropped_facts[:5]),
+            )
         assert self._store is not None
         result = await self._run_store(self._store.commit_raw_object, **params)
+        if isinstance(result, dict):
+            result["provider_facts_dropped"] = len(dropped_facts)
         if result.get("identity_mismatch") is True:
             return self._error(request, "invalid_request", "envelope_id does not match the frozen v2 identity")
         if result.get("session_deleted") is True:
@@ -4189,51 +4198,87 @@ PROVIDER_FACT_KINDS = frozenset({"turn.duration", "session.recap", "session.titl
 _PROVIDER_FACT_PAYLOAD_MAX_BYTES = 8_192
 
 
+def _validate_provider_fact(item: object, *, range_start: int | None, range_end: int | None) -> dict[str, object]:
+    """One typed provider fact; the error names what is wrong with it."""
+    if not isinstance(item, dict) or set(item) != {"kind", "at", "source_position", "payload"}:
+        raise ValueError("each provider fact needs kind, at, source_position and payload")
+    kind = item["kind"]
+    if kind not in PROVIDER_FACT_KINDS:
+        raise ValueError(f"provider fact kind {kind!r} is not catalogued")
+    position = item["source_position"]
+    if type(position) is not int or not 0 <= position < 1 << 64:
+        raise ValueError("provider fact source_position must be an unsigned 64-bit integer")
+    if range_start is not None and range_end is not None and not range_start <= position < range_end:
+        raise ValueError("provider fact source_position is outside the envelope")
+    payload = item["payload"]
+    if not isinstance(payload, dict) or len(json.dumps(payload, separators=(",", ":"))) > _PROVIDER_FACT_PAYLOAD_MAX_BYTES:
+        raise ValueError("provider fact payload must be a small JSON object")
+    if kind == "turn.duration" and type(payload.get("duration_ms")) is not int:
+        raise ValueError("turn.duration facts need an integer duration_ms")
+    if kind == "session.recap" and not (isinstance(payload.get("text"), str) and payload["text"].strip()):
+        raise ValueError("session.recap facts need non-empty text")
+    if kind == "session.title" and not (isinstance(payload.get("title"), str) and payload["title"].strip()):
+        raise ValueError("session.title facts need a non-empty title")
+    if kind == "turn.usage" and type(payload.get("output_tokens")) is not int:
+        raise ValueError("turn.usage facts need integer output_tokens")
+    # Claude reports token counts across a compaction; Codex reports the items
+    # it replaced. Either is a compaction the transcript can show.
+    if kind == "context.compaction" and not any(
+        type(payload.get(key)) is int for key in ("pre_tokens", "post_tokens", "replacement_items")
+    ):
+        raise ValueError("context.compaction facts need pre_tokens, post_tokens or replacement_items")
+    return {
+        "kind": str(kind),
+        "at": _parse_datetime(item["at"], "provider fact at"),
+        "source_position": position,
+        "payload": payload,
+    }
+
+
+def _partition_provider_facts(
+    value: object, *, range_start: int | None = None, range_end: int | None = None
+) -> tuple[tuple[dict[str, object], ...], tuple[str, ...]]:
+    """The facts worth keeping, and why the rest were dropped.
+
+    Facts are derived from bytes the same envelope carries. A malformed fact
+    must never cost the raw commit: rejecting the envelope would park the
+    source cursor behind it and every later transcript line with it. The
+    commit path keeps what validates and names what it dropped; the insert
+    RPC stays strict through `_validate_provider_facts`.
+    """
+    if not isinstance(value, list):
+        return (), ("provider_facts must be a list",)
+    parsed: list[dict[str, object]] = []
+    dropped: list[str] = []
+    seen: set[tuple[int, str]] = set()
+    for index, item in enumerate(value):
+        if index >= 1_000:
+            dropped.append(f"provider_facts truncated at 1000 facts ({len(value)} sent)")
+            break
+        try:
+            fact = _validate_provider_fact(item, range_start=range_start, range_end=range_end)
+        except ValueError as exc:
+            dropped.append(str(exc))
+            continue
+        key = (int(fact["source_position"]), str(fact["kind"]))
+        if key in seen:
+            dropped.append("provider_facts must not repeat a source position and kind")
+            continue
+        seen.add(key)
+        parsed.append(fact)
+    return tuple(parsed), tuple(dropped)
+
+
 def _validate_provider_facts(
     value: object, *, range_start: int | None = None, range_end: int | None = None
 ) -> tuple[dict[str, object], ...]:
-    """Typed provider facts beside the raw bytes; strict on shape, bounded on size."""
+    """Strict form: the first defect rejects the whole request."""
     if not isinstance(value, list) or len(value) > 1_000:
         raise ValueError("provider_facts must contain at most 1000 facts")
-    parsed: list[dict[str, object]] = []
-    seen: set[tuple[int, str]] = set()
-    for item in value:
-        if not isinstance(item, dict) or set(item) != {"kind", "at", "source_position", "payload"}:
-            raise ValueError("each provider fact needs kind, at, source_position and payload")
-        kind = item["kind"]
-        if kind not in PROVIDER_FACT_KINDS:
-            raise ValueError(f"provider fact kind {kind!r} is not catalogued")
-        position = item["source_position"]
-        if type(position) is not int or not 0 <= position < 1 << 64:
-            raise ValueError("provider fact source_position must be an unsigned 64-bit integer")
-        if range_start is not None and range_end is not None and not range_start <= position < range_end:
-            raise ValueError("provider fact source_position is outside the envelope")
-        payload = item["payload"]
-        if not isinstance(payload, dict) or len(json.dumps(payload, separators=(",", ":"))) > _PROVIDER_FACT_PAYLOAD_MAX_BYTES:
-            raise ValueError("provider fact payload must be a small JSON object")
-        if kind == "turn.duration" and type(payload.get("duration_ms")) is not int:
-            raise ValueError("turn.duration facts need an integer duration_ms")
-        if kind == "session.recap" and not (isinstance(payload.get("text"), str) and payload["text"].strip()):
-            raise ValueError("session.recap facts need non-empty text")
-        if kind == "session.title" and not (isinstance(payload.get("title"), str) and payload["title"].strip()):
-            raise ValueError("session.title facts need a non-empty title")
-        if kind == "turn.usage" and type(payload.get("output_tokens")) is not int:
-            raise ValueError("turn.usage facts need integer output_tokens")
-        if kind == "context.compaction" and not any(type(payload.get(key)) is int for key in ("pre_tokens", "post_tokens")):
-            raise ValueError("context.compaction facts need pre_tokens or post_tokens")
-        key = (position, str(kind))
-        if key in seen:
-            raise ValueError("provider_facts must not repeat a source position and kind")
-        seen.add(key)
-        parsed.append(
-            {
-                "kind": str(kind),
-                "at": _parse_datetime(item["at"], "provider fact at"),
-                "source_position": position,
-                "payload": payload,
-            }
-        )
-    return tuple(parsed)
+    parsed, dropped = _partition_provider_facts(value, range_start=range_start, range_end=range_end)
+    if dropped:
+        raise ValueError(dropped[0])
+    return parsed
 
 
 def _validate_raw_object_commit(params: dict) -> None:

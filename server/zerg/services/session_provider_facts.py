@@ -86,27 +86,39 @@ def _event_time(event: dict[str, object]) -> datetime | None:
     return _parse_at(event.get("timestamp"))
 
 
-def turn_ends_by_event(facts: list[dict[str, Any]], events: list[dict[str, object]]) -> dict[str, dict[str, Any]]:
+def turn_ends_by_event(
+    facts: list[dict[str, Any]], events: list[dict[str, object]], *, page_is_tail: bool = True
+) -> dict[str, dict[str, Any]]:
     """Anchor each turn-duration fact to the event its turn ended on.
 
-    The anchor is the last non-user event at or before the fact's time. Claude
-    writes `turn_duration` after the turn's final assistant message; Codex's
-    `task_complete` behaves the same, so the time rule is provider-neutral.
-    An anchor off the loaded page simply yields no decoration on that page.
+    A turn is the run of non-user events after the last user event before the
+    fact; the anchor is the newest of those at or before the fact's time.
+    Claude writes `turn_duration` after the turn's final assistant message
+    and Codex's `task_complete` behaves the same, so the rule is
+    provider-neutral. A turn with no output of its own (stopped before the
+    first reply) decorates nothing rather than the previous turn's last
+    reply. A fact later than every event on a page that is not the newest
+    belongs to a turn off this page and decorates nothing here either.
     """
-    candidates = [
-        (time, str(event["event_id"]))
-        for event in events
-        if event.get("role") not in {"user", "system"} and (time := _event_time(event)) is not None and event.get("event_id")
-    ]
-    candidates.sort(key=lambda item: item[0])
+    ordered = sorted(
+        (
+            (time, str(event["event_id"]), event.get("role"))
+            for event in events
+            if (time := _event_time(event)) is not None and event.get("event_id")
+        ),
+        key=lambda item: item[0],
+    )
     decorations: dict[str, dict[str, Any]] = {}
     for fact in sorted((f for f in facts if f.get("kind") == TURN_DURATION), key=lambda f: f["at"]):
+        before = [item for item in ordered if item[0] <= fact["at"]]
+        if not before or (len(before) == len(ordered) and not page_is_tail):
+            continue
         anchor = None
-        for time, event_id in candidates:
-            if time <= fact["at"]:
+        for _time, event_id, role in reversed(before):
+            if role == "user":
+                break
+            if role != "system":
                 anchor = event_id
-            else:
                 break
         if anchor is None:
             continue

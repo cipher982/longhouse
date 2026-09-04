@@ -118,7 +118,11 @@ def _workspace_envelope(
     if branch_mode == "head":
         events = [event for event in events if event.get("branch_kind") != "abandoned"]
     completed_tool_call_ids = {str(event["tool_call_id"]) for event in events if event.get("role") == "tool" and event.get("tool_call_id")}
-    turn_ends = turn_ends_by_event(facts, events)
+    total = int(page.get("total") or 0) if page is not None else 0
+    # Only the newest page can vouch that a fact later than all of its events
+    # belongs to the turn that ended on its last reply.
+    page_is_tail = (anchor == "tail" and cursor is None) or (page is not None and len(events) >= total)
+    turn_ends = turn_ends_by_event(facts, events, page_is_tail=page_is_tail)
     items = [
         _event_projection(
             event,
@@ -131,7 +135,6 @@ def _workspace_envelope(
         )
         for event in events
     ]
-    total = int(page.get("total") or 0) if page is not None else 0
     if branch_mode == "head":
         total = max(0, total - abandoned_events)
     latest_event_id = str(events[-1]["event_id"]) if events else None

@@ -635,7 +635,9 @@ def _parse_envelope(
     if envelope_id(identity) != expected_envelope:
         raise ValueError("expected_envelope_id does not match the exact source bytes")
     render_spec = _parse_render_spec(payload["render"], raw_spec=spec, source_envelope_id=expected_envelope)
-    provider_facts = _parse_provider_facts(payload.get("facts"), range_start=range_start, range_end=range_end)
+    provider_facts = _parse_provider_facts(
+        payload.get("facts"), range_start=range_start, range_end=range_end, session_id=payload.get("session_id")
+    )
     return spec, {
         "lane": lane,
         "provider_facts": provider_facts,
@@ -663,28 +665,69 @@ def _first_provider_title(facts: list[dict[str, Any]]) -> str | None:
     return None
 
 
-def _parse_provider_facts(value: object, *, range_start: int, range_end: int) -> list[dict[str, Any]]:
-    """Wire facts as catalogd expects them; shape errors reject the envelope."""
+def _parse_provider_facts(value: object, *, range_start: int, range_end: int, session_id: object = None) -> list[dict[str, Any]]:
+    """Wire facts as catalogd expects them; a malformed fact is dropped, never the envelope.
+
+    Facts are derived from the bytes this envelope carries. Rejecting the
+    envelope for one bad fact would park the source cursor behind it and
+    stall every later transcript line, so the bad fact is logged and skipped
+    and the raw commit proceeds.
+    """
     if value is None:
         return []
-    if not isinstance(value, list) or len(value) > 1_000:
-        raise ValueError("facts must contain at most 1000 items")
+    if not isinstance(value, list):
+        logger.warning("storage_v2 envelope facts ignored for session %s: not a list", session_id)
+        return []
     facts: list[dict[str, Any]] = []
-    for item in value:
-        if not isinstance(item, dict) or set(item) != _EXPECTED_PROVIDER_FACT_FIELDS:
-            raise ValueError("each fact must contain kind, at, source_position and payload")
-        kind = item["kind"]
-        if not isinstance(kind, str) or not kind:
-            raise ValueError("fact kind must be a non-empty string")
-        position = item["source_position"]
-        if type(position) is not int or not range_start <= position < range_end:
-            raise ValueError("fact source_position must fall inside the envelope range")
-        at = _aware_datetime(item["at"], "fact at")
-        payload = item["payload"]
-        if not isinstance(payload, dict):
-            raise ValueError("fact payload must be an object")
+    dropped: list[str] = []
+    for item in value[:1_000]:
+        try:
+            if not isinstance(item, dict) or set(item) != _EXPECTED_PROVIDER_FACT_FIELDS:
+                raise ValueError("each fact must contain kind, at, source_position and payload")
+            kind = item["kind"]
+            if not isinstance(kind, str) or not kind:
+                raise ValueError("fact kind must be a non-empty string")
+            position = item["source_position"]
+            if type(position) is not int or not range_start <= position < range_end:
+                raise ValueError("fact source_position must fall inside the envelope range")
+            at = _aware_datetime(item["at"], "fact at")
+            payload = item["payload"]
+            if not isinstance(payload, dict):
+                raise ValueError("fact payload must be an object")
+        except ValueError as exc:
+            dropped.append(str(exc))
+            continue
         facts.append({"kind": kind, "at": at.isoformat(), "source_position": position, "payload": payload})
+    if len(value) > 1_000:
+        dropped.append(f"facts truncated at 1000 items ({len(value)} sent)")
+    if dropped:
+        logger.warning(
+            "storage_v2 envelope for session %s dropped %d malformed fact(s): %s",
+            session_id,
+            len(dropped),
+            "; ".join(dropped[:5]),
+        )
     return facts
+
+
+async def _apply_provider_title(catalogd: Any, session_id: UUID, title: str) -> None:
+    """Freeze or promote the provider's own session name.
+
+    The store decides: an empty anchor takes the name, a Longhouse LLM title
+    is promoted to it once, and a provider anchor is never rewritten. This
+    runs on every path that stores a title fact, including exact replays,
+    so the outcome does not depend on which batch the title arrived in.
+    """
+    await catalogd.call(
+        "storage.session.title.complete.v2",
+        {
+            "session_id": str(session_id),
+            "title": title,
+            "completed_at": datetime.now(UTC).isoformat(),
+            "source": "provider",
+        },
+        timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
+    )
 
 
 def _conversation_resets(render_spec: RenderObjectSpec | None) -> list[dict[str, str | None]]:
@@ -1133,7 +1176,8 @@ async def _commit_admitted_envelope(
         if objects[0].get("receipt") is not None:
             if parsed["provider_facts"]:
                 # The bytes are already durable; facts a pre-facts engine never
-                # shipped (or a backfill re-sends) still need their rows.
+                # shipped (or a backfill re-sends) still need their rows, and
+                # a provider title among them still names the session.
                 await catalogd.call(
                     "session.provider_facts.insert.v2",
                     {
@@ -1143,6 +1187,9 @@ async def _commit_admitted_envelope(
                     },
                     timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
                 )
+                replayed_title = _first_provider_title(parsed["provider_facts"])
+                if replayed_title is not None:
+                    await _apply_provider_title(catalogd, spec.session_id, replayed_title)
             return _validated_receipt(objects[0]["receipt"])
 
         owner_value = getattr(auth_token, "owner_id", None)
@@ -1258,19 +1305,11 @@ async def _commit_admitted_envelope(
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
         provider_title = _first_provider_title(parsed["provider_facts"])
-        if committed.get("title_generation_required") is True and provider_title is not None:
-            # The provider already named this session; freeze its title
-            # instead of paying for one. A frozen anchor makes this a no-op.
-            await catalogd.call(
-                "storage.session.title.complete.v2",
-                {
-                    "session_id": str(spec.session_id),
-                    "title": provider_title,
-                    "completed_at": datetime.now(UTC).isoformat(),
-                    "source": "provider",
-                },
-                timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
-            )
+        if provider_title is not None:
+            # The provider named this session. Whether that freezes an empty
+            # anchor, promotes a Longhouse LLM title that won the race, or is
+            # a no-op against an earlier provider name is the store's call.
+            await _apply_provider_title(catalogd, spec.session_id, provider_title)
         elif (
             committed.get("title_generation_required") is True
             and render_manifest is not None
