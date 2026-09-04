@@ -822,7 +822,11 @@ struct SessionRecapBanner: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("session-recap")
-        .accessibilityLabel("Recap: \(recap.text)")
+        // One control: say everything it shows, and that it expands.
+        .accessibilityLabel(usage.map { "Recap: \(recap.text). Model: \($0.chipLabel)" } ?? "Recap: \(recap.text)")
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint(expanded ? "Collapses the recap" : "Expands the recap")
+        .accessibilityAddTraits(.isButton)
     }
 }
 
