@@ -6,13 +6,12 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -113,7 +112,11 @@ class FailureArtifactTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.run_dir = self.root / "current"
         self.state_path = self.run_dir / "simlab.json"
-        self.patches = [patch.object(simlab, "RUN_DIR", self.run_dir), patch.object(simlab, "STATE_FILE", self.state_path)]
+        self.patches = [
+            patch.object(simlab, "RUN_DIR", self.run_dir),
+            patch.object(simlab, "STATE_FILE", self.state_path),
+            patch.object(simlab, "SCRATCH_ROOT", self.root / "scratch"),
+        ]
         for item in self.patches:
             item.start()
         self.addCleanup(self.temporary.cleanup)
@@ -169,6 +172,43 @@ class FailureArtifactTests(unittest.TestCase):
         self.assertEqual(len(envelope["artifacts"]["capture_errors"]), 3)
         self.assertIn("catch-up timed out", json.loads(Path(envelope["artifacts"]["verdict"]).read_text())["evidence"]["error"])
 
+    def test_dead_follower_cannot_switch_to_a_sliding_log_window(self):
+        follower = Mock()
+        follower.process.poll.return_value = 1
+        with patch.object(simlab, "_app_log_stream", follower), \
+             patch.object(simlab.subprocess, "run") as run:
+            with self.assertRaisesRegex(RuntimeError, "cannot switch log sources"):
+                simlab.app_log_text({}, "10m")
+            run.assert_not_called()
+
+    def test_standalone_verdict_uses_preserved_log_not_a_sliding_window(self):
+        (self.root / "app.log").write_text(mark("start") + render())
+        with patch.object(simlab, "_app_log_stream", None), \
+             patch.object(simlab.subprocess, "run") as run:
+            self.assertEqual(simlab.app_log_text({"scratch": str(self.root)}, "1s"), mark("start") + render())
+            run.assert_not_called()
+
+    def test_down_does_not_signal_recycled_pid_but_stops_owned_process(self):
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True,
+        )
+        try:
+            identity = simlab.process_identity(child.pid)
+            self.assertIsNotNone(identity)
+            state = {"scratch": str(self.root), "server_pid": child.pid,
+                     "process_identities": {"server_pid": "different process start and command"}}
+            simlab.save_state(state)
+            simlab.cmd_down(argparse.Namespace())
+            self.assertIsNone(child.poll(), "down signalled a process that did not belong to this run")
+            state["process_identities"]["server_pid"] = identity
+            simlab.save_state(state)
+            simlab.cmd_down(argparse.Namespace())
+            self.assertIsNotNone(child.wait(timeout=3), "down left its owned process running")
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+
     def test_startup_failure_reaps_spawned_service_and_writes_summary(self):
         # Use an actual disposable process so cleanup is observed, not a mock
         # echo of killpg. No Runtime Host, engine, relay, or simulator starts.
@@ -176,6 +216,7 @@ class FailureArtifactTests(unittest.TestCase):
         children = []
 
         def spawn_service(command, **kwargs):
+            self.assertEqual(command[:5], ["uv", "run", "python", "-m", "zerg.cli.main"])
             process = real_popen(
                 [sys.executable, "-c", "import time; time.sleep(60)"],
                 stdout=kwargs["stdout"], stderr=kwargs["stderr"], start_new_session=True,
@@ -184,7 +225,7 @@ class FailureArtifactTests(unittest.TestCase):
             return process
 
         try:
-            with patch.object(simlab.subprocess, "Popen", side_effect=spawn_service), \
+            with patch.object(simlab, "Popen", side_effect=spawn_service), \
                  patch.object(simlab, "wait_for", side_effect=TimeoutError("runtime host health failed")):
                 with self.assertRaises(TimeoutError):
                     simlab.cmd_up(argparse.Namespace(build=False, port=12345))
@@ -199,10 +240,6 @@ class FailureArtifactTests(unittest.TestCase):
                 if child.poll() is None:
                     child.kill()
                     child.wait()
-            if self.state_path.exists():
-                scratch_path = json.loads(self.state_path.read_text()).get("scratch")
-                if scratch_path:
-                    shutil.rmtree(scratch_path)
 
 
 if __name__ == "__main__":

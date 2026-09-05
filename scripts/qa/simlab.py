@@ -41,10 +41,12 @@ import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from subprocess import Popen
 
 ROOT = Path(__file__).resolve().parents[2]
 RUN_DIR = ROOT / "artifacts" / "simlab" / "current"
 STATE_FILE = RUN_DIR / "simlab.json"
+SCRATCH_ROOT = Path("/tmp/longhouse-simlab")
 # Shadow imports have no launch-registration API. Use the existing hidden
 # provider-evidence namespace; never turn them into Console sessions for QA.
 PROJECT_CWD = "/tmp/longhouse-simlab/evidence/raw/project"
@@ -109,7 +111,7 @@ class AppLogStream:
         environment = sim_env(state)
         if udid:
             environment["SIM_UDID"] = udid
-        self.process = subprocess.Popen(
+        self.process = Popen(
             [str(ROOT / "scripts/ops/sim.sh"), "logs", "--follow"],
             env=environment,
             stdout=subprocess.PIPE,
@@ -223,14 +225,28 @@ def appended_log_contains(path: Path, needle: str):
     return predicate
 
 
-def alive(pid: int) -> bool:
+def process_identity(pid: int) -> str | None:
     if pid <= 0:
+        return None
+    # argv can change after exec (notably Python launchers); process birth
+    # time stays stable and distinguishes a reused PID from this run's child.
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "lstart="],
+        capture_output=True, text=True, check=False, timeout=5,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def owns_process(state: dict, key: str) -> bool:
+    expected = state.get("process_identities", {}).get(key)
+    pid = state.get(key, 0)
+    if not expected or process_identity(pid) != expected:
         return False
     try:
-        os.kill(pid, 0)
-    except OSError:
+        return os.getpgid(pid) == pid
+    except ProcessLookupError:
         return False
-    return True
 
 
 # --------------------------------------------------------------------------
@@ -270,12 +286,12 @@ def build_binaries() -> None:
 def cmd_up(args: argparse.Namespace) -> None:
     if STATE_FILE.exists():
         previous = load_state()
-        if any(alive(previous.get(key, 0)) for key in ("server_pid", "engine_pid", "proxy_pid")):
+        if any(owns_process(previous, key) for key in ("server_pid", "engine_pid", "proxy_pid")):
             die("a scratch run is still up; `simlab.py down` first")
     up_started = time.monotonic()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     # Short enough for the engine's Unix sockets under macOS's 104-byte cap.
-    scratch = Path("/tmp/longhouse-simlab") / stamp
+    scratch = SCRATCH_ROOT / stamp
     home = scratch / "home"
     projects = home / ".claude" / "projects" / PROJECT_CWD.replace("/", "-")
     projects.mkdir(parents=True)
@@ -292,16 +308,20 @@ def cmd_up(args: argparse.Namespace) -> None:
         "timings": [],
     }
     save_state(state)
-    processes: list[subprocess.Popen] = []
+    processes: list[Popen] = []
 
     def start(key: str, command: list[str], environment: dict, log_name: str, cwd: Path | None = None):
         with (scratch / log_name).open("w") as output:
-            process = subprocess.Popen(
+            process = Popen(
                 command, cwd=cwd, env=environment, stdout=output,
                 stderr=subprocess.STDOUT, start_new_session=True,
             )
         processes.append(process)
         state[key] = process.pid
+        identity = process_identity(process.pid)
+        if not identity:
+            die(f"{key} exited before its process identity could be recorded")
+        state.setdefault("process_identities", {})[key] = identity
         save_state(state)
         return process
 
@@ -436,7 +456,7 @@ def cmd_down(_: argparse.Namespace) -> None:
             log(f"simulator app cleanup failed: {exc}; stopping scratch services anyway")
     for key in ("engine_pid", "proxy_pid", "server_pid"):
         pid = state.get(key, 0)
-        if pid and alive(pid):
+        if owns_process(state, key):
             try:
                 os.killpg(pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -449,7 +469,7 @@ def cmd_down(_: argparse.Namespace) -> None:
     time.sleep(1)
     for key in ("engine_pid", "proxy_pid", "server_pid"):
         pid = state.get(key, 0)
-        if pid and alive(pid):
+        if owns_process(state, key):
             try:
                 os.killpg(pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -458,6 +478,7 @@ def cmd_down(_: argparse.Namespace) -> None:
                 log(f"could not stop {key}={pid}: {exc}")
                 continue
         state.pop(key, None)
+        state.get("process_identities", {}).pop(key, None)
     state.pop("sim_udid", None)
     record_timing(state, "down", started)
     save_state(state)
@@ -726,8 +747,15 @@ MARK = re.compile(r"session open stage=(?P<stage>\S+) session=(?P<session>\S+) e
 
 
 def app_log_text(state: dict, since: str) -> str:
-    if _app_log_stream is not None and _app_log_stream.process.poll() is None:
+    if _app_log_stream is not None:
+        if _app_log_stream.process.poll() is not None:
+            die("app log follower exited; recovery boundaries cannot switch log sources")
         return _app_log_stream.text()
+    captured = Path(state["scratch"]) / "app.log" if state.get("scratch") else None
+    if captured is not None and captured.exists():
+        return captured.read_text()
+    if state.get("render_expectation"):
+        die("recorded app log missing; recovery boundaries cannot use a sliding log window")
     result = subprocess.run(
         [str(ROOT / "scripts/ops/sim.sh"), "logs", "--since", since],
         env=sim_env(state), capture_output=True, text=True, check=True, timeout=30,
@@ -915,6 +943,7 @@ def collect_evidence(state: dict, scenario: str, since: str, capture_client: boo
     artifacts = {
         "scratch": state.get("scratch"), "transcript": state.get("transcript"),
         "screenshots": dict(state.get("screenshots", {})),
+        "app_log_source": "follower" if _app_log_stream is not None else "persisted_or_ad_hoc",
     }
     if state.get("scratch"):
         artifacts["service_logs"] = {name: str(Path(state["scratch"]) / f"{name}.log") for name in ("server", "engine", "proxy")}
