@@ -63,6 +63,25 @@ Run the tier that matches your change — don't over-test:
 Backend tests go in `server/tests_lite/` (per-test SQLite DBs, no shared
 conftest). For `ios/` changes, run the Xcode `Longhouse` scheme tests.
 
+On macOS with Xcode and an iOS Simulator installed, `make simlab-run` exercises
+the real app against a scratch Runtime Host and Machine Agent. It covers live
+transcript arrival, malformed/split input, abandoned sends, app termination and
+reopen, and network loss/reconnection without relaunch. To run only recovery:
+
+```bash
+make simlab-run SCENARIOS="interrupted-client-recovery client-network-recovery"
+make test-ios-helper
+```
+
+Each verdict requires the final synthetic source reply in the server projection
+and a matching client-render acknowledgement; server-only progress cannot pass.
+Screenshots, logs, projections, timings, and failure verdicts are retained under
+the unique scratch run linked from `artifacts/simlab/current/summary.json`.
+Inspect the screenshots as well as the verdict. The loopback relay models
+connection loss, not cellular hardware; app termination is not iOS background
+suspension. These are hidden Shadow imports, not real provider/Console command
+tests. No physical phone, provider credentials, or personal transcripts are used.
+
 ## Generated code
 
 Some code is generated — **do not edit it by hand**:

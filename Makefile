@@ -283,6 +283,8 @@ test-mobile-chat-replay: ## Replay a local SQLite transcript through the iOS mob
 
 test-ios-helper: ## iOS simulator helper script tests
 	@bash scripts/tests/select-ios-simulator.test.sh
+	@python3 scripts/tests/simlab.test.py
+	@python3 scripts/tests/simlab-proxy.test.py
 
 test-frontend: ## Frontend unit tests + type-check (~15s)
 	@cd web && bun run validate:types && bun run test -- --run

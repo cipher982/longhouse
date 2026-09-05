@@ -612,6 +612,8 @@ final class SessionViewModel: ObservableObject {
         openWaterfall?.mark(
             "webkit_\(diagnostics.stage)",
             "rows=\(diagnostics.row_count) bytes=\(diagnostics.payload_byte_size)\(renderMs)"
+                + " latest=\(diagnostics.latest_item_id ?? "none") revision=\(diagnostics.source_revision ?? -1)"
+                + " sequence=\(diagnostics.render_sequence) js_failures=\(diagnostics.js_failure_count)"
         )
         guard diagnostics.stage == "rendered" || diagnostics.stage == "failed" else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
