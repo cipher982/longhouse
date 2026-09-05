@@ -1045,6 +1045,19 @@ def _apply_runtime_event(
     incoming_terminal_state = str((event.payload or {}).get("terminal_state") or "").strip()
     current_run_id = state.run_id
     opens_new_run = event.run_id is not None and event.run_id != state.run_id
+    incoming_run = None
+    superseded_run = False
+    run_order_known = False
+    if event.run_id is not None and event.kind in {"phase_signal", "progress_signal", "terminal_signal"}:
+        run_model = LiveSessionRun if isinstance(state, LiveRuntimeState) else SessionRun
+        incoming_run = db.get(run_model, str(event.run_id) if run_model is LiveSessionRun else event.run_id)
+        if opens_new_run and current_run_id is not None and incoming_run is not None:
+            current_run = db.get(run_model, str(current_run_id) if run_model is LiveSessionRun else current_run_id)
+            if current_run is not None:
+                run_order_known = True
+                # A delayed exit can be timestamped after its successor's work.
+                # Invocation order, not delivery or exit order, owns the runtime.
+                superseded_run = normalize_utc(incoming_run.started_at) <= normalize_utc(current_run.started_at)
 
     latest_terminal_related_at = _latest_timestamp(
         state.last_runtime_signal_at,
@@ -1057,13 +1070,26 @@ def _apply_runtime_event(
     if (
         event.kind == "terminal_signal"
         and incoming_terminal_state not in EXPLICIT_CLOSED_TERMINAL_STATES
-        and (terminal_is_for_other_run or (terminal_is_older and (event.run_id is None or current_run_id is None)))
+        and (
+            (terminal_is_for_other_run and (superseded_run if run_order_known else terminal_is_older))
+            or (terminal_is_older and (event.run_id is None or current_run_id is None))
+        )
     ):
         # An old owner's terminal still ends that exact run, but cannot replace
         # the current runtime or invalidate a later unbound provider request.
-        if terminal_is_for_other_run and incoming_terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES:
-            _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
+        if event.run_id is not None and incoming_terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES:
+            if _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at):
+                db.flush()
+                return "applied"
         return "ignored"
+
+    if event.kind in {"phase_signal", "progress_signal"}:
+        if incoming_run is not None and incoming_run.ended_at is not None:
+            return "protected_terminal"
+        # Reject before assigning run_id: even an ignored late phase must not
+        # silently transfer the pointer's owner or reopen a superseded run.
+        if superseded_run or (opens_new_run and terminal_is_older):
+            return "ignored"
 
     if existing_terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         return "protected_session_ended"

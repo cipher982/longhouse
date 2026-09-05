@@ -166,33 +166,24 @@ def materialize_live_interaction(db: Session, state: LiveRuntimeState, *, persis
 
 
 def expire_live_interactions_for_terminal(db: Session, event: Any) -> int:
-    """Apply each terminal's own scope, including delayed terminals of old runs."""
+    """Revoke only from accepted runtime or durable run-exit evidence."""
     if (event.payload or {}).get("terminal_state") not in EXECUTION_TERMINAL_STATES:
         return 0
     state = db.get(LiveRuntimeState, event.runtime_key)
-    if state is not None:
-        materialize_live_interaction(db, state)
+    materialized = materialize_live_interaction(db, state, persist=False) if state is not None else None
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
     rows = db.query(LiveInteractionRequest).filter_by(runtime_key=event.runtime_key, status="pending").all()
+    if materialized is not None and materialized.status == "pending" and materialized not in rows:
+        rows.append(materialized)
     expired = 0
     for row in rows:
-        if not _execution_owned_interaction(row):
+        reason = live_interaction_terminal_reason(db, row)
+        if reason is None:
             continue
         if event.session_id is not None and str(event.session_id) != row.session_id:
             continue
-        if row.run_id and event.run_id is not None:
-            matches = row.run_id == str(event.run_id)
-        else:
-            # Legacy requests without run identity need both temporal ownership
-            # and no evidence that the terminal belongs to a different run.
-            matches = (
-                (state is None or event.run_id is None or state.run_id is None or event.run_id == state.run_id)
-                and (row.run_id is None or state is None or state.run_id is None or row.run_id == str(state.run_id))
-                and normalize_utc(row.last_seen_at) <= occurred_at
-            )
-        if matches:
-            expire_live_interaction(db, row, occurred_at=occurred_at, reason="Owning execution ended")
-            expired += 1
+        expire_live_interaction(db, row, occurred_at=occurred_at, reason=reason)
+        expired += 1
     return expired
 
 
@@ -203,10 +194,8 @@ def apply_live_interaction_event(db: Session, event: Any, state: LiveRuntimeStat
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
     row = db.query(LiveInteractionRequest).filter_by(request_key=request_key).one_or_none()
     if event.kind == "pause_resolution":
-        if row is None:
-            row = materialize_live_interaction(db, state)
-            if row is not None and row.request_key != request_key:
-                row = None
+        if row is None and state.pending_interaction_id == request_key:
+            row = materialize_live_interaction(db, state, persist=False)
         if row is None or row.status != "pending" or normalize_utc(row.last_seen_at) > occurred_at:
             return False
         row.status = _terminal_status(str(payload.get("status") or "resolved"))
@@ -216,6 +205,7 @@ def apply_live_interaction_event(db: Session, event: Any, state: LiveRuntimeStat
         row.resolved_at = occurred_at
         row.last_seen_at = occurred_at
         row.updated_at = occurred_at
+        db.add(row)
         clear_live_interaction_pointer(state, request_key=request_key, occurred_at=occurred_at)
         return True
     if event.session_id is None:

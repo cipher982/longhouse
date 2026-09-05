@@ -648,6 +648,9 @@ def test_delayed_old_run_terminal_keeps_new_run_permission_answerable(interactio
             _interaction_event(ctx, "phase_signal", 10, run_id=new_run_id),
             _interaction_event(ctx, "pause_request", 11, request_key="new", run_id=new_run_id, single_active=False),
             _interaction_event(ctx, "terminal_signal", 20, run_id=ctx.run_id, terminal_state="session_ended"),
+            _interaction_event(ctx, "phase_signal", 5, run_id=ctx.run_id),
+            _interaction_event(ctx, "phase_signal", 22, run_id=ctx.run_id),
+            _interaction_event(ctx, "progress_signal", 23, run_id=ctx.run_id, progress_kind="transcript_append"),
         ]
     )
     pending = ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"]
@@ -658,6 +661,7 @@ def test_delayed_old_run_terminal_keeps_new_run_permission_answerable(interactio
         assert state.terminal_state is None
         assert state.pending_interaction_id == "new"
         assert db.get(LiveSessionRun, new_run_id).ended_at is None
+        assert normalize_utc(db.get(LiveSessionRun, ctx.run_id).ended_at) == ctx.now + timedelta(seconds=20)
     response = ctx.store.resolve_interaction(
         session_id=ctx.session_id,
         interaction_id=pending[0]["id"],
@@ -813,3 +817,115 @@ def test_exact_run_exit_wins_over_later_buffered_progress(interaction_store):
     with Session(ctx.engine) as db:
         assert db.get(LiveRuntimeState, ctx.runtime_key).terminal_state == "session_ended"
         assert normalize_utc(db.get(LiveSessionRun, ctx.run_id).ended_at) == ctx.now + timedelta(seconds=2)
+
+
+@pytest.mark.parametrize("run_bound", [False, True])
+def test_rejected_unbound_terminal_preserves_wait_before_newer_progress(interaction_store, run_bound):
+    ctx = interaction_store
+    run_id = ctx.run_id if run_bound else None
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(ctx, "phase_signal", 0, run_id=run_id),
+            _interaction_event(ctx, "pause_request", 2, run_id=run_id),
+            _interaction_event(ctx, "progress_signal", 4, run_id=run_id, progress_kind="transcript_append"),
+            _interaction_event(ctx, "terminal_signal", 3, terminal_state="session_ended"),
+        ]
+    )
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        assert state.terminal_state is None
+        assert state.pending_interaction_id == "held"
+        assert db.get(LiveSessionRun, ctx.run_id).ended_at is None
+        row = db.query(LiveInteractionRequest).one()
+        assert row.status == "pending"
+        assert row.can_respond == 1
+    assert (
+        ctx.store.resolve_interaction(
+            session_id=ctx.session_id,
+            interaction_id=row.id,
+            status="resolved",
+            response_payload={"permissionDecision": "allow"},
+            response_text=None,
+            resolved_at=ctx.now + timedelta(seconds=5),
+        )["resolved"]
+        is True
+    )
+
+
+@pytest.mark.parametrize("buffered_old_progress", [False, True])
+def test_new_run_terminal_before_phase_ends_owner_and_cannot_be_reopened(interaction_store, buffered_old_progress):
+    ctx = interaction_store
+    next_run_id = str(uuid4())
+    with Session(ctx.engine) as db:
+        db.add(LiveSessionRun(id=next_run_id, thread_id=ctx.thread_id, provider="cursor", started_at=ctx.now + timedelta(seconds=10)))
+        db.add(
+            LiveSessionConnection(
+                run_id=next_run_id,
+                control_plane="cursor_hook",
+                acquisition_kind="spawned_control",
+                acquired_at=ctx.now + timedelta(seconds=10),
+                can_send_input=1,
+            )
+        )
+        db.commit()
+    ctx.store.apply_session_runtime(events=[_interaction_event(ctx, "phase_signal", 0, run_id=ctx.run_id)])
+    if buffered_old_progress:
+        ctx.store.apply_session_runtime(
+            events=[_interaction_event(ctx, "progress_signal", 25, run_id=ctx.run_id, progress_kind="transcript_append")]
+        )
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(ctx, "pause_request", 11, run_id=next_run_id),
+            _interaction_event(ctx, "terminal_signal", 20, run_id=next_run_id, terminal_state="session_ended"),
+        ]
+    )
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        assert str(state.run_id) == next_run_id
+        assert state.terminal_state == "session_ended"
+        assert normalize_utc(db.get(LiveSessionRun, next_run_id).ended_at) == ctx.now + timedelta(seconds=20)
+        assert db.get(LiveSessionRun, ctx.run_id).ended_at is None
+        assert db.query(LiveSessionConnection).filter_by(run_id=next_run_id).one().can_send_input == 0
+        assert db.query(LiveInteractionRequest).one().status == "expired"
+    # A later ingest transaction must honor the durable end. Neither buffered
+    # output nor a superseded invocation is evidence of a new execution.
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(ctx, "phase_signal", 12, run_id=next_run_id),
+            _interaction_event(ctx, "progress_signal", 21, run_id=next_run_id, progress_kind="transcript_append"),
+            _interaction_event(ctx, "phase_signal", 22, run_id=ctx.run_id),
+            _interaction_event(ctx, "pause_request", 23, request_key="late", run_id=next_run_id),
+        ]
+    )
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        assert str(state.run_id) == next_run_id
+        assert state.terminal_state == "session_ended"
+        assert state.pending_interaction_id is None
+        assert normalize_utc(state.terminal_at) == ctx.now + timedelta(seconds=20)
+    assert ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"] == []
+
+
+def test_ignored_events_do_not_materialize_unrelated_or_newer_legacy_wait(interaction_store):
+    ctx = interaction_store
+    ctx.store.apply_session_runtime(events=[_interaction_event(ctx, "pause_request", 2)])
+    with Session(ctx.engine) as db:
+        db.query(LiveInteractionRequest).delete()
+        db.commit()
+    with Session(ctx.engine) as db:
+        result = ingest_live_runtime_events(
+            db,
+            [
+                _interaction_event(ctx, "terminal_signal", 1, terminal_state="session_ended"),
+                _interaction_event(ctx, "pause_resolution", 3, request_key="unrelated"),
+                _interaction_event(ctx, "pause_resolution", 1),
+            ],
+        )
+        db.commit()
+        assert result.updated_runtime_keys == []
+        assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id == "held"
+        assert db.query(LiveInteractionRequest).count() == 0
+    ctx.store.apply_session_runtime(events=[_interaction_event(ctx, "pause_resolution", 4)])
+    with Session(ctx.engine) as db:
+        assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id is None
+        assert db.query(LiveInteractionRequest).one().status == "resolved"

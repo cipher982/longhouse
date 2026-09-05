@@ -503,7 +503,12 @@ fn prepare_next_envelope_with_limit(
             range_kind: "byte_offset".to_string(),
             range_start: raw_batch.range_start,
             range_end: raw_batch.range_end,
-            render: Some(StorageV2Render {
+            // A Cursor snapshot without a clock cannot certify an empty
+            // transcript. Other providers retain their metadata-only receipts.
+            render: (!is_cursor_agent_transcript_path(provider, path)
+                || parse_result.metadata.started_at.is_some()
+                || !render_records.is_empty())
+            .then(|| StorageV2Render {
                 generation_id: render_generation.to_string(),
                 parser_revision: PARSER_REVISION.to_string(),
                 ordering_revision: ORDERING_REVISION.to_string(),
@@ -5159,11 +5164,9 @@ mod tests {
                     prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
                         .unwrap()
                         .unwrap();
-                assert!(prepared
-                    .envelope
-                    .render
-                    .as_ref()
-                    .is_none_or(|render| render.records.is_empty()));
+                // No render manifest: the server must keep this pending, not
+                // publish an apparently complete empty transcript.
+                assert!(prepared.envelope.render.is_none());
                 assert_eq!(
                     BASE64_STANDARD
                         .decode(&prepared.envelope.records[0].data_b64)
@@ -7709,13 +7712,13 @@ mod tests {
     #[tokio::test]
     async fn unresolved_cross_provider_binding_returns_to_transcript_identity() {
         let dir = tempfile::tempdir().unwrap();
-        let conversation_id = "22a940a2-8256-4042-856e-a3b5ade40bd6";
-        let transcript_dir = dir.path().join("agent-transcripts").join(conversation_id);
+        let conversation_id = Uuid::new_v4().to_string();
+        let transcript_dir = dir.path().join("agent-transcripts").join(&conversation_id);
         fs::create_dir_all(&transcript_dir).unwrap();
         let path = transcript_dir.join(format!("{conversation_id}.jsonl"));
         fs::write(
             &path,
-            b"{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
+            b"{\"role\":\"user\",\"timestamp\":\"2026-07-01T12:00:00Z\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
         )
         .unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
@@ -7843,7 +7846,7 @@ mod tests {
         assert_eq!(repaired.envelope.session_id, conversation_id);
         assert_eq!(
             repaired.envelope.render.unwrap().generation_id,
-            render_generation_id(Uuid::parse_str(conversation_id).unwrap()).to_string()
+            render_generation_id(Uuid::parse_str(&conversation_id).unwrap()).to_string()
         );
         assert!(crate::state::session_binding::SessionBinding::new(&conn)
             .get_for_provider(&stable_source_path(&path).to_string_lossy(), "claude")
