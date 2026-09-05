@@ -1,6 +1,6 @@
 ---
 name: zerg-ui
-description: Look at Longhouse UI the way a user does before calling it done. Renders iOS (simulator, SwiftUI previews, UI-test screenshots) and web (fixture captures) to PNGs you can view with the Read tool. Use for any change to a screen, row, banner, chip, or footer, and for UI QA.
+description: Longhouse visual QA and autonomous iOS dogfooding. Use for UI changes, simulator recovery, network-loss experiments, and client-render verification without a physical phone. Covers simlab real-pipeline journeys, iOS screenshots/previews, and web fixture captures.
 ---
 
 # Zerg UI: look at it
@@ -19,12 +19,65 @@ shown to you. Use it.
 | A SwiftUI view or its states | `make ios-previews` | ~4 min, renders every `#Preview` | Component in dark/light, edge states, no server |
 | iOS screen against real data | `make sim-deploy SESSION=<id>` then `make sim-shot LABEL=<name>` | ~3 min build, then seconds per shot | The real pipeline: hosted data, real fonts, real chrome |
 | iOS screen in a deterministic state | `make ios-ui-shot TEST=<Suite>/<test>` | ~2 min | A fixture-driven frame the UI test attaches, exported to PNG |
+| iOS ingest/recovery without a phone | `make simlab-run` | six real-client journeys | Scratch Runtime Host + Machine Agent + iOS app; client-render convergence and network recovery |
 | Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | seconds once Vite runs | Playwright screenshot plus accessibility snapshot |
 
 Look at more than one when the change spans surfaces. The simulator shot
 proves the data path; the fixture shot proves the layout at a known state.
 
 ## iOS
+
+### Autonomous recovery dogfood (simlab)
+
+Use this before asking David to reproduce transcript-delivery or reconnect
+problems on his phone. Run from the product repo on a Mac with Xcode and a
+simulator:
+
+```bash
+make simlab-run
+make simlab-run SCENARIOS="interrupted-client-recovery client-network-recovery"
+make test-ios-helper
+```
+
+`scripts/qa/simlab.py` owns the experiment: isolated provider HOME, scratch
+SQLite Runtime Host, real Machine Agent, synthetic Claude transcripts, and
+the actual simulator app. `simlab_proxy.py` places a loopback TCP relay only
+in the client path; the engine keeps shipping while the client is offline.
+Do not run concurrent simlab jobs against its shared `current` state/simulator.
+
+Six scenarios: open imported history; live appended turns; abandon/resend;
+malformed/split/delayed transcript input; terminate/reopen after new output;
+network loss and reconnect without relaunch. They are hidden **Shadow**
+imports via the existing provider-evidence namespace, not Console launches.
+Do not use the Console-only session-creation API to register a Shadow proof.
+
+**A pass is stronger than server progress:** the exact final assistant reply
+written to the source must reach the server projection, then the newest
+session-open's successful WebKit render must carry its `prose:<event.id>`.
+Duplicate early renders or a partial head containing all user prompts cannot
+pass. Network recovery additionally requires an observed disconnect, a fresh
+stream connection after the offline boundary, and no new session-open.
+`source_revision` is optional benchmark attribution (normally `-1` here), not
+a production freshness requirement.
+
+Read `artifacts/simlab/current/summary.json` for links to each unique scratch
+run's screenshots, app/server/engine/relay logs, source transcript, projection,
+recovery checkpoints, timings, and verdict. Inspect the PNGs: a rendered
+callback alone does not prove a usable layout. `current` is overwritten by the
+next run; scratch evidence lives under `/tmp/longhouse-simlab/<stamp>/artifacts`
+and is temporary, not a durable archive. Persist conclusions/review IDs in
+session notes rather than committing raw logs or screenshots.
+
+Failures must retain verdicts and available evidence. Do not replace a failed
+log follower with a sliding OSLog window: recovery boundaries depend on one
+stable capture. Teardown checks process birth identity and group ownership;
+never signal a PID merely because an old state file names it.
+
+**Limits:** termination is not iOS background suspension; TCP loss is not a
+cellular-radio simulation; synthetic Shadow history does not qualify real
+provider execution, Helm/Console steering, APNs, or Live Activities. No physical
+phone or provider credentials are required. Contributor-facing instructions
+also live in the root `CONTRIBUTING.md` Tests section.
 
 ### Simulator on real data
 ```bash
