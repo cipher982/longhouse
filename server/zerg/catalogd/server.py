@@ -1918,14 +1918,22 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _repair_cursor_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"session_id", "expected_last_activity_at", "source_last_activity_at", "now", "dry_run"}
+        expected = {
+            "session_id",
+            "expected_started_at",
+            "source_started_at",
+            "expected_last_activity_at",
+            "source_last_activity_at",
+            "now",
+            "dry_run",
+        }
         if set(request.params) != expected:
             return self._error(request, "invalid_request", "storage.cursor.activity.repair.v2 has invalid parameters")
         params = dict(request.params)
         if not _is_canonical_uuid(params["session_id"]) or type(params["dry_run"]) is not bool:
             return self._error(request, "invalid_request", "session_id must be a canonical UUID and dry_run a boolean")
         try:
-            for field in ("expected_last_activity_at", "source_last_activity_at", "now"):
+            for field in ("expected_started_at", "source_started_at", "expected_last_activity_at", "source_last_activity_at", "now"):
                 params[field] = _parse_datetime(params[field], field)
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))

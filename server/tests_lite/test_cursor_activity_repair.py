@@ -60,7 +60,14 @@ def recent_sessions(store):
 
 def test_verified_clock_repair_removes_false_recency_without_deleting_history(cursor_catalog):
     store, engine, session_id, now, source, table = cursor_catalog
-    params = dict(session_id=session_id, expected_last_activity_at=now, source_last_activity_at=source, now=now)
+    params = dict(
+        session_id=session_id,
+        expected_started_at=source - timedelta(hours=1),
+        source_started_at=source - timedelta(hours=1),
+        expected_last_activity_at=now,
+        source_last_activity_at=source,
+        now=now,
+    )
     assert recent_sessions(store) == 1
     preview = store.repair_cursor_activity(**params, dry_run=True)
     assert preview["dry_run"] and not preview["repaired"]
@@ -77,6 +84,7 @@ def test_verified_clock_repair_removes_false_recency_without_deleting_history(cu
 @pytest.mark.parametrize("invalid_source", ["before_start", "after_expected", "stale_expected"])
 def test_clock_repair_refuses_unverified_bounds_and_concurrent_updates(cursor_catalog, invalid_source):
     store, _, session_id, now, source, _ = cursor_catalog
+    started = source - timedelta(hours=1)
     expected = now
     if invalid_source == "before_start":
         source -= timedelta(days=1)
@@ -86,6 +94,8 @@ def test_clock_repair_refuses_unverified_bounds_and_concurrent_updates(cursor_ca
         expected -= timedelta(seconds=1)
     result = store.repair_cursor_activity(
         session_id=session_id,
+        expected_started_at=started,
+        source_started_at=started,
         expected_last_activity_at=expected,
         source_last_activity_at=source,
         now=now,
@@ -93,3 +103,28 @@ def test_clock_repair_refuses_unverified_bounds_and_concurrent_updates(cursor_ca
     )
     assert not result["repaired"]
     assert recent_sessions(store) == 1
+
+
+def test_repair_recovers_creation_clock_fabricated_by_historical_import(cursor_catalog):
+    store, engine, session_id, now, source, table = cursor_catalog
+    with engine.begin() as connection:
+        connection.execute(table.update().where(table.c.session_id == session_id).values(started_at=now))
+    params = dict(
+        session_id=session_id,
+        expected_started_at=now,
+        source_started_at=source - timedelta(hours=1),
+        expected_last_activity_at=now,
+        source_last_activity_at=source,
+        now=now,
+        dry_run=False,
+    )
+    # An incorrect expected creation clock must not overwrite newer evidence.
+    stale = {**params, "expected_started_at": now - timedelta(seconds=1)}
+    assert store.repair_cursor_activity(**stale)["reason"] == "compare_and_set_failed"
+    assert recent_sessions(store) == 1
+    assert store.repair_cursor_activity(**params)["repaired"]
+    assert recent_sessions(store) == 0
+    with engine.connect() as connection:
+        row = connection.execute(select(table).where(table.c.session_id == session_id)).mappings().one()
+    assert row["started_at"].replace(tzinfo=UTC) == source - timedelta(hours=1)
+    assert row["raw_state"] == "durable"

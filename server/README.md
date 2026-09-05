@@ -54,9 +54,12 @@ historical correction.
 
 After verifying the source clock, use the same catalog client with method
 `storage.cursor.activity.repair.v2` and parameters `session_id`,
-`expected_last_activity_at` (the current stored value),
-`source_last_activity_at` (the verified provider value), `now`, and `dry_run`.
-Timestamps are ISO-8601. Preview with `dry_run=True`, then apply with `False`.
-The compare-and-set prevents overwriting a concurrent update, and the source
-clock must fall between session creation and the expected stored activity.
+`expected_started_at`, `expected_last_activity_at` (the current stored values),
+`source_started_at`, `source_last_activity_at` (the verified provider values),
+`now`, and `dry_run`. Timestamps are ISO-8601. Preview with `dry_run=True`,
+then apply with `False`. Both clocks are compared before writing, preventing
+an older audit from overwriting concurrent updates. Source creation may move
+earlier, never later, and must precede source activity. Source activity cannot
+exceed the expected stored activity. This also repairs old imports that
+fabricated both creation and activity clocks.
 This corrects timeline recency without rewriting immutable transcript objects.

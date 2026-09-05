@@ -10416,6 +10416,8 @@ class CatalogStore:
         self,
         *,
         session_id: str,
+        expected_started_at: datetime,
+        source_started_at: datetime,
         expected_last_activity_at: datetime,
         source_last_activity_at: datetime,
         now: datetime,
@@ -10429,15 +10431,19 @@ class CatalogStore:
             if row is None or row["provider"] != "cursor":
                 return {"repaired": False, "reason": "cursor_session_not_found", "commit_seq": str(commit_seq)}
             current = _as_aware_utc(row["last_activity_at"])
+            current_start = _as_aware_utc(row["started_at"])
+            source_start = _as_aware_utc(source_started_at)
             source = _as_aware_utc(source_last_activity_at)
-            if current != _as_aware_utc(expected_last_activity_at):
+            if current != _as_aware_utc(expected_last_activity_at) or current_start != _as_aware_utc(expected_started_at):
                 return {"repaired": False, "reason": "compare_and_set_failed", "commit_seq": str(commit_seq)}
-            if source is None or not _as_aware_utc(row["started_at"]) <= source <= current:
+            if source is None or source_start is None or not source_start <= current_start or not source_start <= source <= current:
                 return {"repaired": False, "reason": "source_clock_out_of_bounds", "commit_seq": str(commit_seq)}
-            if source == current:
+            if source == current and source_start == current_start:
                 return {"repaired": False, "reason": "already_current", "commit_seq": str(commit_seq)}
             result = {
                 "session_id": session_id,
+                "previous_started_at": current_start.isoformat(),
+                "source_started_at": source_start.isoformat(),
                 "previous_last_activity_at": current.isoformat(),
                 "source_last_activity_at": source.isoformat(),
                 "dry_run": dry_run,
@@ -10446,7 +10452,9 @@ class CatalogStore:
                 return {**result, "repaired": False, "commit_seq": str(commit_seq)}
             commit_seq = _advance_commit_seq(connection, now)
             connection.execute(
-                update(table).where(table.c.session_id == session_id).values(last_activity_at=source, updated_at=now, commit_seq=commit_seq)
+                update(table)
+                .where(table.c.session_id == session_id)
+                .values(started_at=source_start, last_activity_at=source, updated_at=now, commit_seq=commit_seq)
             )
             # The storage row owns served history; keep its legacy projections
             # consistent without overwriting independently newer runtime evidence.
@@ -10457,7 +10465,7 @@ class CatalogStore:
                         projection.c.session_id == session_id,
                         projection.c.last_activity_at <= expected_last_activity_at,
                     )
-                    .values(last_activity_at=source, updated_at=now)
+                    .values(started_at=func.min(projection.c.started_at, source_start), last_activity_at=source, updated_at=now)
                 )
             return {**result, "repaired": True, "commit_seq": str(commit_seq)}
 
