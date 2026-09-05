@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 257,
+  "file_count": 258,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -676,7 +676,8 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {
@@ -1984,6 +1985,14 @@
       ]
     },
     {
+      "path": "server/zerg/services/session_pause_requests.py",
+      "providers": [
+        "claude",
+        "cursor",
+        "opencode"
+      ]
+    },
+    {
       "path": "server/zerg/services/session_resume.py",
       "providers": [
         "claude",
@@ -2141,7 +2150,8 @@
       "path": "web/src/pages/__tests__/SessionsPage.test.tsx",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {

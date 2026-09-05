@@ -143,6 +143,9 @@ pub struct SessionMetadata {
     pub parent_provider_session_id: Option<String>,
     pub version: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
+    /// Provider-backed session activity when messages have no individual clock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
     pub is_sidechain: bool,
     /// True when a path binding exists that names *this* provider thread, so
@@ -691,12 +694,23 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
         });
     }
 
+    let cursor_timestamps = crate::cursor_store::cursor_transcript_timestamps(path);
+    let cursor_order_anchor = cursor_timestamps.map(|(started_at, _)| started_at);
     // JSONL: choose strategy based on file size
     let mut result = if file_size > MMAP_THRESHOLD {
-        parse_mmap(path, offset, &session_id)?
+        parse_mmap(path, offset, &session_id, cursor_order_anchor)?
     } else {
-        parse_buffered(path, offset, &session_id)?
+        parse_buffered(path, offset, &session_id, cursor_order_anchor)?
     };
+    if let Some((started_at, last_activity_at)) = cursor_timestamps {
+        result.metadata.started_at = Some(
+            result
+                .metadata
+                .started_at
+                .map_or(started_at, |value| value.min(started_at)),
+        );
+        result.metadata.last_activity_at = Some(last_activity_at);
+    }
 
     if let Some(scanned) = scanned_session_meta.as_ref() {
         result.metadata.session_id = scanned.session_id.clone();
@@ -1069,7 +1083,9 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
             }
         };
         (
-            messages.iter().find_map(|message| message.session_id.clone()),
+            messages
+                .iter()
+                .find_map(|message| message.session_id.clone()),
             None,
             messages,
         )
@@ -1081,7 +1097,11 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                 return Ok(empty_gemini_result(session_id, file_size));
             }
         };
-        (session.session_id, session.start_time, session.messages.unwrap_or_default())
+        (
+            session.session_id,
+            session.start_time,
+            session.messages.unwrap_or_default(),
+        )
     };
 
     // Use the sessionId from the document if it's a valid UUID; otherwise keep stem-derived.
@@ -1104,18 +1124,16 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
 
     for (message_index, msg) in messages.into_iter().enumerate() {
         let msg_type = msg.r#type.as_deref().unwrap_or("");
-        let msg_id = if let Some(id) = msg
-            .id
-            .as_deref()
-            .filter(|id| Uuid::parse_str(id).is_ok())
-        {
+        let msg_id = if let Some(id) = msg.id.as_deref().filter(|id| Uuid::parse_str(id).is_ok()) {
             id.to_string()
         } else {
             let key = msg
                 .message_id
                 .as_ref()
                 .and_then(|value| match value {
-                    serde_json::Value::String(value) => (!value.is_empty()).then_some(value.clone()),
+                    serde_json::Value::String(value) => {
+                        (!value.is_empty()).then_some(value.clone())
+                    }
                     serde_json::Value::Number(value) => Some(value.to_string()),
                     _ => None,
                 })
@@ -1415,7 +1433,12 @@ fn project_from_cwd_basename(cwd: &Path) -> Option<String> {
 // mmap-based parser (large files)
 // ---------------------------------------------------------------------------
 
-fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult> {
+fn parse_mmap(
+    path: &Path,
+    offset: u64,
+    session_id: &str,
+    cursor_order_anchor: Option<DateTime<Utc>>,
+) -> Result<ParseResult> {
     let file =
         std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
 
@@ -1522,6 +1545,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
             &mut events,
             &mut antigravity_pending,
             &mut codex_pending,
+            cursor_order_anchor,
         );
         extract_provider_facts(
             &obj,
@@ -1555,7 +1579,12 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
 // Buffered reader parser (small files)
 // ---------------------------------------------------------------------------
 
-fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult> {
+fn parse_buffered(
+    path: &Path,
+    offset: u64,
+    session_id: &str,
+    cursor_order_anchor: Option<DateTime<Utc>>,
+) -> Result<ParseResult> {
     let mut file =
         std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
 
@@ -1646,6 +1675,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
             &mut events,
             &mut antigravity_pending,
             &mut codex_pending,
+            cursor_order_anchor,
         );
         extract_provider_facts(
             &obj,
@@ -1876,7 +1906,10 @@ fn claude_task_tag_value(body: &str, tag: &str) -> Option<String> {
     let close = format!("</{tag}>");
     let start = body.find(&open)? + open.len();
     let end = body[start..].find(&close)? + start;
-    let value = body[start..end].split_whitespace().collect::<Vec<_>>().join(" ");
+    let value = body[start..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     (!value.is_empty()).then_some(bounded_text(&value, 2_000))
 }
 
@@ -1977,7 +2010,8 @@ fn claude_native_local_command_meta_record(obj: &RawLine) -> bool {
     if claude_command_record_text(content) {
         return true;
     }
-    if content.starts_with("<local-command-stdout>") && content.ends_with("</local-command-stdout>") {
+    if content.starts_with("<local-command-stdout>") && content.ends_with("</local-command-stdout>")
+    {
         return true;
     }
     let Some(caveat_end) = content.find("</local-command-caveat>") else {
@@ -2032,10 +2066,9 @@ fn extract_provider_facts(
         // assistant line carries usage; the turn-ending one is the context
         // size the next prompt will start from.
         (Some("assistant"), _)
-            if obj
-                .message
-                .as_ref()
-                .is_some_and(|m| m.usage.is_some() && m.stop_reason.as_deref() == Some("end_turn")) =>
+            if obj.message.as_ref().is_some_and(|m| {
+                m.usage.is_some() && m.stop_reason.as_deref() == Some("end_turn")
+            }) =>
         {
             "turn.usage"
         }
@@ -2094,7 +2127,9 @@ fn extract_provider_facts(
             serde_json::json!({ "text": bounded_text(text, 2_000) })
         }
         "turn.usage" => {
-            let Some(message) = obj.message.as_ref() else { return };
+            let Some(message) = obj.message.as_ref() else {
+                return;
+            };
             let Some(usage) = message
                 .usage
                 .as_deref()
@@ -2124,7 +2159,10 @@ fn extract_provider_facts(
                 .and_then(|d| d.get("thinking_tokens"))
                 .and_then(|v| v.as_u64())
             {
-                payload.insert("thinking_tokens".to_string(), serde_json::Value::from(thinking));
+                payload.insert(
+                    "thinking_tokens".to_string(),
+                    serde_json::Value::from(thinking),
+                );
             }
             for key in ["service_tier", "speed"] {
                 if let Some(text) = usage.get(key).and_then(|v| v.as_str()) {
@@ -2154,7 +2192,10 @@ fn extract_provider_facts(
         "turn.api_error" => {
             let mut payload = serde_json::Map::new();
             if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
-                payload.insert("error".to_string(), serde_json::Value::from(bounded_text(error, 500)));
+                payload.insert(
+                    "error".to_string(),
+                    serde_json::Value::from(bounded_text(error, 500)),
+                );
             }
             for (wire, ours) in [
                 ("retryAttempt", "retry_attempt"),
@@ -2221,6 +2262,7 @@ fn extract_events(
     events: &mut Vec<ParsedEvent>,
     antigravity_pending: &mut AntigravityPending,
     codex_pending: &mut CodexPending,
+    cursor_order_anchor: Option<DateTime<Utc>>,
 ) {
     let event_type = obj.r#type.as_deref().unwrap_or("");
 
@@ -2252,11 +2294,17 @@ fn extract_events(
         _ => {}
     }
 
-    let timestamp = obj
-        .timestamp
-        .as_deref()
-        .and_then(parse_timestamp)
-        .unwrap_or_else(Utc::now);
+    let source_timestamp = obj.timestamp.as_deref().and_then(parse_timestamp);
+    let timestamp = if obj.role.is_some() {
+        // Cursor's projection omits per-message clocks. Preserve source order
+        // with a known session anchor; without one, retain the raw line only.
+        let Some(timestamp) = source_timestamp.or(cursor_order_anchor) else {
+            return;
+        };
+        timestamp
+    } else {
+        source_timestamp.unwrap_or_else(Utc::now)
+    };
 
     let msg_uuid = obj.uuid.as_deref().unwrap_or("").to_string();
     let msg_uuid = if msg_uuid.is_empty() {
@@ -2475,7 +2523,11 @@ fn cursor_user_query_text(text: &str) -> Option<String> {
         if end <= start || !trimmed[end + "</user_query>".len()..].trim().is_empty() {
             continue;
         }
-        return Some(trimmed[start + "<user_query>".len()..end].trim().to_string());
+        return Some(
+            trimmed[start + "<user_query>".len()..end]
+                .trim()
+                .to_string(),
+        );
     }
     None
 }
@@ -2487,9 +2539,11 @@ fn cursor_has_injection_marker(text: &str) -> bool {
         CURSOR_INJECTION_TAGS.iter().any(|(marker, close)| {
             line.starts_with(marker)
                 && (line[marker.len()..].contains(close)
-                    || lines[index + 1..]
-                        .iter()
-                        .any(|next| CURSOR_INJECTION_TAGS.iter().any(|(other, _)| next.trim_start().starts_with(other))))
+                    || lines[index + 1..].iter().any(|next| {
+                        CURSOR_INJECTION_TAGS
+                            .iter()
+                            .any(|(other, _)| next.trim_start().starts_with(other))
+                    }))
         })
     })
 }
@@ -3237,7 +3291,10 @@ impl CodexFactState {
             }
         }
         if let Some(window) = self.context_window {
-            payload.insert("context_window".to_string(), serde_json::Value::from(window));
+            payload.insert(
+                "context_window".to_string(),
+                serde_json::Value::from(window),
+            );
         }
         if !payload.contains_key("output_tokens") {
             return None;
@@ -3296,8 +3353,12 @@ fn seed_codex_fact_state(path: &Path, offset: u64) -> CodexFactState {
         let payload_type = payload.get("type").and_then(|v| v.as_str());
         match value.get("type").and_then(|v| v.as_str()) {
             Some("turn_context") => state.note_turn_context(payload),
-            Some("event_msg") if payload_type == Some("task_started") => state.note_task_started(payload),
-            Some("event_msg") if payload_type == Some("token_count") => state.note_token_count(payload),
+            Some("event_msg") if payload_type == Some("task_started") => {
+                state.note_task_started(payload)
+            }
+            Some("event_msg") if payload_type == Some("token_count") => {
+                state.note_token_count(payload)
+            }
             _ => {}
         }
     }
@@ -3321,7 +3382,10 @@ fn codex_fact_state_for(path: &Path, offset: u64) -> CodexFactState {
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 /// Codex provider facts. Only the handful of line shapes that carry a signal
@@ -3346,7 +3410,12 @@ fn extract_codex_provider_facts(
             | ("compacted", _)
             | (
                 "event_msg",
-                "task_started" | "token_count" | "task_complete" | "turn_aborted" | "error" | "stream_error"
+                "task_started"
+                    | "token_count"
+                    | "task_complete"
+                    | "turn_aborted"
+                    | "error"
+                    | "stream_error"
             )
     );
     if !wanted {
@@ -3387,7 +3456,10 @@ fn extract_codex_provider_facts(
     match (line_type, payload_type) {
         ("compacted", _) => {
             let mut fact = serde_json::Map::new();
-            if let Some(items) = payload.get("replacement_history").and_then(|v| v.as_array()) {
+            if let Some(items) = payload
+                .get("replacement_history")
+                .and_then(|v| v.as_array())
+            {
                 fact.insert(
                     "replacement_items".to_string(),
                     serde_json::Value::from(items.len()),
@@ -3558,10 +3630,14 @@ fn extract_codex_events(
             // as role=user (not role=developer), so we detect them by content prefix.
             if role == Role::User {
                 let input_texts = content_items.iter().filter_map(|item| {
-                    (item.r#type.as_deref() == Some("input_text")).then_some(item.text.as_deref().unwrap_or(""))
+                    (item.r#type.as_deref() == Some("input_text"))
+                        .then_some(item.text.as_deref().unwrap_or(""))
                 });
                 let input_texts = input_texts.collect::<Vec<_>>();
-                if input_texts.iter().any(|text| codex_text_is_turn_aborted_marker(text)) {
+                if input_texts
+                    .iter()
+                    .any(|text| codex_text_is_turn_aborted_marker(text))
+                {
                     if pending.suppress_next_turn_aborted_marker {
                         pending.suppress_next_turn_aborted_marker = false;
                     } else {
@@ -4243,12 +4319,16 @@ mod tests {
         let compact = result
             .events
             .iter()
-            .find(|event| event.content_text.as_deref() == Some("This session is being continued from a summary."))
+            .find(|event| {
+                event.content_text.as_deref()
+                    == Some("This session is being continued from a summary.")
+            })
             .unwrap();
         assert_eq!(compact.role, Role::System);
         assert_eq!(compact.raw_type, "claude_compact_summary");
         assert!(result.events.iter().any(|event| {
-            event.role == Role::User && event.content_text.as_deref() == Some("A real channel message.")
+            event.role == Role::User
+                && event.content_text.as_deref() == Some("A real channel message.")
         }));
         assert!(result.events.iter().any(|event| {
             event.role == Role::User
@@ -4299,9 +4379,9 @@ mod tests {
             dir.path(),
             "019c638d-0000-0000-0000-000000000099.jsonl",
             &[
-                r#"{"role":"user","message":{"content":[{"type":"text","text":"<user_query>Reply with exactly LH_CURSOR_SEED_abc123 and no other text.</user_query>"}]}}"#,
-                r#"{"role":"assistant","message":{"content":[{"type":"text","text":"LH_CURSOR_SEED_abc123"}]}}"#,
-                r#"{"role":"user","message":{"content":[{"type":"text","text":"<agent_transcripts>context injected by Cursor</agent_transcripts>"}]}}"#,
+                r#"{"role":"user","timestamp":"2026-07-20T14:00:00Z","message":{"content":[{"type":"text","text":"<user_query>Reply with exactly LH_CURSOR_SEED_abc123 and no other text.</user_query>"}]}}"#,
+                r#"{"role":"assistant","timestamp":"2026-07-20T14:00:01Z","message":{"content":[{"type":"text","text":"LH_CURSOR_SEED_abc123"}]}}"#,
+                r#"{"role":"user","timestamp":"2026-07-20T14:00:02Z","message":{"content":[{"type":"text","text":"<agent_transcripts>context injected by Cursor</agent_transcripts>"}]}}"#,
                 r#"{"type":"turn_ended","status":"success"}"#,
             ],
         );
@@ -4332,15 +4412,18 @@ mod tests {
             dir.path(),
             "cursor-boundaries.jsonl",
             &[
-                r#"{"role":"user","message":{"content":[{"type":"text","text":"<agent_transcripts>\n<user_query>old history</user_query>\n</agent_transcripts>\n<user_query>current prompt</user_query>"}]}}"#,
-                r#"{"role":"user","message":{"content":[{"type":"text","text":"Please explain the literal <rules> marker."}]}}"#,
+                r#"{"role":"user","timestamp":"2026-07-20T14:00:00Z","message":{"content":[{"type":"text","text":"<agent_transcripts>\n<user_query>old history</user_query>\n</agent_transcripts>\n<user_query>current prompt</user_query>"}]}}"#,
+                r#"{"role":"user","timestamp":"2026-07-20T14:00:01Z","message":{"content":[{"type":"text","text":"Please explain the literal <rules> marker."}]}}"#,
             ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 2);
         assert_eq!(result.events[0].role, Role::User);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("current prompt"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("current prompt")
+        );
         assert_eq!(result.events[1].role, Role::User);
         assert_eq!(
             result.events[1].content_text.as_deref(),
@@ -4348,7 +4431,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// A Task/Agent subagent's spawning tool call exists only in the sidecar.
     /// Without this read the child can never be bound to the row that spawned
     /// it, which is the whole navigational value of nesting.
@@ -5752,9 +5834,15 @@ mod tests {
 
         assert_eq!(result.events.len(), 2);
         assert_eq!(result.events[0].role, Role::User);
-        assert_eq!(result.events[0].content_text.as_deref(), Some("hello from legacy Gemini"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("hello from legacy Gemini")
+        );
         assert_eq!(result.events[1].role, Role::Assistant);
-        assert_eq!(result.metadata.session_id, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        assert_eq!(
+            result.metadata.session_id,
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        );
     }
 
     #[test]

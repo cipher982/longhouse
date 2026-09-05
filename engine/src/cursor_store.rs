@@ -14,6 +14,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use chrono::{DateTime, Utc};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
@@ -28,6 +29,7 @@ pub struct CursorStoreSnapshot {
     pub conversation_uuid: String,
     pub root_blob_id: Option<String>,
     pub created_at_ms: Option<i64>,
+    pub updated_at_ms: Option<i64>,
     pub meta_rows: Vec<CursorStoreMetaRow>,
     pub blob_rows: Vec<CursorStoreBlobRow>,
     pub root_message_blob_ids: RootMessageBlobIds,
@@ -177,6 +179,7 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
     let conversation_uuid = required_string(&root_metadata, "agentId")?;
     let root_blob_id = optional_string(&root_metadata, "latestRootBlobId");
     let created_at_ms = root_metadata.get("createdAt").and_then(Value::as_i64);
+    let updated_at_ms = cursor_updated_at_ms(path, created_at_ms);
     let blob_rows = read_blob_rows(&snapshot)?;
     let root_message_blob_ids = match root_blob_id.as_deref() {
         Some(root_blob_id) => match blob_rows.iter().find(|row| row.id == root_blob_id) {
@@ -199,6 +202,7 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
         conversation_uuid,
         root_blob_id,
         created_at_ms,
+        updated_at_ms,
         meta_rows,
         blob_rows,
         root_message_blob_ids,
@@ -220,6 +224,7 @@ pub fn read_cursor_render_snapshot(path: &Path) -> Result<CursorStoreSnapshot> {
     let conversation_uuid = required_string(&root_metadata, "agentId")?;
     let root_blob_id = optional_string(&root_metadata, "latestRootBlobId");
     let created_at_ms = root_metadata.get("createdAt").and_then(Value::as_i64);
+    let updated_at_ms = cursor_updated_at_ms(path, created_at_ms);
     let mut blob_rows = Vec::new();
     let root_message_blob_ids = match root_blob_id.as_deref() {
         Some(root_id) => match read_blob_row(&snapshot, root_id)? {
@@ -246,6 +251,7 @@ pub fn read_cursor_render_snapshot(path: &Path) -> Result<CursorStoreSnapshot> {
         conversation_uuid,
         root_blob_id,
         created_at_ms,
+        updated_at_ms,
         meta_rows,
         blob_rows,
         root_message_blob_ids,
@@ -410,6 +416,101 @@ pub fn is_cursor_store_database_path(path: &Path) -> bool {
         .is_some_and(|value| value == "store.db")
 }
 
+/// Cursor's provider-written sidecar records store progress, unlike filesystem
+/// mtimes, which also change when an archive is copied or imported.
+fn cursor_updated_at_ms(db_path: &Path, created_at_ms: Option<i64>) -> Option<i64> {
+    let bytes = std::fs::read(db_path.parent()?.join("meta.json")).ok()?;
+    let metadata: Value = serde_json::from_slice(&bytes).ok()?;
+    if metadata.get("schemaVersion").and_then(Value::as_u64) != Some(1)
+        || metadata.get("createdAtMs").and_then(Value::as_i64) != created_at_ms
+        || created_at_ms.is_none()
+    {
+        return None;
+    }
+    metadata.get("updatedAtMs").and_then(Value::as_i64)
+}
+
+pub(crate) fn cursor_session_timestamps(
+    created_at_ms: Option<i64>,
+    updated_at_ms: Option<i64>,
+    evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let started_at = created_at_ms
+        .and_then(DateTime::from_timestamp_millis)
+        .or_else(|| evidence.and_then(|evidence| evidence.first_activity_at))?;
+    let last_activity_at = updated_at_ms
+        .and_then(DateTime::from_timestamp_millis)
+        .into_iter()
+        .chain(evidence.and_then(|evidence| evidence.last_activity_at))
+        .max()
+        .unwrap_or(started_at)
+        .max(started_at);
+    Some((started_at, last_activity_at))
+}
+
+/// The JSONL projection and store describe the same provider conversation.
+/// Recover its clock once per parse; missing per-message times remain coarse
+/// session-start ordering anchors, never the time Longhouse reads the archive.
+pub(crate) fn cursor_transcript_timestamps(path: &Path) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    if !path
+        .components()
+        .any(|part| part.as_os_str() == "agent-transcripts")
+    {
+        return None;
+    }
+    let Some(conversation_id) = path.file_stem().and_then(|value| value.to_str()) else {
+        return None;
+    };
+    if Uuid::parse_str(conversation_id).is_err() {
+        return None;
+    }
+    let snapshot = crate::cursor_visibility::configured_cursor_store(conversation_id)
+        .and_then(|store| {
+            read_cursor_render_snapshot(&store)
+                .inspect_err(|error| {
+                    tracing::warn!(
+                        path = %store.display(),
+                        error = %error,
+                        "Ignoring unreadable optional Cursor store clock; preserving JSONL archival"
+                    );
+                })
+                .ok()
+        })
+        .filter(|snapshot| snapshot.conversation_uuid == conversation_id);
+    // These clocks enrich an independently readable JSONL source. A failure
+    // must not turn optional provider evidence into an archive prerequisite.
+    // Log once per failed evidence source per parse, never once per message.
+    let evidence =
+        crate::cursor_launch_binding::launch_binding_state_for_conversation(conversation_id)
+            .and_then(|binding| match binding {
+                crate::cursor_launch_binding::CursorLaunchBindingState::Managed(binding) => {
+                    crate::cursor_visibility::load_cursor_visibility_evidence(
+                        &binding.session_id,
+                        conversation_id,
+                    )
+                }
+                _ => Ok(None),
+            })
+            .inspect_err(|error| {
+                tracing::warn!(
+                    conversation_id,
+                    error = %error,
+                    "Ignoring unreadable optional Cursor receipt clock; preserving JSONL archival"
+                );
+            })
+            .ok()
+            .flatten();
+    cursor_session_timestamps(
+        snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.created_at_ms),
+        snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.updated_at_ms),
+        evidence.as_ref(),
+    )
+}
+
 /// Workspace facts for a Cursor session, read from the sidecar Cursor writes
 /// next to `store.db`.
 ///
@@ -421,9 +522,7 @@ pub fn is_cursor_store_database_path(path: &Path) -> bool {
 /// Returns `(cwd, project, git_repo)`. A missing or malformed sidecar yields
 /// `None` rather than an error: an unattributed session is the status quo, and
 /// is preferable to failing an otherwise healthy ingest.
-pub fn cursor_workspace_facts(
-    db_path: &Path,
-) -> Option<(String, Option<String>, Option<String>)> {
+pub fn cursor_workspace_facts(db_path: &Path) -> Option<(String, Option<String>, Option<String>)> {
     let sidecar = db_path.parent()?.join("meta.json");
     let raw = std::fs::read_to_string(&sidecar).ok()?;
     let parsed: Value = serde_json::from_str(&raw).ok()?;

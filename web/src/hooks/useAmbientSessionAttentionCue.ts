@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from "react";
 import type { TimelineSessionCard } from "../services/api/agents";
+import { needsSessionAttention } from "../lib/sessionRuntime";
 import { usePageMeta } from "./usePageMeta";
 import { useDocumentVisible } from "./useDocumentVisible";
 
@@ -9,7 +10,7 @@ type NavigatorWithBadge = Navigator & {
 };
 
 function attentionCount(sessions: TimelineSessionCard[]): number {
-  return sessions.filter((thread) => thread.head.session_state.pending_interaction != null).length;
+  return sessions.filter((thread) => needsSessionAttention(thread.head)).length;
 }
 
 function attentionTitle(count: number): string {

@@ -690,6 +690,8 @@ class CatalogDaemon:
             return await self._list_owned_sessions(request)
         if request.method == "storage.session.semantic_projection.repair.v2":
             return await self._repair_storage_semantic_projection(request)
+        if request.method == "storage.cursor.activity.repair.v2":
+            return await self._repair_cursor_activity(request)
         if request.method == "storage.media.commit.v2":
             return await self._commit_media_object(request)
         if request.method == "storage.media.read.v2":
@@ -1899,14 +1901,36 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _expire_due_interactions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"now"}:
-            return self._error(request, "invalid_request", "interaction.expire_due.v2 requires now")
+        if "now" not in request.params or set(request.params) - {"now", "session_id", "dry_run"}:
+            return self._error(request, "invalid_request", "interaction.expire_due.v2 requires now and optional session_id, dry_run")
+        session_id = request.params.get("session_id")
+        dry_run = request.params.get("dry_run", False)
+        if session_id is not None and not _is_canonical_uuid(session_id):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        if type(dry_run) is not bool:
+            return self._error(request, "invalid_request", "dry_run must be a boolean")
         try:
             now = _parse_datetime(request.params["now"], "now")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(self._store.expire_due_interactions, now=now)
+        result = await self._run_store(self._store.expire_due_interactions, now=now, session_id=session_id, dry_run=dry_run)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _repair_cursor_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "expected_last_activity_at", "source_last_activity_at", "now", "dry_run"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "storage.cursor.activity.repair.v2 has invalid parameters")
+        params = dict(request.params)
+        if not _is_canonical_uuid(params["session_id"]) or type(params["dry_run"]) is not bool:
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID and dry_run a boolean")
+        try:
+            for field in ("expected_last_activity_at", "source_last_activity_at", "now"):
+                params[field] = _parse_datetime(params[field], field)
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.repair_cursor_activity, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _repair_expire_interaction(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -5,7 +5,7 @@ import { makeSessionStateFacts } from "../../../test/sessionState";
 const NOW = Date.parse("2026-05-19T16:00:00Z");
 
 describe("getRowTimeLabel", () => {
-  it("uses the server-owned status timestamp when present", () => {
+  it("labels the selected timeline or result timestamp", () => {
     expect(
       getRowTimeLabel({
         seenAt: "2026-05-19T15:57:00Z",

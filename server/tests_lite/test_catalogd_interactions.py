@@ -24,11 +24,18 @@ from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
 from zerg.services.session_pause_requests import make_pause_request_key
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_live_runtime_events
+from zerg.utils.time import normalize_utc
 
 
 @pytest.fixture
@@ -260,6 +267,14 @@ async def test_catalogd_repairs_only_the_exact_legacy_permission_gate_record(dae
     await daemon.start()
     client = CatalogClient(socket_path, default_timeout_seconds=5.0)
     try:
+        maintenance = await client.call(
+            "interaction.expire_due.v2",
+            {"now": now.isoformat(), "session_id": session_id, "dry_run": True},
+        )
+        # No deadline or owner-exit evidence: normal maintenance must not
+        # revoke this wait just because its legacy provider label is wrong.
+        assert maintenance["candidate_count"] == 0
+        assert maintenance["dry_run"] is True
         repaired = await client.call(
             "interaction.repair.expire.v2",
             {
@@ -525,3 +540,276 @@ async def test_permission_and_pause_routes_use_catalog_without_db(daemon_paths, 
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.fixture
+def interaction_store(tmp_path):
+    engine = create_catalog_engine(tmp_path / "interaction.db")
+    initialize_catalog_schema(engine)
+    now = datetime(2026, 7, 20, 12, tzinfo=UTC)
+    session_id, thread_id, run_id = str(uuid4()), str(uuid4()), str(uuid4())
+    with Session(engine) as db:
+        db.add(
+            LiveSessionCatalog(session_id=session_id, provider="cursor", environment="prod", started_at=now, primary_thread_id=thread_id)
+        )
+        db.add(LiveSessionThread(id=thread_id, session_id=session_id, provider="cursor", is_primary=1, created_at=now, updated_at=now))
+        db.add(LiveSessionRun(id=run_id, thread_id=thread_id, provider="cursor", started_at=now))
+        db.add(
+            LiveSessionConnection(
+                run_id=run_id,
+                control_plane="cursor_hook",
+                acquisition_kind="spawned_control",
+                acquired_at=now,
+                can_send_input=1,
+                can_interrupt=1,
+            )
+        )
+        db.commit()
+    yield SimpleNamespace(
+        engine=engine,
+        store=CatalogStore(engine),
+        now=now,
+        session_id=session_id,
+        runtime_key=f"cursor:{session_id}",
+        thread_id=thread_id,
+        run_id=run_id,
+    )
+    engine.dispose()
+
+
+def _interaction_event(ctx, event_kind, seconds, *, request_key="held", run_id=None, **payload):
+    return RuntimeEventIngest(
+        runtime_key=ctx.runtime_key,
+        session_id=UUID(ctx.session_id),
+        provider="cursor",
+        source="cursor_hook",
+        kind=event_kind,
+        occurred_at=ctx.now + timedelta(seconds=seconds),
+        run_id=UUID(run_id) if run_id else None,
+        phase="running" if event_kind == "phase_signal" else None,
+        dedupe_key=f"{event_kind}:{seconds}:{request_key}",
+        payload={
+            "request_key": request_key,
+            "kind": "permission_prompt",
+            "can_respond": True,
+            "provider_ref": {"source": "claude_permission_gate", "reply_transport": "claude_pretooluse_pull"},
+            **payload,
+        },
+    )
+
+
+@pytest.mark.parametrize("ingress", ["catalog_batch", "live_reducer"])
+def test_terminal_revokes_held_permission_and_rejects_late_replay(interaction_store, ingress):
+    ctx = interaction_store
+    request = _interaction_event(ctx, "pause_request", 1)
+    terminal = _interaction_event(ctx, "terminal_signal", 2, terminal_state="session_ended", terminal_reason="helm_exit")
+    events = [request, terminal, request.model_copy(update={"occurred_at": ctx.now + timedelta(seconds=3)})]
+    if ingress == "catalog_batch":
+        ctx.store.apply_session_runtime(events=events)
+    else:
+        with Session(ctx.engine) as db:
+            ingest_live_runtime_events(db, events)
+            db.commit()
+    history = ctx.store.list_interactions(session_id=ctx.session_id, status=None, limit=20)["interactions"]
+    assert history[0]["status"] == "expired"
+    assert history[0]["can_respond"] is False
+    assert ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"] == []
+    decision = ctx.store.read_interaction_decision(session_id=ctx.session_id, interaction_id=history[0]["id"], request_key=None)
+    assert decision["decision"] == "deny"
+    response = ctx.store.resolve_interaction(
+        session_id=ctx.session_id,
+        interaction_id=history[0]["id"],
+        status="resolved",
+        response_payload={"permissionDecision": "allow"},
+        response_text="late",
+        resolved_at=ctx.now + timedelta(seconds=4),
+    )
+    assert response["resolved"] is False
+    with Session(ctx.engine) as db:
+        assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_projection_json is None
+        assert normalize_utc(db.get(LiveSessionRun, ctx.run_id).ended_at) == terminal.occurred_at
+        connection = db.query(LiveSessionConnection).filter_by(run_id=ctx.run_id).one()
+        assert connection.state == "ended"
+        assert connection.can_send_input == 0
+        assert db.get(LiveSessionCatalog, ctx.session_id) is not None
+        assert db.query(LiveArchiveOutbox).count() == 0
+
+
+def test_delayed_old_run_terminal_keeps_new_run_permission_answerable(interaction_store):
+    ctx = interaction_store
+    new_run_id = str(uuid4())
+    with Session(ctx.engine) as db:
+        db.add(LiveSessionRun(id=new_run_id, thread_id=ctx.thread_id, provider="cursor", started_at=ctx.now + timedelta(seconds=10)))
+        db.commit()
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(ctx, "phase_signal", 0, run_id=ctx.run_id),
+            _interaction_event(ctx, "pause_request", 1, request_key="old", run_id=ctx.run_id),
+            _interaction_event(ctx, "phase_signal", 10, run_id=new_run_id),
+            _interaction_event(ctx, "pause_request", 11, request_key="new", run_id=new_run_id, single_active=False),
+            _interaction_event(ctx, "terminal_signal", 20, run_id=ctx.run_id, terminal_state="session_ended"),
+        ]
+    )
+    pending = ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"]
+    assert [row["request_key"] for row in pending] == ["new"]
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        assert str(state.run_id) == new_run_id
+        assert state.terminal_state is None
+        assert state.pending_interaction_id == "new"
+        assert db.get(LiveSessionRun, new_run_id).ended_at is None
+    response = ctx.store.resolve_interaction(
+        session_id=ctx.session_id,
+        interaction_id=pending[0]["id"],
+        status="resolved",
+        response_payload={"permissionDecision": "allow"},
+        response_text=None,
+        resolved_at=ctx.now + timedelta(seconds=21),
+    )
+    assert response["resolved"] is True
+
+
+def test_unbound_older_terminal_cannot_consume_later_permission(interaction_store):
+    ctx = interaction_store
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(ctx, "pause_request", 20, request_key="new"),
+            _interaction_event(ctx, "terminal_signal", 10, terminal_state="session_ended"),
+            _interaction_event(ctx, "pause_request", 5, request_key="late-old"),
+        ]
+    )
+    pending = ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"]
+    assert [row["request_key"] for row in pending] == ["new"]
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        assert state.pending_interaction_id == "new"
+        assert state.terminal_state is None
+
+
+@pytest.mark.parametrize("runtime_only", [False, True])
+def test_maintenance_repairs_no_expiry_orphans_and_old_run_without_touching_new_run(interaction_store, runtime_only):
+    ctx = interaction_store
+    request = _interaction_event(ctx, "pause_request", 1)
+    ctx.store.apply_session_runtime(events=[request])
+    new_run_id = str(uuid4())
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        state.terminal_state = "session_ended"
+        state.terminal_at = ctx.now + timedelta(seconds=5)
+        state.terminal_reason = "helm_exit"
+        if runtime_only:
+            db.query(LiveInteractionRequest).delete()
+        db.add(LiveSessionRun(id=new_run_id, thread_id=ctx.thread_id, provider="cursor", started_at=ctx.now + timedelta(seconds=10)))
+        db.commit()
+    preview = ctx.store.expire_due_interactions(now=ctx.now + timedelta(days=30), dry_run=True)
+    assert preview["candidate_count"] == 1
+    assert [run["run_id"] for run in preview["runs"]] == [ctx.run_id]
+    with Session(ctx.engine) as db:
+        assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id == "held"
+        assert db.get(LiveSessionRun, ctx.run_id).ended_at is None
+        assert db.query(LiveInteractionRequest).count() == (0 if runtime_only else 1)
+    applied = ctx.store.expire_due_interactions(now=ctx.now + timedelta(days=30))
+    assert applied["expired_count"] == 1
+    assert applied["run_repair_count"] == 1
+    with Session(ctx.engine) as db:
+        assert db.query(LiveInteractionRequest).one().status == "expired"
+        assert db.query(LiveInteractionRequest).one().expires_at is None
+        assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id is None
+        assert normalize_utc(db.get(LiveSessionRun, ctx.run_id).ended_at) == ctx.now + timedelta(seconds=5)
+        assert db.get(LiveSessionRun, new_run_id).ended_at is None
+    replay = ctx.store.expire_due_interactions(now=ctx.now + timedelta(days=31))
+    assert replay["expired_count"] == 0
+    assert replay["run_repair_count"] == 0
+    assert replay["commit_seq"] == applied["commit_seq"]
+
+
+def test_response_terminalizes_historical_orphan_before_allow(interaction_store):
+    ctx = interaction_store
+    ctx.store.apply_session_runtime(events=[_interaction_event(ctx, "pause_request", 1)])
+    interaction_id = ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"][0]["id"]
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        state.terminal_state = "session_ended"
+        state.terminal_at = ctx.now + timedelta(seconds=2)
+        db.commit()
+    result = ctx.store.resolve_interaction(
+        session_id=ctx.session_id,
+        interaction_id=interaction_id,
+        status="resolved",
+        response_payload={"permissionDecision": "allow"},
+        response_text=None,
+        resolved_at=ctx.now + timedelta(seconds=3),
+    )
+    assert result["resolved"] is False
+    assert result["interaction"]["status"] == "expired"
+    assert (
+        ctx.store.read_interaction_decision(session_id=ctx.session_id, interaction_id=interaction_id, request_key=None)["decision"]
+        == "deny"
+    )
+
+
+@pytest.mark.parametrize("evidence", ["terminal", "continued", "stale"])
+def test_provider_questions_require_execution_evidence_and_durable_questions_survive(interaction_store, evidence):
+    ctx = interaction_store
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(
+                ctx,
+                "pause_request",
+                1,
+                request_key="provider",
+                kind="structured_question",
+                provider_ref={"reply_transport": "managed_push"},
+                can_respond=False,
+            ),
+            _interaction_event(
+                ctx, "pause_request", 2, request_key="durable", kind="structured_question", provider_ref={}, single_active=False
+            ),
+        ]
+    )
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        if evidence == "terminal":
+            state.terminal_state = "session_ended"
+            state.terminal_at = ctx.now + timedelta(seconds=3)
+        elif evidence == "continued":
+            state.execution_started_at = ctx.now + timedelta(seconds=3)
+            state.last_progress_at = ctx.now + timedelta(seconds=4)
+        else:
+            state.phase = "idle"
+            state.freshness_expires_at = ctx.now
+        db.commit()
+    repair = ctx.store.expire_due_interactions(now=ctx.now + timedelta(days=40))
+    assert repair["expired_count"] == (0 if evidence == "stale" else 1)
+    pending = ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"]
+    assert {row["request_key"] for row in pending} == ({"provider", "durable"} if evidence == "stale" else {"durable"})
+
+
+def test_provider_work_while_question_still_pending_does_not_expire_it(interaction_store):
+    ctx = interaction_store
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(ctx, "pause_request", 1, kind="structured_question", provider_ref={"reply_transport": "managed_push"}),
+            _interaction_event(ctx, "phase_signal", 2, pause_request_still_pending=True),
+            _interaction_event(ctx, "progress_signal", 3, progress_kind="transcript_append"),
+        ]
+    )
+    result = ctx.store.expire_due_interactions(now=ctx.now + timedelta(days=30))
+    assert result["expired_count"] == 0
+    assert ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"][0]["can_respond"] is True
+
+
+def test_exact_run_exit_wins_over_later_buffered_progress(interaction_store):
+    ctx = interaction_store
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(ctx, "phase_signal", 0, run_id=ctx.run_id),
+            _interaction_event(ctx, "pause_request", 1, run_id=ctx.run_id),
+            _interaction_event(ctx, "progress_signal", 3, run_id=ctx.run_id, progress_kind="transcript_append"),
+            _interaction_event(ctx, "terminal_signal", 2, run_id=ctx.run_id, terminal_state="session_ended"),
+        ]
+    )
+    assert ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"] == []
+    with Session(ctx.engine) as db:
+        assert db.get(LiveRuntimeState, ctx.runtime_key).terminal_state == "session_ended"
+        assert normalize_utc(db.get(LiveSessionRun, ctx.run_id).ended_at) == ctx.now + timedelta(seconds=2)

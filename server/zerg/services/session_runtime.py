@@ -631,14 +631,15 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
 def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:
     """Materialize runtime state into the hot Live Store without archive side effects.
 
-    The live lane intentionally does not write SessionObservation rows, pause
-    requests, notification ledgers, SessionRun, or AgentSession lifecycle
-    fields. Those remain archive responsibilities. This reducer exists so
-    user-visible phase/control freshness can update before archive storage
-    catches up.
+    The live lane owns held interactions and live run/control facts, but never
+    writes archive observations, pause requests, or notification ledgers.
     """
 
+    from zerg.models.live_store import LiveInteractionRequest
     from zerg.services.live_session_state import touch_live_sessions_from_runtime_events
+    from zerg.services.session_pause_requests import expire_live_interaction
+    from zerg.services.session_pause_requests import expire_live_interactions_for_terminal
+    from zerg.services.session_pause_requests import live_interaction_terminal_reason
 
     updated_runtime_keys: list[str] = []
     for event in events:
@@ -654,6 +655,17 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
             state_model=LiveRuntimeState,
             archive_side_effects=False,
         )
+        if event.kind == "terminal_signal" and expire_live_interactions_for_terminal(db, event):
+            outcome = "applied"
+        elif outcome == "applied" and event.kind in {"phase_signal", "progress_signal"}:
+            state = db.get(LiveRuntimeState, event.runtime_key)
+            if state is not None and state.pending_interaction_id:
+                interaction = (
+                    db.query(LiveInteractionRequest).filter_by(request_key=state.pending_interaction_id, status="pending").one_or_none()
+                )
+                reason = live_interaction_terminal_reason(db, interaction) if interaction is not None else None
+                if reason is not None:
+                    expire_live_interaction(db, interaction, occurred_at=normalize_utc(event.occurred_at), reason=reason)
         _record_managed_codex_runtime_observation(event, f"live_{outcome}")
         if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
@@ -809,6 +821,35 @@ def _exit_status_for_terminal(terminal_state: str, payload: Mapping[str, Any]) -
     return terminal_state[:64]
 
 
+def _live_run_for_terminal(
+    db: Session, *, event: RuntimeEventIngest, state: LiveRuntimeState, occurred_at: datetime
+) -> LiveSessionRun | None:
+    """Resolve legacy run-less exits without guessing across threads or new runs."""
+    session_id = event.session_id or state.session_id
+    if session_id is None:
+        return None
+    query = (
+        db.query(LiveSessionRun)
+        .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
+        .filter(
+            LiveSessionThread.session_id == str(session_id),
+            LiveSessionRun.provider == event.provider,
+            LiveSessionRun.started_at <= occurred_at,
+        )
+    )
+    run_id = event.run_id or state.run_id
+    if run_id is not None:
+        query = query.filter(LiveSessionRun.id == str(run_id))
+    elif event.thread_id or state.thread_id:
+        query = query.filter(LiveSessionRun.thread_id == str(event.thread_id or state.thread_id))
+    else:
+        query = query.filter(LiveSessionThread.is_primary == 1)
+    candidates = query.order_by(LiveSessionRun.started_at.desc()).limit(2).all()
+    if not candidates or (len(candidates) > 1 and candidates[0].started_at == candidates[1].started_at):
+        return None
+    return candidates[0]
+
+
 def _apply_run_terminal_event(
     db: Session,
     *,
@@ -816,13 +857,13 @@ def _apply_run_terminal_event(
     state: SessionRuntimeState | LiveRuntimeState,
     occurred_at: datetime,
 ) -> bool:
-    run_id = event.run_id or state.run_id
-    if run_id is None:
-        return False
     live_lane = isinstance(state, LiveRuntimeState)
-    run_model = LiveSessionRun if live_lane else SessionRun
     connection_model = LiveSessionConnection if live_lane else SessionConnection
-    run = db.query(run_model).filter(run_model.id == str(run_id) if live_lane else run_model.id == run_id).first()
+    if live_lane:
+        run = _live_run_for_terminal(db, event=event, state=state, occurred_at=occurred_at)
+    else:
+        run_id = event.run_id or state.run_id
+        run = db.get(SessionRun, run_id) if run_id is not None else None
     if run is None:
         return False
     if event.session_id is not None:
@@ -980,38 +1021,12 @@ def _apply_runtime_event(
 ) -> RuntimeEventApplyOutcome:
     if event.kind in {"pause_request", "pause_resolution"}:
         if not archive_side_effects:
-            from zerg.services.session_pause_requests import build_pause_runtime_projection
-            from zerg.services.session_pause_requests import pause_runtime_request_key
+            from zerg.services.session_pause_requests import apply_live_interaction_event
 
             state = _ensure_state(db, event, state_model=state_model, archive_side_effects=False)
-            payload = event.payload if isinstance(event.payload, dict) else {}
-            occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
-            interaction_updated_at = normalize_utc(state.pending_interaction_updated_at)
-            if interaction_updated_at is not None and (
-                occurred_at < interaction_updated_at or (occurred_at == interaction_updated_at and event.kind == "pause_request")
-            ):
-                return "ignored"
-            if event.kind == "pause_request":
-                projection = build_pause_runtime_projection(event)
-                state.pending_interaction_id = projection["request_key"]
-                state.pending_interaction_kind = str(payload.get("kind") or "structured_question").strip()
-                state.pending_interaction_opened_at = occurred_at
-                state.pending_interaction_can_respond = int(bool(payload.get("can_respond")))
-                state.pending_interaction_projection_json = projection
-            else:
-                target_id = pause_runtime_request_key(event)
-                if state.pending_interaction_id is not None and target_id != state.pending_interaction_id:
-                    return "ignored"
-                state.pending_interaction_id = None
-                state.pending_interaction_kind = None
-                state.pending_interaction_opened_at = None
-                state.pending_interaction_can_respond = 0
-                state.pending_interaction_projection_json = None
-            state.pending_interaction_updated_at = occurred_at
-            state.runtime_version = int(state.runtime_version or 0) + 1
-            state.updated_at = max(normalize_utc(state.updated_at) or occurred_at, occurred_at)
+            changed = apply_live_interaction_event(db, event, state)
             db.flush()
-            return "applied"
+            return "applied" if changed else "ignored"
         from zerg.services.session_pause_requests import apply_pause_runtime_event
 
         return "applied" if apply_pause_runtime_event(db, event) else "ignored"
@@ -1035,14 +1050,19 @@ def _apply_runtime_event(
         state.last_runtime_signal_at,
         state.last_progress_at,
         state.terminal_at,
+        state.pending_interaction_opened_at if isinstance(state, LiveRuntimeState) else None,
     )
-    terminal_is_newer_than_event = latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at
-    terminal_is_session_end = (incoming_terminal_state or "finished") == "session_ended"
-    terminal_is_for_current_run = current_run_id is None or event.run_id is None or event.run_id == current_run_id
-    terminal_superseded = (
-        event.kind == "terminal_signal" and terminal_is_newer_than_event and not terminal_is_session_end and not terminal_is_for_current_run
-    )
-    if terminal_superseded:
+    terminal_is_for_other_run = current_run_id is not None and event.run_id is not None and event.run_id != current_run_id
+    terminal_is_older = latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at
+    if (
+        event.kind == "terminal_signal"
+        and incoming_terminal_state not in EXPLICIT_CLOSED_TERMINAL_STATES
+        and (terminal_is_for_other_run or (terminal_is_older and (event.run_id is None or current_run_id is None)))
+    ):
+        # An old owner's terminal still ends that exact run, but cannot replace
+        # the current runtime or invalidate a later unbound provider request.
+        if terminal_is_for_other_run and incoming_terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES:
+            _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
         return "ignored"
 
     if existing_terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:

@@ -168,6 +168,23 @@ describe("resolveSessionRuntimeState", () => {
     expect(isSessionClosed({ session_state: makeSessionStateFacts({ closed: true }) })).toBe(true);
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
   });
+
+  it.each([
+    { closed: true, userState: "active" },
+    { closed: false, userState: "parked" },
+  ])("does not request attention from stale pending interactions when closed=$closed and user=$userState", ({ closed, userState }) => {
+    const runtime = resolveSessionRuntimeState(makeSession({
+      user_state: userState,
+      session_state: makeSessionStateFacts({
+        closed,
+        pendingInteraction: true,
+        activity: "quiescent",
+        observedAt: "2026-07-20T12:00:00Z",
+      }),
+    }));
+
+    expect(runtime.needsAttention).toBe(false);
+  });
 });
 
 describe("resolveTimelineSignal", () => {

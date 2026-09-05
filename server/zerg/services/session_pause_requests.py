@@ -14,7 +14,10 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
+from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
 from zerg.utils.time import normalize_utc
 
 PAUSE_KIND_STRUCTURED_QUESTION = "structured_question"
@@ -33,6 +36,254 @@ REPLY_TRANSPORT_CLAUDE_PULL = "claude_pretooluse_pull"
 REPLY_TRANSPORT_CURSOR_POLL = "cursor_permission_poll"
 REPLY_TRANSPORT_MANAGED_PUSH = "managed_push"
 PULL_REPLY_TRANSPORTS = {REPLY_TRANSPORT_CLAUDE_PULL, REPLY_TRANSPORT_CURSOR_POLL}
+
+# A stale lease is not proof of exit. Permission waits and managed-push provider
+# questions belong to an execution; durable Longhouse questions do not.
+EXECUTION_TERMINAL_STATES = {"session_ended", "process_gone", "run_completed", "run_failed", "run_cancelled", "user_closed"}
+
+
+def clear_live_interaction_pointer(state: LiveRuntimeState, *, request_key: str, occurred_at: datetime) -> bool:
+    """Clear only the pointer owned by this request, retaining the replay watermark."""
+    if state.pending_interaction_id != request_key:
+        return False
+    state.pending_interaction_id = None
+    state.pending_interaction_kind = None
+    state.pending_interaction_opened_at = None
+    state.pending_interaction_projection_json = None
+    state.pending_interaction_can_respond = 0
+    state.pending_interaction_updated_at = max(normalize_utc(state.pending_interaction_updated_at) or occurred_at, occurred_at)
+    state.runtime_version = int(state.runtime_version or 0) + 1
+    state.updated_at = max(normalize_utc(state.updated_at) or occurred_at, occurred_at)
+    return True
+
+
+def expire_live_interaction(db: Session, row: LiveInteractionRequest, *, occurred_at: datetime, reason: str) -> None:
+    """Revoke a held request without discarding its history or a newer pointer."""
+    row.status = "expired"
+    row.can_respond = 0
+    row.resolved_at = occurred_at
+    row.last_seen_at = max(normalize_utc(row.last_seen_at) or occurred_at, occurred_at)
+    row.updated_at = occurred_at
+    row.response_payload_json = {"permissionDecision": "deny", "permissionDecisionReason": reason}
+    row.response_text = reason
+    db.add(row)
+    state = db.get(LiveRuntimeState, row.runtime_key)
+    if state is not None:
+        clear_live_interaction_pointer(state, request_key=row.request_key, occurred_at=occurred_at)
+
+
+def _execution_owned_interaction(row: LiveInteractionRequest) -> bool:
+    return row.kind == PAUSE_KIND_PERMISSION_PROMPT or row.reply_transport == REPLY_TRANSPORT_MANAGED_PUSH
+
+
+def live_interaction_terminal_reason(db: Session, row: LiveInteractionRequest) -> str | None:
+    """Return positive owner-exit evidence, never a guess from stale activity."""
+    if not _execution_owned_interaction(row):
+        return None
+    if row.run_id:
+        run = db.get(LiveSessionRun, row.run_id)
+        if run is not None and run.ended_at is not None:
+            thread = db.get(LiveSessionThread, run.thread_id)
+            if thread is not None and thread.session_id == row.session_id:
+                return "Owning execution ended"
+    state = db.get(LiveRuntimeState, row.runtime_key)
+    if state is None or str(state.session_id) != row.session_id:
+        return None
+    last_seen_at = normalize_utc(row.last_seen_at)
+    resumed_at = normalize_utc(state.execution_started_at)
+    progress_at = normalize_utc(state.last_progress_at)
+    if (
+        row.reply_transport == REPLY_TRANSPORT_MANAGED_PUSH
+        and state.phase == "idle"
+        and resumed_at is not None
+        and last_seen_at is not None
+        and resumed_at > last_seen_at
+        and progress_at is not None
+        and progress_at >= resumed_at
+        and (row.run_id is None or state.run_id is None or row.run_id == str(state.run_id))
+    ):
+        return "Provider continued after the interaction"
+    if state.terminal_state not in EXECUTION_TERMINAL_STATES:
+        return None
+    if row.run_id and state.run_id is not None:
+        return "Owning execution ended" if row.run_id == str(state.run_id) else None
+    terminal_at = normalize_utc(state.terminal_at)
+    if terminal_at is not None and last_seen_at is not None and last_seen_at <= terminal_at:
+        return "Owning execution ended"
+    return None
+
+
+def materialize_live_interaction(db: Session, state: LiveRuntimeState, *, persist: bool = True) -> LiveInteractionRequest | None:
+    """Preserve a pre-interaction-table runtime request before repairing it."""
+    if not state.pending_interaction_id or state.session_id is None:
+        return None
+    row = db.query(LiveInteractionRequest).filter_by(request_key=state.pending_interaction_id).one_or_none()
+    if row is not None:
+        return row
+    projection = state.pending_interaction_projection_json
+    if not isinstance(projection, dict):
+        return None
+    occurred_at = normalize_utc(state.pending_interaction_opened_at)
+    if occurred_at is None:
+        return None
+    provider = str(state.provider)
+    kind = state.pending_interaction_kind or projection.get("kind") or PAUSE_KIND_STRUCTURED_QUESTION
+    source, transport = (
+        {
+            "claude": ("claude_permission_gate", REPLY_TRANSPORT_CLAUDE_PULL),
+            "cursor": ("cursor_permission_gate", REPLY_TRANSPORT_CURSOR_POLL),
+            "opencode": ("opencode_bridge", REPLY_TRANSPORT_MANAGED_PUSH),
+        }.get(provider, (None, None))
+        if kind == PAUSE_KIND_PERMISSION_PROMPT
+        else (None, None)
+    )
+    prefix = f"{provider}:{state.runtime_key}:"
+    row = LiveInteractionRequest(
+        id=str(projection.get("id") or uuid5(NAMESPACE_URL, f"longhouse-pause:{state.pending_interaction_id}")),
+        session_id=str(state.session_id),
+        runtime_key=state.runtime_key,
+        run_id=projection.get("run_id"),
+        provider=provider,
+        request_key=state.pending_interaction_id,
+        provider_request_id=state.pending_interaction_id.removeprefix(prefix) if state.pending_interaction_id.startswith(prefix) else None,
+        source=source,
+        reply_transport=transport,
+        kind=kind,
+        status="pending",
+        can_respond=int(bool(state.pending_interaction_can_respond)),
+        request_payload_json={},
+        projection_json=projection,
+        occurred_at=occurred_at,
+        last_seen_at=normalize_utc(state.pending_interaction_updated_at) or occurred_at,
+        created_at=occurred_at,
+        updated_at=normalize_utc(state.pending_interaction_updated_at) or occurred_at,
+        expires_at=_datetime_payload(projection.get("expires_at")),
+    )
+    if persist:
+        db.add(row)
+        db.flush()
+    return row
+
+
+def expire_live_interactions_for_terminal(db: Session, event: Any) -> int:
+    """Apply each terminal's own scope, including delayed terminals of old runs."""
+    if (event.payload or {}).get("terminal_state") not in EXECUTION_TERMINAL_STATES:
+        return 0
+    state = db.get(LiveRuntimeState, event.runtime_key)
+    if state is not None:
+        materialize_live_interaction(db, state)
+    occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    rows = db.query(LiveInteractionRequest).filter_by(runtime_key=event.runtime_key, status="pending").all()
+    expired = 0
+    for row in rows:
+        if not _execution_owned_interaction(row):
+            continue
+        if event.session_id is not None and str(event.session_id) != row.session_id:
+            continue
+        if row.run_id and event.run_id is not None:
+            matches = row.run_id == str(event.run_id)
+        else:
+            # Legacy requests without run identity need both temporal ownership
+            # and no evidence that the terminal belongs to a different run.
+            matches = (
+                (state is None or event.run_id is None or state.run_id is None or event.run_id == state.run_id)
+                and (row.run_id is None or state is None or state.run_id is None or row.run_id == str(state.run_id))
+                and normalize_utc(row.last_seen_at) <= occurred_at
+            )
+        if matches:
+            expire_live_interaction(db, row, occurred_at=occurred_at, reason="Owning execution ended")
+            expired += 1
+    return expired
+
+
+def apply_live_interaction_event(db: Session, event: Any, state: LiveRuntimeState) -> bool:
+    """Reduce request history and its runtime pointer together, in event order."""
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    request_key = pause_runtime_request_key(event)
+    occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    row = db.query(LiveInteractionRequest).filter_by(request_key=request_key).one_or_none()
+    if event.kind == "pause_resolution":
+        if row is None:
+            row = materialize_live_interaction(db, state)
+            if row is not None and row.request_key != request_key:
+                row = None
+        if row is None or row.status != "pending" or normalize_utc(row.last_seen_at) > occurred_at:
+            return False
+        row.status = _terminal_status(str(payload.get("status") or "resolved"))
+        row.can_respond = 0
+        row.response_payload_json = _json_obj(payload.get("response_payload") or payload.get("response_payload_json"))
+        row.response_text = _clean_str(payload.get("response_text") or payload.get("message"))
+        row.resolved_at = occurred_at
+        row.last_seen_at = occurred_at
+        row.updated_at = occurred_at
+        clear_live_interaction_pointer(state, request_key=request_key, occurred_at=occurred_at)
+        return True
+    if event.session_id is None:
+        return False
+    # A request identity denotes one provider wait, never a reusable slot.
+    if row is not None and (row.status != "pending" or normalize_utc(row.last_seen_at) >= occurred_at):
+        return False
+    projection = build_pause_runtime_projection(event)
+    provider_ref = _mapping(payload.get("provider_ref") or payload.get("provider_ref_json"))
+    if row is None:
+        row = LiveInteractionRequest(id=projection["id"], request_key=request_key, created_at=occurred_at)
+    row.session_id = str(event.session_id)
+    row.runtime_key = event.runtime_key
+    run_id = event.run_id
+    if run_id is None and state.run_id is not None:
+        run = db.get(LiveSessionRun, str(state.run_id))
+        # Do not attach a delayed request to a newer execution, or a new
+        # unbound request to an already-ended execution.
+        terminal_at = normalize_utc(state.terminal_at)
+        if (run is None or normalize_utc(run.started_at) <= occurred_at) and (terminal_at is None or occurred_at <= terminal_at):
+            run_id = state.run_id
+    row.run_id = str(run_id) if run_id is not None else None
+    row.provider = event.provider
+    row.provider_request_id = _clean_str(payload.get("provider_request_id") or payload.get("request_id"))
+    row.source = _clean_str(provider_ref.get("source")) or event.source
+    row.reply_transport = _clean_str(provider_ref.get("reply_transport"))
+    row.kind = str(payload.get("kind") or PAUSE_KIND_STRUCTURED_QUESTION)
+    row.status = "pending"
+    row.can_respond = int(bool(payload.get("can_respond")))
+    row.request_payload_json = _request_payload(payload)
+    row.projection_json = {**projection, "run_id": row.run_id}
+    row.occurred_at = occurred_at
+    row.last_seen_at = occurred_at
+    row.updated_at = occurred_at
+    row.expires_at = _datetime_payload(projection.get("expires_at"))
+    db.add(row)
+    reason = live_interaction_terminal_reason(db, row)
+    watermark = normalize_utc(state.pending_interaction_updated_at)
+    if reason is None and watermark is not None and occurred_at <= watermark and _execution_owned_interaction(row):
+        reason = "Superseded by a newer provider interaction"
+    if reason is not None:
+        expire_live_interaction(db, row, occurred_at=occurred_at, reason=reason)
+        return True
+    if bool(payload.get("single_active", True)):
+        for previous in (
+            db.query(LiveInteractionRequest)
+            .filter(
+                LiveInteractionRequest.runtime_key == event.runtime_key,
+                LiveInteractionRequest.request_key != request_key,
+                LiveInteractionRequest.status == "pending",
+                LiveInteractionRequest.last_seen_at <= occurred_at,
+            )
+            .all()
+        ):
+            # A permission cannot silently consume a durable user question.
+            if previous.kind == row.kind and _execution_owned_interaction(previous) == _execution_owned_interaction(row):
+                expire_live_interaction(db, previous, occurred_at=occurred_at, reason="Superseded by a newer provider interaction")
+    if watermark is not None and occurred_at <= watermark:
+        return True
+    state.pending_interaction_id = request_key
+    state.pending_interaction_kind = row.kind
+    state.pending_interaction_opened_at = occurred_at
+    state.pending_interaction_updated_at = occurred_at
+    state.pending_interaction_can_respond = row.can_respond
+    state.pending_interaction_projection_json = row.projection_json
+    state.runtime_version = int(state.runtime_version or 0) + 1
+    state.updated_at = max(normalize_utc(state.updated_at) or occurred_at, occurred_at)
+    return True
 
 
 def pending_interaction_from_live_runtime(runtime: LiveRuntimeState | None) -> dict[str, Any] | None:
@@ -479,6 +730,7 @@ def build_pause_runtime_projection(event: Any) -> dict[str, Any]:
         "request_key": request_key,
         "session_id": str(event.session_id),
         "runtime_key": _clean_str(event.runtime_key) or "",
+        "run_id": str(event.run_id) if getattr(event, "run_id", None) is not None else None,
         "kind": _clean_str(payload.get("kind")) or PAUSE_KIND_STRUCTURED_QUESTION,
         "status": PENDING_STATUS,
         "provider": _clean_str(event.provider) or "unknown",

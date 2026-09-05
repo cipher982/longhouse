@@ -7,7 +7,7 @@ import {
 import { useDocumentVisible } from "./useDocumentVisible";
 import { useOnlineEpoch } from "./useOnlineEpoch";
 import { emitRenderBeacon, emitStateRenderBeacon, recordServerClockSkew } from "../lib/renderBeacon";
-import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
+import { isSessionClosed } from "../lib/sessionRuntime";
 import { SessionActivityFeed, classifyWorkspaceChange } from "../lib/sessionActivityFeed";
 import {
   buildTimelineModel,
@@ -116,13 +116,10 @@ function shouldRefreshWorkspaceSession(
     return false;
   }
 
-  // lifecycle==='closed' is the ground-truth closure signal. Keep polling
-  // while the session is open, or when a live/attention signal is still present.
-  const runtime = resolveSessionRuntimeState(session);
-  if (!isSessionClosed(session)) {
-    return true;
-  }
-  return runtime.isLive || runtime.needsAttention;
+  // Closed and inactive sessions cannot keep polling because of a stale
+  // pending interaction or activity signal.
+  return !isSessionClosed(session)
+    && (session.user_state == null || session.user_state === "active");
 }
 
 function applyTranscriptPreviewToSession(

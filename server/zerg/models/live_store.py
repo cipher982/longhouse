@@ -636,6 +636,7 @@ class LiveInteractionRequest(LiveBase):
     id = Column(String(36), primary_key=True)
     session_id = Column(String(36), nullable=False, index=True)
     runtime_key = Column(String(255), nullable=False, index=True)
+    run_id = Column(String(36), nullable=True, index=True)
     provider = Column(String(64), nullable=False, index=True)
     request_key = Column(String(255), nullable=False, unique=True, index=True)
     provider_request_id = Column(String(255), nullable=True, index=True)

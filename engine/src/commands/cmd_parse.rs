@@ -41,6 +41,9 @@ pub fn cmd_parse(
     if let Some(ref started) = result.metadata.started_at {
         eprintln!("  started: {}", started);
     }
+    if let Some(activity) = &result.metadata.last_activity_at {
+        eprintln!("  last_activity: {}", activity.to_rfc3339());
+    }
     if let Some(ref ended) = result.metadata.ended_at {
         eprintln!("  ended: {}", ended);
     }

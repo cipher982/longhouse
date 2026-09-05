@@ -11,10 +11,14 @@ function setDocumentHidden(hidden: boolean) {
   });
 }
 
-function card(needsAttention: boolean): TimelineSessionCard {
+function card(
+  needsAttention: boolean,
+  options: { closed?: boolean; userState?: string } = {},
+): TimelineSessionCard {
   return {
     head: {
-      session_state: makeSessionStateFacts({ pendingInteraction: needsAttention }),
+      user_state: options.userState,
+      session_state: makeSessionStateFacts({ pendingInteraction: needsAttention, closed: options.closed }),
     },
   } as TimelineSessionCard;
 }
@@ -69,6 +73,28 @@ describe("useAmbientSessionAttentionCue", () => {
     await waitFor(() => {
       expect(document.title).toBe("Longhouse");
       expect(clearAppBadge).toHaveBeenCalled();
+    });
+  });
+
+  it("removes closed and inactive pending interactions from hidden-tab attention cues", async () => {
+    const { rerender } = render(<Harness sessions={[card(true), card(true)]} />);
+    await waitFor(() => {
+      expect(setAppBadge).toHaveBeenLastCalledWith(2);
+      expect(document.title).toBe("● 2 blocked · Longhouse");
+    });
+
+    rerender(<Harness sessions={[card(true, { closed: true }), card(true)]} />);
+    await waitFor(() => {
+      expect(setAppBadge).toHaveBeenLastCalledWith(1);
+      expect(document.title).toBe("● Blocked · Longhouse");
+    });
+
+    clearAppBadge.mockClear();
+    rerender(<Harness sessions={[card(true, { closed: true }), card(true, { userState: "parked" })]} />);
+    await waitFor(() => {
+      expect(clearAppBadge).toHaveBeenCalled();
+      expect(document.title).toBe("Longhouse");
+      expect(document.querySelector('link[rel="icon"]')?.getAttribute("href")).not.toContain("attention=1");
     });
   });
 });

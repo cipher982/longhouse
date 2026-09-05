@@ -455,6 +455,7 @@ def _interaction_dto(row: LiveInteractionRequest) -> dict[str, Any]:
         "id": str(row.id),
         "session_id": str(row.session_id),
         "runtime_key": str(row.runtime_key),
+        "run_id": row.run_id,
         "provider": str(row.provider),
         "request_key": str(row.request_key),
         "provider_request_id": row.provider_request_id,
@@ -514,89 +515,6 @@ def _runtime_interaction_dto(runtime: LiveRuntimeState) -> dict[str, Any] | None
         "resolved_at": None,
         "expires_at": projection.get("expires_at"),
     }
-
-
-def _apply_live_interaction_event(db: Session, event: Any) -> LiveInteractionRequest | None:
-    """Mirror one accepted runtime interaction event into bounded control facts."""
-
-    from zerg.services.session_pause_requests import build_pause_runtime_projection
-    from zerg.services.session_pause_requests import pause_runtime_request_key
-
-    payload = event.payload if isinstance(event.payload, dict) else {}
-    request_key = pause_runtime_request_key(event)
-    observed_at = _as_aware_utc(event.occurred_at) or datetime.now(UTC)
-    if event.kind == "pause_resolution":
-        row = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.request_key == request_key).one_or_none()
-        if row is None or row.status != "pending":
-            return row
-        if (_as_aware_utc(row.last_seen_at) or observed_at) > observed_at:
-            return row
-        terminal_status = str(payload.get("status") or "resolved")
-        row.status = terminal_status if terminal_status in {"resolved", "rejected", "failed", "expired"} else "resolved"
-        row.can_respond = 0
-        row.response_payload_json = dict(payload.get("response_payload") or payload.get("response_payload_json") or {}) or None
-        row.response_text = str(payload.get("response_text") or payload.get("message") or "").strip() or None
-        row.resolved_at = observed_at
-        row.last_seen_at = observed_at
-        row.updated_at = observed_at
-        db.add(row)
-        return row
-    if event.kind != "pause_request" or event.session_id is None:
-        return None
-    provider_ref = payload.get("provider_ref") or payload.get("provider_ref_json") or {}
-    provider_ref = provider_ref if isinstance(provider_ref, dict) else {}
-    row = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.request_key == request_key).one_or_none()
-    if row is not None:
-        last_seen_at = _as_aware_utc(row.last_seen_at)
-        resolved_at = _as_aware_utc(row.resolved_at)
-        if (last_seen_at is not None and observed_at < last_seen_at) or (row.status == "pending" and last_seen_at == observed_at):
-            return row
-        if row.status != "pending" and resolved_at is not None and observed_at <= resolved_at:
-            return row
-    if bool(payload.get("single_active", True)):
-        db.query(LiveInteractionRequest).filter(
-            LiveInteractionRequest.runtime_key == str(event.runtime_key),
-            LiveInteractionRequest.request_key != request_key,
-            LiveInteractionRequest.status == "pending",
-        ).update(
-            {
-                "status": "expired",
-                "can_respond": 0,
-                "last_seen_at": observed_at,
-                "resolved_at": observed_at,
-                "updated_at": observed_at,
-            },
-            synchronize_session=False,
-        )
-    projection = build_pause_runtime_projection(event)
-    if row is None:
-        row = LiveInteractionRequest(
-            id=_interaction_id(request_key),
-            request_key=request_key,
-            created_at=observed_at,
-        )
-    row.session_id = str(event.session_id)
-    row.runtime_key = str(event.runtime_key)
-    row.provider = str(event.provider or "unknown")
-    row.provider_request_id = str(payload.get("provider_request_id") or payload.get("request_id") or "").strip() or None
-    row.source = str(provider_ref.get("source") or "").strip() or None
-    row.reply_transport = str(provider_ref.get("reply_transport") or "").strip() or None
-    row.kind = str(payload.get("kind") or "structured_question")
-    row.status = "pending"
-    row.can_respond = int(bool(payload.get("can_respond")))
-    request_payload = payload.get("request_payload") or payload.get("request_payload_json") or payload.get("payload") or {}
-    row.request_payload_json = dict(request_payload) if isinstance(request_payload, dict) else {}
-    row.projection_json = projection
-    row.response_payload_json = None
-    row.response_text = None
-    row.occurred_at = observed_at
-    row.last_seen_at = observed_at
-    row.resolved_at = None
-    expires_at = projection.get("expires_at")
-    row.expires_at = _as_aware_utc(datetime.fromisoformat(expires_at)) if isinstance(expires_at, str) else None
-    row.updated_at = observed_at
-    db.add(row)
-    return row
 
 
 def _live_control_session_dto(session: Any) -> dict[str, Any]:
@@ -2390,8 +2308,6 @@ class CatalogStore:
                         synchronize_session=False,
                     )
                 for event in events:
-                    if event.runtime_key in updated_keys and event.kind in {"pause_request", "pause_resolution"}:
-                        _apply_live_interaction_event(orm, event)
                     # Binding aliases are an idempotent graph side effect, not a
                     # runtime-state mutation. A valid binding can leave the
                     # reducer snapshot unchanged and still must be persisted so
@@ -2512,7 +2428,7 @@ class CatalogStore:
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
                 result = ingest_live_runtime_events(orm, [event])
-                row = _apply_live_interaction_event(orm, event)
+                row = orm.query(LiveInteractionRequest).filter_by(request_key=interaction["request_key"]).one()
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -2566,53 +2482,120 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
-    def expire_due_interactions(self, *, now: datetime, session_id: str | None = None) -> dict[str, Any]:
-        """Terminalize elapsed held permissions and clear their runtime pointers.
+    def expire_due_interactions(self, *, now: datetime, session_id: str | None = None, dry_run: bool = False) -> dict[str, Any]:
+        """Repair elapsed or provably orphaned waits through catalog maintenance.
 
-        This is deliberately a catalog mutation, rather than a read-time filter:
-        callers observing a deadline receive the same canonical facts as every
-        other consumer.
+        No age-based guesses, archive writes, or startup data migration. Dry runs
+        report the same transactionally evaluated evidence that apply consumes.
         """
+        from zerg.services.session_pause_requests import EXECUTION_TERMINAL_STATES
+        from zerg.services.session_pause_requests import clear_live_interaction_pointer
+        from zerg.services.session_pause_requests import expire_live_interaction
+        from zerg.services.session_pause_requests import live_interaction_terminal_reason
+        from zerg.services.session_pause_requests import materialize_live_interaction
+        from zerg.services.session_runtime import RuntimeEventIngest
+        from zerg.services.session_runtime import _apply_run_terminal_event
+        from zerg.services.session_runtime import _live_run_for_terminal
 
-        reason = "Approval deadline expired"
+        repairs = []
+        run_repairs = []
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            legacy_interactions = []
             try:
-                due_query = orm.query(LiveInteractionRequest).filter(
-                    LiveInteractionRequest.status == "pending",
-                    LiveInteractionRequest.kind == "permission_prompt",
-                    LiveInteractionRequest.expires_at.is_not(None),
-                    LiveInteractionRequest.expires_at <= now,
+                unended_run = (
+                    orm.query(LiveSessionRun.id)
+                    .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
+                    .filter(
+                        LiveSessionThread.session_id == LiveRuntimeState.session_id,
+                        LiveSessionRun.ended_at.is_(None),
+                        LiveSessionRun.started_at <= LiveRuntimeState.terminal_at,
+                    )
+                    .correlate(LiveRuntimeState)
+                    .exists()
+                )
+                runtime_query = orm.query(LiveRuntimeState).filter(
+                    or_(
+                        LiveRuntimeState.pending_interaction_id.is_not(None),
+                        and_(LiveRuntimeState.terminal_state.in_(EXECUTION_TERMINAL_STATES - {"user_closed"}), unended_run),
+                    )
                 )
                 if session_id is not None:
-                    due_query = due_query.filter(LiveInteractionRequest.session_id == session_id)
-                due = due_query.all()
-                for row in due:
-                    row.status = "expired"
-                    row.can_respond = 0
-                    row.resolved_at = now
-                    row.last_seen_at = now
-                    row.updated_at = now
-                    row.response_payload_json = {"permissionDecision": "deny", "permissionDecisionReason": reason}
-                    row.response_text = reason
-                    runtime = orm.get(LiveRuntimeState, row.runtime_key)
-                    if runtime is not None and runtime.pending_interaction_id == row.request_key:
-                        runtime.pending_interaction_id = None
-                        runtime.pending_interaction_kind = None
-                        runtime.pending_interaction_opened_at = None
-                        runtime.pending_interaction_updated_at = None
-                        runtime.pending_interaction_projection_json = None
-                        runtime.pending_interaction_can_respond = 0
-                        runtime.runtime_version = int(runtime.runtime_version or 0) + 1
-                        runtime.updated_at = now
-                orm.commit()
+                    runtime_query = runtime_query.filter(LiveRuntimeState.session_id == UUID(session_id))
+                for runtime in runtime_query.all():
+                    # Legacy writers persisted only the pointer. Materialize it
+                    # before terminalizing so the original question is retained.
+                    legacy = materialize_live_interaction(orm, runtime, persist=False)
+                    if legacy is not None and legacy not in orm:
+                        legacy_interactions.append(legacy)
+                    terminal_at = _as_aware_utc(runtime.terminal_at)
+                    if (
+                        runtime.terminal_state not in EXECUTION_TERMINAL_STATES - {"user_closed"}
+                        or terminal_at is None
+                        or runtime.session_id is None
+                    ):
+                        continue
+                    event = RuntimeEventIngest(
+                        runtime_key=runtime.runtime_key,
+                        session_id=runtime.session_id,
+                        run_id=runtime.run_id,
+                        provider=runtime.provider,
+                        source="interaction_maintenance",
+                        kind="terminal_signal",
+                        occurred_at=terminal_at,
+                        dedupe_key=f"repair-terminal:{runtime.runtime_key}",
+                        payload={"terminal_state": runtime.terminal_state, "terminal_reason": runtime.terminal_reason},
+                    )
+                    run = _live_run_for_terminal(orm, event=event, state=runtime, occurred_at=terminal_at)
+                    if run is None:
+                        continue
+                    if _apply_run_terminal_event(orm, event=event, state=runtime, occurred_at=terminal_at):
+                        run_repairs.append({"session_id": str(runtime.session_id), "run_id": run.id, "ended_at": terminal_at.isoformat()})
+                pending_query = orm.query(LiveInteractionRequest).filter(LiveInteractionRequest.status == "pending")
+                if session_id is not None:
+                    pending_query = pending_query.filter(LiveInteractionRequest.session_id == session_id)
+                for row in [*pending_query.all(), *legacy_interactions]:
+                    reason = live_interaction_terminal_reason(orm, row)
+                    if (
+                        reason is None
+                        and row.kind == "permission_prompt"
+                        and row.expires_at is not None
+                        and _as_aware_utc(row.expires_at) <= now
+                    ):
+                        reason = "Approval deadline expired"
+                    if reason is None:
+                        continue
+                    repairs.append({"session_id": row.session_id, "interaction_id": row.id, "reason": reason})
+                    expire_live_interaction(orm, row, occurred_at=now, reason=reason)
+                # Repair pointers left behind by older terminalization paths.
+                for runtime in runtime_query.filter(LiveRuntimeState.pending_interaction_id.is_not(None)).all():
+                    row = orm.query(LiveInteractionRequest).filter_by(request_key=runtime.pending_interaction_id).one_or_none()
+                    if row is not None and row.status != "pending":
+                        if clear_live_interaction_pointer(runtime, request_key=row.request_key, occurred_at=now):
+                            repairs.append(
+                                {"session_id": row.session_id, "interaction_id": row.id, "reason": "Terminal interaction pointer"}
+                            )
+                if dry_run:
+                    orm.rollback()
+                else:
+                    orm.commit()
             except BaseException:
                 orm.rollback()
                 raise
             finally:
                 orm.close()
-            commit_seq = _advance_commit_seq(connection, now) if due else _current_commit_seq(connection)
-            return {"expired_count": len(due), "commit_seq": str(commit_seq)}
+            commit_seq = (
+                _advance_commit_seq(connection, now) if not dry_run and (repairs or run_repairs) else _current_commit_seq(connection)
+            )
+            return {
+                "expired_count": 0 if dry_run else len(repairs),
+                "candidate_count": len(repairs),
+                "run_repair_count": 0 if dry_run else len(run_repairs),
+                "dry_run": dry_run,
+                "interactions": repairs,
+                "runs": run_repairs,
+                "commit_seq": str(commit_seq),
+            }
 
     def repair_expire_interaction(
         self,
@@ -2656,23 +2639,9 @@ class CatalogStore:
                         "interaction": receipt,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
-                row.status = "expired"
-                row.can_respond = 0
-                row.resolved_at = now
-                row.last_seen_at = now
-                row.updated_at = now
-                row.response_payload_json = {"permissionDecision": "deny", "permissionDecisionReason": reason}
-                row.response_text = reason
-                runtime = orm.get(LiveRuntimeState, row.runtime_key)
-                if runtime is not None and runtime.pending_interaction_id == row.request_key:
-                    runtime.pending_interaction_id = None
-                    runtime.pending_interaction_kind = None
-                    runtime.pending_interaction_opened_at = None
-                    runtime.pending_interaction_updated_at = None
-                    runtime.pending_interaction_projection_json = None
-                    runtime.pending_interaction_can_respond = 0
-                    runtime.runtime_version = int(runtime.runtime_version or 0) + 1
-                    runtime.updated_at = now
+                from zerg.services.session_pause_requests import expire_live_interaction
+
+                expire_live_interaction(orm, row, occurred_at=now, reason=reason)
                 repaired = _interaction_dto(row)
                 orm.commit()
             except BaseException:
@@ -2893,6 +2862,9 @@ class CatalogStore:
     ) -> dict[str, Any]:
         """Resolve exactly one pending interaction and clear matching runtime truth."""
 
+        from zerg.services.session_pause_requests import expire_live_interaction
+        from zerg.services.session_pause_requests import live_interaction_terminal_reason
+        from zerg.services.session_pause_requests import materialize_live_interaction
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_live_runtime_events
 
@@ -2916,27 +2888,7 @@ class CatalogStore:
                     )
                     fallback = _runtime_interaction_dto(runtime) if runtime is not None else None
                     if fallback is not None and fallback["id"] == interaction_id:
-                        row = LiveInteractionRequest(
-                            id=interaction_id,
-                            session_id=session_id,
-                            runtime_key=fallback["runtime_key"],
-                            provider=fallback["provider"],
-                            request_key=fallback["request_key"],
-                            provider_request_id=fallback["provider_request_id"],
-                            source=fallback["source"],
-                            reply_transport=fallback["reply_transport"],
-                            kind=fallback["kind"],
-                            status="pending",
-                            can_respond=int(fallback["can_respond"]),
-                            request_payload_json={},
-                            projection_json=fallback["projection"],
-                            occurred_at=_as_aware_utc(runtime.pending_interaction_opened_at) or resolved_at,
-                            last_seen_at=_as_aware_utc(runtime.pending_interaction_updated_at) or resolved_at,
-                            created_at=_as_aware_utc(runtime.pending_interaction_opened_at) or resolved_at,
-                            updated_at=_as_aware_utc(runtime.pending_interaction_updated_at) or resolved_at,
-                        )
-                        orm.add(row)
-                        orm.flush()
+                        row = materialize_live_interaction(orm, runtime)
                 if row is None:
                     orm.rollback()
                     return {
@@ -2945,6 +2897,18 @@ class CatalogStore:
                         "reason": "not_found",
                         "interaction": None,
                         "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                terminal_reason = live_interaction_terminal_reason(orm, row) if row.status == "pending" else None
+                if terminal_reason is not None:
+                    expire_live_interaction(orm, row, occurred_at=resolved_at, reason=terminal_reason)
+                    result = _interaction_dto(row)
+                    orm.commit()
+                    return {
+                        "found": True,
+                        "resolved": False,
+                        "reason": "not_pending",
+                        "interaction": result,
+                        "commit_seq": str(_advance_commit_seq(connection, resolved_at)),
                     }
                 if row.status != "pending":
                     result = _interaction_dto(row)
@@ -2996,7 +2960,7 @@ class CatalogStore:
                     },
                 )
                 ingest_live_runtime_events(orm, [event])
-                resolved = _apply_live_interaction_event(orm, event)
+                resolved = row
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -10447,6 +10411,55 @@ class CatalogStore:
                 "has_more": has_more,
                 "commit_seq": str(_current_commit_seq(connection)),
             }
+
+    def repair_cursor_activity(
+        self,
+        *,
+        session_id: str,
+        expected_last_activity_at: datetime,
+        source_last_activity_at: datetime,
+        now: datetime,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        """Replace a verified Cursor import clock without rewriting raw history."""
+        table = StorageSession.__table__
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(table).where(table.c.session_id == session_id)).mappings().first()
+            commit_seq = _current_commit_seq(connection)
+            if row is None or row["provider"] != "cursor":
+                return {"repaired": False, "reason": "cursor_session_not_found", "commit_seq": str(commit_seq)}
+            current = _as_aware_utc(row["last_activity_at"])
+            source = _as_aware_utc(source_last_activity_at)
+            if current != _as_aware_utc(expected_last_activity_at):
+                return {"repaired": False, "reason": "compare_and_set_failed", "commit_seq": str(commit_seq)}
+            if source is None or not _as_aware_utc(row["started_at"]) <= source <= current:
+                return {"repaired": False, "reason": "source_clock_out_of_bounds", "commit_seq": str(commit_seq)}
+            if source == current:
+                return {"repaired": False, "reason": "already_current", "commit_seq": str(commit_seq)}
+            result = {
+                "session_id": session_id,
+                "previous_last_activity_at": current.isoformat(),
+                "source_last_activity_at": source.isoformat(),
+                "dry_run": dry_run,
+            }
+            if dry_run:
+                return {**result, "repaired": False, "commit_seq": str(commit_seq)}
+            commit_seq = _advance_commit_seq(connection, now)
+            connection.execute(
+                update(table).where(table.c.session_id == session_id).values(last_activity_at=source, updated_at=now, commit_seq=commit_seq)
+            )
+            # The storage row owns served history; keep its legacy projections
+            # consistent without overwriting independently newer runtime evidence.
+            for projection in (LiveSessionCatalog.__table__, LiveTimelineCard.__table__):
+                connection.execute(
+                    update(projection)
+                    .where(
+                        projection.c.session_id == session_id,
+                        projection.c.last_activity_at <= expected_last_activity_at,
+                    )
+                    .values(last_activity_at=source, updated_at=now)
+                )
+            return {**result, "repaired": True, "commit_seq": str(commit_seq)}
 
     def repair_storage_semantic_projection(
         self,

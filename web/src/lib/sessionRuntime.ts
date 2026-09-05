@@ -31,7 +31,7 @@ type TimelineRuntimeOverlay = {
 
 export type TimelineRuntimeSession = Pick<
   AgentSession,
-  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "capabilities" | "runtime_display" | "session_state"
+  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "capabilities" | "runtime_display" | "session_state" | "user_state"
 > &
   Partial<Omit<TimelineRuntimeOverlay, "runtime_display">>;
 
@@ -39,6 +39,14 @@ export function isSessionClosed(
   session: Pick<AgentSession, "session_state"> | null | undefined,
 ): boolean {
   return session?.session_state.disposition.state === "closed";
+}
+
+export function needsSessionAttention(
+  session: Pick<AgentSession, "session_state" | "user_state">,
+): boolean {
+  return !isSessionClosed(session)
+    && (session.user_state == null || session.user_state === "active")
+    && session.session_state.pending_interaction != null;
 }
 
 /**
@@ -62,8 +70,7 @@ export function resolveTimelineSignal(
   if (options.connectivityHealthy === false) return "quiet";
 
   const facts = session.session_state;
-  const userActive = session.user_state == null || session.user_state === "active";
-  if (userActive && facts.pending_interaction != null) return "attention";
+  if (needsSessionAttention(session)) return "attention";
   if (facts.activity.state === "thinking" || facts.activity.state === "executing") return "working";
   if (facts.activity.state === "blocked" || facts.activity.state === "stalled") return "attention";
   if (facts.activity.state === "unknown") return "unknown";
@@ -149,7 +156,7 @@ export function resolveSessionRuntimeState(
   const displayPhase = facts.presentation.primary?.label ?? "";
   const isExecuting = facts.activity.state === "thinking" || facts.activity.state === "executing";
   const isLive = isExecuting;
-  const needsAttention = facts.pending_interaction != null;
+  const needsAttention = needsSessionAttention(session);
   const isIdle = facts.disposition.state === "closed" || facts.activity.state === "quiescent";
   const isStalled = facts.activity.state === "stalled";
 

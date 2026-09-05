@@ -304,6 +304,50 @@ describe("useSessionWorkspace", () => {
     });
   });
 
+  it.each([
+    { closed: true, userState: "active" },
+    { closed: false, userState: "parked" },
+  ])("stops workspace and transcript polling for stale pending interactions when closed=$closed and user=$userState", ({ closed, userState }) => {
+    let handlers: { onConnected?: () => void } | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+    const activeSession = {
+      ...baseSession,
+      user_state: "active",
+      session_state: makeSessionStateFacts({
+        mode: "console",
+        pendingInteraction: true,
+        activity: "quiescent",
+        observedAt: "2026-07-20T12:00:00Z",
+      }),
+    };
+    seedHookMocks(0, activeSession);
+    const { rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+    const interval = () => agentSessionMocks.useAgentSessionWorkspace.mock.calls.at(-1)?.[1]?.refetchInterval;
+    expect(interval()({ state: { data: { session: activeSession } } })).toBe(5_000);
+
+    const inactiveSession = {
+      ...activeSession,
+      user_state: userState,
+      session_state: {
+        ...activeSession.session_state,
+        disposition: { state: closed ? "closed" : "open" },
+      },
+    };
+    seedHookMocks(0, inactiveSession);
+    rerender();
+
+    expect(interval()({ state: { data: { session: inactiveSession } } })).toBe(false);
+    expect(agentSessionMocks.useAgentSessionProjectionInfinite.mock.calls.at(-1)?.[1]?.refetchInterval).toBe(false);
+
+    // The connected-Console reconciliation path must not revive either poll.
+    act(() => handlers?.onConnected?.());
+    expect(interval()({ state: { data: { session: inactiveSession } } })).toBe(false);
+    expect(agentSessionMocks.useAgentSessionProjectionInfinite.mock.calls.at(-1)?.[1]?.refetchInterval).toBe(false);
+  });
+
   it("opens the stream conservatively when the first workspace snapshot errors", () => {
     const error = new Error("workspace unavailable");
     agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({

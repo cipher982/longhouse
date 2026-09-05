@@ -691,13 +691,13 @@ describe("SessionsPage", () => {
 
       renderSessionsPage("/timeline");
 
-      expect(screen.getByText("Started Just now")).toBeInTheDocument();
+      expect(screen.getByText("Updated Just now")).toBeInTheDocument();
 
       act(() => {
         vi.advanceTimersByTime(15_000);
       });
 
-      expect(screen.getByText("Started 1m ago")).toBeInTheDocument();
+      expect(screen.getByText("Updated 1m ago")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -1080,18 +1080,40 @@ describe("SessionsPage", () => {
   });
 
 
-  it("uses the session start time for the card timestamp", async () => {
+  it.each([
+    { anchor: "2026-09-05T11:59:00Z", label: "Updated 1m ago" },
+    { anchor: null, label: "Updated 3m ago" },
+  ])("dates an old approval by recent session activity (anchor: $anchor)", ({ anchor, label }) => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-21T12:05:00Z"));
+    vi.setSystemTime(new Date("2026-09-05T12:00:00Z"));
+    const approvalState = makeSessionStateFacts({
+      pendingInteraction: true,
+      activity: "quiescent",
+      observedAt: "2026-07-20T12:00:00Z",
+    });
+    approvalState.pending_interaction = {
+      id: "old-cursor-approval",
+      kind: "approval",
+      opened_at: "2026-07-20T12:00:00Z",
+      can_respond: false,
+    };
+    approvalState.presentation.primary = {
+      key: "needs_approval",
+      label: "Needs approval",
+      tone: "blocked",
+      observed_at: "2026-07-20T12:00:00Z",
+    };
 
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
-            started_at: "2026-03-21T11:00:00Z",
-            ended_at: "2026-03-21T12:00:00Z",
-            last_activity_at: "2026-03-21T12:00:00Z",
-            timeline_anchor_at: "2026-03-21T12:03:00Z",
+            provider: "cursor",
+            started_at: "2026-07-19T11:00:00Z",
+            ended_at: null,
+            last_activity_at: "2026-09-05T11:57:00Z",
+            timeline_anchor_at: anchor,
+            session_state: approvalState,
           }),
         ],
         total: 1,
@@ -1104,7 +1126,41 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(screen.getByText("Started 1h ago")).toBeInTheDocument();
+    const row = within(screen.getByTestId("session-row"));
+    expect(row.getByText("Needs approval")).toBeInTheDocument();
+    expect(row.getByText(label)).toBeInTheDocument();
+    expect(row.queryByText(/Jul 20/)).not.toBeInTheDocument();
+  });
+
+  it("keeps unread result ages anchored to completion rather than newer session activity", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-05T12:00:00Z"));
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            timeline_anchor_at: "2026-09-05T11:59:00Z",
+            last_activity_at: "2026-09-05T11:59:00Z",
+            session_state: makeSessionStateFacts({
+              mode: "console",
+              activity: "quiescent",
+              unread: true,
+              lastResultAt: "2026-09-05T11:50:00Z",
+              lastResultOutcome: "completed",
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(within(screen.getByTestId("session-row")).getByText("Finished 10m ago")).toBeInTheDocument();
   });
 
 

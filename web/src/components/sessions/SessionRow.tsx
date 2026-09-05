@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type Ref } from "react";
 import type { DraggableAttributes } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
-import { type SessionStateFacts, type TimelineSessionCard } from "../../services/api/agents";
+import { getTimelineSessionAnchor, type SessionStateFacts, type TimelineSessionCard } from "../../services/api/agents";
 import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel } from "../../lib/sessionRuntime";
 import {
   formatRelativeTime,
@@ -82,8 +82,8 @@ export function SessionRow({
   const unreadOutcome = session.session_state.last_result_outcome;
   const unreadOutcomeLabel = unreadOutcome === "failed" ? "Failed" : unreadOutcome === "cancelled" ? "Cancelled" : "Finished";
   const timeLabel = getRowTimeLabel({
-    seenAt: unread ? (session.session_state.last_result_at ?? null) : (timelineStatus?.observed_at ?? null),
-    seenAtPrefix: unread ? unreadOutcomeLabel : timelineStatus ? "Updated" : null,
+    seenAt: unread ? (session.session_state.last_result_at ?? null) : getTimelineSessionAnchor(session),
+    seenAtPrefix: unread ? unreadOutcomeLabel : "Updated",
     startedAt: startedAtIso,
     relativeNowMs,
   });

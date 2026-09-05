@@ -16,7 +16,8 @@ type SessionStateFacts = {
     connection: string;
     actions: Record<string, { state: "available" | "unavailable" | "unknown"; reason?: string | null }>;
   };
-  pending_interaction: null;
+  pending_interaction: { id: string; kind: "approval"; opened_at: string; can_respond: boolean } | null;
+  working_set?: "open" | "history";
   transcript: { convergence: "current"; searchable: boolean; live_observation: boolean };
   host: { state: string; observed_at?: string | null };
   presentation: {
@@ -1006,7 +1007,43 @@ export function buildTimelineCardStressFixture(): {
     root: stampUnread(unreadFailedBase.root, "failed", "2026-04-15T15:32:00Z"),
   };
 
+  // Approval age is deliberately old while canonical session activity is fresh.
+  // This row must say "Updated 1m ago", not the approval's March 20 date.
+  const oldApprovalBase = makeSession();
+  const oldCursorApproval = makeTimelineCard({
+    id: "old-cursor-approval",
+    thread_root_session_id: "old-cursor-approval",
+    thread_head_session_id: "old-cursor-approval",
+    provider: "cursor",
+    started_at: "2026-03-20T12:00:00Z",
+    last_activity_at: "2026-04-15T16:10:00Z",
+    timeline_anchor_at: "2026-04-15T16:11:00Z",
+    anchor_title: "Cursor approval with newer transcript activity",
+    timeline_title: "Cursor approval with newer transcript activity",
+    summary: "Approval opened March 20; session activity advanced to April 15.",
+    session_state: {
+      ...oldApprovalBase.session_state,
+      working_set: "open",
+      pending_interaction: {
+        id: "old-cursor-approval-request",
+        kind: "approval",
+        opened_at: "2026-03-20T12:00:00Z",
+        can_respond: false,
+      },
+      presentation: {
+        ...oldApprovalBase.session_state.presentation,
+        primary: {
+          key: "needs_approval",
+          label: "Needs approval",
+          tone: "blocked",
+          observed_at: "2026-03-20T12:00:00Z",
+        },
+      },
+    },
+  });
+
   const sessions = [
+    oldCursorApproval,
     liveCodex,
     closedCodex,
     idleClaude,
@@ -1026,7 +1063,7 @@ export function buildTimelineCardStressFixture(): {
     },
     filters: {
       projects: ["zerg", "demo-vpn", "project", "longhouse-mobile", "photo-restore-lab"],
-      providers: ["claude", "codex", "antigravity"],
+      providers: ["claude", "codex", "cursor", "antigravity"],
       machines: ["cinder", "studio", "This machine", "Cloud"],
     },
     runners: {

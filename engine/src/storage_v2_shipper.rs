@@ -309,6 +309,15 @@ fn prepare_next_envelope_with_limit(
         return Ok(None);
     };
     let mut parse_result = parser::parse_session_file(path, position)?;
+    if is_cursor_agent_transcript_path(provider, path)
+        && parse_result.metadata.started_at.is_none()
+        && parse_result.events.is_empty()
+    {
+        tracing::warn!(
+            path = %path.display(),
+            "Cursor transcript has no source clock; archiving raw-only with the stable source epoch clock"
+        );
+    }
     // A binding is "exact" when it names the very thread this transcript
     // records. That is what separates a fork Longhouse started — it bound the
     // child's path to the child's session at fork time — from one a managed
@@ -3514,17 +3523,23 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
     let session_id = managed_session_id.clone().unwrap_or_else(|| {
         cursor_store::longhouse_session_id_for_cursor(&snapshot.conversation_uuid)
     });
-    let started_at = snapshot
-        .created_at_ms
-        .and_then(DateTime::from_timestamp_millis)
-        .unwrap_or_else(|| {
-            DateTime::parse_from_rfc3339(&resolution.opened_at)
-                .expect("source epoch opened_at is generated internally")
-                .with_timezone(&Utc)
-        });
-    let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
-        .expect("source epoch opened_at is generated internally")
-        .with_timezone(&Utc);
+    let (started_at, last_activity_at) = cursor_store::cursor_session_timestamps(
+        store_snapshot.created_at_ms,
+        store_snapshot.updated_at_ms,
+        visibility_evidence.as_ref(),
+    )
+    .unwrap_or_else(|| {
+        // The wire requires a clock even for raw-only archives. Keep the
+        // established epoch fallback explicit when Cursor supplied no clock.
+        tracing::warn!(
+            path = %db_path.display(),
+            "Cursor store has no source clock; using the stable source epoch clock"
+        );
+        let opened_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
+            .expect("source epoch opened_at is generated internally")
+            .with_timezone(&Utc);
+        (opened_at, opened_at)
+    });
     let mut render_records = cursor_render_records(
         &store_snapshot,
         &selected,
@@ -3622,7 +3637,7 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
                     .and_then(|(_, _, git_repo)| git_repo.clone()),
                 git_branch: None,
                 started_at: started_at.to_rfc3339(),
-                last_activity_at: observed_at.max(started_at).to_rfc3339(),
+                last_activity_at: last_activity_at.to_rfc3339(),
                 ended_at: None,
                 origin_kind: Some("cursor_store".to_string()),
                 hidden_from_default_timeline: managed_session_id.is_none() || !render_ready,
@@ -4353,6 +4368,7 @@ fn session_facts(
     let last_activity_at = records
         .iter()
         .filter_map(record_time)
+        .chain(metadata.last_activity_at)
         .max()
         .or(metadata.ended_at)
         .unwrap_or(started_at);
@@ -4942,6 +4958,245 @@ mod tests {
     }
 
     #[test]
+    fn cursor_archives_keep_source_activity_across_replay_and_progress() {
+        let _guard = CURSOR_BINDING_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let cursor_home = dir.path().join("cursor");
+        let store_path = cursor_home
+            .join("chats/workspace")
+            .join(CURSOR_CONVERSATION_ID)
+            .join("store.db");
+        fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        let store = make_cursor_store(&store_path);
+        let transcript_path = cursor_home
+            .join("projects/workspace/agent-transcripts")
+            .join(CURSOR_CONVERSATION_ID)
+            .join(format!("{CURSOR_CONVERSATION_ID}.jsonl"));
+        fs::create_dir_all(transcript_path.parent().unwrap()).unwrap();
+        let transcript = "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n";
+        fs::write(&transcript_path, transcript).unwrap();
+        let sidecar_path = store_path.parent().unwrap().join("meta.json");
+        let write_activity = |updated_at_ms| {
+            fs::write(
+                &sidecar_path,
+                serde_json::to_vec(&serde_json::json!({
+                    "schemaVersion": 1,
+                    "createdAtMs": 1_773_403_200_000_i64,
+                    "updatedAtMs": updated_at_ms,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        write_activity(1_773_403_260_000_i64);
+        let previous_cursor_home = std::env::var_os("CURSOR_HOME");
+        let previous_xdg_home = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe {
+            std::env::set_var("CURSOR_HOME", &cursor_home);
+            std::env::set_var("XDG_CONFIG_HOME", dir.path().join("config"));
+        }
+        // Restore the process environment even if a regression panics.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            let first_store = prepare_next_cursor_envelope(&mut conn, &capabilities(), &store_path)
+                .unwrap()
+                .unwrap();
+            let first_transcript =
+                prepare_next_envelope(&mut conn, &capabilities(), &transcript_path, "cursor", None)
+                    .unwrap()
+                    .unwrap();
+            let expected_start = DateTime::from_timestamp_millis(1_773_403_200_000)
+                .unwrap()
+                .to_rfc3339();
+            let expected_activity = DateTime::from_timestamp_millis(1_773_403_260_000)
+                .unwrap()
+                .to_rfc3339();
+            for prepared in [&first_store, &first_transcript] {
+                assert_eq!(prepared.envelope.session.started_at, expected_start);
+                assert_eq!(
+                    prepared.envelope.session.last_activity_at,
+                    expected_activity
+                );
+                assert_eq!(prepared.envelope.session.ended_at, None);
+                acknowledge_prepared(&mut conn, prepared);
+            }
+            assert_eq!(
+                first_transcript.envelope.render.as_ref().unwrap().records[0].order_time_us,
+                1_773_403_200_000_000
+            );
+
+            // A parser upgrade or historical reimport opens a new ingestion
+            // epoch without changing when this provider conversation happened.
+            conn.execute("UPDATE source_epoch_registry SET source_revision = 'older-parser' WHERE source_epoch = ?1",
+                [first_store.source_epoch.to_string()]).unwrap();
+            replay_file_source(&mut conn, &transcript_path, "cursor").unwrap();
+            let replay_store =
+                prepare_next_cursor_envelope(&mut conn, &capabilities(), &store_path)
+                    .unwrap()
+                    .unwrap();
+            let replay_transcript =
+                prepare_next_envelope(&mut conn, &capabilities(), &transcript_path, "cursor", None)
+                    .unwrap()
+                    .unwrap();
+            for prepared in [&replay_store, &replay_transcript] {
+                assert_eq!(
+                    prepared.envelope.session.last_activity_at,
+                    expected_activity
+                );
+                acknowledge_prepared(&mut conn, prepared);
+            }
+            assert_eq!(
+                replay_transcript.envelope.render.as_ref().unwrap().records[0].order_time_us,
+                1_773_403_200_000_000
+            );
+
+            write_activity(1_773_403_320_000_i64);
+            let mut root_ids = vec![0xbb; 32];
+            root_ids.extend_from_slice(&[0xdd; 32]);
+            set_cursor_root(&store, CURSOR_ROOT_B, &root_ids);
+            store
+                .execute(
+                    "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+                    params![
+                        CURSOR_MESSAGE_B,
+                        br#"{"role":"assistant","content":"done"}"#
+                    ],
+                )
+                .unwrap();
+            fs::write(
+                &transcript_path,
+                format!(
+                    "{transcript}{{\"role\":\"assistant\",\"message\":{{\"content\":\"done\"}}}}\n"
+                ),
+            )
+            .unwrap();
+            let progressed_store =
+                prepare_next_cursor_envelope(&mut conn, &capabilities(), &store_path)
+                    .unwrap()
+                    .unwrap();
+            let progressed_transcript =
+                prepare_next_envelope(&mut conn, &capabilities(), &transcript_path, "cursor", None)
+                    .unwrap()
+                    .unwrap();
+            let expected_progress = DateTime::from_timestamp_millis(1_773_403_320_000)
+                .unwrap()
+                .to_rfc3339();
+            for prepared in [&progressed_store, &progressed_transcript] {
+                assert_eq!(
+                    prepared.envelope.session.last_activity_at,
+                    expected_progress
+                );
+                assert_eq!(prepared.envelope.session.ended_at, None);
+            }
+        }));
+        for (name, previous) in [
+            ("CURSOR_HOME", previous_cursor_home),
+            ("XDG_CONFIG_HOME", previous_xdg_home),
+        ] {
+            match previous {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+        if let Err(error) = outcome {
+            std::panic::resume_unwind(error);
+        }
+    }
+
+    #[test]
+    fn cursor_store_without_sidecar_activity_uses_creation_not_ingestion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let _store = make_cursor_store(&path);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            prepared.envelope.session.last_activity_at,
+            DateTime::from_timestamp_millis(1_773_403_200_000)
+                .unwrap()
+                .to_rfc3339()
+        );
+    }
+
+    #[test]
+    fn cursor_transcript_without_clock_still_archives_exact_raw_records() {
+        let _guard = CURSOR_BINDING_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = Uuid::new_v4().to_string();
+        let path = dir
+            .path()
+            .join("agent-transcripts")
+            .join(format!("{conversation}.jsonl"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let raw = b"{\"role\":\"user\",\"message\":{\"content\":\"undated source\"}}\n";
+        fs::write(&path, raw).unwrap();
+        let cursor_home = dir.path().join("cursor");
+        let store_path = cursor_home
+            .join("chats/workspace")
+            .join(&conversation)
+            .join("store.db");
+        fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        let previous_cursor_home = std::env::var_os("CURSOR_HOME");
+        let previous_xdg_home = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe {
+            std::env::set_var("CURSOR_HOME", &cursor_home);
+            std::env::set_var("XDG_CONFIG_HOME", dir.path().join("config"));
+        }
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for source in ["absent", "corrupt"] {
+                if source == "corrupt" {
+                    fs::write(&store_path, b"not a SQLite database").unwrap();
+                }
+                let mut conn =
+                    open_db(Some(&dir.path().join(format!("{source}-state.db")))).unwrap();
+                let prepared =
+                    prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
+                        .unwrap()
+                        .unwrap();
+                assert!(prepared
+                    .envelope
+                    .render
+                    .as_ref()
+                    .is_none_or(|render| render.records.is_empty()));
+                assert_eq!(
+                    BASE64_STANDARD
+                        .decode(&prepared.envelope.records[0].data_b64)
+                        .unwrap(),
+                    raw
+                );
+                assert_eq!(
+                    prepared.envelope.session.started_at,
+                    prepared.envelope.epoch_opened_at
+                );
+                acknowledge_prepared(&mut conn, &prepared);
+                assert!(
+                    prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }));
+        for (name, previous) in [
+            ("CURSOR_HOME", previous_cursor_home),
+            ("XDG_CONFIG_HOME", previous_xdg_home),
+        ] {
+            match previous {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+        if let Err(error) = outcome {
+            std::panic::resume_unwind(error);
+        }
+    }
+
+    #[test]
     fn cursor_acp_source_preserves_exact_notifications_and_needs_a_receipt_to_advance() {
         let dir = tempfile::tempdir().unwrap();
         let session_id = "019c638d-0000-0000-0000-000000000099";
@@ -5218,6 +5473,7 @@ mod tests {
                 conversation_uuid: CURSOR_CONVERSATION_ID.to_string(),
                 root_blob_id: None,
                 created_at_ms: Some(1_773_403_200_000),
+                updated_at_ms: None,
                 meta_rows: Vec::new(),
                 blob_rows,
                 root_message_blob_ids: cursor_store::RootMessageBlobIds::Parsed(root_ids),

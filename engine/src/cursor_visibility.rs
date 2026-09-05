@@ -76,6 +76,8 @@ pub(crate) struct CursorVisibilityEvidence {
     pub turns: Vec<CursorProviderTurn>,
     pub session_ended: bool,
     pub ambiguous: bool,
+    pub first_activity_at: Option<DateTime<Utc>>,
+    pub last_activity_at: Option<DateTime<Utc>>,
 }
 
 impl CursorVisibilityEvidence {
@@ -167,7 +169,7 @@ pub(crate) fn has_cursor_prompt_receipt(
     })
 }
 
-fn configured_cursor_store(conversation_id: &str) -> Option<PathBuf> {
+pub(crate) fn configured_cursor_store(conversation_id: &str) -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     let cursor_home = std::env::var_os("CURSOR_HOME")
         .map(PathBuf::from)
@@ -294,6 +296,8 @@ pub(crate) fn parse_cursor_visibility_evidence(
     let mut indices = HashMap::<String, usize>::new();
     let mut session_ended = false;
     let mut ambiguous = false;
+    let mut first_activity_at = None;
+    let mut last_activity_at = None;
     for (line_index, line) in contents.lines().enumerate() {
         let row: Value = match serde_json::from_str(line) {
             Ok(row) => row,
@@ -316,6 +320,11 @@ pub(crate) fn parse_cursor_visibility_evidence(
         if generation_id.is_empty() {
             continue;
         }
+        let observed_at = row
+            .get("observed_at")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc));
         if event == "beforeSubmitPrompt" {
             let prompt = payload
                 .and_then(|payload| payload.get("prompt"))
@@ -348,6 +357,16 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 stop_status: None,
                 stop_observed_at: None,
             });
+            if let Some(observed_at) = observed_at {
+                first_activity_at = Some(
+                    first_activity_at
+                        .map_or(observed_at, |first: DateTime<Utc>| first.min(observed_at)),
+                );
+                last_activity_at = Some(
+                    last_activity_at
+                        .map_or(observed_at, |last: DateTime<Utc>| last.max(observed_at)),
+                );
+            }
             continue;
         }
         let Some(index) = indices.get(generation_id).copied() else {
@@ -359,6 +378,24 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 line_index + 1
             )
         })?;
+        // Only provider work belonging to an accepted prompt advances activity.
+        // Session teardown, binding refresh and local commands are not turns.
+        if matches!(
+            event,
+            "afterAgentResponse"
+                | "afterAgentThought"
+                | "preToolUse"
+                | "postToolUse"
+                | "postToolUseFailure"
+                | "stop"
+        ) {
+            if let Some(observed_at) = observed_at {
+                first_activity_at =
+                    Some(first_activity_at.map_or(observed_at, |first| first.min(observed_at)));
+                last_activity_at =
+                    Some(last_activity_at.map_or(observed_at, |last| last.max(observed_at)));
+            }
+        }
         match event {
             "afterAgentResponse" => {
                 let response_text = payload
@@ -392,12 +429,46 @@ pub(crate) fn parse_cursor_visibility_evidence(
         turns,
         session_ended,
         ambiguous,
+        first_activity_at,
+        last_activity_at,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn activity_tracks_provider_work_not_teardown_or_unrelated_receipts() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","observed_at":"2026-07-20T14:00:00Z","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"postToolUse","observed_at":"2026-07-20T14:01:00Z","conversation_id":"conversation","payload":{"generation_id":"g1"}}
+{"event":"afterAgentResponse","observed_at":"2026-07-20T14:02:00Z","conversation_id":"conversation","payload":{"generation_id":"g1","text":"done"}}
+{"event":"stop","observed_at":"2026-07-20T14:02:01Z","conversation_id":"conversation","payload":{"generation_id":"g1","status":"completed"}}
+{"event":"stop","observed_at":"2026-09-04T16:51:00Z","conversation_id":"other","payload":{"generation_id":"g1","status":"completed"}}
+{"event":"stop","observed_at":"2026-09-04T16:51:00Z","conversation_id":"conversation","payload":{"generation_id":"unknown","status":"completed"}}
+{"event":"beforeSubmitPrompt","observed_at":"2026-09-04T16:51:00Z","conversation_id":"conversation","payload":{"generation_id":"exit","prompt":"/exit"}}
+{"event":"stop","observed_at":"2026-09-04T16:51:01Z","conversation_id":"conversation","payload":{"generation_id":"exit","status":"completed"}}
+{"event":"sessionEnd","observed_at":"2026-09-04T16:51:02Z","conversation_id":"conversation","payload":{}}"#,
+            "conversation",
+        ).unwrap();
+        let (started_at, last_activity_at) =
+            crate::cursor_store::cursor_session_timestamps(None, None, Some(&evidence)).unwrap();
+        assert_eq!(started_at.to_rfc3339(), "2026-07-20T14:00:00+00:00");
+        assert_eq!(last_activity_at.to_rfc3339(), "2026-07-20T14:02:01+00:00");
+
+        let running = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","observed_at":"2026-07-23T10:00:00Z","conversation_id":"conversation","payload":{"generation_id":"g2","prompt":"keep working"}}
+{"event":"postToolUse","observed_at":"2026-07-23T10:05:00Z","conversation_id":"conversation","payload":{"generation_id":"g2"}}"#,
+            "conversation",
+        ).unwrap();
+        let (_, progressed_at) =
+            crate::cursor_store::cursor_session_timestamps(None, None, Some(&running)).unwrap();
+        assert_eq!(progressed_at.to_rfc3339(), "2026-07-23T10:05:00+00:00");
+        assert_eq!(
+            running.unsettled_reason(),
+            Some(CursorEvidenceWait::InFlight)
+        );
+    }
 
     #[test]
     fn completed_turn_waits_for_response_when_stop_arrives_first() {
