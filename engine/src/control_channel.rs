@@ -4404,7 +4404,7 @@ exit 1
         let fake = temp.path().join("opencode");
         write_test_executable(
             &fake,
-            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"text\",\"sessionID\":\"ses_console_test\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}'\n",
+            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"text\",\"sessionID\":\"ses_console_test\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}' '{\"type\":\"step_finish\",\"sessionID\":\"ses_console_test\",\"part\":{\"reason\":\"stop\"}}'\n",
         );
         let longhouse_home = temp.path().join("longhouse");
         let session_id = Uuid::new_v4().to_string();

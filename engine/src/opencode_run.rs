@@ -1,6 +1,7 @@
 //! OpenCode Console turns through stock `opencode run --format json`.
 
 use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -399,6 +400,8 @@ async fn monitor_opencode_run(
                         "run_failed",
                         Some("OpenCode Console completed without a native sessionID".to_string()),
                     )
+                } else if let Err(error) = stream_completion(stdout_path) {
+                    ("run_failed", Some(error.to_string()))
                 } else {
                     ("run_completed", None)
                 };
@@ -466,16 +469,16 @@ async fn monitor_recovered_claim(
                 ("run_failed", Some(error.to_string()))
             } else if cancelled {
                 ("run_cancelled", None)
-            } else if provider_thread_id.is_some() && stream_has_successful_finish(&stdout_path) {
-                ("run_completed", None)
-            } else {
+            } else if provider_thread_id.is_none() {
                 (
                     "run_failed",
-                    Some(
-                        "OpenCode Console process exited without observed terminal status"
-                            .to_string(),
-                    ),
+                    Some("OpenCode Console exited without a native sessionID".to_string()),
                 )
+            } else {
+                match stream_completion(&stdout_path) {
+                    Ok(()) => ("run_completed", None),
+                    Err(error) => ("run_failed", Some(error.to_string())),
+                }
             };
             cleanup_process_group(sink.process_group_id).await;
             sink.post_terminal(
@@ -511,9 +514,16 @@ async fn settle_recovered_dead_claim(
     )
     .await;
     let cancelled = claim.cancel_requested_at.is_some();
+    let completion = projection.and_then(|()| {
+        anyhow::ensure!(
+            provider_thread_id.is_some(),
+            "OpenCode Console exited without a native sessionID"
+        );
+        stream_completion(stdout_path)
+    });
     let terminal = if cancelled {
         "run_cancelled"
-    } else if provider_thread_id.is_some() && stream_has_successful_finish(stdout_path) {
+    } else if completion.is_ok() {
         "run_completed"
     } else {
         "run_failed"
@@ -528,7 +538,7 @@ async fn settle_recovered_dead_claim(
     sink.post_terminal(
         terminal,
         None,
-        projection
+        completion
             .err()
             .map(|error| error.to_string())
             .or_else(|| stderr_tail(stderr_path)),
@@ -797,20 +807,58 @@ fn event_provider_thread_id(event: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-fn stream_has_successful_finish(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    text.lines().any(|line| {
-        serde_json::from_str::<Value>(line).is_ok_and(|event| {
-            event.get("type").and_then(Value::as_str) == Some("step_finish")
-                && event
+fn stream_completion(path: &Path) -> Result<()> {
+    let file = File::open(path).context("opening OpenCode terminal evidence")?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    let mut finished = false;
+    loop {
+        line.clear();
+        if reader
+            .read_line(&mut line)
+            .context("reading OpenCode terminal evidence")?
+            == 0
+        {
+            break;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        match event.get("type").and_then(Value::as_str) {
+            Some("error") => {
+                let error = event.get("error");
+                let message = error
+                    .and_then(|error| error.get("data"))
+                    .and_then(|data| data.get("message"))
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        error
+                            .and_then(|error| error.get("message"))
+                            .and_then(Value::as_str)
+                    })
+                    .or_else(|| {
+                        error
+                            .and_then(|error| error.get("name"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or("unknown provider error");
+                anyhow::bail!("OpenCode provider error: {message}");
+            }
+            Some("step_finish") => {
+                finished |= event
                     .get("part")
                     .and_then(|part| part.get("reason"))
                     .and_then(Value::as_str)
-                    == Some("stop")
-        })
-    })
+                    == Some("stop");
+            }
+            _ => {}
+        }
+    }
+    anyhow::ensure!(
+        finished,
+        "OpenCode Console exited without a successful step_finish"
+    );
+    Ok(())
 }
 
 fn promote_binding(sink: &OpenCodeRunSink, provider_thread_id: &str) -> Result<()> {
@@ -1090,13 +1138,37 @@ mod tests {
             "{\"type\":\"text\",\"sessionID\":\"ses_test\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}\n",
         )
         .unwrap();
-        assert!(!stream_has_successful_finish(&path));
+        assert!(stream_completion(&path).is_err());
         std::fs::write(
             &path,
             "{\"type\":\"step_finish\",\"sessionID\":\"ses_test\",\"part\":{\"reason\":\"stop\"}}\n",
         )
         .unwrap();
-        assert!(stream_has_successful_finish(&path));
+        assert!(stream_completion(&path).is_ok());
+    }
+
+    #[test]
+    fn native_api_error_is_failure_even_after_a_successful_step() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("stdout.jsonl");
+        let error = json!({
+            "type": "error",
+            "sessionID": "ses_test",
+            "error": {"name": "APIError", "data": {
+                "message": "User not found.", "statusCode": 401, "isRetryable": false
+            }}
+        });
+        std::fs::write(&path, format!("{error}\n")).unwrap();
+        assert!(stream_completion(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("User not found."));
+        std::fs::write(
+            &path,
+            format!("{{\"type\":\"step_finish\",\"part\":{{\"reason\":\"stop\"}}}}\n{error}\n"),
+        )
+        .unwrap();
+        assert!(stream_completion(&path).is_err());
     }
 
     #[tokio::test]
