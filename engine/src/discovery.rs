@@ -26,6 +26,11 @@ pub struct ProviderConfig {
 ///
 /// Returns providers whose root directories exist on this system.
 pub fn get_providers() -> Vec<ProviderConfig> {
+    existing_provider_roots(configured_provider_roots())
+}
+
+/// Configured roots, including stores a provider has not created yet.
+pub fn configured_provider_roots() -> Vec<ProviderConfig> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let home = PathBuf::from(home);
     let claude_root = std::env::var("CLAUDE_CONFIG_DIR")
@@ -38,8 +43,17 @@ pub fn get_providers() -> Vec<ProviderConfig> {
         .unwrap_or_else(|| home.join(".config"));
 
     provider_candidates(&home, &claude_root, &xdg_config_root)
+}
+
+fn existing_provider_roots(candidates: Vec<ProviderConfig>) -> Vec<ProviderConfig> {
+    candidates
         .into_iter()
-        .filter(|p| p.root.exists())
+        .filter_map(|mut provider| {
+            // Native watchers report physical paths (for example /private/tmp
+            // on macOS). Use the same identity for scans and event routing.
+            provider.root = provider.root.canonicalize().ok()?;
+            Some(provider)
+        })
         .collect()
 }
 
@@ -278,6 +292,11 @@ pub fn provider_for_path(
             return Some(provider.name);
         }
     }
+    if let Ok(physical) = path.canonicalize() {
+        if physical != path {
+            return provider_for_path(&physical, providers);
+        }
+    }
     None
 }
 
@@ -306,6 +325,11 @@ pub fn session_path_for_watcher_event(
         }
         if is_provider_session_file(provider, path) {
             return Some((path.to_path_buf(), provider.name));
+        }
+    }
+    if let Ok(physical) = path.canonicalize() {
+        if physical != path {
+            return session_path_for_watcher_event(&physical, providers);
         }
     }
     None
@@ -397,6 +421,34 @@ fn is_workflow_journal(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    #[cfg(unix)]
+    fn physical_watcher_paths_match_provider_roots_reached_through_aliases() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let root = home.join(".codex/sessions");
+        fs::create_dir_all(&root).unwrap();
+        let alias = temp.path().join("home-alias");
+        std::os::unix::fs::symlink(&home, &alias).unwrap();
+        let alias_file = alias.join(".codex/sessions/reply.jsonl");
+        fs::write(&alias_file, b"{}\n").unwrap();
+        let physical_file = alias_file.canonicalize().unwrap();
+        let providers = existing_provider_roots(provider_candidates(
+            &alias,
+            &alias.join(".claude"),
+            &alias.join(".config"),
+        ));
+        assert_eq!(
+            session_path_for_watcher_event(&physical_file, &providers),
+            Some((physical_file.clone(), "codex")),
+        );
+        assert_eq!(provider_for_path(&alias_file, &providers), Some("codex"));
+        assert_eq!(
+            discover_all_files(&providers),
+            vec![(physical_file, "codex")],
+        );
+    }
 
     /// Root of the committed Claude dynamic-workflow fixture tree.
     /// Mirrors the real on-disk layout produced by a `/deep-research` run.
@@ -634,7 +686,11 @@ mod tests {
     #[test]
     fn antigravity_legacy_logs_json_is_discovered_but_other_tmp_json_is_not() {
         let home = PathBuf::from("/tmp/home");
-        let providers = provider_candidates(&home, Path::new("/tmp/custom-claude"), &home.join(".config"));
+        let providers = provider_candidates(
+            &home,
+            Path::new("/tmp/custom-claude"),
+            &home.join(".config"),
+        );
         let logs = home
             .join(".gemini")
             .join("tmp")

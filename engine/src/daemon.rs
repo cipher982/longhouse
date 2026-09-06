@@ -771,7 +771,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 4. Discover providers. ACP creates run files after the daemon starts;
     // establish its engine-owned root first so the watcher includes it.
     std::fs::create_dir_all(crate::config::get_agent_dir()?.join("cursor-acp-source"))?;
-    let providers = discovery::get_providers();
+    let mut providers = discovery::get_providers();
+    let mut pending_provider_roots = discovery::configured_provider_roots();
     if providers.is_empty() {
         tracing::warn!("No provider directories found — nothing to watch");
         return Ok(());
@@ -910,6 +911,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let mut fallback_timer = tokio::time::interval(fallback_interval);
     fallback_timer.tick().await; // consume first immediate tick
+                                 // A newly installed provider may create its first transcript store long
+                                 // after startup. Refresh only the small root list, not the whole archive.
+    let mut provider_roots_timer = tokio::time::interval(Duration::from_secs(1));
+    provider_roots_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    provider_roots_timer.tick().await;
 
     let mut failed_ship_retry_timer = tokio::time::interval(failed_ship_retry_interval);
     failed_ship_retry_timer.tick().await; // consume first immediate tick
@@ -2151,6 +2157,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             "Known managed state changed; bounded periodic observation owns refresh"
                         );
                     }
+                }
+            }
+
+            _ = provider_roots_timer.tick(), if !pending_provider_roots.is_empty() => {
+                if watcher.refresh_provider_roots(&mut providers, &mut pending_provider_roots) {
+                    start_discovery_task(
+                        &mut discovery_tasks,
+                        &providers,
+                        WorkPriority::Scan,
+                        "new provider transcript root",
+                    );
                 }
             }
 

@@ -148,6 +148,44 @@ impl SessionWatcher {
         })
     }
 
+    /// Enroll provider stores created after the Machine Agent started.
+    /// Keep failed registrations absent so the next refresh can retry them.
+    pub fn refresh_provider_roots(
+        &mut self,
+        providers: &mut Vec<ProviderConfig>,
+        candidates: &mut Vec<ProviderConfig>,
+    ) -> bool {
+        let mut added = false;
+        let mut index = 0;
+        while index < candidates.len() {
+            let Ok(root) = candidates[index].root.canonicalize() else {
+                index += 1;
+                continue;
+            };
+            if providers
+                .iter()
+                .any(|known| known.root == root && known.name == candidates[index].name)
+            {
+                candidates.swap_remove(index);
+                continue;
+            }
+            match self._watcher.watch(&root, RecursiveMode::Recursive) {
+                Ok(()) => {
+                    let mut provider = candidates.swap_remove(index);
+                    provider.root = root;
+                    tracing::info!(provider = provider.name, path = %provider.root.display(), "Enrolled new provider transcript root");
+                    providers.push(provider);
+                    added = true;
+                }
+                Err(error) => {
+                    tracing::warn!(path = %root.display(), %error, "Could not watch new provider transcript root");
+                    index += 1;
+                }
+            }
+        }
+        added
+    }
+
     /// Await the next filesystem event from the OS watcher thread.
     ///
     /// Returns `None` only if the channel has been closed (watcher dropped),
@@ -277,6 +315,34 @@ mod tests {
                     latest_observed_at_ms: 5,
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_created_after_start_delivers_native_file_events() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("new-provider").join("sessions");
+        let mut providers = Vec::new();
+        let mut watcher = SessionWatcher::new(&providers, &[]).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        watcher.refresh_provider_roots(
+            &mut providers,
+            &mut vec![ProviderConfig {
+                name: "codex",
+                root: root.clone(),
+                extension: "jsonl",
+            }],
+        );
+        let path = root.join("new-session.jsonl");
+        std::fs::write(&path, b"{\"type\":\"session_meta\"}\n").unwrap();
+        let observed =
+            tokio::time::timeout(std::time::Duration::from_secs(5), watcher.next_event())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            observed.path.canonicalize().unwrap(),
+            path.canonicalize().unwrap()
         );
     }
 
