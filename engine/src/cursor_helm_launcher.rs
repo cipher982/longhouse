@@ -113,8 +113,8 @@ struct ResumeClaim {
 
 fn normalize_permission_mode(value: &str) -> anyhow::Result<String> {
     match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "auto_approve" => Ok("auto_approve".into()),
-        "provider_local" | "bypass" => Ok("provider_local".into()),
+        "auto_approve" | "bypass" => Ok("auto_approve".into()),
+        "provider_local" => Ok("provider_local".into()),
         "remote_approve" | "remote_human" => Ok("remote_human".into()),
         _ => anyhow::bail!("invalid --permission-mode"),
     }
@@ -2238,6 +2238,15 @@ mod tests {
         assert_eq!(claim.permission_mode, "remote_human");
         assert!(read_claim(root.path(), &session_id, Some("auto_approve"), None, None).is_err());
         assert!(read_claim(root.path(), &session_id, Some("remote_approve"), None, None).is_ok());
+    }
+
+    #[test]
+    fn explicit_bypass_matches_auto_approve_and_rejects_provider_local_resume() {
+        let root = tempfile::tempdir().unwrap();
+        let automatic = observed_claim(root.path(), Some("auto_approve"));
+        assert!(read_claim(root.path(), &automatic, Some("bypass"), None, None).is_ok());
+        let local = observed_claim(root.path(), Some("provider_local"));
+        assert!(read_claim(root.path(), &local, Some("bypass"), None, None).is_err());
     }
 
     #[test]
