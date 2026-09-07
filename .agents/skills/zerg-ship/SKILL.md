@@ -131,6 +131,10 @@ on to the next useful task.
 
 If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
 
+When releasing a held push through `workflow_dispatch`, also dispatch
+`runtime-image.yml` at the same ref/SHA. The deploy's image wait filters by event
+type; a successful push-triggered image run does not satisfy a manual deploy.
+
 Manual fallback:
 
 ```bash
