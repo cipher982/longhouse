@@ -608,11 +608,17 @@ def _transcript(
     # durable revision is the last mutation of the session row on the global
     # catalog sequence, so ordinary metadata/read-state writes can advance it
     # after a render is current. It is not a transcript coverage coordinate.
-    revision_lag = bool(source_revision is not None and render_revision is not None and source_revision > render_revision)
+    revision_lag = source_revision > render_revision if source_revision is not None and render_revision is not None else None
+    # Missing replies describe provider progress, not missing transcript bytes.
+    # Keep that legacy hint only when content coverage coordinates are unknown.
     lagging = bool(
         revision_lag
         or (normalized_archive == "pending" and has_expected_content)
-        or (not has_visible_transcript_preview and (has_pending_response_turn or user_messages > assistant_messages))
+        or (
+            revision_lag is None
+            and not has_visible_transcript_preview
+            and (has_pending_response_turn or user_messages > assistant_messages)
+        )
     )
     if lagging:
         convergence: TranscriptConvergence = "lagging"
@@ -621,7 +627,7 @@ def _transcript(
         # catch up to.  Calling it "syncing" turns ordinary empty state into a
         # repair incident and can persist forever until the first message.
         convergence = "current"
-    elif normalized_archive in {"current", "legacy_hot"}:
+    elif revision_lag is False or normalized_archive in {"current", "legacy_hot"}:
         convergence = "current"
     else:
         convergence = "unknown"

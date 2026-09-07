@@ -42,10 +42,9 @@ use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
-// v6: session facts now carry the workspace recovered from Cursor's sibling
-// `meta.json`, so every previously-shipped Cursor source must replay to pick up
-// a cwd and project it was ingested without.
-const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v6-workspace-facts";
+// v7: failed/aborted managed prose remains inspectable as abandoned output,
+// without authorizing it as a committed head reply. Replay historical sources.
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v7-abandoned-prose";
 const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
 
 pub(crate) struct PreparedStorageV2Envelope {
@@ -2676,6 +2675,7 @@ pub(crate) fn prepare_next_opencode_envelope(
 #[derive(Debug, Default)]
 struct CursorTextProjection {
     suppressed: HashSet<(String, usize)>,
+    abandoned: HashSet<(String, usize)>,
 }
 
 #[derive(Debug)]
@@ -2819,6 +2819,17 @@ fn cursor_text_projection(
                     text_block_count = store_turn.text_blocks.len(),
                     "Suppressing managed Cursor assistant text"
                 );
+            }
+        } else if matches!(
+            receipt_turn.stop_status.as_deref(),
+            Some("error" | "aborted")
+        ) {
+            // Native output survives a failed turn, but no successful response
+            // receipt authorizes it as a head reply. Keep reasoning raw-only.
+            for (blob_id, subordinal, _) in &store_turn.text_blocks {
+                let key = (blob_id.clone(), *subordinal);
+                projection.suppressed.remove(&key);
+                projection.abandoned.insert(key);
             }
         }
     }
@@ -2977,6 +2988,7 @@ fn cursor_render_records(
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
+            let mut abandoned = false;
             let (
                 event_role,
                 content_text,
@@ -2996,6 +3008,7 @@ fn cursor_render_records(
                         if projection.suppressed.contains(&key) {
                             continue;
                         }
+                        abandoned = projection.abandoned.contains(&key);
                     }
                     let (effective_role, effective_text) = if kind == "reasoning" {
                         ("assistant".to_string(), text)
@@ -3058,7 +3071,11 @@ fn cursor_render_records(
                 tool_output_text,
                 tool_call_id,
                 thread_id: None,
-                branch_kind: (kind == "reasoning").then(|| "reasoning".to_string()),
+                branch_kind: if abandoned {
+                    Some("abandoned".to_string())
+                } else {
+                    (kind == "reasoning").then(|| "reasoning".to_string())
+                },
                 parent_uuid: None,
                 raw_record_ordinal: *raw_record_ordinal,
             });
@@ -5500,7 +5517,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_failed_retry_artifacts_remain_raw_but_do_not_render_as_replies() {
+    fn cursor_failed_retry_prose_is_inspectable_without_becoming_head_replies() {
         let user = "1111111111111111111111111111111111111111111111111111111111111111";
         let attempt_one = "2222222222222222222222222222222222222222222222222222222222222222";
         let attempt_two = "3333333333333333333333333333333333333333333333333333333333333333";
@@ -5540,13 +5557,20 @@ mod tests {
         };
 
         let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
-        assert_eq!(rendered.len(), 1);
-        assert_eq!(rendered[0].role, "user");
-        assert_eq!(rendered[0].content_text.as_deref(), Some("hello test 1"));
+        let head = rendered
+            .iter()
+            .filter(|record| record.branch_kind.as_deref() != Some("abandoned"))
+            .map(|record| (record.role.as_str(), record.content_text.as_deref()))
+            .collect::<Vec<_>>();
+        assert_eq!(head, vec![("user", Some("hello test 1"))]);
+        let abandoned = rendered
+            .iter()
+            .filter(|record| record.branch_kind.as_deref() == Some("abandoned"))
+            .map(|record| record.content_text.as_deref().unwrap())
+            .collect::<Vec<_>>();
         assert_eq!(
-            selected.len(),
-            5,
-            "all retry artifacts remain in the raw envelope"
+            abandoned,
+            vec!["reply one", "reply two", "reply three", "reply four"]
         );
     }
 
@@ -5661,7 +5685,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_failed_turn_keeps_executed_tool_evidence_but_suppresses_prose() {
+    fn cursor_aborted_turn_keeps_tools_and_labels_uncommitted_prose() {
         let user = "1111111111111111111111111111111111111111111111111111111111111111";
         let tool = "2222222222222222222222222222222222222222222222222222222222222222";
         let prose = "3333333333333333333333333333333333333333333333333333333333333333";
@@ -5684,16 +5708,22 @@ mod tests {
                 generation_id: "generation-failed-tool".to_string(),
                 prompt: "run it".to_string(),
                 response_text: None,
-                stop_status: Some("error".to_string()),
+                stop_status: Some("aborted".to_string()),
                 stop_observed_at: None,
             }],
             ..Default::default()
         };
 
         let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
-        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered.len(), 3);
         assert_eq!(rendered[0].role, "user");
         assert_eq!(rendered[1].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(rendered[1].branch_kind, None);
+        assert_eq!(
+            rendered[2].content_text.as_deref(),
+            Some("uncommitted prose")
+        );
+        assert_eq!(rendered[2].branch_kind.as_deref(), Some("abandoned"));
     }
 
     #[test]

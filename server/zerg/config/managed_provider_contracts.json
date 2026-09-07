@@ -2300,7 +2300,9 @@
         "engine/src/cursor_hooks.rs",
         "server/zerg/services/managed_local_control.py",
         "engine/src/cursor_helm_control.rs",
-        "engine/src/cursor_print.rs"
+        "engine/src/cursor_print.rs",
+        "engine/src/cursor_visibility.rs",
+        "engine/src/storage_v2_shipper.rs"
       ],
       "wire_families": [
         "cursor_agent_jsonl",
@@ -2799,7 +2801,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "fe2f74d5efa5bcbe5fc342d7f510ec7da945c3423c055e7d3f49082ed3a73fbf"
+      "adapter_digest": "525548d2a2602b67f9022d69d0b912c865ef06e4ac455c579f5a6541df331f70"
     },
     {
       "provider": "pi",

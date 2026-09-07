@@ -23,9 +23,11 @@ from zerg.services.session_liveness_facts import PhaseObservation
 from zerg.services.session_liveness_facts import ProcessObservation
 from zerg.services.session_liveness_facts import SessionLivenessFacts
 from zerg.services.session_runtime import SessionRuntimeView
+from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import build_archive_session_state_facts
 from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_state_contract import project_transcript_facts
+from zerg.services.session_state_facts_projector import project_served_session_state_facts
 
 NOW = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
 
@@ -228,7 +230,7 @@ def test_transcript_lag_never_becomes_provider_working():
     assert "Working" not in facts.model_dump_json()
 
 
-def test_transcript_coordinates_advance_independently():
+def test_current_render_supersedes_unanswered_message_heuristic():
     facts = project_transcript_facts(
         session=_session(),
         last_activity_at=NOW,
@@ -241,10 +243,7 @@ def test_transcript_coordinates_advance_independently():
         transcript_last_append_at=NOW - timedelta(seconds=3),
     )
 
-    assert facts.source_revision == 11
-    assert facts.durable_revision == 17
-    assert facts.render_revision == 13
-    assert facts.last_append_at == NOW - timedelta(seconds=3)
+    assert facts.convergence == "current"
 
 
 def test_current_archive_ignores_later_session_row_revision():
@@ -274,6 +273,87 @@ def test_current_archive_lags_when_source_is_newer_than_render():
         source_revision=200,
         durable_revision=200,
         render_revision=181,
+    )
+
+    assert facts.convergence == "lagging"
+
+
+@pytest.mark.parametrize("end_reason", ["failed", "cancelled", None], ids=["failed", "cancelled", "running"])
+@pytest.mark.parametrize(
+    ("render_revision", "expected_convergence"),
+    [(3543003, "current"), (3543002, "lagging")],
+    ids=["covered", "missing_content"],
+)
+def test_no_reply_turn_convergence_is_independent_of_run_outcome(end_reason, render_revision, expected_convergence):
+    transcript = project_transcript_facts(
+        session=_session(origin_kind="console"),
+        last_activity_at=NOW,
+        user_messages=1,
+        assistant_messages=0,
+        archive_state="current",
+        source_revision=3543003,
+        durable_revision=3543003,
+        render_revision=render_revision,
+    )
+    facts = project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=3543144,
+        catalog_facts={
+            "catalog": {"origin_kind": "console", "provider": "cursor"},
+            "latest_run": {
+                "id": "run-1",
+                "started_at": NOW - timedelta(minutes=1),
+                "ended_at": NOW if end_reason is not None else None,
+                "exit_status": end_reason,
+            },
+        },
+        heads=(),
+        supported_operations=(),
+        pending_interaction=None,
+        transcript=transcript,
+        host=SessionHostFacts(state="unknown"),
+        now=NOW,
+    )
+
+    assert facts.run is not None
+    assert facts.run.lifecycle == ("ended" if end_reason is not None else "running")
+    assert facts.run.end_reason == end_reason
+    assert facts.activity.state == "unknown"
+    assert facts.transcript.convergence == expected_convergence
+    assert (facts.presentation.transcript is not None) == (expected_convergence == "lagging")
+
+
+@pytest.mark.parametrize("archive_state", ["current", "pending", None])
+def test_content_coverage_supersedes_pending_response_hint_but_not_pending_archive(archive_state):
+    facts = project_transcript_facts(
+        session=_session(),
+        last_activity_at=NOW,
+        has_pending_response_turn=True,
+        user_messages=1,
+        assistant_messages=1,
+        archive_state=archive_state,
+        source_revision=181,
+        durable_revision=181,
+        render_revision=181,
+    )
+
+    assert facts.convergence == ("lagging" if archive_state == "pending" else "current")
+
+
+@pytest.mark.parametrize(
+    ("source_revision", "render_revision"),
+    [(None, None), (181, None), (None, 181)],
+)
+def test_unanswered_turn_keeps_conservative_lag_without_both_content_coordinates(source_revision, render_revision):
+    facts = project_transcript_facts(
+        session=_session(),
+        last_activity_at=NOW,
+        user_messages=1,
+        assistant_messages=0,
+        archive_state="current",
+        source_revision=source_revision,
+        durable_revision=181,
+        render_revision=render_revision,
     )
 
     assert facts.convergence == "lagging"

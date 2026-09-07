@@ -1530,6 +1530,8 @@ providers:
   - server/zerg/services/managed_local_control.py
   - engine/src/cursor_helm_control.rs
   - engine/src/cursor_print.rs
+  - engine/src/cursor_visibility.rs
+  - engine/src/storage_v2_shipper.rs
   wire_families: [cursor_agent_jsonl, cursor_helm]
   observation_sources: [native_archive, managed_bridge]
   normalization_ruleset: cursor
