@@ -106,6 +106,16 @@ def test_tail_resolves_provider_native_id(live_catalog, live_catalog_client):
     assert payload["session_id"] == str(longhouse_id)
     assert payload["events"][0]["content"].startswith("run the migration")
 
+    direct_resp = live_catalog_client.get(
+        f"/agents/sessions/{longhouse_id}/tail",
+        params={"roles": "user,assistant"},
+        headers=headers,
+    )
+    assert direct_resp.status_code == 200, direct_resp.text
+    direct_payload = direct_resp.json()
+    assert direct_payload["session_id"] == payload["session_id"]
+    assert direct_payload["events"] == payload["events"]
+
 
 def test_get_session_resolves_native_id_and_carries_it_in_the_body(live_catalog, live_catalog_client):
     owner_id = live_catalog.create_user("owner@native-id.test")

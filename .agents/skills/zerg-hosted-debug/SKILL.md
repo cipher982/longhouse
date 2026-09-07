@@ -189,6 +189,12 @@ current count facts before success. Do not accept the upgraded API while it
 returns `branch_projection_pending` for historical data. Keep the cache on the
 persistent data mount across container replacement; `--limit` is preflight-only.
 
+`schema_generation` fingerprints the table shape, so do not assume an old API
+can adopt the new writer. For a combined Runtime Host, use an explicit
+maintenance window: stop old API/catalog, start the new catalog alone, apply
+cached facts to zero missing, then start the new API. Re-apply after API upgrade
+to catch the old writer's final objects; do not infer readiness from process health.
+
 ## Watchman Evidence
 
 Ops Watchman records `db_file_stats` observations with the same DB/disk/page

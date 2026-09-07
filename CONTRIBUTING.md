@@ -126,6 +126,11 @@ requires zero missing current facts; neither phase rewrites source history.
 Keep the cache across container replacement. `--limit` samples preparation
 only and cannot be combined with `--apply`.
 
+Catalog schema fingerprints reject mixed reader/writer versions. Use an explicit
+maintenance window when the writer cannot be upgraded independently: start the
+new catalog, apply the prepared facts, then start the new API. Repeat `--apply`
+after the API upgrade to cover any final objects created by the old writer.
+
 ## Generated code
 
 Some code is generated — **do not edit it by hand**:

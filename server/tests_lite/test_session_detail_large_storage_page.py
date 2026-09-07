@@ -133,6 +133,7 @@ def _seed_large_storage_session(database_path, *, session_id: UUID, generation_i
                     "user_messages": 1,
                     "assistant_messages": 0,
                     "tool_calls": 0,
+                    "abandoned_events": 0,
                     "semantic_projection_version": 1,
                     "first_order_key": _order_key(index),
                     "last_order_key": _order_key(index),
@@ -257,6 +258,8 @@ async def test_large_session_workspace_tail_is_bounded_and_independent_of_catalo
         events = [item["event"] for item in payload["projection"]["items"]]
         assert [event["id"] for event in events] == [f"event-{index}" for index in range(_EVENT_COUNT - _PAGE_SIZE, _EVENT_COUNT)]
         assert payload["projection"]["has_more"] is True
+        assert payload["projection"]["total"] == _EVENT_COUNT
+        assert payload["projection"]["abandoned_events"] == 0
         assert render_pool.read_count <= _PAGE_SIZE + 2
         assert not blocked.done()
     finally:

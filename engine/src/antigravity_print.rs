@@ -320,7 +320,7 @@ async fn recovered_claim_liveness(
     }
     #[cfg(target_os = "linux")]
     {
-        return unrecorded_stdout_liveness(stdout_path);
+        return unrecorded_stdout_liveness(stdout_path, &claim.claimed_at);
     }
     #[cfg(target_os = "macos")]
     {
@@ -369,47 +369,91 @@ fn lsof_output_liveness(output: &std::process::Output) -> ClaimLiveness {
 }
 
 #[cfg(target_os = "linux")]
-fn unrecorded_stdout_liveness(stdout_path: &Path) -> ClaimLiveness {
-    use std::os::unix::fs::MetadataExt;
-
+fn unrecorded_stdout_liveness(stdout_path: &Path, claimed_at: &str) -> ClaimLiveness {
     let inspect = || -> std::io::Result<ClaimLiveness> {
         let stdout = std::fs::metadata(stdout_path)?;
-        for entry in std::fs::read_dir("/proc")? {
-            let entry = entry?;
-            if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
-                continue;
-            }
-            let process = match entry.metadata() {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error),
-            };
-            // A Console child inherits our uid. Other users' inaccessible fd
-            // tables do not make inspection of our own processes incomplete.
-            if process.uid() != unsafe { libc::geteuid() } {
-                continue;
-            }
-            let descriptors = match std::fs::read_dir(entry.path().join("fd")) {
-                Ok(descriptors) => descriptors,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error),
-            };
-            for descriptor in descriptors {
-                let metadata = match std::fs::metadata(descriptor?.path()) {
-                    Ok(metadata) => metadata,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(error),
-                };
-                if metadata.dev() == stdout.dev() && metadata.ino() == stdout.ino() {
-                    return Ok(ClaimLiveness::Live);
-                }
-            }
-        }
-        Ok(ClaimLiveness::Gone)
+        Ok(stdout_liveness_from_processes(
+            std::fs::read_dir("/proc")?,
+            &stdout,
+            crate::process_identity::parse_rfc3339(claimed_at),
+            |pid| crate::process_identity::try_collect_process_fact(pid)?.start_time,
+        ))
     };
     inspect().unwrap_or_else(|error| {
         tracing::debug!(path = %stdout_path.display(), %error, "Cannot inspect Antigravity stdout ownership through /proc");
         ClaimLiveness::Unknown
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn stdout_liveness_from_processes(
+    processes: impl IntoIterator<Item = std::io::Result<std::fs::DirEntry>>,
+    stdout: &std::fs::Metadata,
+    claimed_at: Option<DateTime<Utc>>,
+    mut fresh_start_time: impl FnMut(u32) -> Option<DateTime<Utc>>,
+) -> ClaimLiveness {
+    let mut incomplete = false;
+    for entry in processes {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                incomplete = true;
+                continue;
+            }
+        };
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        match process_stdout_liveness(&entry.path(), stdout) {
+            Ok(ClaimLiveness::Live) => return ClaimLiveness::Live,
+            Ok(ClaimLiveness::Gone) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Ok(ClaimLiveness::Unknown) | Err(_) => {}
+        }
+        // An inaccessible fd table is not evidence about every claim. The
+        // provider and its descendants are born after the durable claim; an
+        // older process cannot have inherited this invocation's stdout.
+        // Resolve identity after the failed inspection, not from the startup
+        // inventory, which could describe a previous occupant of this PID.
+        // Leave two seconds for ps/boot-time rounding, not a claim-age timeout.
+        let predates_claim = fresh_start_time(pid)
+            .zip(claimed_at)
+            .is_some_and(|(start, claim)| start + chrono::Duration::seconds(2) < claim);
+        incomplete |= !predates_claim;
+    }
+    if incomplete {
+        ClaimLiveness::Unknown
+    } else {
+        ClaimLiveness::Gone
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn process_stdout_liveness(
+    process_path: &Path,
+    stdout: &std::fs::Metadata,
+) -> std::io::Result<ClaimLiveness> {
+    use std::os::unix::fs::MetadataExt;
+
+    // A Console child inherits our uid. Keep the existing visibility boundary.
+    if std::fs::metadata(process_path)?.uid() != unsafe { libc::geteuid() } {
+        return Ok(ClaimLiveness::Gone);
+    }
+    let mut incomplete = false;
+    for descriptor in std::fs::read_dir(process_path.join("fd"))? {
+        match descriptor.and_then(|descriptor| std::fs::metadata(descriptor.path())) {
+            Ok(metadata) if metadata.dev() == stdout.dev() && metadata.ino() == stdout.ino() => {
+                return Ok(ClaimLiveness::Live);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => incomplete = true,
+        }
+    }
+    Ok(if incomplete {
+        ClaimLiveness::Unknown
+    } else {
+        ClaimLiveness::Gone
     })
 }
 
@@ -1203,6 +1247,114 @@ mod tests {
         assert_eq!(lsof_output_liveness(&output), ClaimLiveness::Unknown);
         output.stderr.clear();
         assert_eq!(lsof_output_liveness(&output), ClaimLiveness::Gone);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_stdout_scan_excludes_only_proven_pre_claim_inspection_failures() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let stdout = dir.path().join("stdout.log");
+        std::fs::write(&stdout, "").unwrap();
+        let stdout = std::fs::metadata(stdout).unwrap();
+        let proc_root = dir.path().join("proc");
+        let process = proc_root.join("123");
+        std::fs::create_dir_all(&process).unwrap();
+        // A symlink loop gives a deterministic fd-table inspection error,
+        // including when the tests run as root and chmod cannot deny access.
+        symlink("fd", process.join("fd")).unwrap();
+        let claimed_at = Utc::now();
+        let inspect = |claim, start| {
+            stdout_liveness_from_processes(
+                std::fs::read_dir(&proc_root).unwrap(),
+                &stdout,
+                claim,
+                |_| start,
+            )
+        };
+        let old_start = claimed_at - chrono::Duration::minutes(10);
+        assert_eq!(
+            inspect(Some(claimed_at), Some(old_start)),
+            ClaimLiveness::Gone
+        );
+        // A provider born in the claim's second can round down in ps. Neither
+        // that overlap nor unavailable claim/process identity proves absence.
+        assert_eq!(
+            inspect(
+                Some(claimed_at),
+                Some(claimed_at - chrono::Duration::seconds(1))
+            ),
+            ClaimLiveness::Unknown
+        );
+        assert_eq!(
+            inspect(
+                Some(claimed_at),
+                Some(claimed_at + chrono::Duration::seconds(1))
+            ),
+            ClaimLiveness::Unknown
+        );
+        assert_eq!(inspect(Some(claimed_at), None), ClaimLiveness::Unknown);
+        assert_eq!(inspect(None, Some(old_start)), ClaimLiveness::Unknown);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_stdout_scan_finds_writer_after_process_and_descriptor_errors() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let stdout_path = dir.path().join("stdout.log");
+        std::fs::write(&stdout_path, "").unwrap();
+        let stdout = std::fs::metadata(&stdout_path).unwrap();
+        let proc_root = dir.path().join("proc");
+        std::fs::create_dir_all(proc_root.join("1")).unwrap();
+        symlink("fd", proc_root.join("1/fd")).unwrap();
+        for pid in ["2", "3"] {
+            let fd = proc_root.join(pid).join("fd");
+            std::fs::create_dir_all(&fd).unwrap();
+            symlink("0", fd.join("0")).unwrap();
+        }
+        symlink(&stdout_path, proc_root.join("3/fd/1")).unwrap();
+        let mut entries = std::fs::read_dir(&proc_root)
+            .unwrap()
+            .collect::<std::io::Result<Vec<_>>>()
+            .unwrap();
+        entries.sort_by_key(|entry| entry.file_name());
+        // Force incomplete evidence before the holder, regardless of filesystem
+        // enumeration order. Missing identity must not short-circuit positives.
+        let entries = std::iter::once(Err(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )))
+        .chain(entries.into_iter().map(Ok));
+        assert_eq!(
+            stdout_liveness_from_processes(entries, &stdout, Some(Utc::now()), |_| None),
+            ClaimLiveness::Live
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_stdout_scan_does_not_retain_vanished_descriptors() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let stdout_path = dir.path().join("stdout.log");
+        std::fs::write(&stdout_path, "").unwrap();
+        let stdout = std::fs::metadata(stdout_path).unwrap();
+        let proc_root = dir.path().join("proc");
+        let fd = proc_root.join("123/fd");
+        std::fs::create_dir_all(&fd).unwrap();
+        symlink("already-closed", fd.join("1")).unwrap();
+        assert_eq!(
+            stdout_liveness_from_processes(
+                std::fs::read_dir(&proc_root).unwrap(),
+                &stdout,
+                Some(Utc::now()),
+                |_| None,
+            ),
+            ClaimLiveness::Gone
+        );
     }
 
     #[test]

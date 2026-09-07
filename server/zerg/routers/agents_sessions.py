@@ -739,7 +739,7 @@ def _parse_tail_roles(raw: object) -> frozenset[str]:
 
 
 def _tail_response(
-    session_id: UUID,
+    session_id: str,
     events: list[dict],
     roles: frozenset[str],
     *,
@@ -759,7 +759,7 @@ def _tail_response(
     """
 
     return {
-        "session_id": str(session_id),
+        "session_id": session_id,
         "events": events,
         "total": len(events),
         "roles": sorted(roles),
@@ -839,17 +839,6 @@ async def session_tail(
         anchor="tail",
     )
     if workspace is None:
-        resolved = await asyncio.to_thread(_live_session_id_via_provider_alias, session_id, owner_id=int(owner_id))
-        if resolved is not None:
-            session_id = resolved
-            workspace = await build_storage_v2_workspace(
-                session_id=session_id,
-                owner_id=int(owner_id),
-                branch_mode="head",
-                limit=scan_limit,
-                anchor="tail",
-            )
-    if workspace is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     projection = workspace["projection"]
     # Count the raw page before any filtering. Exhaustion has to be keyed off
@@ -872,7 +861,7 @@ async def session_tail(
     # after trimming so dropped events cannot consume it.
     events = _apply_tail_content_budget(events[-limit:], content_budget)
     return _tail_response(
-        session_id,
+        projection["focus_session_id"],
         events,
         requested_roles,
         scan_window=len(scanned),

@@ -94,3 +94,87 @@ async def test_corrupt_render_cannot_leave_a_stale_successful_repair_receipt(leg
     assert json.loads(cache.with_suffix(".summary.json").read_text())["status"] == "fail"
     assert cache.read_text() == ""
     assert path.read_bytes() == corrupted
+
+
+@pytest.mark.asyncio
+async def test_apply_repairs_real_catalog_once_without_rewriting_render(tmp_path):
+    import tempfile
+    from datetime import UTC
+    from datetime import datetime
+    from pathlib import Path
+
+    from zerg.catalogd.client import CatalogClient
+    from zerg.catalogd.server import CatalogDaemon
+
+    from tests_lite.test_catalogd_storage_v2 import _raw_params
+    from tests_lite.test_catalogd_storage_v2 import _render_manifest
+
+    with tempfile.TemporaryDirectory(prefix="lh-count-", dir="/tmp") as sockets:
+        database, socket = tmp_path / "catalog.db", Path(sockets) / "catalog.sock"
+        root, cache = tmp_path / "objects", tmp_path / "counts.jsonl"
+        daemon = CatalogDaemon(database_path=database, socket_path=socket)
+        await daemon.start()
+        client = CatalogClient(socket)
+        try:
+            epoch, sid, generation = uuid4(), uuid4(), uuid4()
+            raw = _raw_params(
+                epoch=epoch, session_id=sid, start=0, end=5, records=(b"seed\n",), sealed_at=datetime.now(UTC), provider="cursor"
+            )
+            spec = RenderObjectSpec(
+                session_id=sid,
+                render_generation=generation,
+                parser_revision="engine-parser-v2",
+                ordering_revision="semantic-order-v2",
+                machine_id="cinder",
+                provider="cursor",
+                opaque_source_id="history.jsonl",
+                source_epoch=epoch,
+                source_envelope_id=raw["envelope_id"],
+                records=tuple(
+                    RenderRecord(
+                        event_id=name,
+                        order_time_us=1700000000000000 + index,
+                        source_position=0,
+                        event_subordinal=index,
+                        role="assistant",
+                        content_text=name,
+                        interaction_kind="provider_system",
+                        branch_kind=branch,
+                    )
+                    for index, (name, branch) in enumerate((("partial", "abandoned"), ("final", None)))
+                ),
+            )
+            sealed = seal_render_object(root, spec)
+            manifest = _render_manifest(generation, source_epoch=epoch, provider="cursor")
+            for key in manifest:
+                if hasattr(sealed, key):
+                    manifest[key] = getattr(sealed, key)
+            manifest.update(abandoned_events=None, semantic_projection_version=1)
+            raw.update(render_state="ready", render_manifest=manifest, projectors=["search-v2"])
+            await client.call("storage.raw_object.commit.v2", raw)
+            native_before = (root / sealed.object_path).read_bytes()
+            prepared = await repair_counts(database=database, cache=cache, socket_path=socket, object_root=root, apply=False, limit=None)
+            assert prepared["status"] == "pass"
+            applied = await repair_counts(database=database, cache=cache, socket_path=socket, object_root=root, apply=True, limit=None)
+            assert applied["status"] == "pass"
+            assert applied["missing_objects"] == 0
+            assert applied["updated_objects"] == 1
+            page = await client.call(
+                "storage.session.render_manifest.v2",
+                {
+                    "session_id": str(sid),
+                    "owner_id": "42",
+                    "generation_id": str(generation),
+                    "anchor": "start",
+                    "after_order_key": None,
+                    "before_order_key": None,
+                    "limit": 1,
+                },
+            )
+            assert page["abandoned_events"] == 1
+            repeated = await repair_counts(database=database, cache=cache, socket_path=socket, object_root=root, apply=True, limit=None)
+            assert repeated["status"] == "pass" and repeated["updated_objects"] == 0
+            assert (root / sealed.object_path).read_bytes() == native_before
+        finally:
+            await client.close()
+            await daemon.close()
