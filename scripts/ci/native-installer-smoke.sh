@@ -150,6 +150,22 @@ smoke_command() {
   "${SMOKE_ENV[@]}" "$NODE_BIN" "$TEST_ROOT/run-bounded.js" "$@"
 }
 
+# Only this host-side metadata reader may see the workflow GitHub credential.
+# Installed binaries keep the scrubbed SMOKE_ENV; no secret enters argv or artifacts.
+github_metadata() {
+  "$NODE_BIN" - "$1" <<'GITHUB_EOF'
+const url = process.argv[2];
+const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+const headers = { Accept: "application/vnd.github+json", "User-Agent": "longhouse-native-installer-smoke" };
+if (token) headers.Authorization = `Bearer ${token}`;
+(async () => {
+  const response = await fetch(url, { headers, redirect: "error", signal: AbortSignal.timeout(45000) });
+  if (!response.ok) throw new Error(`GitHub metadata request failed: HTTP ${response.status}`);
+  process.stdout.write(await response.text());
+})().catch(error => { console.error(error.message); process.exitCode = 1; });
+GITHUB_EOF
+}
+
 install_pair() {
   local tag="${1:-}" stage="$2"
   local -a env_args=("LONGHOUSE_MACOS_APP_INSTALL_DIR=$HOME_DIR/Applications")
@@ -295,8 +311,7 @@ const differing = prior.findIndex((part, index) => part !== target[index]);
 if (differing < 0 || prior[differing] >= target[differing]) throw new Error("target version must advance beyond previous tag");
 VERSION_EOF
   release_api="https://api.github.com/repos/cipher982/longhouse"
-  smoke_command 60 curl -fsSL --connect-timeout 10 --max-time 45 \
-    "$release_api/releases/tags/$PREVIOUS_TAG" > "$EVIDENCE_DIR/previous-release.json"
+  github_metadata "$release_api/releases/tags/$PREVIOUS_TAG" > "$EVIDENCE_DIR/previous-release.json"
   "$NODE_BIN" - "$EVIDENCE_DIR/previous-release.json" "$PREVIOUS_TAG" <<'RELEASE_EOF'
 const fs = require("fs");
 const [filename, tag] = process.argv.slice(2);
@@ -305,8 +320,7 @@ if (release.tag_name !== tag || release.draft !== false || release.prerelease !=
   throw new Error("previous tag is not a published stable public release");
 }
 RELEASE_EOF
-  smoke_command 60 curl -fsSL --connect-timeout 10 --max-time 45 \
-    "$release_api/commits/$PREVIOUS_TAG" > "$EVIDENCE_DIR/previous-commit.json"
+  github_metadata "$release_api/commits/$PREVIOUS_TAG" > "$EVIDENCE_DIR/previous-commit.json"
   previous_commit="$("$NODE_BIN" - "$EVIDENCE_DIR/previous-commit.json" <<'COMMIT_EOF'
 const fs = require("fs");
 const commit = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).sha;
