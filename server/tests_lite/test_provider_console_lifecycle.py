@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.services.provider_capability_schema import load_capability_assertions
 
@@ -426,3 +425,31 @@ def test_console_runtime_wake_socket_stays_below_linux_path_limit():
     wake_socket = longhouse_home / "agent" / "transcript-wake.sock"
 
     assert len(os.fsencode(wake_socket)) <= 90
+
+
+def test_archive_assistant_markers_exclude_tools_and_non_text_content(monkeypatch):
+    marker = "LH_ARCHIVE_MARKER"
+    events = [
+        {"id": "prompt", "role": "user", "content_text": marker},
+        {"id": "tool", "role": "assistant", "tool_name": "shell", "content_text": marker},
+        {"id": "metadata", "role": "assistant", "content_text": {"marker": marker}},
+        {"id": "preview", "role": "assistant", "event_origin": "live_provisional", "content_text": marker},
+        {"id": "reply", "role": "assistant", "content_text": marker},
+    ]
+    monkeypatch.setattr(lifecycle, "_request", lambda *_args: {"events": events})
+
+    matches = lifecycle._assistant_marker_events("https://runtime.example", "token", "session-1", marker)
+
+    assert [event["id"] for event in matches] == ["reply"]
+
+
+def test_archive_convergence_rejects_duplicate_markers_within_one_reply(monkeypatch):
+    marker = "LH_ARCHIVE_MARKER"
+    monkeypatch.setattr(
+        lifecycle,
+        "_request",
+        lambda *_args: {"events": [{"id": "reply", "role": "assistant", "content_text": f"{marker} {marker}"}]},
+    )
+
+    with pytest.raises(RuntimeError, match="exactly one occurrence"):
+        lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)

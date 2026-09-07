@@ -35,11 +35,14 @@ import contextlib
 import json
 import os
 import queue
+import socket
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from collections.abc import Iterable
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
@@ -58,6 +61,24 @@ class ApiError(RuntimeError):
 
 
 USER_AGENT = "longhouse-console-served-state-e2e/1"
+MARKER_WORDS = (
+    "ALDER",
+    "BIRCH",
+    "CEDAR",
+    "DUNE",
+    "EMBER",
+    "FERN",
+    "GROVE",
+    "HARBOR",
+    "IVORY",
+    "JUNIPER",
+    "KITE",
+    "LANTERN",
+    "MAPLE",
+    "NOVA",
+    "ORCHID",
+    "RIVER",
+)
 
 # The pulsing composer bar is NOT display_phase. SessionChat.tsx:726 renders
 # "Working" off isSendLocked, which SessionDetailPage.tsx:574 derives from
@@ -185,6 +206,58 @@ def settlement_state(workspace: dict, run_id: str) -> tuple[bool, dict]:
     return settled, observed
 
 
+def event_text(event: Mapping[str, object]) -> str:
+    """Read text fields only; structured content and metadata are not replies."""
+    text = event.get("content_text")
+    if text is None:
+        text = event.get("content")
+    return text if isinstance(text, str) else ""
+
+
+def assistant_marker_events(events: Iterable[object], marker: str, *, default_origin: str | None = None) -> list[dict]:
+    """Share the durable assistant predicate between archive and served proofs.
+
+    Archive-only endpoints may supply an explicit durable default. A served
+    projection must carry its origin: provisional output is never final proof.
+    Keep all matches, including duplicates, so callers can reject multiplicity.
+    """
+    return [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and event.get("role") == "assistant"
+        and event.get("event_origin", default_origin) == "durable"
+        and not event.get("tool_name")
+        and bool(marker)
+        and marker in event_text(event)
+    ]
+
+
+def assistant_marker_evidence(workspace: dict, session_id: str, marker: str) -> dict:
+    projection = workspace.get("projection") or {}
+    matches = assistant_marker_events(
+        (
+            item.get("event")
+            for item in projection.get("items") or []
+            if isinstance(item, dict) and item.get("kind") == "event" and item.get("session_id") == session_id
+        ),
+        marker,
+    )
+    counts = [event_text(event).count(marker) for event in matches]
+    event_ids = [event.get("id") for event in matches]
+    # A partial page cannot exclude a duplicate that was not served in it.
+    complete_page = projection.get("has_more") is False and projection.get("page_offset") == 0
+    exact = len(matches) == 1 and counts == [1] and bool(event_ids[0]) and complete_page
+    return {
+        "event_ids": event_ids,
+        "event_count": len(matches),
+        "marker_counts": counts,
+        "marker_count": sum(counts),
+        "complete_page": complete_page,
+        "exactly_once": exact,
+    }
+
+
 class StreamWatcher(threading.Thread):
     """Subscribe to the workspace SSE stream and timestamp every frame."""
 
@@ -195,6 +268,8 @@ class StreamWatcher(threading.Thread):
         self.frames: queue.Queue = queue.Queue()
         self.stop_flag = threading.Event()
         self.error: Exception | None = None
+        self._response = None
+        self._socket: socket.socket | None = None
 
     def run(self) -> None:
         request = urllib.request.Request(
@@ -208,8 +283,14 @@ class StreamWatcher(threading.Thread):
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=600) as response:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                self._response = response
+                # Closing a buffered reader while another thread reads it can
+                # block. Shut down its transport first to release that reader.
+                self._socket = response.fp.raw._sock
                 event: str | None = None
+                if self.stop_flag.is_set():
+                    return
                 for raw in response:
                     if self.stop_flag.is_set():
                         return
@@ -224,8 +305,27 @@ class StreamWatcher(threading.Thread):
                             payload = {}
                         self.frames.put((time.monotonic(), event, payload))
                         event = None
+                if not self.stop_flag.is_set():
+                    self.error = RuntimeError("workspace stream ended before observation finished")
         except Exception as exc:  # noqa: BLE001 - reported, never raised into the harness
-            self.error = exc
+            if not self.stop_flag.is_set():
+                self.error = exc
+        finally:
+            self._socket = None
+            self._response = None
+
+    def close(self) -> None:
+        self.stop_flag.set()
+        transport = self._socket
+        if transport is not None:
+            with contextlib.suppress(OSError):
+                transport.shutdown(socket.SHUT_RDWR)
+        response = self._response
+        if response is not None:
+            response.close()
+        self.join(timeout=5)
+        if self.is_alive() and self.error is None:
+            self.error = RuntimeError("workspace stream did not stop after observation")
 
     def drain(self) -> list[tuple[float, str | None, dict]]:
         out: list[tuple[float, str | None, dict]] = []
@@ -301,10 +401,12 @@ def run(
         raise RuntimeError("Longhouse API URL and device token are required")
 
     client = Client(api_url, token)
-    marker = f"LH_SERVED_{uuid4().hex[:12]}"
+    # Human-readable words survive screenshot OCR better than ambiguous hex
+    # glyphs. Session/run identity still provides the binding, not this nonce.
+    marker = "LH_SERVED_" + "_".join(MARKER_WORDS[int(nibble, 16)] for nibble in uuid4().hex[:6])
     report: dict = {
         "artifact_kind": "console_served_state_e2e",
-        "schema_version": 1,
+        "schema_version": 2,
         "provider": args.provider,
         "device_id": args.device_id,
         # Recorded so a failure artifact says which directory it ran in. With
@@ -344,14 +446,28 @@ def _observe_turn(
     session_id: str,
     marker: str,
 ) -> dict:
-    """Drive one turn and judge what a viewer receives."""
-    # Subscribe before dispatching, or the turn races the subscription. Waiting a
-    # fixed two seconds is not enough: the stream emits a workspace_changed at
-    # connect, and on a slow handshake that frame lands after dispatch and passes
-    # as live delivery with zero turn frames. Wait for the baseline explicitly and
-    # remember its sequence so only newer frames count.
+    """Drive one turn and judge the served API, not client rendering."""
     watcher = StreamWatcher(client, args.watch_session or session_id)
     watcher.start()
+    try:
+        return _observe_watched_turn(client, args, report, session_id, marker, watcher)
+    finally:
+        watcher.close()
+        report["stream_error"] = repr(watcher.error) if watcher.error else None
+        if watcher.error is not None and "failures" in report:
+            report["failures"].append(f"workspace stream failed: {watcher.error!r}")
+            report["verdict"] = "red"
+
+
+def _observe_watched_turn(
+    client: Client,
+    args: argparse.Namespace,
+    report: dict,
+    session_id: str,
+    marker: str,
+    watcher: StreamWatcher,
+) -> dict:
+    # Subscribe before dispatch and exclude the connect snapshot from delivery.
     baseline_seq = -1
     saw_connect = False
     handshake_deadline = time.monotonic() + 30
@@ -366,96 +482,134 @@ def _observe_turn(
         if watcher.error is not None:
             raise RuntimeError(f"stream failed before the turn started: {watcher.error!r}")
         time.sleep(0.25)
-    if not saw_connect:
-        raise RuntimeError("stream never delivered its connect frame")
+    if not saw_connect or baseline_seq < 0:
+        raise RuntimeError("stream never delivered its connect frame and baseline workspace")
     report["baseline_pubsub_seq"] = baseline_seq
 
-    dispatched_at = time.monotonic()
-    turn = _start_turn(
-        client,
-        session_id,
-        f"Use the shell tool to run exactly: sleep 6 && echo {marker}. Then reply with exactly {marker} and nothing else.",
+    # The final marker is absent from both the prompt and the tool output.
+    # Only the assistant performs the concatenation, after the delayed tool.
+    split = len(marker) // 2
+    message = (
+        "Use the shell tool to run exactly: sleep 6. "
+        f'Then concatenate the prefix "{marker[:split]}" and suffix "{marker[split:]}" '
+        "and reply with only the concatenated result, once, and nothing else."
     )
+    dispatched_at = time.monotonic()
+    turn = _start_turn(client, session_id, message)
+    received_at = time.monotonic()
     run_id = str(turn["run_id"])
     report["run_id"] = run_id
+    report["turn_receipt"] = {key: turn.get(key) for key in ("turn_id", "run_id", "state")}
+    timing = {
+        "clock": "monotonic",
+        "surface": "served_workspace_api",
+        "dispatch_started_at_s": dispatched_at,
+        "dispatch_receipt_at_s": received_at,
+        "first_assistant_served_at_s": None,
+        "settled_at_s": None,
+        "poll_interval_s": 1.0,
+    }
+    report["timing"] = timing
+    report["dispatch_latency_s"] = round(received_at - dispatched_at, 3)
 
-    # --- Oracle 1: live delivery during the turn ---------------------------
-    #
-    # The turn is judged finished when its reply reaches the served projection,
-    # not when a local claim file flips. That keeps every signal remote, so this
-    # runs anywhere with API access rather than only on the box that owns the
-    # engine -- and it encodes the incident directly: the wedge was a turn whose
-    # content arrived while the state kept saying working.
     first_live: float | None = None
     offsets: list[float] = []
     produced_at: float | None = None
-    deadline = time.monotonic() + args.turn_timeout
+    settled_at: float | None = None
+    samples: list[dict] = []
+    report["workspace_samples"] = samples
+    deadline = received_at + args.turn_timeout
+    duplicate_seen = False
     while time.monotonic() < deadline:
         for stamp, event, payload in watcher.drain():
-            if event in {"connected", "heartbeat"}:
+            if event in {"connected", "heartbeat"} or stamp < dispatched_at:
                 continue
-            sequence = int(payload.get("pubsub_seq") or 0)
-            # Only a frame newer than the connect baseline is evidence that this
-            # turn reached a viewer.
-            if sequence <= baseline_seq:
+            if int(payload.get("pubsub_seq") or 0) <= baseline_seq:
                 continue
-            offsets.append(round(stamp - dispatched_at, 2))
+            offsets.append(round(stamp - dispatched_at, 3))
             if first_live is None:
                 first_live = stamp - dispatched_at
+
+        sample_started_at = time.monotonic()
         workspace = client.served_workspace(session_id)
-        if marker in json.dumps(workspace.get("projection") or {}):
-            produced_at = time.monotonic()
+        sample_received_at = time.monotonic()
+        evidence = assistant_marker_evidence(workspace, session_id, marker)
+        settled, observed = settlement_state(workspace, run_id)
+        transcript = ((workspace.get("session") or {}).get("session_state") or {}).get("transcript") or {}
+        sample = {
+            "request_started_at_s": sample_started_at,
+            "response_received_at_s": sample_received_at,
+            "assistant_marker": evidence,
+            "served_state": observed,
+            "transcript": transcript,
+        }
+        samples.append(sample)
+        duplicate_seen = duplicate_seen or evidence["event_count"] > 1 or evidence["marker_count"] > 1
+        if produced_at is None and evidence["exactly_once"] and sample_received_at <= deadline:
+            produced_at = sample_received_at
+            timing["first_assistant_served_at_s"] = produced_at
+            report["first_assistant_marker"] = evidence
+            # Poll timestamps bound detection; they are not token-generation or
+            # rendered-content timestamps. Keep the preceding sample as well.
+            report["first_assistant_sample_index"] = len(samples) - 1
+            deadline = produced_at + args.settle_budget
+        run = ((workspace.get("session") or {}).get("session_state") or {}).get("run") or {}
+        if run.get("id") == run_id and run.get("lifecycle") == "ended" and run.get("end_reason") in {"failed", "cancelled"}:
+            report["terminal_failure"] = {
+                "run_id": run_id,
+                "end_reason": run["end_reason"],
+                "observed_at_s": sample_received_at,
+            }
+            break
+        if (
+            produced_at is not None
+            and len(samples) - 1 > report["first_assistant_sample_index"]
+            and sample_received_at <= deadline
+            and evidence["exactly_once"]
+            and not duplicate_seen
+            and settled
+            and transcript.get("convergence") == "current"
+        ):
+            settled_at = sample_received_at
+            timing["settled_at_s"] = settled_at
             break
         time.sleep(1.0)
 
+    final = samples[-1] if samples else {}
+    final_evidence = final.get("assistant_marker") or {}
     report["marker_served"] = produced_at is not None
-    report["marker_latency_s"] = round(produced_at - dispatched_at, 2) if produced_at else None
+    report["marker_latency_s"] = round(produced_at - dispatched_at, 3) if produced_at is not None else None
+    report["assistant_marker_after_settlement"] = final_evidence
+    report["assistant_reply_complete"] = settled_at is not None
+    report["duplicate_assistant_marker_seen"] = duplicate_seen
+    report["served_state_after_reply"] = final.get("served_state")
+    report["transcript"] = final.get("transcript")
+    report["settle_latency_s"] = round(settled_at - produced_at, 3) if settled_at is not None and produced_at is not None else None
 
     buckets: dict[int, int] = {}
     for offset in offsets:
         buckets[int(offset)] = buckets.get(int(offset), 0) + 1
-    report["first_live_frame_s"] = round(first_live, 2) if first_live is not None else None
+    # These are stream invalidations, not first rendered assistant content.
+    report["first_live_frame_s"] = round(first_live, 3) if first_live is not None else None
     report["frame_count"] = len(offsets)
     report["frame_offsets"] = offsets
-    # Each frame invalidates the workspace for every connected viewer.
     report["peak_frames_per_sec"] = max(buckets.values()) if buckets else 0
     report["busy_seconds"] = len(buckets)
-    # --- Oracle 2: settlement after the reply is served --------------------
-    #
-    # The incident assertion. A reply reaching a viewer while the state axis
-    # still says working is exactly what the wedge looked like: the response was
-    # there when you came back, and the bar kept pulsing.
-    settled_at: float | None = None
-    observed: dict | None = None
-    transcript_state: dict | None = None
-    if produced_at is not None:
-        while time.monotonic() - produced_at < args.settle_budget:
-            workspace = client.served_workspace(session_id)
-            settled, observed = settlement_state(workspace, run_id)
-            transcript_state = ((workspace.get("session") or {}).get("session_state") or {}).get("transcript")
-            if settled:
-                settled_at = time.monotonic()
-                break
-            time.sleep(1.0)
-
-    report["served_state_after_reply"] = observed
-    report["transcript"] = transcript_state
-    report["settle_latency_s"] = round(settled_at - produced_at, 2) if settled_at and produced_at else None
-
-    watcher.stop_flag.set()
-    report["stream_error"] = repr(watcher.error) if watcher.error else None
 
     failures: list[str] = []
     if first_live is None:
         failures.append("no live frame reached the served stream during the turn")
-    if produced_at is None:
-        failures.append(f"the turn reply never reached the served projection within {args.turn_timeout}s")
+    if report.get("terminal_failure"):
+        failures.append(f"the current provider turn ended unsuccessfully: {report['terminal_failure']}")
+    elif produced_at is None:
+        failures.append(f"exactly one durable assistant reply was not served within {args.turn_timeout}s: {final_evidence}")
     elif settled_at is None:
-        failures.append(f"the reply is served but the state axis still says working after {args.settle_budget}s: {observed}")
-    if watcher.error is not None:
-        # A stream that dies mid-turn is a delivery failure even if early frames
-        # arrived; recording it without failing on it makes the oracle decorative.
-        failures.append(f"workspace stream died before the turn settled: {watcher.error!r}")
+        failures.append(
+            f"assistant reply and current run did not settle completely within {args.settle_budget}s: "
+            f"{final_evidence}, state={final.get('served_state')}, transcript={final.get('transcript')}"
+        )
+    if duplicate_seen:
+        failures.append("the served assistant reply contained duplicate marker output")
     report["failures"] = failures
     report["verdict"] = "red" if failures else "green"
     return report

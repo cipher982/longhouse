@@ -112,18 +112,13 @@ Hard Codex contract:
 
 - Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.
 - Do not infer one provider's liveness/control model from another provider. Split behavior when the provider mechanics differ.
-- Antigravity is Shadow-only. Ingest, archive, and transcript projection keep
-  working; Longhouse routes no control to it. As of 2026-07-31 the contract
-  records `send_input` as `policy_disabled` with `routed_to:
-  shadow_archive_only`, `machine_control_supports` is empty, and the engine's
-  `reject_excluded_provider` refuses every antigravity command with
-  `provider_shadow_only` before dispatch.
-  The named control plane is still `antigravity_hook_inbox` for archive
-  purposes. The hook-inbox injection itself was proven by a real `agy` loop
-  canary; the product simply does not route there, which is why the operation
-  is `policy_disabled` rather than `not_implemented`. Do not re-advertise
-  `antigravity.send`, Console execution, reattach, interrupt, or active-turn
-  steer unless the product decision changes.
+- Antigravity supports managed launch and Console execution. Read
+  `schemas/managed_providers.yml` for each operation's current disposition;
+  maintenance-level investment does not mean Shadow-only.
+- Console ownership comes from stock stream-json `init.conversation_id`, not
+  terminal result timing or diagnostic log text. Pending identity must not let
+  its native transcript become an unrelated Shadow session. Keep historical
+  malformed claims isolated from unrelated source discovery.
 
 ## Workflows
 

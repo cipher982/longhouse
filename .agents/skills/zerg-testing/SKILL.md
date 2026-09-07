@@ -29,6 +29,13 @@ TCP relay. Read the [zerg-ui simlab workflow](../zerg-ui/SKILL.md#autonomous-rec
 for isolation, screenshots, retained evidence, and limits. Server counts or
 an early render are not sufficient proof that the client received the final reply.
 
+For real-provider terminal fidelity, pair `make test-console-served-state-e2e`
+with `make test-terminal-fidelity-web` and `make test-terminal-fidelity-ios`.
+The root [CONTRIBUTING.md Tests section](../../../CONTRIBUTING.md#tests) documents
+the case manifest, explicit target/authentication, screenshots and source
+immutability. These complement simlab; real execution, rendered pixels and
+connection recovery are separate proof obligations.
+
 ## Debugging Flow
 1) `make test-e2e-errors`
 2) `make test-e2e-single TEST=tests/<spec>.ts`

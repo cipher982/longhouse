@@ -82,6 +82,30 @@ connection loss, not cellular hardware; app termination is not iOS background
 suspension. These are hidden Shadow imports, not real provider/Console command
 tests. No physical phone, provider credentials, or personal transcripts are used.
 
+For real provider sessions, use `make test-console-served-state-e2e ARGS="--help"`
+to create explicit hidden proof sessions, then feed their actual assistant replies
+to the real-client checks:
+
+```bash
+make test-terminal-fidelity-web FIDELITY_CASES=/tmp/cases.json PLAYWRIGHT_BASE_URL=<runtime-url>
+make test-terminal-fidelity-ios FIDELITY_CASES=/tmp/cases.json IOS_DESTINATION="platform=iOS Simulator,id=<uuid>"
+```
+
+The JSON manifest is an array of `{ "name": "...", "session_id": "...",
+"markers": ["SUMMIT_BLUE", "RIVER_GREEN"] }` objects. Markers are exact, distinct,
+whitespace-free final assistant replies, not text copied verbatim into a prompt.
+iOS additionally requires `source_path` and verifies its SHA-256 stays unchanged.
+Use only hidden/test sessions. Set the iOS target explicitly with
+`LONGHOUSE_FIDELITY_SERVER_URL` and `LONGHOUSE_FIDELITY_AUTH_TOKEN`; browser
+authentication follows the existing live Playwright configuration.
+These checks use real served data, not API mocks. They retain ordered-reply,
+cold-open/return, screenshots, and timing evidence under
+`artifacts/terminal-fidelity/`. iOS additionally verifies painted final text
+and termination/reopen. Prefer short, distinct natural-word replies for optical
+checks; long machine identifiers can wrap ambiguously. A provider matrix failure
+must stay visible even when other providers pass. These checks complement
+simlab's connection-recovery scenarios; neither proves cellular-radio behavior.
+
 ## Generated code
 
 Some code is generated — **do not edit it by hand**:

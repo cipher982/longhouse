@@ -241,6 +241,16 @@ simlab-run: ## Golden paths through a scratch runtime, engine, and the simulator
 	@python3 scripts/qa/simlab.py up --build >/dev/null
 	@python3 scripts/qa/simlab.py run --deploy $(SCENARIOS); STATUS=$$?; python3 scripts/qa/simlab.py down >/dev/null 2>&1; exit $$STATUS
 
+.PHONY: test-terminal-fidelity-web test-terminal-fidelity-ios
+test-terminal-fidelity-web: ## Real hidden-session browser fidelity (FIDELITY_CASES, PLAYWRIGHT_BASE_URL required)
+	@test -n "$(FIDELITY_CASES)" || (echo "Set FIDELITY_CASES to the campaign JSON manifest" >&2; exit 2)
+	@test -n "$(PLAYWRIGHT_BASE_URL)" || (echo "Set PLAYWRIGHT_BASE_URL to the explicit Runtime Host or linked dev frontend" >&2; exit 2)
+	@cd e2e && LONGHOUSE_FIDELITY_CASES_PATH="$(abspath $(FIDELITY_CASES))" bunx playwright test --config playwright.prod.config.js tests/live/terminal-fidelity.spec.ts --output "$(abspath $(or $(FIDELITY_OUTPUT),artifacts/terminal-fidelity/web))"
+
+test-terminal-fidelity-ios: ## Real-session iOS pixels and source immutability (FIDELITY_CASES, IOS_DESTINATION required)
+	@test -n "$(FIDELITY_CASES)" || (echo "Set FIDELITY_CASES to the campaign JSON manifest" >&2; exit 2)
+	@python3 scripts/qa/terminal-fidelity-ios.py --cases "$(abspath $(FIDELITY_CASES))" $(if $(FIDELITY_OUTPUT),--output "$(abspath $(FIDELITY_OUTPUT))",)
+
 test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit tests)
 	@cd web && bun run test -- --run src/components/session-workspace/__tests__/RenderTelemetryPanel.test.tsx src/pages/__tests__/SessionDetailPage.test.tsx
 	@python3 scripts/build/generate_build_identity.py

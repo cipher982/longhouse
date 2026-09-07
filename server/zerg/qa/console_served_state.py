@@ -50,7 +50,7 @@ ASSERTION_SETTLED = "served_state_settles_once_the_reply_is_served"
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.console_served_state.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=SCENARIO_ID,
     scenario_revision=2,
     assertion_cells=((ASSERTION_LIVE, None), (ASSERTION_SETTLED, None)),
@@ -245,11 +245,19 @@ def assertions_from_report(report: dict) -> dict[str, bool]:
     Kept separate from the run so the mapping is testable without a provider,
     and so a report shape change fails here rather than silently reporting pass.
     """
-    live = report.get("first_live_frame_s") is not None and int(report.get("frame_count") or 0) > 0
-    # Settlement is only meaningful once the reply is actually served: a turn
-    # that never produced anything has nothing to settle from.
-    reply_served = bool(report.get("marker_served"))
-    settled = reply_served and report.get("settle_latency_s") is not None
+    live = report.get("first_live_frame_s") is not None and int(report.get("frame_count") or 0) > 0 and not report.get("stream_error")
+    # Legacy marker_served artifacts admitted prompt echoes. Only the strict
+    # post-settlement assistant evidence can qualify reply content.
+    evidence = report.get("assistant_marker_after_settlement") or {}
+    settled = (
+        report.get("marker_served") is True
+        and report.get("assistant_reply_complete") is True
+        and report.get("duplicate_assistant_marker_seen") is False
+        and evidence.get("exactly_once") is True
+        and evidence.get("event_count") == 1
+        and evidence.get("marker_count") == 1
+        and report.get("settle_latency_s") is not None
+    )
     return {ASSERTION_LIVE: live, ASSERTION_SETTLED: settled}
 
 

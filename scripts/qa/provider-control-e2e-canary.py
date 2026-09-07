@@ -2369,6 +2369,27 @@ def _antigravity_unwatched_worker(
     return {"HOME": str(home), "GEMINI_API_KEY": api_key, **_no_browser_env(root)}, home, "api_key"
 
 
+def _antigravity_stream_result(stdout: str) -> dict[str, Any] | None:
+    records = _parse_json_lines(stdout)
+    results = [row["result"] for row in records if row.get("event") == "result" and isinstance(row.get("result"), dict)]
+    if len(results) != 1:
+        return None
+    payload = results[0]
+    if payload.get("status") == "SUCCESS" and not isinstance(payload.get("response"), str):
+        return None
+    conversation_id = payload.get("conversation_id")
+    if not isinstance(conversation_id, str):
+        return None
+    try:
+        uuid.UUID(conversation_id)
+    except ValueError:
+        return None
+    initialized = [row.get("conversation_id") for row in records if row.get("event") == "init"]
+    if not initialized or any(value != conversation_id for value in initialized):
+        return None
+    return payload
+
+
 def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Prove a real single-turn agy run using the Console adapter's own argv.
 
@@ -2459,10 +2480,7 @@ def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -
     elapsed = round(time.monotonic() - started, 3)
 
     stdout = result.stdout or ""
-    try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError:
-        payload = None
+    payload = _antigravity_stream_result(stdout)
     conversation_id = str((payload or {}).get("conversation_id") or "").strip()
     status = str((payload or {}).get("status") or "").strip()
     response = str((payload or {}).get("response") or "")
@@ -2500,7 +2518,7 @@ def run_antigravity_real_run_once_canary(args: argparse.Namespace, root: Path) -
     if payload is None:
         return _fail(
             "antigravity_run_once_unstructured",
-            "agy --output-format json did not emit a parsable result object",
+            "agy --output-format stream-json did not emit one result bound to its init identity",
             **evidence,
         )
     if status != "SUCCESS":

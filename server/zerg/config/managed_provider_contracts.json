@@ -167,7 +167,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "495e2fa86572782e1fd5c4d89dc257246e950f8388759af96f3ccb3cccacd9a6"
+              "oracle_digest": "d4d97e867b4a91f0c19a0c62d36e2037e64ffb3bf91356466da5859de666f095"
             }
           ]
         },
@@ -1041,7 +1041,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "495e2fa86572782e1fd5c4d89dc257246e950f8388759af96f3ccb3cccacd9a6"
+              "oracle_digest": "d4d97e867b4a91f0c19a0c62d36e2037e64ffb3bf91356466da5859de666f095"
             },
             {
               "id": "real_print_marker_returned",
@@ -1552,7 +1552,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "495e2fa86572782e1fd5c4d89dc257246e950f8388759af96f3ccb3cccacd9a6"
+              "oracle_digest": "d4d97e867b4a91f0c19a0c62d36e2037e64ffb3bf91356466da5859de666f095"
             }
           ]
         },
@@ -2426,7 +2426,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "495e2fa86572782e1fd5c4d89dc257246e950f8388759af96f3ccb3cccacd9a6"
+              "oracle_digest": "d4d97e867b4a91f0c19a0c62d36e2037e64ffb3bf91356466da5859de666f095"
             }
           ]
         },

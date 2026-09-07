@@ -28,6 +28,8 @@ from typing import Any
 from uuid import uuid4
 
 from zerg.qa.codex_auth import login_with_api_key
+from zerg.qa.console_served_state_core import assistant_marker_events
+from zerg.qa.console_served_state_core import event_text
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
@@ -365,21 +367,12 @@ def _wait_claim(
     raise RuntimeError(f"Console claim did not reach {sorted(states)}: {last}")
 
 
-def _event_text(event: Mapping[str, object]) -> str:
-    return str(event.get("content_text") or event.get("content") or "")
-
-
 def _assistant_marker_events(api_url: str, token: str, session_id: str, marker: str) -> list[dict[str, Any]]:
     result = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/events?limit=200")
     events = result.get("events") if isinstance(result.get("events"), list) else []
-    return [
-        event
-        for event in events
-        if isinstance(event, dict)
-        and event.get("role") == "assistant"
-        and event.get("event_origin", "durable") == "durable"
-        and marker in _event_text(event)
-    ]
+    # This archive endpoint contains only durable records and omits origin.
+    # Served projections use the same predicate without that archive default.
+    return assistant_marker_events(events, marker, default_origin="durable")
 
 
 def _wait_exact_assistant_marker(
@@ -396,8 +389,8 @@ def _wait_exact_assistant_marker(
     while time.monotonic() < deadline:
         matches = _assistant_marker_events(api_url, token, session_id, marker)
         last_count = len(matches)
-        if last_count > 1:
-            raise RuntimeError(f"assistant marker converged {last_count} times instead of exactly once")
+        if last_count > 1 or any(event_text(event).count(marker) != 1 for event in matches):
+            raise RuntimeError("assistant marker did not converge to one event with exactly one occurrence")
         if last_count == 1:
             stable_since = stable_since or time.monotonic()
             if time.monotonic() - stable_since >= 2:
@@ -905,8 +898,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             **provider_response_evidence,
             "bound_assistant_event_id": first_events[0].get("id"),
             "bound_assistant_event_origin": first_events[0].get("event_origin", "durable"),
-            "bound_assistant_event_excerpt": _event_text(first_events[0])[:512],
-            "bound_assistant_marker_count": _event_text(first_events[0]).count(marker),
+            "bound_assistant_event_excerpt": event_text(first_events[0])[:512],
+            "bound_assistant_marker_count": event_text(first_events[0]).count(marker),
             "marker_in_provider_response": True,
             "marker_in_bound_assistant_event": True,
             "assistant_event_count": len(first_events),
