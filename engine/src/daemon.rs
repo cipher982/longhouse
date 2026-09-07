@@ -13,6 +13,7 @@
 //! state live transcript path.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -21,7 +22,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 
 use crate::config::{self, ShipperConfig};
@@ -258,6 +259,15 @@ struct PathTaskContext {
     /// during `run()`; per-job code uses leases instead of `open_db`.
     db_pool: ConnectionPool,
     storage_v2: std::sync::Arc<StorageV2Capabilities>,
+    shutdown: watch::Sender<bool>,
+}
+
+struct PathWorkersShutdown(watch::Sender<bool>);
+
+impl Drop for PathWorkersShutdown {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
 }
 
 struct PathTaskResult {
@@ -810,6 +820,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         config.shipper_config.db_path.as_deref(),
         config.shipper_config.workers.max(1) + 4,
     )?;
+    let (path_shutdown, _) = watch::channel(false);
+    let _path_shutdown_guard = PathWorkersShutdown(path_shutdown.clone());
     let task_context = PathTaskContext {
         client: client.clone(),
         tracker: tracker.clone(),
@@ -817,6 +829,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         limiter: std::sync::Arc::clone(&adaptive_limiter),
         db_pool: db_pool.clone(),
         storage_v2,
+        shutdown: path_shutdown.clone(),
     };
 
     // 6. Start file watcher before catch-up work so live changes queue immediately.
@@ -1112,7 +1125,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             task_result = in_flight.join_next(), if scheduler.has_in_flight() => {
                 match task_result {
-                    Some(Ok(result)) => {
+                    Some(Ok(Some(result))) => {
                         let retry_path = result.job.path.clone();
                         let retry_provider = result.job.provider;
                         let reconciled_to_head = result.reconciled_to_head
@@ -1181,6 +1194,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         return Err(anyhow::anyhow!("path task failed: {}", e));
                     }
                     None => {}
+                    Some(Ok(None)) => {}
                 }
             }
 
@@ -2480,6 +2494,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         }
     }
 
+    path_shutdown.send_replace(true);
+    in_flight.abort_all();
+    while in_flight.join_next().await.is_some() {}
     if let Some(task) = control_channel_task {
         task.abort();
     }
@@ -3179,7 +3196,7 @@ async fn handle_live_transcript_file_events(
     scheduler: &mut PathScheduler,
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
-    in_flight: &mut JoinSet<PathTaskResult>,
+    in_flight: &mut JoinSet<Option<PathTaskResult>>,
     task_context: &PathTaskContext,
     offline: bool,
     background_paused: bool,
@@ -3988,9 +4005,37 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// Path preparation, SQLite, compression, and acknowledgements can block.
+/// Construct and poll their non-Send futures away from the LocalSet that owns
+/// live wake/control dispatch. Scheduler admission still bounds these workers.
+fn spawn_path_worker<T, Work, Fut>(
+    tasks: &mut JoinSet<Option<T>>,
+    mut shutdown: watch::Receiver<bool>,
+    work: Work,
+) where
+    T: Send + 'static,
+    Work: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = T> + 'static,
+{
+    let runtime = tokio::runtime::Handle::current();
+    tasks.spawn_blocking(move || {
+        runtime.block_on(async move {
+            let cancelled = *shutdown.borrow();
+            if cancelled {
+                return None;
+            }
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => None,
+                value = work() => Some(value),
+            }
+        })
+    });
+}
+
 fn start_ready_jobs(
     scheduler: &mut PathScheduler,
-    in_flight: &mut JoinSet<PathTaskResult>,
+    in_flight: &mut JoinSet<Option<PathTaskResult>>,
     task_context: &PathTaskContext,
     live_only: bool,
 ) {
@@ -4001,7 +4046,8 @@ fn start_ready_jobs(
     };
     while let Some(job) = next_job {
         let task_context = task_context.clone();
-        in_flight.spawn_local(run_path_job(job, task_context));
+        let shutdown = task_context.shutdown.subscribe();
+        spawn_path_worker(in_flight, shutdown, move || run_path_job(job, task_context));
         next_job = if live_only {
             scheduler.pop_launchable_live()
         } else {
@@ -4012,7 +4058,7 @@ fn start_ready_jobs(
 
 fn pump_ready_local_work(
     scheduler: &mut PathScheduler,
-    in_flight: &mut JoinSet<PathTaskResult>,
+    in_flight: &mut JoinSet<Option<PathTaskResult>>,
     task_context: &PathTaskContext,
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
     offline: bool,
@@ -4675,6 +4721,51 @@ fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskRes
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_path_work_does_not_delay_live_dispatch() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let (_shutdown, receiver) = tokio::sync::watch::channel(false);
+                let mut tasks = tokio::task::JoinSet::new();
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let began = std::time::Instant::now();
+                super::spawn_path_worker(&mut tasks, receiver, move || async move {
+                    let non_send = std::rc::Rc::new(7);
+                    started.send(()).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(750));
+                    tokio::task::yield_now().await;
+                    *non_send
+                });
+                ready.await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                assert!(
+                    began.elapsed() < std::time::Duration::from_millis(500),
+                    "archive preparation blocked the live dispatch loop"
+                );
+                assert_eq!(tasks.join_next().await.unwrap().unwrap(), Some(7));
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn dropping_path_worker_owner_cancels_pending_network_work() {
+        let (shutdown, receiver) = tokio::sync::watch::channel(false);
+        let owner = super::PathWorkersShutdown(shutdown);
+        let mut tasks = tokio::task::JoinSet::new();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        super::spawn_path_worker(&mut tasks, receiver, move || async move {
+            started.send(()).unwrap();
+            std::future::pending::<usize>().await
+        });
+        ready.await.unwrap();
+        drop(owner);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), tasks.join_next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, None);
+    }
 
     #[test]
     fn ledger_watermark_detects_out_of_process_phase_writes() {
