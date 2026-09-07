@@ -234,15 +234,36 @@ jobs:
           exit 1
 
       - name: Run disposable installer smoke
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR: artifacts/native-installer
         run: |
           chmod +x scripts/ci/native-installer-smoke.sh
           if [[ "${{ github.event_name }}" == "release" ]]; then
             export LONGHOUSE_NATIVE_SMOKE_REMOTE=1
-            export LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT="$(git rev-parse HEAD)"
+            expected_commit="$(git rev-parse HEAD)"
+            export LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT="$expected_commit"
             release_version="${{ github.event.release.tag_name }}"
             export LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION="${release_version#v}"
+            previous_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate |
+              jq -sr --arg target "$release_version" '
+                def version: ltrimstr("v") | split(".") | map(tonumber);
+                ($target | version) as $target_version |
+                [.[][] | select(.draft == false and .prerelease == false) |
+                  .tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) |
+                  select(version < $target_version)] |
+                sort_by(version) | last // error("No previous stable release")')"
+            export LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG="$previous_tag"
           fi
           ./scripts/ci/native-installer-smoke.sh
+
+      - name: Retain installer and upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-installer-${{ matrix.os }}
+          path: artifacts/native-installer
+          if-no-files-found: ignore
 
   installer-public-canary:
     # Installs what the world actually gets: the latest published release,
@@ -276,14 +297,34 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
       - name: Run public installer smoke
+        env:
+          LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR: artifacts/native-installer
         run: |
           chmod +x scripts/ci/native-installer-smoke.sh
           release_json="$(gh release view --json tagName)"
           release_tag="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tagName"])' <<< "$release_json")"
           export LONGHOUSE_NATIVE_SMOKE_REMOTE=1
-          export LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
+          expected_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
+          export LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT="$expected_commit"
           export LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION="${release_tag#v}"
+          previous_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate |
+            jq -sr --arg target "$release_tag" '
+              def version: ltrimstr("v") | split(".") | map(tonumber);
+              ($target | version) as $target_version |
+              [.[][] | select(.draft == false and .prerelease == false) |
+                .tag_name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) |
+                select(version < $target_version)] |
+              sort_by(version) | last // error("No previous stable release")')"
+          export LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG="$previous_tag"
           ./scripts/ci/native-installer-smoke.sh
+
+      - name: Retain public upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: public-installer-upgrade-${{ matrix.os }}
+          path: artifacts/native-installer
+          if-no-files-found: ignore
 
   runtime-packaging-macos:
     if: ${{ github.event_name != 'schedule' }}

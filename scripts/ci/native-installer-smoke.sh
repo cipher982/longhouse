@@ -3,6 +3,27 @@
 # any Python or uv executable available to it.
 set -euo pipefail
 
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<'USAGE'
+Usage: scripts/ci/native-installer-smoke.sh
+
+Default: build and smoke the local native pair.
+Remote release: LONGHOUSE_NATIVE_SMOKE_REMOTE=1 plus
+  LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION=<version without v>
+  LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT=<full commit SHA>
+Optional upgrade: LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG=<published stable vX.Y.Z>
+  Install that exact public release before the target in the same disposable HOME.
+  No previous release is selected automatically. Local-build mode rejects this option.
+Evidence: LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR=<directory> retains safe run evidence;
+  otherwise evidence stays under a printed temporary root on failure.
+
+This proves native installation and fixture-backed CLI behavior, not hosted viewing,
+provider qualification, or service activation. It never activates a user service.
+USAGE
+  exit 0
+fi
+[[ $# == 0 ]] || { echo "Unexpected argument; use --help" >&2; exit 2; }
+
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 NODE_BIN="$(command -v node)"
 PYTHON_BIN="$(command -v python3)"
@@ -14,21 +35,64 @@ RUNTIME_PID=""
 REMOTE_RELEASE="${LONGHOUSE_NATIVE_SMOKE_REMOTE:-0}"
 EXPECTED_COMMIT="${LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT:-}"
 EXPECTED_VERSION="${LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION:-}"
+PREVIOUS_TAG="${LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG:-}"
+EVIDENCE_DIR="${LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR:-$TEST_ROOT/evidence}"
+mkdir -p "$EVIDENCE_DIR"
+EVIDENCE_DIR="$(cd "$EVIDENCE_DIR" && pwd)"
+SMOKE_ENV=(
+  env -i "HOME=$HOME_DIR" "LONGHOUSE_HOME=$HOME_DIR/.longhouse"
+  "PATH=$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin"
+  "TMPDIR=$TEST_ROOT/tmp" "SHELL=/bin/bash" "TERM=xterm-256color"
+  "XDG_CONFIG_HOME=$HOME_DIR/.config" "XDG_DATA_HOME=$HOME_DIR/.local/share"
+  "LONGHOUSE_TELEMETRY=0" "LONGHOUSE_SMOKE_NODE=$NODE_BIN"
+)
 
 cleanup() {
+  local status=$?
   if [[ -n "$RUNTIME_PID" ]]; then
     kill "$RUNTIME_PID" 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      kill -0 "$RUNTIME_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -9 "$RUNTIME_PID" 2>/dev/null || true
+    wait "$RUNTIME_PID" 2>/dev/null || true
   fi
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    launchctl bootout "gui/$(id -u)" "$HOME_DIR/Library/LaunchAgents/com.longhouse.shipper.plist" 2>/dev/null || true
+  # No global service was loaded, so never bootout the user's shared label.
+  # Keep only explicit evidence, not credentials, downloaded pairs or helper files.
+  if [[ "$status" != 0 || -n "${LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR:-}" ]]; then
+    printf '%s\n' "$status" > "$EVIDENCE_DIR/exit-status"
+    rm -rf "$HOME_DIR" "$PAIR_DIR" "$TEST_ROOT/tmp"
+    rm -f "$TEST_ROOT/fake-runtime.js" "$TEST_ROOT/run-bounded.js" "$RUNTIME_PORT_FILE"
+    echo "native installer smoke evidence: $EVIDENCE_DIR" >&2
+    [[ "$EVIDENCE_DIR" == "$TEST_ROOT/"* ]] || rm -rf "$TEST_ROOT"
+  else
+    rm -rf "$TEST_ROOT"
   fi
-  rm -rf "$TEST_ROOT"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'echo "native installer smoke failed at line $LINENO" >&2' ERR
 
-mkdir -p "$PAIR_DIR" "$HOME_DIR/traps"
+mkdir -p "$PAIR_DIR" "$HOME_DIR/traps" "$TEST_ROOT/tmp"
+if [[ -n "$PREVIOUS_TAG" && "$REMOTE_RELEASE" != "1" ]]; then
+  echo "LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG requires remote-release mode" >&2
+  exit 2
+fi
 if [[ "$REMOTE_RELEASE" == "1" ]]; then
-  [[ -n "$EXPECTED_COMMIT" && -n "$EXPECTED_VERSION" ]]
+  [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ && "$EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "Remote smoke requires an exact expected commit and release version" >&2
+    exit 2
+  }
+  [[ -z "${LONGHOUSE_INSTALL_VERSION:-}" || "${LONGHOUSE_INSTALL_VERSION#v}" == "$EXPECTED_VERSION" ]] || {
+    echo "LONGHOUSE_INSTALL_VERSION conflicts with the expected target version" >&2
+    exit 2
+  }
+  [[ -z "${LONGHOUSE_NATIVE_BIN_DIR:-}" ]] || {
+    echo "Remote smoke refuses a local native binary override" >&2
+    exit 2
+  }
 else
   python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
   python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- build \
@@ -49,39 +113,118 @@ EOF
   chmod 755 "$HOME_DIR/traps/$command"
 done
 
-install_pair() {
-  local -a env_args=(
-    "HOME=$HOME_DIR"
-    "PATH=$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin"
-    "SHELL=/bin/bash"
-    "LONGHOUSE_TELEMETRY=0"
-  )
-  if [[ "$REMOTE_RELEASE" != "1" ]]; then
-    env_args+=("LONGHOUSE_NATIVE_BIN_DIR=$PAIR_DIR")
-  fi
-  env "${env_args[@]}" bash "$ROOT_DIR/scripts/install.sh" >/dev/null
+# Bound the entire command group, including installer downloads and engine children.
+# This host-side harness is Node; Python/uv remain unavailable to installed commands.
+cat > "$TEST_ROOT/run-bounded.js" <<'BOUNDED_EOF'
+const { spawn } = require("child_process");
+const [seconds, executable, ...args] = process.argv.slice(2);
+const child = spawn(executable, args, { stdio: "inherit", detached: true });
+let failure;
+function stop(code) {
+  failure = code;
+  try { process.kill(-child.pid, "SIGKILL"); } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+}
+const timer = setTimeout(() => {
+  console.error(`native smoke command exceeded ${seconds}s`);
+  stop(124);
+}, Number(seconds) * 1000);
+process.on("SIGTERM", () => stop(143));
+process.on("SIGINT", () => stop(130));
+child.on("error", (error) => {
+  clearTimeout(timer);
+  console.error(`native smoke could not start command: ${error.code}`);
+  process.exit(1);
+});
+child.on("close", (code) => {
+  clearTimeout(timer);
+  try { process.kill(-child.pid, "SIGKILL"); } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+  process.exit(failure ?? code ?? 1);
+});
+BOUNDED_EOF
+
+smoke_command() {
+  "${SMOKE_ENV[@]}" "$NODE_BIN" "$TEST_ROOT/run-bounded.js" "$@"
 }
 
-install_pair
+install_pair() {
+  local tag="${1:-}" stage="$2"
+  local -a env_args=("LONGHOUSE_MACOS_APP_INSTALL_DIR=$HOME_DIR/Applications")
+  if [[ "$REMOTE_RELEASE" == "1" ]]; then
+    env_args+=("LONGHOUSE_INSTALL_VERSION=$tag")
+  else
+    env_args+=("LONGHOUSE_NATIVE_BIN_DIR=$PAIR_DIR")
+  fi
+  smoke_command 600 env "${env_args[@]}" bash "$ROOT_DIR/scripts/install.sh" \
+    > "$EVIDENCE_DIR/$stage-install.log" 2>&1
+}
 
-first_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
-install_pair
-second_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
-[[ "$first_release" != "$second_release" ]]
+check_identity() {
+  local stage="$1" version="$2" commit="$3"
+  smoke_command 60 "$installed" verify-pair > "$EVIDENCE_DIR/$stage-verify-pair.log"
+  smoke_command 60 "$installed" build-identity --json > "$EVIDENCE_DIR/$stage-identity.json"
+  "$NODE_BIN" - "$EVIDENCE_DIR/$stage-identity.json" "$version" "$commit" "$HOME_DIR" <<'IDENTITY_EOF'
+const fs = require("fs");
+const path = require("path");
+const [filename, version, commit, home] = process.argv.slice(2);
+const payload = JSON.parse(fs.readFileSync(filename, "utf8"));
+for (const name of ["facade", "engine"]) {
+  const identity = payload[name];
+  if (identity?.version !== version || identity?.commit !== commit || identity?.dirty !== false) {
+    throw new Error(`${name} identity does not match the clean expected release ${version} (${commit})`);
+  }
+}
+if (payload.engine_path !== fs.realpathSync(path.join(home, ".local/bin/longhouse-engine"))) {
+  throw new Error("facade did not execute its disposable installed engine");
+}
+IDENTITY_EOF
+}
 
-installed="$HOME_DIR/.local/bin/longhouse"
-[[ -x "$installed" ]]
-HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" verify-pair >/dev/null
-HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" local-health --fast --json >/dev/null
-if [[ "$REMOTE_RELEASE" == "1" ]]; then
-  identity="$(HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" "$installed" build-identity --json)"
-  LONGHOUSE_SMOKE_IDENTITY="$identity" LONGHOUSE_SMOKE_EXPECTED_COMMIT="$EXPECTED_COMMIT" LONGHOUSE_SMOKE_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    "$NODE_BIN" -e '
-const payload = JSON.parse(process.env.LONGHOUSE_SMOKE_IDENTITY);
-if (payload.facade?.commit !== process.env.LONGHOUSE_SMOKE_EXPECTED_COMMIT) throw new Error(`commit mismatch: ${payload.facade?.commit}`);
-if (payload.facade?.version !== process.env.LONGHOUSE_SMOKE_EXPECTED_VERSION) throw new Error(`version mismatch: ${payload.facade?.version}`);
-'
-fi
+snapshot_upgrade_state() {
+  local stage="$1"
+  smoke_command 60 "$installed" local-health --fast --json > "$EVIDENCE_DIR/$stage-health.json"
+  "$NODE_BIN" - "$HOME_DIR" "$EVIDENCE_DIR/$stage-health.json" "$RUNTIME_PORT" \
+    > "$EVIDENCE_DIR/$stage-state.json" <<'STATE_EOF'
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const [home, healthPath, port] = process.argv.slice(2);
+const machine = JSON.parse(fs.readFileSync(path.join(home, ".longhouse/machine/state.json"), "utf8"));
+const health = JSON.parse(fs.readFileSync(healthPath, "utf8"));
+if (machine.runtime_url !== `http://127.0.0.1:${port}` || machine.machine_name !== "native-installer-upgrade") {
+  throw new Error("previously enrolled machine configuration is missing or changed");
+}
+if (health.realtime?.runtime_url !== machine.runtime_url || health.realtime?.machine_name !== machine.machine_name ||
+    health.realtime?.token_path !== path.join(home, ".longhouse/machine/device-token")) {
+  throw new Error("installed engine cannot read the preserved enrollment");
+}
+const files = {};
+for (const relative of [".longhouse/machine/state.json", ".longhouse/machine/device-token", ".cursor/hooks.json"]) {
+  const filename = path.join(home, relative);
+  const bytes = fs.readFileSync(filename);
+  if (!bytes.length) throw new Error(`empty durable state: ${relative}`);
+  files[relative] = { sha256: crypto.createHash("sha256").update(bytes).digest("hex"), mode: fs.statSync(filename).mode & 0o777 };
+}
+// No credential bytes or invented transcript/history are copied to evidence.
+console.log(JSON.stringify({ runtime_url: machine.runtime_url, machine_name: machine.machine_name, files }, null, 2));
+STATE_EOF
+}
+
+"$NODE_BIN" - "$ROOT_DIR/scripts/install.sh" "$EVIDENCE_DIR/installer-source.json" <<'SOURCE_EOF'
+const fs = require("fs");
+const crypto = require("crypto");
+const [source, output] = process.argv.slice(2);
+fs.writeFileSync(output, JSON.stringify({
+  source: "scripts/install.sh (checkout source, not a release-tag installer)",
+  sha256: crypto.createHash("sha256").update(fs.readFileSync(source)).digest("hex"),
+  runtime: "JSON API fixture; no hosted page or real-provider viewing proof",
+  service_activation: false,
+}, null, 2) + "\n");
+SOURCE_EOF
+
 
 # Managed launches fail closed without coordination authority, matching the
 # Claude contract, so the fixture Runtime Host issues a session-scoped token the
@@ -132,11 +275,77 @@ http
     console.log(this.address().port);
   });
 RUNTIME_EOF
-node "$TEST_ROOT/fake-runtime.js" >"$RUNTIME_PORT_FILE" &
+"${SMOKE_ENV[@]}" "$NODE_BIN" "$TEST_ROOT/fake-runtime.js" >"$RUNTIME_PORT_FILE" &
 RUNTIME_PID=$!
 for _ in $(seq 1 50); do [[ -s "$RUNTIME_PORT_FILE" ]] && break; sleep 0.1; done
 [[ -s "$RUNTIME_PORT_FILE" ]]
 RUNTIME_PORT="$(head -n 1 "$RUNTIME_PORT_FILE")"
+
+# This is a JSON API fixture, not a served product page. Hosted viewing and
+# real-provider qualification belong to the real-client campaign, not this smoke.
+installed="$HOME_DIR/.local/bin/longhouse"
+if [[ -n "$PREVIOUS_TAG" ]]; then
+  [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "Previous tag must name an exact stable vX.Y.Z release" >&2
+    exit 2
+  }
+  "$NODE_BIN" - "$PREVIOUS_TAG" "$EXPECTED_VERSION" <<'VERSION_EOF'
+const [prior, target] = process.argv.slice(2).map(value => value.replace(/^v/, "").split(".").map(BigInt));
+const differing = prior.findIndex((part, index) => part !== target[index]);
+if (differing < 0 || prior[differing] >= target[differing]) throw new Error("target version must advance beyond previous tag");
+VERSION_EOF
+  release_api="https://api.github.com/repos/cipher982/longhouse"
+  smoke_command 60 curl -fsSL --connect-timeout 10 --max-time 45 \
+    "$release_api/releases/tags/$PREVIOUS_TAG" > "$EVIDENCE_DIR/previous-release.json"
+  "$NODE_BIN" - "$EVIDENCE_DIR/previous-release.json" "$PREVIOUS_TAG" <<'RELEASE_EOF'
+const fs = require("fs");
+const [filename, tag] = process.argv.slice(2);
+const release = JSON.parse(fs.readFileSync(filename, "utf8"));
+if (release.tag_name !== tag || release.draft !== false || release.prerelease !== false || !release.published_at) {
+  throw new Error("previous tag is not a published stable public release");
+}
+RELEASE_EOF
+  smoke_command 60 curl -fsSL --connect-timeout 10 --max-time 45 \
+    "$release_api/commits/$PREVIOUS_TAG" > "$EVIDENCE_DIR/previous-commit.json"
+  previous_commit="$("$NODE_BIN" - "$EVIDENCE_DIR/previous-commit.json" <<'COMMIT_EOF'
+const fs = require("fs");
+const commit = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).sha;
+if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("public previous tag commit missing");
+console.log(commit);
+COMMIT_EOF
+)"
+  [[ "$previous_commit" != "$EXPECTED_COMMIT" ]] || { echo "Upgrade must advance build commit" >&2; exit 1; }
+  install_pair "$PREVIOUS_TAG" previous
+  check_identity previous "${PREVIOUS_TAG#v}" "$previous_commit"
+  smoke_command 60 env LONGHOUSE_DEVICE_TOKEN=native-installer-smoke-upgrade-token \
+    "$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" --device native-installer-upgrade \
+    > "$EVIDENCE_DIR/previous-auth.log"
+  smoke_command 60 "$installed" cursor configure --cursor-dir "$HOME_DIR/.cursor" \
+    > "$EVIDENCE_DIR/previous-cursor-configure.log"
+  snapshot_upgrade_state previous
+else
+  install_pair "$EXPECTED_VERSION" first
+fi
+
+first_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
+install_pair "$EXPECTED_VERSION" target
+second_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
+[[ "$first_release" != "$second_release" ]]
+[[ -x "$installed" ]]
+smoke_command 60 "$installed" verify-pair > /dev/null
+smoke_command 60 "$installed" local-health --fast --json > /dev/null
+if [[ "$REMOTE_RELEASE" == "1" ]]; then
+  check_identity target "$EXPECTED_VERSION" "$EXPECTED_COMMIT"
+fi
+if [[ -n "$PREVIOUS_TAG" ]]; then
+  # Check before target auth/configure can recreate anything the installer lost.
+  snapshot_upgrade_state target
+  cmp "$EVIDENCE_DIR/previous-state.json" "$EVIDENCE_DIR/target-state.json" || {
+    echo "Upgrade changed or lost durable enrollment, credential, or native hooks" >&2
+    exit 1
+  }
+  echo "native upgrade passed: $PREVIOUS_TAG -> v$EXPECTED_VERSION (enrollment and native hooks preserved)"
+fi
 
 cat > "$HOME_DIR/traps/open" <<'EOF'
 #!/usr/bin/env sh
@@ -159,31 +368,38 @@ const request = require("http").request(
   (response) => process.exit(response.statusCode === 303 ? 0 : 1),
 );
 request.on("error", () => process.exit(1));
+request.setTimeout(10000, () => request.destroy(new Error("callback timed out")));
 request.end(body);
 ' "$1"
 EOF
 chmod 755 "$HOME_DIR/traps/open"
 ln -s open "$HOME_DIR/traps/xdg-open"
-HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-LONGHOUSE_SMOKE_NODE="$NODE_BIN" \
-"$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" --browser >/dev/null
+smoke_command 60 "$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" --browser >/dev/null
 [[ "$(cat "$HOME_DIR/.longhouse/machine/device-token")" == "zdt_browser_fixture_token" ]]
 
-HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-LONGHOUSE_DEVICE_TOKEN="native-installer-smoke-token" \
-"$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" >/dev/null
-HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-"$installed" machine repair --repair-service --json >/dev/null
+smoke_command 60 env LONGHOUSE_DEVICE_TOKEN=native-installer-smoke-token \
+  "$installed" auth --url "http://127.0.0.1:$RUNTIME_PORT" >/dev/null
+# HOME alone does not isolate launchd/systemd's per-user service namespace.
+# Exercise native repair planning, but never load/restart the global shipper label.
+smoke_command 60 "$installed" machine repair --repair-service --dry-run --json \
+  > "$EVIDENCE_DIR/target-repair-plan.json"
+"$NODE_BIN" - "$EVIDENCE_DIR/target-repair-plan.json" <<'REPAIR_EOF'
+const fs = require("fs");
+const plan = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+if (plan.dry_run !== true || plan.state !== "dry_run_planned" || plan.machine_state?.configured !== true) {
+  throw new Error("native service repair could not plan from the installed machine state");
+}
+REPAIR_EOF
+[[ ! -e "$HOME_DIR/Library/LaunchAgents/com.longhouse.shipper.plist" ]]
+[[ ! -e "$HOME_DIR/.config/systemd/user/longhouse-shipper.service" ]]
 [[ -f "$HOME_DIR/.longhouse/machine/state.json" ]]
 [[ -f "$HOME_DIR/.longhouse/machine/device-token" ]]
-[[ -f "$HOME_DIR/Library/LaunchAgents/com.longhouse.shipper.plist" || "$(uname -s)" != "Darwin" ]]
 [[ ! -e "$HOME_DIR/.claude/hooks/longhouse-permission-gate.py" ]]
 
 # Cursor's installed surface is entirely native: hook installation must point
 # at the paired engine rather than leaving Python shims in the device path.
 mkdir -p "$HOME_DIR/.cursor"
-HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-  "$installed" cursor configure --cursor-dir "$HOME_DIR/.cursor" >/dev/null
+smoke_command 60 "$installed" cursor configure --cursor-dir "$HOME_DIR/.cursor" >/dev/null
 grep -q 'cursor-lifecycle-hook' "$HOME_DIR/.cursor/hooks.json"
 grep -q 'cursor-permission-hook' "$HOME_DIR/.cursor/hooks.json"
 ! grep -q 'longhouse-cursor-hook.py\|longhouse-cursor-permission-hook.py' "$HOME_DIR/.cursor/hooks.json"
@@ -202,23 +418,20 @@ sleep 1
 exit "${LONGHOUSE_FAKE_CURSOR_EXIT:-0}"
 EOF
 chmod 755 "$HOME_DIR/traps/cursor-agent"
-HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-  "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" \
+smoke_command 60 "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" --timeout 45 \
   "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" \
-  >"$HOME_DIR/cursor-pty.out" 2>"$HOME_DIR/cursor-pty.err" || {
+  >"$EVIDENCE_DIR/cursor-pty.out" 2>"$EVIDENCE_DIR/cursor-pty.err" || {
     echo "native cursor PTY launch failed:" >&2
-    cat "$HOME_DIR/cursor-pty.err" >&2
-    cat "$HOME_DIR/cursor-pty.out" >&2
+    cat "$EVIDENCE_DIR/cursor-pty.err" >&2
+    cat "$EVIDENCE_DIR/cursor-pty.out" >&2
     exit 1
   }
-grep -q 'CURSOR_NATIVE_PTY_OK' "$HOME_DIR/cursor-pty.out"
-set +e
-HOME="$HOME_DIR" PATH="$HOME_DIR/.local/bin:$HOME_DIR/traps:/usr/bin:/bin:/usr/sbin:/sbin" \
-  LONGHOUSE_FAKE_CURSOR_EXIT=7 "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" \
+grep -q 'CURSOR_NATIVE_PTY_OK' "$EVIDENCE_DIR/cursor-pty.out"
+cursor_exit=0
+smoke_command 60 env LONGHOUSE_FAKE_CURSOR_EXIT=7 \
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/ci/run-in-pty.py" --timeout 45 \
   "$installed" cursor --cwd "$HOME_DIR" --cursor-bin "$HOME_DIR/traps/cursor-agent" \
-  >/dev/null
-cursor_exit=$?
-set -e
+  >"$EVIDENCE_DIR/cursor-exit-7.out" 2>"$EVIDENCE_DIR/cursor-exit-7.err" || cursor_exit=$?
 [[ "$cursor_exit" == "7" ]]
 
 # The managed-provider seams have hermetic upstream fixtures. Keep those

@@ -10,6 +10,8 @@
 #   LONGHOUSE_INSTALL_VERSION Pin the native release version (for release gates/debugging)
 #   LONGHOUSE_NATIVE_BIN_DIR  Explicit directory containing paired longhouse
 #                             and longhouse-engine binaries (local/dev only)
+#   LONGHOUSE_MACOS_APP_INSTALL_DIR Explicit app destination directory
+#                                  (default: /Applications; disposable install QA)
 #
 set -euo pipefail
 
@@ -315,6 +317,10 @@ download_and_install_macos_app_release_asset() {
     local tmp_dir=""
     local archive_path=""
     local checksums_path=""
+    local app_install_dir="${LONGHOUSE_MACOS_APP_INSTALL_DIR:-/Applications}"
+    local app_path="$app_install_dir/Longhouse.app"
+
+    [[ "$app_install_dir" == /* ]] || { error "LONGHOUSE_MACOS_APP_INSTALL_DIR must be absolute"; return 1; }
     local extracted_app=""
 
     case "$(uname -m)" in
@@ -347,7 +353,7 @@ download_and_install_macos_app_release_asset() {
     # local-runtime-checksums.txt — the same manifest install_native_pair
     # verifies the native pair against. Fail closed: a missing manifest or a
     # missing entry for this asset stops the install before it replaces
-    # /Applications/Longhouse.app.
+    # the destination Longhouse.app.
     if ! curl -fsSL "$base_url/local-runtime-checksums.txt" -o "$checksums_path"; then
         rm -rf "$tmp_dir"
         error "Could not download local-runtime-checksums.txt from $base_url"
@@ -372,19 +378,20 @@ download_and_install_macos_app_release_asset() {
         return 1
     fi
 
-    rm -rf "/Applications/Longhouse.app"
-    if ! ditto "$extracted_app" "/Applications/Longhouse.app"; then
+    mkdir -p "$app_install_dir"
+    rm -rf "$app_path"
+    if ! ditto "$extracted_app" "$app_path"; then
         rm -rf "$tmp_dir"
-        error "Could not copy Longhouse.app into /Applications"
+        error "Could not copy Longhouse.app into $app_install_dir"
         return 1
     fi
 
     rm -rf "$tmp_dir"
-    success "Longhouse.app installed in /Applications"
+    success "Longhouse.app installed in $app_install_dir"
     return 0
 }
 
-# Install Longhouse.app into /Applications on macOS
+# Install Longhouse.app into the selected Applications directory on macOS
 install_macos_app() {
     if [[ "$(uname -s)" != "Darwin" ]]; then
         return 0
@@ -517,10 +524,11 @@ verify_installation() {
     fi
 
     if [[ "$(uname -s)" == "Darwin" && -n "$INSTALL_RELEASE_VERSION" ]]; then
-        if [[ -d "/Applications/Longhouse.app" ]]; then
-            success "Longhouse.app: /Applications/Longhouse.app"
+        local app_path="${LONGHOUSE_MACOS_APP_INSTALL_DIR:-/Applications}/Longhouse.app"
+        if [[ -d "$app_path" ]]; then
+            success "Longhouse.app: $app_path"
         else
-            error "Longhouse.app not installed in /Applications"
+            error "Longhouse.app not installed at $app_path"
             all_ok=false
         fi
     fi
@@ -654,7 +662,7 @@ print_success() {
     echo ""
     if [[ "$is_macos" == "1" ]]; then
         echo "Next:"
-        echo "  1. Open /Applications/Longhouse.app"
+        echo "  1. Open ${LONGHOUSE_MACOS_APP_INSTALL_DIR:-/Applications}/Longhouse.app"
         echo "  2. Finish setup in the app"
         echo "  3. Find one prior session in the timeline"
         echo ""

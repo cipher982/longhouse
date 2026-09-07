@@ -108,6 +108,58 @@ checks; long machine identifiers can wrap ambiguously. A provider matrix failure
 must stay visible even when other providers pass. These checks complement
 simlab's connection-recovery scenarios; neither proves cellular-radio behavior.
 
+To run the complete local campaign without assembling a case manifest by hand:
+
+```bash
+make test-terminal-fidelity-gate ARGS="--server-url https://your-runtime.example --browser-url http://127.0.0.1:47200 --device-id your-machine --provider codex --cwd /path/to/workspace --ios-destination 'platform=iOS Simulator,id=<uuid>'"
+```
+
+Run on the provider-owning Mac after `make dev`. Repeat `--provider` for an
+explicit matrix. The command uses the existing machine token (or `--token-env
+NAME`), binds each successful Console proof to its original native source,
+runs web and iOS viewing, then both simlab recovery scenarios. Every requested
+provider remains in the verdict, including failures; unavailable prerequisites
+cannot silently skip a required stage. Logs, source hashes, individual proofs,
+and the final summary stay in a unique `artifacts/terminal-fidelity/gate-*`
+directory. This is an operator qualification, not a credential-dependent gate
+on every push. `make test-terminal-fidelity-gate-helper` checks its failure
+boundaries without a provider or simulator.
+
+Historical indexing is a separate qualification from upload receipts. On the
+Runtime Host, supply a JSON array of session UUIDs (or objects with `session_id`):
+
+```bash
+python -m zerg.cli.historical_convergence \
+  --catalog-db /data/longhouse-live.db --search-db /data/search.db \
+  --cohort /data/cache/cohort.json --output /data/cache/convergence.json \
+  --wait --timeout 600
+```
+
+The checker opens both databases read-only, captures fixed target revisions,
+and verifies published search fences and active embedding completion.
+`--wait` fails on incomplete convergence or timeout; without it, a zero-exit
+`pending` result is only a diagnostic snapshot, not a pass. It retains counts
+and failure categories, never transcript text. The checkout equivalent is
+`make historical-convergence-check ARGS="..."`.
+
+The existing hosted benchmark accepts `HOSTED_SHIPPER_BENCH_FILES`,
+`HOSTED_SHIPPER_BENCH_EVENTS_PER_FILE`, `HOSTED_SHIPPER_BENCH_BYTES_PER_EVENT`,
+and `HOSTED_SHIPPER_BENCH_LIVE_COUNT` for larger repeated workloads. Keep the
+latency budget unchanged and retain each run, including failures; don't call
+upload receipts proof of derived-index convergence.
+
+Launch Gate's remote installer checks upgrade from the preceding stable public
+release into the selected release. For a manual run, set
+`LONGHOUSE_NATIVE_SMOKE_REMOTE=1`, the exact expected version/commit,
+`LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG`, and
+`LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR`, then run `make test-install`.
+It verifies both distributed binaries and preserves prior enrollment,
+credential permissions, and native hook state in one disposable HOME.
+The app stays in that HOME's Applications directory; the smoke never loads
+or stops the user's service. Its API/provider fixtures prove installation,
+not real provider execution or client viewing; use the fidelity campaign
+for those obligations.
+
 ## Runtime data upgrades
 
 Existing render history needs an explicit branch-count backfill when upgrading
