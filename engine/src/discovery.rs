@@ -3,6 +3,7 @@
 //! Discovers session files across Claude, Codex, and Antigravity providers.
 //! Replaces the Claude-only `bench::discover_session_files()`.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -298,6 +299,30 @@ pub fn provider_for_path(
         }
     }
     None
+}
+
+/// Provider hook paths are hints, not permission to enroll a second transcript.
+/// Antigravity's Stop hook names its full mirror; discovery and Console use
+/// transcript.jsonl. Resolve that documented sibling before binding/scheduling,
+/// even when the canonical file is not present yet. Never fall back to the mirror.
+pub(crate) fn canonical_transcript_hint<'a>(provider: &str, path: &'a Path) -> Cow<'a, Path> {
+    if provider.eq_ignore_ascii_case("antigravity")
+        && path
+            .file_name()
+            .is_some_and(|name| name == "transcript_full.jsonl")
+        && path.parent().is_some_and(|parent| {
+            parent.file_name().is_some_and(|name| name == "logs")
+                && parent.parent().is_some_and(|system| {
+                    system
+                        .file_name()
+                        .is_some_and(|name| name == ".system_generated")
+                })
+        })
+    {
+        Cow::Owned(path.with_file_name("transcript.jsonl"))
+    } else {
+        Cow::Borrowed(path)
+    }
 }
 
 pub fn session_path_for_watcher_event(

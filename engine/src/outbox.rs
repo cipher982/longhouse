@@ -764,8 +764,8 @@ fn persist_managed_binding_for_payload(
     else {
         return true;
     };
-    let canonical =
-        std::fs::canonicalize(&transcript_path).unwrap_or_else(|_| transcript_path.clone());
+    let transcript_path = crate::discovery::canonical_transcript_hint(provider, &transcript_path);
+    let canonical = crate::storage_v2_shipper::stable_source_path(&transcript_path);
     if let Err(err) = crate::state::session_binding::SessionBinding::new(conn).bind(
         &canonical.to_string_lossy(),
         session_id,
@@ -1479,14 +1479,20 @@ mod tests {
     fn test_collect_outbox_persists_antigravity_managed_binding_intent() {
         let dir = tempfile::tempdir().unwrap();
         let db = tempfile::NamedTempFile::new().unwrap();
-        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let transcript = dir
+            .path()
+            .join("brain/conversation/.system_generated/logs/transcript.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        fs::write(&transcript, b"canonical snapshot\n").unwrap();
+        let mirror = transcript.with_file_name("transcript_full.jsonl");
+        fs::write(&mirror, b"full mirror\n").unwrap();
         let path = dir.path().join("prs.ANTIGRAVITY.json");
         let payload = serde_json::json!({
             "session_id": "antigravity-session",
             "state": "idle",
             "provider": "antigravity",
             "control_path": "managed",
-            "transcript_path": transcript.path(),
+            "transcript_path": mirror,
         });
         fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
 
@@ -1501,10 +1507,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(
-            PathBuf::from(row.0),
-            fs::canonicalize(transcript.path()).unwrap()
-        );
+        assert_eq!(PathBuf::from(row.0), fs::canonicalize(&transcript).unwrap());
         assert_eq!(row.1, "antigravity-session");
         assert_eq!(row.2, "antigravity");
     }

@@ -1923,7 +1923,11 @@
       "adapter_sources": [
         "server/zerg/services/managed_local_control.py",
         "engine/src/managed_antigravity_scan.rs",
-        "engine/src/antigravity_print.rs"
+        "engine/src/antigravity_print.rs",
+        "server/zerg/services/antigravity_hook_inbox.py",
+        "engine/src/discovery.rs",
+        "engine/src/daemon.rs",
+        "engine/src/outbox.rs"
       ],
       "wire_families": [
         "antigravity_conversations",
@@ -2275,7 +2279,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "642ca2284a6746b8974e9bbcf0d4932aa5fdb9332f9622e212fc23db1db69008"
+      "adapter_digest": "fe014a8ea0f4e1f529170f56f5da2e3b738f42564124490d0d757810eaac1c21"
     },
     {
       "provider": "cursor",
@@ -2801,7 +2805,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "525548d2a2602b67f9022d69d0b912c865ef06e4ac455c579f5a6541df331f70"
+      "adapter_digest": "a9bc6d02b6fd75073a6f20f00d074ce1dbd7e60f4160fcd6aeb7a0a79442a217"
     },
     {
       "provider": "pi",

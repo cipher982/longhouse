@@ -120,6 +120,7 @@
     {
       "path": "engine/src/daemon.rs",
       "providers": [
+        "antigravity",
         "claude",
         "codex",
         "cursor",

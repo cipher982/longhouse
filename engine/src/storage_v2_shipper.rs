@@ -6917,6 +6917,104 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_mirror_hint_cannot_duplicate_a_snapshot_or_erase_later_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(
+            "brain/eb514596-95e0-4e96-a1cc-e355b576127c/.system_generated/logs/transcript.jsonl",
+        );
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mirror = path.with_file_name("transcript_full.jsonl");
+        // The live failure's sources differ in tool argument representation,
+        // but name the same native final step. They are not byte-identical.
+        let tool = r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-07T02:15:54Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"\"sleep 6\""}}]}"#;
+        let reply = r#"{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-07T02:16:02Z","content":"repeated answer"}"#;
+        let native = format!("{tool}\n{reply}\n");
+        let full = native.replace(r#"\"sleep 6\""#, "sleep 6");
+        fs::write(&path, &native).unwrap();
+        fs::write(&mirror, &full).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let session_id = "c75c18e2-2726-4ad6-94a4-0756fdb340c4";
+        let first = prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "antigravity",
+            Some(session_id),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            first
+                .envelope
+                .render
+                .as_ref()
+                .unwrap()
+                .records
+                .iter()
+                .filter(|record| record.event_id == "antigravity-step-3-content")
+                .count(),
+            1
+        );
+        acknowledge_prepared(&mut conn, &first);
+        let hinted = crate::discovery::canonical_transcript_hint("antigravity", &mirror);
+        assert!(prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &hinted,
+            "antigravity",
+            Some(session_id)
+        )
+        .unwrap()
+        .is_none());
+
+        // A later native snapshot may repeat the exact reply at a distinct step.
+        // It must rotate this source's epoch, not dedupe prose or lose raw history.
+        let repeated = reply.replace("\"step_index\":3", "\"step_index\":5");
+        let updated = format!("{native}{repeated}\n");
+        fs::write(&path, &updated).unwrap();
+        let next = prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &hinted,
+            "antigravity",
+            Some(session_id),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            next.envelope.opaque_source_id,
+            first.envelope.opaque_source_id
+        );
+        assert_eq!(
+            next.envelope.predecessor_source_epoch,
+            Some(first.source_epoch.to_string())
+        );
+        let replies = next
+            .envelope
+            .render
+            .as_ref()
+            .unwrap()
+            .records
+            .iter()
+            .filter(|record| record.content_text.as_deref() == Some("repeated answer"))
+            .map(|record| record.event_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            replies,
+            vec!["antigravity-step-3-content", "antigravity-step-5-content"]
+        );
+        assert_eq!(
+            decode_envelope_record_bytes(&first.envelope.records).unwrap(),
+            vec![native.into_bytes()]
+        );
+        assert_eq!(
+            decode_envelope_record_bytes(&next.envelope.records).unwrap(),
+            vec![updated.into_bytes()]
+        );
+        assert_eq!(fs::read(&mirror).unwrap(), full.into_bytes());
+    }
+
+    #[test]
     fn antigravity_pending_init_holds_sources_then_binds_only_its_native_thread() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

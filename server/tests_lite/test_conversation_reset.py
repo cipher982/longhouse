@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import sqlite3
 import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from zerg.qa.antigravity_conversation_reset import ISOLATED_WORKER_ENABLE_ENV
 from zerg.qa.antigravity_conversation_reset import _accept_workspace_trust_if_prompted
 from zerg.qa.antigravity_conversation_reset import run as run_antigravity_reset
@@ -516,7 +517,57 @@ def test_antigravity_hook_publishes_managed_binding_intent_without_running_engin
     payload = json.loads(outbox[0].read_text())
     assert payload["control_path"] == "managed"
     assert payload["session_id"] == env["LONGHOUSE_MANAGED_SESSION_ID"]
-    assert "bind --path" not in _ANTIGRAVITY_HOOK_SCRIPT
+
+
+def test_antigravity_stop_mirror_hint_keeps_wake_and_binding_on_canonical_source(tmp_path: Path) -> None:
+    script = tmp_path / "hook.sh"
+    script.write_text(_ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path)), encoding="utf-8")
+    script.chmod(0o755)
+    conversation_id = "22222222-2222-4222-8222-222222222222"
+    transcript = tmp_path / "brain" / conversation_id / ".system_generated" / "logs" / "transcript.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_bytes(b"canonical snapshot\n")
+    mirror = transcript.with_name("transcript_full.jsonl")
+    mirror.write_bytes(b"full mirror with distinct tool argument bytes\n")
+    # Unix socket paths have a short platform limit; keep the hook home separate
+    # from pytest's potentially long transcript fixture path.
+    with tempfile.TemporaryDirectory(prefix="lh-agy-") as home:
+        agent = Path(home) / "agent"
+        agent.mkdir()
+        env = os.environ.copy()
+        env.update(
+            LONGHOUSE_HOME=home,
+            LONGHOUSE_MANAGED_PROVIDER="antigravity",
+            LONGHOUSE_MANAGED_SESSION_ID="11111111-1111-4111-8111-111111111111",
+            LONGHOUSE_ANTIGRAVITY_STATE_DIR=str(Path(home) / "sessions"),
+            LONGHOUSE_ANTIGRAVITY_INBOX_DIR=str(Path(home) / "inbox"),
+        )
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(agent / "transcript-wake.sock"))
+            listener.listen(1)
+            listener.settimeout(2)
+            completed = subprocess.run(
+                [str(script), "Stop"],
+                input=json.dumps({"conversationId": conversation_id, "transcriptPath": str(mirror), "fullyIdle": True}),
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+            assert completed.returncode == 0, completed.stderr
+            stream, _ = listener.accept()
+            with stream:
+                received = bytearray()
+                while chunk := stream.recv(4096):
+                    received.extend(chunk)
+            wake = json.loads(received)
+        assert wake["path"] == str(transcript)
+        assert wake["file_len_hint"] == transcript.stat().st_size
+        payload = json.loads(next((agent / "outbox").glob("prs.*.json")).read_text())
+        assert payload["transcript_path"] == str(transcript)
+        state = json.loads((Path(home) / "sessions" / f"{env['LONGHOUSE_MANAGED_SESSION_ID']}.json").read_text())
+        assert state["transcript_path"] == str(transcript)
+        assert mirror.read_bytes() == b"full mirror with distinct tool argument bytes\n"
 
 
 def test_antigravity_hook_ignores_managed_identity_from_another_provider(tmp_path: Path) -> None:

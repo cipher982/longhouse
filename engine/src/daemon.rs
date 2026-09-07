@@ -4140,7 +4140,7 @@ fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> String {
 
 fn record_transcript_wake_hint(
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
-    signal: TranscriptWakeSignal,
+    mut signal: TranscriptWakeSignal,
 ) -> Option<(PathBuf, &'static str, ObservationTrace)> {
     let Some(provider) = discovery::canonical_provider_name(&signal.provider) else {
         tracing::debug!(
@@ -4149,6 +4149,12 @@ fn record_transcript_wake_hint(
         );
         return None;
     };
+    if let std::borrow::Cow::Owned(path) =
+        discovery::canonical_transcript_hint(provider, &signal.path)
+    {
+        signal.file_len_hint = path.metadata().ok().map(|metadata| metadata.len());
+        signal.path = path;
+    }
     if !signal.path.exists() {
         tracing::debug!(
             provider = %signal.provider,
@@ -5960,6 +5966,42 @@ mod tests {
         assert_eq!(scheduled.2.turn_id.as_deref(), Some("turn-123"));
         assert_eq!(scheduled.2.wake_reason.as_deref(), Some("turn_completed"));
         assert_eq!(scheduled.2.file_len_hint, Some(456));
+    }
+
+    #[test]
+    fn antigravity_mirror_completion_wake_uses_the_discovered_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir
+            .path()
+            .join("brain/conversation/.system_generated/logs/transcript.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, b"canonical snapshot\n").unwrap();
+        let mirror = transcript.with_file_name("transcript_full.jsonl");
+        std::fs::write(&mirror, b"full mirror has different tool argument bytes\n").unwrap();
+        let mut latest_wakes = HashMap::new();
+        let wake = |path: PathBuf, observed_at_ms| TranscriptWakeSignal {
+            provider: "antigravity".to_string(),
+            path,
+            phase: "idle".to_string(),
+            observed_at_ms,
+            session_id: Some("managed-session".to_string()),
+            turn_id: None,
+            wake_reason: Some("turn_completed".to_string()),
+            file_len_hint: Some(45),
+            received_at_ms: Some(observed_at_ms),
+        };
+        let scheduled = record_transcript_wake_hint(&mut latest_wakes, wake(mirror.clone(), 123))
+            .expect("the provider mirror hint must wake the canonical source");
+        assert_eq!(scheduled.0, transcript);
+        assert_eq!(scheduled.2.file_len_hint, Some(19));
+        assert_eq!(scheduled.2.session_id.as_deref(), Some("managed-session"));
+        assert!(
+            record_transcript_wake_hint(&mut latest_wakes, wake(transcript.clone(), 123)).is_none()
+        );
+
+        // A missing canonical source must not enroll the still-present mirror.
+        std::fs::remove_file(&transcript).unwrap();
+        assert!(record_transcript_wake_hint(&mut latest_wakes, wake(mirror, 124)).is_none());
     }
 
     #[test]

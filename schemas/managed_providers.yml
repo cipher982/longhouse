@@ -1190,6 +1190,10 @@ providers:
   - server/zerg/services/managed_local_control.py
   - engine/src/managed_antigravity_scan.rs
   - engine/src/antigravity_print.rs
+  - server/zerg/services/antigravity_hook_inbox.py
+  - engine/src/discovery.rs
+  - engine/src/daemon.rs
+  - engine/src/outbox.rs
   wire_families: [antigravity_conversations, antigravity_hooks]
   observation_sources: [native_archive, hooks]
   normalization_ruleset: antigravity

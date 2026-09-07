@@ -342,26 +342,29 @@ async fn recovered_claim_liveness(
                 return ClaimLiveness::Unknown;
             }
         };
-        // lsof exits 1 with no output when no process has this file open.
-        // Warnings and failed inspections are never proof of death.
         if !output.stderr.is_empty() {
-            tracing::debug!(run_id = %claim.run_id, stderr = %String::from_utf8_lossy(&output.stderr), "Antigravity stdout ownership inspection was incomplete");
-            return ClaimLiveness::Unknown;
+            tracing::debug!(run_id = %claim.run_id, stderr = %String::from_utf8_lossy(&output.stderr), "Antigravity stdout ownership inspection reported warnings");
         }
-        if output.status.code() == Some(1) && output.stdout.is_empty() {
-            return ClaimLiveness::Gone;
-        }
-        if output.status.success()
-            && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-                line.strip_prefix('p')
-                    .is_some_and(|pid| pid.parse::<u32>().is_ok())
-            })
-        {
-            return ClaimLiveness::Live;
-        }
-        ClaimLiveness::Unknown
+        lsof_output_liveness(&output)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    ClaimLiveness::Unknown
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn lsof_output_liveness(output: &std::process::Output) -> ClaimLiveness {
+    // A found holder is positive evidence even if an unrelated mount could
+    // not be scanned. An incomplete negative scan never proves death.
+    if String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+        line.strip_prefix('p')
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .is_some_and(|pid| pid > 0)
+    }) {
+        return ClaimLiveness::Live;
+    }
+    if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
+        return ClaimLiveness::Gone;
+    }
     ClaimLiveness::Unknown
 }
 
@@ -1185,6 +1188,22 @@ fn normalized_optional(value: &Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn lsof_positive_holder_survives_unrelated_scan_warnings() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: b"p1234\n".to_vec(),
+            stderr: b"WARNING: cannot stat unrelated filesystem\n".to_vec(),
+        };
+        assert_eq!(lsof_output_liveness(&output), ClaimLiveness::Live);
+        output.stdout.clear();
+        assert_eq!(lsof_output_liveness(&output), ClaimLiveness::Unknown);
+        output.stderr.clear();
+        assert_eq!(lsof_output_liveness(&output), ClaimLiveness::Gone);
+    }
 
     #[test]
     fn antigravity_startup_releases_abandoned_pre_spawn_claims_without_mutating_sources() {
