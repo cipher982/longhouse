@@ -250,6 +250,14 @@ fn prepare_next_envelope_with_limit(
             }
         }
     }
+    if provider.eq_ignore_ascii_case("antigravity") && durable_session_id.is_none() {
+        durable_session_id = crate::antigravity_print::bind_discovered_source(
+            conn,
+            &canonical_path,
+            &crate::turn_claims::default_registry()?.list_all()?,
+            &crate::config::get_agent_dir()?,
+        )?;
+    }
     if provider.eq_ignore_ascii_case("antigravity")
         && durable_session_id.is_none()
         && path
@@ -3857,7 +3865,7 @@ fn load_pending_for_source(
 /// canonicalizing `/var/.../file` while it exists yields `/private/var/...`,
 /// so falling back to the original path after deletion would orphan pending
 /// work. The parent remains canonicalizable in that crash/retry window.
-fn stable_source_path(path: &Path) -> PathBuf {
+pub(crate) fn stable_source_path(path: &Path) -> PathBuf {
     if let Ok(canonical) = std::fs::canonicalize(path) {
         return canonical;
     }
@@ -6870,6 +6878,111 @@ mod tests {
             exact_retry.envelope.expected_envelope_id,
             prepared.envelope.expected_envelope_id
         );
+    }
+
+    #[test]
+    fn antigravity_launch_log_owns_early_source_and_survives_cold_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("longhouse");
+        let agent_dir = home.join("agent");
+        let registry = crate::turn_claims::TurnClaimRegistry::new(agent_dir.join("turn-claims"));
+        let session_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let native_id = Uuid::new_v4().to_string();
+        let shadow_id = Uuid::new_v4().to_string();
+        registry
+            .claim(
+                &run_id,
+                &session_id,
+                &Uuid::new_v4().to_string(),
+                None,
+                None,
+                "antigravity",
+            )
+            .unwrap();
+        let run_dir = agent_dir
+            .join("antigravity-console")
+            .join(&session_id)
+            .join(&run_id);
+        fs::create_dir_all(&run_dir).unwrap();
+        let log_path = run_dir.join("provider.log");
+        fs::write(&log_path, format!(
+            "ERROR: logging before google.Init: I0906 18:44:45.866822       1 server.go:1153] Created conversation {shadow_id}\n\
+             ERROR: logging before google.Init: I0906 18:44:45.871810       1 session.go:171] Print mode: conversation={native_id}, sending message\n"
+        )).unwrap();
+        // No stdout result, pid, or completed binding yet. This is the real
+        // spawn/discovery race, not a manually pre-bound transcript fixture.
+        let source = b"{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-09-06T22:07:35Z\",\"content\":\"hello\"}\n";
+        let transcript = |id: &str| {
+            let path = dir
+                .path()
+                .join("brain")
+                .join(id)
+                .join(".system_generated/logs/transcript_full.jsonl");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, source).unwrap();
+            // A long-running tool leaves the transcript unchanged beyond the
+            // old five-second grace. Ownership must not expire with its mtime.
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(
+                    fs::FileTimes::new()
+                        .set_modified(std::time::SystemTime::now() - Duration::from_secs(60)),
+                )
+                .unwrap();
+            path
+        };
+        let path = transcript(&native_id);
+        let shadow = transcript(&shadow_id);
+        temp_env::with_var("LONGHOUSE_HOME", Some(&home), || {
+            let mut conn = open_db(Some(&dir.path().join("first.db"))).unwrap();
+            // A durable binding failure must not fall through to Shadow.
+            conn.execute_batch("CREATE TRIGGER reject_binding BEFORE INSERT ON session_binding BEGIN SELECT RAISE(FAIL, 'binding unavailable'); END;").unwrap();
+            assert!(
+                prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                    .is_err()
+            );
+            assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+            conn.execute_batch("DROP TRIGGER reject_binding").unwrap();
+            let prepared =
+                prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(prepared.envelope.session_id, session_id);
+            let unrelated =
+                prepare_next_envelope(&mut conn, &capabilities(), &shadow, "antigravity", None)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(unrelated.envelope.session_id, shadow_id);
+            assert_eq!(fs::read(&path).unwrap(), source);
+            drop(conn);
+
+            // Cold recovery does not depend on a live provider, a successful
+            // turn, or the old binding DB surviving. The run log is durable.
+            registry.mark_failed(&run_id, "engine restarted").unwrap();
+            let mut recovered = open_db(Some(&dir.path().join("recovered.db"))).unwrap();
+            let prepared =
+                prepare_next_envelope(&mut recovered, &capabilities(), &path, "antigravity", None)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(prepared.envelope.session_id, session_id);
+            drop(recovered);
+
+            // Legacy completed invocations recover from their confirmed claim
+            // without requiring a process-scoped log that did not exist then.
+            registry
+                .mark_provider_binding(&run_id, &native_id, Some(&path.to_string_lossy()))
+                .unwrap();
+            fs::remove_file(&log_path).unwrap();
+            let mut legacy = open_db(Some(&dir.path().join("legacy.db"))).unwrap();
+            let prepared =
+                prepare_next_envelope(&mut legacy, &capabilities(), &path, "antigravity", None)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(prepared.envelope.session_id, session_id);
+        });
     }
 
     #[test]

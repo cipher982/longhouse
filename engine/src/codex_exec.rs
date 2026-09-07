@@ -844,7 +844,10 @@ fn reconcile_codex_exec_claims(
     };
     let mut recovered = 0;
     for claim in claims {
-        if claim.adapter.as_deref() != Some(CODEX_EXEC_ADAPTER) || claim.state != "spawned" {
+        if claim.provider != "codex"
+            || claim.adapter.as_deref() != Some(CODEX_EXEC_ADAPTER)
+            || claim.state != "spawned"
+        {
             continue;
         }
         match codex_exec_process_identity(&claim, &process_facts) {

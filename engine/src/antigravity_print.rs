@@ -6,16 +6,13 @@
 //! user authenticated with `GEMINI_API_KEY`, so hook-delivered control is not
 //! universally available. A one-shot print turn is.
 //!
-//! The conversation identity comes back on stdout rather than from a directory
-//! scan: `--output-format json` emits a single object carrying
-//! `conversation_id`, and agy writes that conversation's append-only transcript
-//! to `~/.gemini/antigravity-cli/brain/<conversation_id>/.system_generated/
-//! logs/transcript_full.jsonl`. The engine binds that transcript to the
-//! Longhouse session and wakes the daemon so it gets shipped, mirroring the
-//! other one-shot console adapters.
+//! The stock CLI logs `Print mode: conversation=<id>, sending message` before
+//! writing the native transcript. Each invocation gets its own private log so
+//! discovery can resolve that exact thread to its durable turn claim, without
+//! waiting for the terminal stdout result or guessing from a workspace.
 
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -107,14 +104,47 @@ pub async fn start_antigravity_print_turn(
     let stderr_path = run_dir.join("stderr.log");
     let stdout_file = private_output_file(&stdout_path)?;
     let stderr_file = private_output_file(&stderr_path)?;
+    let provider_log_path = run_dir.join("provider.log");
+    private_output_file(&provider_log_path)?;
+    // Fail before launching if durable ownership cannot be recorded. Discovery
+    // can also reconstruct this binding from the claim and process-scoped log.
+    let db_path = config
+        .local_db_path
+        .as_deref()
+        .context("Antigravity Console requires a local source binding database")?;
+    crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
+    if let Some(conversation_id) = normalized_optional(&config.conversation_id) {
+        validate_uuid(&conversation_id, "conversation_id")?;
+        persist_transcript_binding(
+            db_path,
+            &conversation_transcript_path(
+                &antigravity_brain_root().context("HOME is unset")?,
+                &conversation_id,
+            ),
+            &config.session_id,
+            &conversation_id,
+        )?;
+        crate::turn_claims::default_registry()?.mark_provider_binding(
+            &config.run_id,
+            &conversation_id,
+            None,
+        )?;
+    }
 
-    let args = build_antigravity_args(
+    let mut args = build_antigravity_args(
         &config.prompt,
         config.model.as_deref(),
         config.conversation_id.as_deref(),
         config
             .print_timeout_secs
             .unwrap_or(DEFAULT_PRINT_TIMEOUT_SECS),
+    );
+    args.splice(
+        0..0,
+        [
+            "--log-file".to_string(),
+            provider_log_path.to_string_lossy().into_owned(),
+        ],
     );
     let argv = std::iter::once(config.antigravity_bin.clone())
         .chain(args.iter().cloned())
@@ -186,7 +216,7 @@ pub async fn start_antigravity_print_turn(
         crate::turn_claims::process_start_time_for_pid(Some(pid)),
         ANTIGRAVITY_PRINT_ADAPTER,
         &launch_id,
-        None,
+        config.conversation_id.as_deref(),
         &stdout_path.to_string_lossy(),
         &stderr_path.to_string_lossy(),
         result,
@@ -230,7 +260,7 @@ pub async fn recover_antigravity_print_turns(
     let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
     for claim in registry.list_nonterminal()? {
-        if claim.adapter.as_deref() != Some(ANTIGRAVITY_PRINT_ADAPTER) || claim.state != "spawned" {
+        if !is_antigravity_print_claim(&claim) || claim.state != "spawned" {
             continue;
         }
         let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
@@ -283,7 +313,14 @@ async fn monitor_recovered_claim(
     stderr_path: PathBuf,
     sink: AntigravityPrintSink,
 ) {
+    let mut source_bound = false;
     loop {
+        if !source_bound {
+            source_bound = sink.bind_observed_transcript().await.unwrap_or_else(|error| {
+                tracing::warn!(run_id = %sink.run_id, %error, "Antigravity source binding is pending");
+                false
+            });
+        }
         if claim_process_liveness(&claim) == ClaimLiveness::Gone {
             let cancel_requested = crate::turn_claims::default_registry()
                 .and_then(|registry| registry.read(&claim.run_id))
@@ -317,7 +354,7 @@ pub fn interrupt_antigravity_print_turn(run_id: &str, session_id: &str) -> Resul
     if claim.session_id != session_id || claim.provider != "antigravity" {
         anyhow::bail!("Antigravity Console turn claim does not match the requested session");
     }
-    if claim.adapter.as_deref() != Some(ANTIGRAVITY_PRINT_ADAPTER) || claim.state != "spawned" {
+    if !is_antigravity_print_claim(&claim) || claim.state != "spawned" {
         anyhow::bail!("Antigravity Console turn is not active");
     }
     let pid = claim
@@ -356,7 +393,14 @@ async fn monitor_antigravity_print(
     sink: AntigravityPrintSink,
 ) {
     sink.post_phase("thinking", None).await;
+    let mut source_bound = false;
     let status = loop {
+        if !source_bound {
+            source_bound = sink.bind_observed_transcript().await.unwrap_or_else(|error| {
+                tracing::warn!(run_id = %sink.run_id, %error, "Antigravity source binding is pending");
+                false
+            });
+        }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
@@ -387,13 +431,15 @@ async fn settle_antigravity_claim(
     exit_code: Option<i32>,
     stderr_path: &Path,
 ) {
+    // Ownership is independent of turn success: cancellation and model errors
+    // still leave a native transcript that belongs to this Console session.
+    let binding = sink.bind_observed_transcript().await;
     if cancel_requested {
         cleanup_process_group(sink.process_group_id).await;
         sink.post_terminal("run_cancelled", exit_code, None).await;
         return;
     }
-    // A non-zero exit is a failed turn even when agy left a readable result
-    // behind, so this is checked before the transcript is bound.
+    // A non-zero exit is a failed turn even when agy left a readable result.
     if exit_code.is_some_and(|code| code != 0) {
         cleanup_process_group(sink.process_group_id).await;
         sink.post_terminal("run_failed", exit_code, stderr_tail(stderr_path))
@@ -414,9 +460,7 @@ async fn settle_antigravity_claim(
         .await;
         return;
     };
-    // A reported ERROR is a failed turn even though agy exits 0 for it. Binding
-    // the transcript and calling it complete would show the operator a
-    // successful turn whose answer is an error string.
+    // A reported ERROR is a failed turn even though agy exits 0 for it.
     if status
         .as_deref()
         .is_some_and(|value| !value.eq_ignore_ascii_case("SUCCESS"))
@@ -434,7 +478,7 @@ async fn settle_antigravity_claim(
         .await;
         return;
     }
-    let Some(transcript) = locate_conversation_transcript(&conversation_id) else {
+    if locate_conversation_transcript(&conversation_id).is_none() {
         cleanup_process_group(sink.process_group_id).await;
         sink.post_terminal(
             "run_failed",
@@ -445,11 +489,15 @@ async fn settle_antigravity_claim(
         )
         .await;
         return;
-    };
-    sink.bind_transcript(&transcript, &conversation_id).await;
-    sink.post_binding(&conversation_id, &transcript).await;
-    sink.wake_transcript_shipper(&transcript, &conversation_id)
-        .await;
+    }
+    if let Err(error) = binding.and_then(|bound| {
+        anyhow::ensure!(bound, "Antigravity transcript has no durable managed owner");
+        Ok(())
+    }) {
+        sink.post_terminal("run_failed", exit_code, Some(error.to_string()))
+            .await;
+        return;
+    }
     sink.post_terminal("run_completed", exit_code, None).await;
 }
 
@@ -460,15 +508,9 @@ async fn settle_antigravity_claim(
 /// `--print-timeout` as the prompt and answer a question about its own flag,
 /// leaving the real prompt as a stray positional. The ordering here is
 /// load-bearing, not cosmetic.
-/// The argv the Console adapter passes to `agy`, exposed so the release canary
-/// can run exactly what the adapter runs.
+/// The provider's one-shot turn arguments, exposed for the release canary.
+/// The Console launcher additionally routes diagnostics to its private run log.
 ///
-/// The canary used to rebuild this list in Python under a comment promising it
-/// was byte-for-byte identical. That promise held only until someone edited
-/// this function, and nothing would have failed when it stopped holding: the
-/// canary would keep proving that `agy --print` works while the adapter built
-/// something else. Deriving the argv from here makes that drift impossible
-/// instead of merely discouraged.
 pub fn console_turn_argv(
     prompt: &str,
     model: Option<&str>,
@@ -526,12 +568,14 @@ fn read_print_result(stdout_path: &Path) -> Option<(String, Option<String>)> {
 
 /// agy writes one append-only transcript per conversation under its brain dir.
 fn locate_conversation_transcript(conversation_id: &str) -> Option<PathBuf> {
-    let path = antigravity_brain_root()?
-        .join(conversation_id)
-        .join(".system_generated")
-        .join("logs")
-        .join("transcript_full.jsonl");
+    let path = conversation_transcript_path(&antigravity_brain_root()?, conversation_id);
     path.is_file().then_some(path)
+}
+
+fn conversation_transcript_path(brain_root: &Path, conversation_id: &str) -> PathBuf {
+    brain_root
+        .join(conversation_id)
+        .join(".system_generated/logs/transcript_full.jsonl")
 }
 
 fn antigravity_brain_root() -> Option<PathBuf> {
@@ -544,33 +588,190 @@ fn antigravity_brain_root() -> Option<PathBuf> {
     )
 }
 
-impl AntigravityPrintSink {
-    async fn bind_transcript(&self, transcript: &Path, provider_session_id: &str) {
-        if let Some(db_path) = self.local_db_path.as_deref() {
-            match crate::state::db::open_client_connection(
-                Path::new(db_path),
-                Duration::from_millis(500),
-            ) {
-                Ok(conn) => {
-                    let binding = crate::state::session_binding::SessionBinding::new(&conn);
-                    if let Err(err) = binding.bind(
-                        &transcript.to_string_lossy(),
-                        &self.session_id,
-                        "antigravity",
-                    ) {
-                        eprintln!("[antigravity-print] persist transcript binding failed: {err}");
-                    }
+/// Read only the invocation's own log, never the shared CLI log or a cwd scan.
+/// Stock agy emits this synchronous record before forwarding the user message.
+/// Keeping it on disk makes discovery independent of the monitor's scheduling
+/// and preserves ownership even if the engine dies before recording a binding.
+fn observed_conversation_id(stdout_path: &Path) -> Result<Option<String>> {
+    let log_path = stdout_path.with_file_name("provider.log");
+    let mut logged_id = None;
+    match File::open(&log_path) {
+        Ok(file) => {
+            for line in BufReader::new(file).lines() {
+                let line = line?;
+                let Some((_, message)) = line.split_once(" session.go:") else {
+                    continue;
+                };
+                let Some((line_number, message)) =
+                    message.split_once("] Print mode: conversation=")
+                else {
+                    continue;
+                };
+                if line_number.is_empty() || !line_number.bytes().all(|c| c.is_ascii_digit()) {
+                    continue;
                 }
-                Err(err) => {
-                    eprintln!("[antigravity-print] open transcript binding DB failed: {err}")
-                }
+                let Some(id) = message.strip_suffix(", sending message") else {
+                    continue;
+                };
+                validate_uuid(id, "logged Antigravity conversation id")?;
+                logged_id = Some(id.to_string());
+                break;
             }
         }
-        if let Ok(registry) = crate::turn_claims::default_registry() {
-            let source = transcript.to_string_lossy().to_string();
-            let _ =
-                registry.mark_provider_binding(&self.run_id, provider_session_id, Some(&source));
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| format!("reading {}", log_path.display())),
+    }
+    // Old invocations have only the terminal JSON result. It remains exact
+    // ownership evidence, including for failed turns and cold-start recovery.
+    let id = read_print_result(stdout_path).map(|(id, _)| id);
+    if let Some(id) = id.as_deref() {
+        validate_uuid(id, "Antigravity conversation id")?;
+    }
+    if let (Some(logged), Some(reported)) = (logged_id.as_ref(), id.as_ref()) {
+        anyhow::ensure!(
+            logged == reported,
+            "Antigravity stdout disagrees with the launch log identity"
+        );
+    }
+    Ok(logged_id.or(id))
+}
+
+fn is_antigravity_print_claim(claim: &crate::turn_claims::TurnClaim) -> bool {
+    claim.provider == "antigravity"
+        && (claim.adapter.as_deref() == Some(ANTIGRAVITY_PRINT_ADAPTER)
+            || claim
+                .result
+                .as_ref()
+                .and_then(|result| result.get("transport"))
+                .and_then(Value::as_str)
+                == Some(ANTIGRAVITY_PRINT_ADAPTER))
+}
+
+fn persist_transcript_binding(
+    db_path: &Path,
+    transcript: &Path,
+    session_id: &str,
+    provider_session_id: &str,
+) -> Result<()> {
+    let conn = crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
+    bind_source_owner(&conn, transcript, session_id, provider_session_id)
+}
+
+fn bind_source_owner(
+    conn: &rusqlite::Connection,
+    transcript: &Path,
+    session_id: &str,
+    provider_session_id: &str,
+) -> Result<()> {
+    let path = crate::storage_v2_shipper::stable_source_path(transcript);
+    let path = path.to_string_lossy();
+    let binding = crate::state::session_binding::SessionBinding::new(conn);
+    if let Some(existing) = binding.get_for_provider(&path, "antigravity")? {
+        anyhow::ensure!(
+            existing == session_id,
+            "Antigravity transcript already has another managed owner"
+        );
+    }
+    binding.bind_for_thread(&path, session_id, "antigravity", Some(provider_session_id))
+}
+
+/// Resolve only an exact native thread found in a durable Console claim or its
+/// process-scoped launch log. Unrelated Shadow sources are not held or retagged.
+/// Terminal claims are intentionally included: process liveness is not source
+/// ownership, and a failed turn's transcript still belongs to its Console.
+pub(crate) fn bind_discovered_source(
+    conn: &rusqlite::Connection,
+    path: &Path,
+    claims: &[crate::turn_claims::TurnClaim],
+    agent_dir: &Path,
+) -> Result<Option<String>> {
+    let Some(logs) = path
+        .parent()
+        .filter(|p| p.file_name().is_some_and(|n| n == "logs"))
+    else {
+        return Ok(None);
+    };
+    let Some(system) = logs
+        .parent()
+        .filter(|p| p.file_name().is_some_and(|n| n == ".system_generated"))
+    else {
+        return Ok(None);
+    };
+    let Some(conversation) = system.parent() else {
+        return Ok(None);
+    };
+    let Some(provider_id) = conversation
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|id| Uuid::parse_str(id).is_ok())
+    else {
+        return Ok(None);
+    };
+    let mut owner: Option<&str> = None;
+    for claim in claims
+        .iter()
+        .filter(|claim| claim.provider == "antigravity")
+    {
+        let id = if claim.provider_identity_confirmed {
+            claim.provider_thread_id.clone()
+        } else {
+            let stdout = claim
+                .stdout_path
+                .as_ref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    // The durable claim precedes spawn; this deterministic path is
+                    // also available during the spawn -> mark_spawned write gap.
+                    agent_dir
+                        .join("antigravity-console")
+                        .join(&claim.session_id)
+                        .join(&claim.run_id)
+                        .join("stdout.log")
+                });
+            observed_conversation_id(&stdout)?
+        };
+        if id.as_deref() != Some(provider_id) {
+            continue;
         }
+        if let Some(existing) = owner {
+            anyhow::ensure!(
+                existing == claim.session_id,
+                "Antigravity thread has conflicting Console claims"
+            );
+        }
+        owner = Some(&claim.session_id);
+    }
+    if let Some(session_id) = owner {
+        bind_source_owner(conn, path, session_id, provider_id)?;
+    }
+    Ok(owner.map(str::to_string))
+}
+
+impl AntigravityPrintSink {
+    async fn bind_observed_transcript(&self) -> Result<bool> {
+        let Some(provider_session_id) = observed_conversation_id(&self.stdout_path)? else {
+            return Ok(false);
+        };
+        let transcript = conversation_transcript_path(
+            &antigravity_brain_root().context("HOME is unset")?,
+            &provider_session_id,
+        );
+        let db_path = self
+            .local_db_path
+            .as_deref()
+            .context("Antigravity Console has no source binding database")?;
+        persist_transcript_binding(db_path, &transcript, &self.session_id, &provider_session_id)?;
+        crate::turn_claims::default_registry()?.mark_provider_binding(
+            &self.run_id,
+            &provider_session_id,
+            Some(&transcript.to_string_lossy()),
+        )?;
+        self.post_binding(&provider_session_id, &transcript).await;
+        if transcript.is_file() {
+            self.wake_transcript_shipper(&transcript, &provider_session_id)
+                .await;
+        }
+        Ok(true)
     }
 
     async fn post_binding(&self, provider_session_id: &str, transcript: &Path) {
@@ -821,11 +1022,12 @@ mod tests {
             runtime_events_outbox_dir: dir.join("outbox"),
         };
         settle_antigravity_claim(&sink, true, Some(0), &stderr).await;
-        let events = read_outbox_kinds(&dir.join("outbox"));
-        assert!(events.contains(&"terminal_signal".to_string()));
-        // A cancelled turn must not bind a transcript: the conversation is
-        // half-written and claiming it as this turn's output is a lie.
-        assert!(!events.contains(&"binding_signal".to_string()));
+        let events = read_outbox_events(&dir.join("outbox"));
+        let terminal = events
+            .iter()
+            .find(|event| event["kind"] == "terminal_signal")
+            .unwrap();
+        assert_eq!(terminal["payload"]["terminal_state"], "run_cancelled");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -851,13 +1053,17 @@ mod tests {
             runtime_events_outbox_dir: dir.join("outbox"),
         };
         settle_antigravity_claim(&sink, false, Some(1), &stderr).await;
-        let events = read_outbox_kinds(&dir.join("outbox"));
-        assert!(events.contains(&"terminal_signal".to_string()));
-        assert!(!events.contains(&"binding_signal".to_string()));
+        let events = read_outbox_events(&dir.join("outbox"));
+        let terminal = events
+            .iter()
+            .find(|event| event["kind"] == "terminal_signal")
+            .unwrap();
+        assert_eq!(terminal["payload"]["terminal_state"], "run_failed");
+        assert_eq!(terminal["payload"]["exit_code"], 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn read_outbox_kinds(outbox: &Path) -> Vec<String> {
+    fn read_outbox_events(outbox: &Path) -> Vec<Value> {
         let Ok(entries) = std::fs::read_dir(outbox) else {
             return Vec::new();
         };
@@ -865,12 +1071,6 @@ mod tests {
             .filter_map(|entry| entry.ok())
             .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
             .filter_map(|raw| serde_json::from_str::<Value>(&raw).ok())
-            .filter_map(|value| {
-                value
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
             .collect()
     }
 

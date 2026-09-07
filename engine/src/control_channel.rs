@@ -609,9 +609,9 @@ async fn provider_readiness_snapshot() -> Value {
     let env_lookup = |name: &str| std::env::var_os(name);
     let pending = managed_provider_contract_items().iter().map(|contract| {
         let binary = provider_binary_value(contract, &env_lookup);
-        let on_path = binary
-            .as_ref()
-            .is_some_and(|value| command_value_exists_in_path(value.as_os_str(), path_value.as_deref()));
+        let on_path = binary.as_ref().is_some_and(|value| {
+            command_value_exists_in_path(value.as_os_str(), path_value.as_deref())
+        });
         crate::provider_readiness::readiness_for_contract(contract, binary, on_path)
     });
     crate::provider_readiness::readiness_map(futures_util::future::join_all(pending).await)
@@ -1695,9 +1695,7 @@ async fn execute_turn_start(
             run_id: run_id.clone(),
             client_request_id: client_request_id.clone(),
             cwd,
-            claude_bin: console_provider_binary_with_env("claude", &|name| {
-                std::env::var_os(name)
-            }),
+            claude_bin: console_provider_binary_with_env("claude", &|name| std::env::var_os(name)),
             prompt: message,
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
@@ -1921,7 +1919,8 @@ async fn execute_turn_start(
                     CURSOR_PRINT_ADAPTER
                         | OPENCODE_RUN_ADAPTER
                         | CLAUDE_PRINT_ADAPTER
-                        | PI_PRINT_ADAPTER,
+                        | PI_PRINT_ADAPTER
+                        | ANTIGRAVITY_PRINT_ADAPTER,
                 )
             ) {
                 return Ok(result);
@@ -3062,7 +3061,9 @@ mod tests {
 
     #[test]
     fn control_channel_status_tracks_connection_state() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let status = new_control_channel_status();
         assert_eq!(status.snapshot().enabled, false);
         assert_eq!(status.snapshot().status, "disabled");
@@ -3509,14 +3510,9 @@ mod tests {
         // exists on PATH.
         write_executable(&dir, "custom-claude");
         let staged_claude = dir.join("custom-claude").into_os_string();
-        let env_lookup = |name: &str| {
-            (name == "LONGHOUSE_CLAUDE_BIN").then(|| staged_claude.clone())
-        };
-        let supports = control_supports_for_path_with_env(
-            Some(dir.as_os_str()),
-            &env_lookup,
-            true,
-        );
+        let env_lookup =
+            |name: &str| (name == "LONGHOUSE_CLAUDE_BIN").then(|| staged_claude.clone());
+        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &env_lookup, true);
         assert!(supports.contains(&"claude.turn_start".to_string()));
         assert_eq!(
             console_provider_binary_with_env("claude", &env_lookup),
@@ -3702,7 +3698,9 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_claude_control_natively() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::tempdir().unwrap();
         let (port, mut rx) = spawn_claude_inject_server().await;
         let session_id = "11111111-1111-4111-8111-111111111111";
@@ -3785,7 +3783,9 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_antigravity_send_through_the_hook_inbox() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let unique = format!(
             "lh-antigravity-send-{}-{}",
             std::process::id(),
@@ -3840,7 +3840,9 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_opencode_send_through_native_control() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::TempDir::new().unwrap();
         let empty_path = temp.path().join("empty-path");
         let config_dir = temp.path().join("claude-config");
@@ -3897,7 +3899,9 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_opencode_interrupt_through_native_control() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::TempDir::new().unwrap();
         let empty_path = temp.path().join("empty-path");
         let config_dir = temp.path().join("claude-config");
@@ -3948,7 +3952,9 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_opencode_terminate_through_native_control() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = tempfile::TempDir::new().unwrap();
         let empty_path = temp.path().join("empty-path");
         let config_dir = temp.path().join("claude-config");
@@ -4013,7 +4019,9 @@ mod tests {
 
     #[tokio::test]
     async fn handle_command_frame_routes_provider_live_proof_without_session_id() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let unique = format!(
             "lh-provider-live-proof-{}-{}",
             std::process::id(),
@@ -4111,7 +4119,9 @@ exit 0
 
     #[tokio::test]
     async fn provider_live_proof_rejects_expected_version_mismatch() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let unique = format!(
             "lh-provider-live-proof-version-mismatch-{}-{}",
             std::process::id(),
@@ -4177,7 +4187,9 @@ exit 0
 
     #[tokio::test]
     async fn provider_live_proof_returns_valid_red_artifact_as_command_success() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let unique = format!(
             "lh-provider-live-proof-red-{}-{}",
             std::process::id(),
@@ -4396,7 +4408,9 @@ exit 1
 
     #[test]
     fn opencode_console_turn_start_uses_stock_run_and_resumes_native_session() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let temp = tempfile::TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
@@ -4494,8 +4508,146 @@ exit 1
     }
 
     #[test]
+    fn antigravity_console_claim_survives_dispatch_and_recovers_its_native_source() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let longhouse_home = temp.path().join("longhouse");
+        let native_id = Uuid::new_v4().to_string();
+        let session_id = Uuid::new_v4().to_string();
+        let run_id = Uuid::new_v4().to_string();
+        let transcript = home
+            .join(".gemini/antigravity-cli/brain")
+            .join(&native_id)
+            .join(".system_generated/logs/transcript_full.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        let fake = temp.path().join("agy");
+        write_test_executable(
+            &fake,
+            &format!(
+                r#"#!/bin/sh
+set -eu
+previous=""
+for value in "$@"; do
+  if [ "$previous" = "--log-file" ]; then log="$value"; fi
+  previous="$value"
+done
+printf 'ERROR: logging before google.Init: I0906 18:44:45.871810       1 session.go:171] Print mode: conversation={native_id}, sending message\n' > "$log"
+printf '%s\n' '{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-09-06T22:07:35Z","content":"hello"}}' > '{}'
+printf '%s\n' '{{"conversation_id":"{native_id}","status":"SUCCESS","response":"done"}}'
+"#,
+                transcript.display()
+            ),
+        );
+        let db_path = temp.path().join("state.db");
+        crate::state::db::open_db(Some(&db_path)).unwrap();
+        let mut config = test_config();
+        config.db_path = Some(db_path.clone());
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.as_os_str())),
+                ("LONGHOUSE_ANTIGRAVITY_BIN", Some(fake.as_os_str())),
+            ],
+            || {
+                // A current-thread runtime returns from dispatch before the spawned
+                // monitor is polled. Dropping it models losing the engine monitor,
+                // while the provider's exact launch log and output survive.
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let mut cache = command_cache();
+                let response = runtime.block_on(handle_command_frame(
+                    json!({
+                        "type": "command",
+                        "command_id": run_id,
+                        "session_id": session_id,
+                        "command_type": COMMAND_TURN_START,
+                        "payload": {
+                            "provider": "antigravity",
+                            "thread_id": Uuid::new_v4().to_string(),
+                            "run_id": run_id,
+                            "cwd": temp.path(),
+                            "message": "reply once",
+                            "permission_mode": "bypass"
+                        }
+                    }),
+                    &mut cache,
+                    &config,
+                ));
+                assert_eq!(response["ok"], true, "{response}");
+                let registry = crate::turn_claims::default_registry().unwrap();
+                let claim = registry.read(&run_id).unwrap();
+                assert_eq!(claim.adapter.as_deref(), Some(ANTIGRAVITY_PRINT_ADAPTER));
+                let pid = claim.pid.unwrap() as i32;
+                let mut status = 0;
+                assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+                assert!(libc::WIFEXITED(status));
+                assert_eq!(libc::WEXITSTATUS(status), 0);
+                drop(runtime);
+                assert_eq!(registry.read(&run_id).unwrap().state, "spawned");
+
+                let recovered = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                // Older dispatchers mislabeled this exact provider invocation as
+                // codex_exec. Codex recovery must not settle another provider, and
+                // Antigravity must recognize its recorded transport on recovery.
+                registry
+                    .mark_spawned(
+                        &run_id,
+                        claim.pid,
+                        claim.process_group_id,
+                        claim.process_start_time,
+                        "codex_exec",
+                        claim.result.unwrap(),
+                    )
+                    .unwrap();
+                recovered
+                    .block_on(crate::codex_exec::recover_codex_exec_turns(
+                        "test-machine",
+                        Some(db_path.clone()),
+                    ))
+                    .unwrap();
+                assert_eq!(registry.read(&run_id).unwrap().state, "spawned");
+                recovered
+                    .block_on(crate::antigravity_print::recover_antigravity_print_turns(
+                        "test-machine",
+                        Some(db_path.clone()),
+                    ))
+                    .unwrap();
+                let settled = registry.read(&run_id).unwrap();
+                assert_eq!(settled.state, "terminal");
+                assert_eq!(settled.result.unwrap()["terminal_state"], "run_completed");
+                assert_eq!(
+                    settled.provider_thread_id.as_deref(),
+                    Some(native_id.as_str())
+                );
+                let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+                assert_eq!(
+                    crate::state::session_binding::SessionBinding::new(&conn)
+                        .get_for_provider(
+                            &std::fs::canonicalize(&transcript)
+                                .unwrap()
+                                .to_string_lossy(),
+                            "antigravity"
+                        )
+                        .unwrap(),
+                    Some(session_id.clone()),
+                );
+            },
+        );
+    }
+
+    #[test]
     fn claude_console_turn_start_is_bounded_bound_and_natively_resumable() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let temp = tempfile::TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");

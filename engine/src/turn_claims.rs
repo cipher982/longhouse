@@ -253,8 +253,10 @@ impl TurnClaimRegistry {
     }
 
     pub fn list_all(&self) -> Result<Vec<TurnClaim>> {
-        let Ok(entries) = fs::read_dir(&self.root) else {
-            return Ok(Vec::new());
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("reading turn claim registry"),
         };
         let mut claims = Vec::new();
         for entry in entries {
@@ -396,6 +398,18 @@ pub fn mark_terminal(run_id: &str, terminal_state: &str, error: Option<String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_claim_registry_is_not_an_empty_ownership_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claims");
+        fs::write(&path, "not a directory").unwrap();
+        assert!(TurnClaimRegistry::new(path).list_all().is_err());
+        assert!(TurnClaimRegistry::new(dir.path().join("absent"))
+            .list_all()
+            .unwrap()
+            .is_empty());
+    }
 
     fn id(value: u128) -> String {
         Uuid::from_u128(value).to_string()
