@@ -451,8 +451,9 @@ def _parse_render_spec(
     raw_values: list[object] = []
     for raw_record in raw_spec.records:
         try:
-            raw_values.append(raw_record.data.decode("utf-8"))
-        except UnicodeDecodeError:
+            raw_value = json.loads(raw_record.data.decode("utf-8"))
+            raw_values.append(raw_value if isinstance(raw_value, dict) else None)
+        except (UnicodeDecodeError, json.JSONDecodeError):
             raw_values.append(None)
     seed_provider_interaction_sequence_context(raw_spec.provider, raw_values, interaction_sequence_context)
     for raw_ordinal, raw_json in enumerate(raw_values):
@@ -531,13 +532,7 @@ def _parse_render_spec(
     return spec
 
 
-def _raw_record_role(raw_json: object) -> str | None:
-    if not isinstance(raw_json, str):
-        return None
-    try:
-        raw_value = json.loads(raw_json)
-    except (TypeError, json.JSONDecodeError):
-        return None
+def _raw_record_role(raw_value: object) -> str | None:
     if not isinstance(raw_value, dict):
         return None
     message = raw_value.get("message")

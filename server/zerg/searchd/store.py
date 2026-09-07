@@ -1260,7 +1260,10 @@ class SearchStore:
                     e.opaque_source_id, e.source_epoch, e.source_position,
                     e.event_subordinal, e.record_ordinal) > (?, ?, ?, ?, ?, ?, ?, ?)
             """
-            params.extend(after)
+            # Match index_object's sortable TEXT encoding. Binding the wire
+            # integer compares against unpadded text, skipping tied rows for
+            # nonzero positions and replaying them for position zero.
+            params.extend((*after[:5], f"{after[5]:020d}", *after[6:]))
         params.append(limit + 1)
         rows = self.connection.execute(
             f"""

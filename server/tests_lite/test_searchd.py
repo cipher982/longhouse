@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
+
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
@@ -550,81 +551,135 @@ def test_episode_embeddings_refresh_revision_on_unchanged_hash(tmp_path):
         connection.close()
 
 
-def test_embedding_source_reads_only_the_fenced_published_projection(tmp_path):
-    connection = open_search_database(tmp_path / "search.db")
-    store = SearchStore(connection)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit,page_bytes", [(1, 1_000_000), (1_000, 2_500)])
+async def test_embedding_source_reads_only_the_fenced_published_projection(tmp_path, monkeypatch, limit, page_bytes):
+    monkeypatch.setattr("zerg.searchd.store._EMBEDDING_SOURCE_PAGE_BYTES", page_bytes)
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    socket_path = socket_parent / "s"
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
     session_id = str(uuid4())
     generation_id = str(uuid4())
     source_epoch = str(uuid4())
     object_id = hashlib.sha256(b"embedding-source").hexdigest()
+    records = []
+    for index, position in enumerate((153, 153, 0, 0)):
+        record = {
+            **_records("published semantic source")[index % 2],
+            "event_id": f"event-{index}",
+            "record_ordinal": index,
+            "order_time_us": 1_720_780_400_000_000 + index // 2,
+            "source_position": position,
+            "event_subordinal": index % 2,
+            "content_text": f"published event {index}\n" * 150,
+        }
+        if index == 1:
+            record.update(content_text=None, tool_name="Bash", tool_output_text="native tool output\n" * 150)
+        elif index == 2:
+            record.update(role="assistant", interaction_kind="provider_system", content_text=None)
+        records.append(record)
+    index_params = {
+        "session_id": session_id,
+        "generation_id": generation_id,
+        "object_id": object_id,
+        "desired_revision": "7",
+        "provider": "codex",
+        "machine_id": "machine",
+        "project": "longhouse",
+        "environment": "local",
+        "cwd": None,
+        "git_repo": None,
+        "opaque_source_id": "source.jsonl",
+        "source_epoch": source_epoch,
+        "records": records,
+    }
     try:
-        store.index_object(
-            session_id=session_id,
-            generation_id=generation_id,
-            object_id=object_id,
-            desired_revision=7,
-            provider="codex",
-            machine_id="machine",
-            project="longhouse",
-            environment="local",
-            cwd=None,
-            git_repo=None,
-            opaque_source_id="source.jsonl",
-            source_epoch=source_epoch,
-            records=_records("published semantic source"),
+        await client.call("search.index.object.v2", index_params)
+        published = await client.call(
+            "search.index.publish.v2",
+            {
+                "session_id": session_id,
+                "generation_id": generation_id,
+                "owner_id": "owner-1",
+                "desired_revision": "7",
+                "object_count": 1,
+                "object_set_hash": object_set_hash([object_id]),
+                "event_count": len(records),
+                "project": "longhouse",
+                "provider": "codex",
+                "environment": "local",
+                "cwd": None,
+                "git_repo": None,
+                "started_at": "2026-01-01T00:00:00+00:00",
+                "hidden_from_default_timeline": False,
+                "origin_kind": None,
+            },
         )
-        assert (
-            store.publish_generation(
-                session_id=session_id,
-                generation_id=generation_id,
-                owner_id="owner-1",
-                desired_revision=7,
-                object_count=1,
-                object_set_hash=object_set_hash([object_id]),
-                event_count=2,
-                project="longhouse",
-                provider="codex",
-                environment="local",
-                cwd=None,
-                git_repo=None,
-                started_at="2026-01-01T00:00:00+00:00",
-            )["published"]
-            is True
+        assert published["published"] is True
+        # Staged rows in the same generation must not enter this publication.
+        await client.call(
+            "search.index.object.v2",
+            {
+                **index_params,
+                "object_id": hashlib.sha256(b"unpublished-embedding-source").hexdigest(),
+                "desired_revision": "8",
+                "records": _records("unpublished source"),
+            },
         )
-
-        first = store.read_embedding_source(
-            session_id=session_id,
-            expected_generation_id=None,
-            expected_revision=None,
-            after=None,
-            limit=1,
-        )
-        assert first["generation_id"] == generation_id
-        assert first["revision"] == "7"
-        assert first["owner_id"] == "owner-1"
-        assert first["event_count"] == 2
-        assert first["has_more"] is True
-        assert first["records"][0]["content_text"] == "published semantic source"
-
-        second = store.read_embedding_source(
-            session_id=session_id,
-            expected_generation_id=generation_id,
-            expected_revision=7,
-            after=tuple(first["next_cursor"]),
-            limit=1,
-        )
-        assert second["has_more"] is False
-        assert second["records"][0]["content_text"] == "indexed answer"
-        with pytest.raises(ValueError, match="revision changed"):
-            store.read_embedding_source(
-                session_id=session_id,
+        expected_records = [
+            {
+                "timestamp": record["order_time_us"],
+                "machine_id": "machine",
+                "provider": "codex",
+                "opaque_source_id": "source.jsonl",
+                "source_epoch": source_epoch,
+                "source_position": record["source_position"],
+                "event_subordinal": record["event_subordinal"],
+                "role": record["role"],
+                "content_text": record["content_text"],
+                "interaction_kind": record["interaction_kind"],
+                "tool_name": record["tool_name"],
+                "tool_output_text": record["tool_output_text"],
+            }
+            for record in records
+        ]
+        source_params = {
+            "session_id": session_id,
+            "expected_generation_id": None,
+            "expected_revision": None,
+            "after": None,
+            "limit": limit,
+        }
+        retrieved = []
+        for index, expected in enumerate(expected_records):
+            page = await client.call("search.embedding.source.v2", source_params)
+            assert page["generation_id"] == generation_id
+            assert page["revision"] == "7"
+            assert page["owner_id"] == "owner-1"
+            assert page["provider"] == "codex"
+            assert page["event_count"] == len(expected_records)
+            # Both the row limit and the byte limit split tied native events.
+            # Compare actual content, including empty/system and tool rows:
+            # missing and duplicated rows must not cancel out in the count.
+            assert page["records"] == [expected]
+            assert page["has_more"] is (index + 1 < len(expected_records))
+            retrieved.extend(page["records"])
+            source_params.update(
                 expected_generation_id=generation_id,
-                expected_revision=8,
-                after=None,
-                limit=1,
+                expected_revision="7",
+                after=page["next_cursor"],
             )
+        assert retrieved == expected_records
+        assert len(retrieved) == page["event_count"]
+        with pytest.raises(CatalogRemoteError, match="revision changed"):
+            await client.call("search.embedding.source.v2", {**source_params, "expected_revision": "8", "after": None})
     finally:
-        connection.close()
+        await client.close()
+        await daemon.close()
+        socket_parent.rmdir()
 
 
 def test_startup_prunes_every_inactive_embedding_space(tmp_path):

@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use rayon::prelude::*;
@@ -355,6 +355,151 @@ pub struct ShipBenchResult {
     pub live_latency_p95_ms: Option<f64>,
     pub live_failures: usize,
     pub failures: usize,
+    pub repair_stats: ShipLaneStats,
+    pub live_stats: ShipLaneStats,
+}
+
+/// Client-side diagnostics across all completed envelopes, including failures.
+/// Request/wait percentiles are per-envelope sums across every attempt, with
+/// zero-wait envelopes included. Totals are cumulative, not wall-clock time.
+#[derive(Default)]
+pub struct ShipLaneStats {
+    pub completed_envelopes: usize,
+    pub attempts: usize,
+    pub backpressure_responses: usize,
+    pub retries: usize,
+    pub request_total_ms: f64,
+    pub request_p50_ms: Option<f64>,
+    pub request_p95_ms: Option<f64>,
+    pub retry_wait_total_ms: f64,
+    pub retry_wait_p50_ms: Option<f64>,
+    pub retry_wait_p95_ms: Option<f64>,
+    terminal_failures: [usize; 8],
+}
+
+#[derive(Clone, Copy)]
+enum ShipFailureKind {
+    Backpressure,
+    Conflict,
+    Rejected,
+    Timeout,
+    Transport,
+    Decode,
+    Other,
+    Task,
+}
+
+impl ShipFailureKind {
+    const ALL: [(Self, &'static str); 8] = [
+        (Self::Backpressure, "backpressure"),
+        (Self::Conflict, "conflict"),
+        (Self::Rejected, "rejected"),
+        (Self::Timeout, "timeout"),
+        (Self::Transport, "transport"),
+        (Self::Decode, "decode"),
+        (Self::Other, "other"),
+        (Self::Task, "task"),
+    ];
+
+    fn from_error(error: &anyhow::Error) -> Self {
+        use crate::shipping::client::{
+            StorageV2Backpressure, StorageV2Conflict, StorageV2EnvelopeRejected,
+        };
+
+        if error.is::<StorageV2Backpressure>() {
+            Self::Backpressure
+        } else if error.is::<StorageV2Conflict>() {
+            Self::Conflict
+        } else if error.is::<StorageV2EnvelopeRejected>() {
+            Self::Rejected
+        } else if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            if error.is_timeout() {
+                Self::Timeout
+            } else if error.is_decode() {
+                Self::Decode
+            } else {
+                Self::Transport
+            }
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// One numeric sample per prepared envelope; no response or error text retained.
+#[derive(Default)]
+struct ShipSample {
+    latency_ms: f64,
+    attempts: usize,
+    backpressure_responses: usize,
+    retries: usize,
+    request_ms: f64,
+    retry_wait_ms: f64,
+    failure: Option<ShipFailureKind>,
+}
+
+impl ShipLaneStats {
+    fn from_samples(samples: &[ShipSample], task_failures: usize) -> Self {
+        let mut stats = Self {
+            completed_envelopes: samples.len(),
+            ..Self::default()
+        };
+        stats.terminal_failures[ShipFailureKind::Task as usize] = task_failures;
+        for sample in samples {
+            stats.attempts += sample.attempts;
+            stats.backpressure_responses += sample.backpressure_responses;
+            stats.retries += sample.retries;
+            stats.request_total_ms += sample.request_ms;
+            stats.retry_wait_total_ms += sample.retry_wait_ms;
+            if let Some(kind) = sample.failure {
+                stats.terminal_failures[kind as usize] += 1;
+            }
+        }
+        let mut durations: Vec<f64> = samples.iter().map(|sample| sample.request_ms).collect();
+        durations.sort_by(f64::total_cmp);
+        stats.request_p50_ms = pct(&durations, 0.50);
+        stats.request_p95_ms = pct(&durations, 0.95);
+        durations.clear();
+        durations.extend(samples.iter().map(|sample| sample.retry_wait_ms));
+        durations.sort_by(f64::total_cmp);
+        stats.retry_wait_p50_ms = pct(&durations, 0.50);
+        stats.retry_wait_p95_ms = pct(&durations, 0.95);
+        stats
+    }
+
+    fn print_summary(&self, lane: &str) {
+        eprintln!(
+            "{lane} attempts: {} across {} completed envelopes; backpressure {}; retries {}",
+            self.attempts, self.completed_envelopes, self.backpressure_responses, self.retries
+        );
+        for (label, total, p50, p95) in [
+            (
+                "request time",
+                self.request_total_ms,
+                self.request_p50_ms,
+                self.request_p95_ms,
+            ),
+            (
+                "retry wait",
+                self.retry_wait_total_ms,
+                self.retry_wait_p50_ms,
+                self.retry_wait_p95_ms,
+            ),
+        ] {
+            match (p50, p95) {
+                (Some(p50), Some(p95)) => eprintln!(
+                    "{lane} {label}: {total:.1}ms total / p50 {p50:.1}ms / p95 {p95:.1}ms"
+                ),
+                _ => eprintln!("{lane} {label}: (no completed envelopes)"),
+            }
+        }
+        for (kind, label) in ShipFailureKind::ALL {
+            let count = self.terminal_failures[kind as usize];
+            if count > 0 {
+                eprintln!("{lane} terminal failures: {label}={count}");
+            }
+        }
+    }
 }
 
 impl ShipBenchResult {
@@ -403,11 +548,15 @@ impl ShipBenchResult {
             "Ship latency:   p50 {:.1}ms / p95 {:.1}ms",
             self.ship_latency_p50_ms, self.ship_latency_p95_ms
         );
+        eprintln!(
+            "Client timings: all completed envelopes (including failures); per-envelope sums across attempts; retry wait is measured sleep"
+        );
+        self.repair_stats.print_summary("Repair");
         match (self.server_queue_wait_p50_ms, self.server_queue_wait_p95_ms) {
             (Some(p50), Some(p95)) => {
                 eprintln!("Server queue:   p50 {:.1}ms / p95 {:.1}ms", p50, p95)
             }
-            _ => eprintln!("Server queue:   (no X-Ingest-* headers seen)"),
+            _ => eprintln!("Server queue:   (not provided by storage-v2 receipts)"),
         }
         match (self.server_exec_p50_ms, self.server_exec_p95_ms) {
             (Some(p50), Some(p95)) => {
@@ -427,6 +576,7 @@ impl ShipBenchResult {
                 }
                 _ => eprintln!("Live latency:   (no successful live probes)"),
             }
+            self.live_stats.print_summary("Live");
             if self.live_failures > 0 {
                 eprintln!("Live failures:  {}", self.live_failures);
             }
@@ -599,10 +749,8 @@ pub fn run_benchmark_ship(
         use tokio::time::{sleep, Duration};
 
         let sem = Arc::new(Semaphore::new(concurrency.max(1)));
-        let ship_latencies: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(archive_count)));
-        let live_latencies: Arc<Mutex<Vec<f64>>> =
-            Arc::new(Mutex::new(Vec::with_capacity(mixed_live_count)));
+        let mut ship_samples = Vec::with_capacity(archive_count);
+        let mut live_samples = Vec::with_capacity(mixed_live_count);
         let failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let live_failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let repair_receipts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -611,11 +759,10 @@ pub fn run_benchmark_ship(
         let overall_start = Instant::now();
         let mut handles = Vec::with_capacity(archive_count + live_prepared.len());
 
-        for (i, item) in prepared.into_iter().enumerate() {
+        for item in prepared {
             let sem = sem.clone();
             let client = client.clone();
             let ingest_path = ingest_path.clone();
-            let ship_latencies = ship_latencies.clone();
             let failures = failures.clone();
             let repair_receipts = repair_receipts.clone();
             let events_shipped = events_shipped.clone();
@@ -625,8 +772,10 @@ pub fn run_benchmark_ship(
                 tokio::spawn(async move {
                     let _permit = sem.acquire_owned().await.unwrap();
                     let started = Instant::now();
-                    let mut attempts = 0;
+                    let mut sample = ShipSample::default();
                     let result = loop {
+                        sample.attempts += 1;
+                        let request_started = Instant::now();
                         let result = client
                             .ship_storage_v2_body(
                                 &ingest_path,
@@ -636,19 +785,22 @@ pub fn run_benchmark_ship(
                                 None,
                             )
                             .await;
+                        sample.request_ms += request_started.elapsed().as_secs_f64() * 1000.0;
                         let Some(backpressure) = result.as_ref().err().and_then(|error| {
                             error.downcast_ref::<crate::shipping::client::StorageV2Backpressure>()
                         }) else {
                             break result;
                         };
-                        if attempts >= 2 {
+                        sample.backpressure_responses += 1;
+                        if sample.retries >= 2 {
                             break result;
                         }
-                        attempts += 1;
+                        sample.retries += 1;
+                        let wait_started = Instant::now();
                         sleep(backpressure.retry_after).await;
+                        sample.retry_wait_ms += wait_started.elapsed().as_secs_f64() * 1000.0;
                     };
-                    let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
-                    ship_latencies.lock().unwrap().push(latency_ms);
+                    sample.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
                     match result {
                         Ok(_) => {
                             repair_receipts.fetch_add(1, Ordering::Relaxed);
@@ -656,9 +808,10 @@ pub fn run_benchmark_ship(
                         }
                         Err(error) => {
                             failures.fetch_add(1, Ordering::Relaxed);
-                            eprintln!("  repair ship #{i} failed: {error:#}");
+                            sample.failure = Some(ShipFailureKind::from_error(&error));
                         }
                     }
+                    sample
                 }),
             ));
         }
@@ -669,15 +822,16 @@ pub fn run_benchmark_ship(
         for (i, item) in live_prepared.into_iter().enumerate() {
             let client = client.clone();
             let ingest_path = ingest_path.clone();
-            let live_latencies = live_latencies.clone();
             let live_failures = live_failures.clone();
             handles.push((
                 "live",
                 tokio::spawn(async move {
                     sleep(Duration::from_millis((i as u64).saturating_mul(100))).await;
                     let started = Instant::now();
-                    let mut attempts = 0;
+                    let mut sample = ShipSample::default();
                     let result = loop {
+                        sample.attempts += 1;
+                        let request_started = Instant::now();
                         let result = client
                             .ship_storage_v2_body(
                                 &ingest_path,
@@ -687,46 +841,72 @@ pub fn run_benchmark_ship(
                                 None,
                             )
                             .await;
+                        sample.request_ms += request_started.elapsed().as_secs_f64() * 1000.0;
                         let Some(backpressure) = result.as_ref().err().and_then(|error| {
                             error.downcast_ref::<crate::shipping::client::StorageV2Backpressure>()
                         }) else {
                             break result;
                         };
-                        if attempts >= 2 {
+                        sample.backpressure_responses += 1;
+                        if sample.retries >= 2 {
                             break result;
                         }
-                        attempts += 1;
+                        sample.retries += 1;
+                        let wait_started = Instant::now();
                         sleep(backpressure.retry_after).await;
+                        sample.retry_wait_ms += wait_started.elapsed().as_secs_f64() * 1000.0;
                     };
-                    let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+                    sample.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
                     match result {
-                        Ok(_) => live_latencies.lock().unwrap().push(latency_ms),
+                        Ok(_) => {}
                         Err(error) => {
                             live_failures.fetch_add(1, Ordering::Relaxed);
-                            eprintln!("  live probe #{i} failed: {error:#}");
+                            sample.failure = Some(ShipFailureKind::from_error(&error));
                         }
                     }
+                    sample
                 }),
             ));
         }
 
+        let mut repair_task_failures = 0;
+        let mut live_task_failures = 0;
         for (lane, handle) in handles {
-            if let Err(error) = handle.await {
-                if lane == "live" {
-                    live_failures.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    failures.fetch_add(1, Ordering::Relaxed);
+            match handle.await {
+                Ok(sample) => {
+                    if lane == "live" {
+                        live_samples.push(sample);
+                    } else {
+                        ship_samples.push(sample);
+                    }
                 }
-                eprintln!("  {lane} ship task failed before completion: {error}");
+                Err(_) => {
+                    if lane == "live" {
+                        live_failures.fetch_add(1, Ordering::Relaxed);
+                        live_task_failures += 1;
+                    } else {
+                        failures.fetch_add(1, Ordering::Relaxed);
+                        repair_task_failures += 1;
+                    }
+                }
             }
         }
         let total_seconds = overall_start.elapsed().as_secs_f64();
 
-        let mut ship_lat = ship_latencies.lock().unwrap().clone();
+        let repair_stats = ShipLaneStats::from_samples(&ship_samples, repair_task_failures);
+        let live_stats = ShipLaneStats::from_samples(&live_samples, live_task_failures);
+        let mut ship_lat: Vec<f64> = ship_samples
+            .iter()
+            .map(|sample| sample.latency_ms)
+            .collect();
         ship_lat.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let ship_p50 = pct(&ship_lat, 0.50).unwrap_or(0.0);
         let ship_p95 = pct(&ship_lat, 0.95).unwrap_or(0.0);
-        let mut live_lat = live_latencies.lock().unwrap().clone();
+        let mut live_lat: Vec<f64> = live_samples
+            .iter()
+            .filter(|sample| sample.failure.is_none())
+            .map(|sample| sample.latency_ms)
+            .collect();
         live_lat.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         ShipBenchResult {
@@ -750,6 +930,8 @@ pub fn run_benchmark_ship(
             live_latency_p95_ms: pct(&live_lat, 0.95),
             live_failures: live_failures.load(Ordering::Relaxed),
             failures: failures.load(Ordering::Relaxed),
+            repair_stats,
+            live_stats,
         }
     });
 
@@ -862,7 +1044,54 @@ mod tests {
             live_latency_p95_ms,
             live_failures,
             failures: 0,
+            repair_stats: ShipLaneStats::default(),
+            live_stats: ShipLaneStats::default(),
         }
+    }
+
+    #[test]
+    fn lane_stats_include_failed_attempts_and_zero_wait_envelopes() {
+        let samples = [
+            ShipSample {
+                attempts: 1,
+                request_ms: 10.0,
+                ..ShipSample::default()
+            },
+            ShipSample {
+                attempts: 3,
+                backpressure_responses: 2,
+                retries: 2,
+                request_ms: 60.0,
+                retry_wait_ms: 400.0,
+                ..ShipSample::default()
+            },
+            ShipSample {
+                attempts: 3,
+                backpressure_responses: 3,
+                retries: 2,
+                request_ms: 90.0,
+                retry_wait_ms: 600.0,
+                failure: Some(ShipFailureKind::Backpressure),
+                ..ShipSample::default()
+            },
+        ];
+        let stats = ShipLaneStats::from_samples(&samples, 1);
+
+        // The exhausted final attempt is backpressure, but causes no third sleep.
+        assert_eq!(stats.attempts, 7);
+        assert_eq!(stats.backpressure_responses, 5);
+        assert_eq!(stats.retries, 4);
+        assert_eq!(stats.request_total_ms, 160.0);
+        assert_eq!(stats.request_p50_ms, Some(60.0));
+        assert_eq!(stats.request_p95_ms, Some(90.0));
+        assert_eq!(stats.retry_wait_total_ms, 1_000.0);
+        assert_eq!(stats.retry_wait_p50_ms, Some(400.0));
+        assert_eq!(stats.retry_wait_p95_ms, Some(600.0));
+        assert_eq!(
+            stats.terminal_failures[ShipFailureKind::Backpressure as usize],
+            1
+        );
+        assert_eq!(stats.terminal_failures[ShipFailureKind::Task as usize], 1);
     }
 
     #[test]
