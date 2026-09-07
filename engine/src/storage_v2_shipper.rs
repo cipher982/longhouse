@@ -251,12 +251,18 @@ fn prepare_next_envelope_with_limit(
         }
     }
     if provider.eq_ignore_ascii_case("antigravity") && durable_session_id.is_none() {
-        durable_session_id = crate::antigravity_print::bind_discovered_source(
+        match crate::antigravity_print::bind_discovered_source(
             conn,
             &canonical_path,
             &crate::turn_claims::default_registry()?.list_all()?,
             &crate::config::get_agent_dir()?,
-        )?;
+        )? {
+            crate::antigravity_print::SourceOwnership::Managed(session_id) => {
+                durable_session_id = Some(session_id);
+            }
+            crate::antigravity_print::SourceOwnership::Pending => return Ok(None),
+            crate::antigravity_print::SourceOwnership::Unclaimed => {}
+        }
     }
     if provider.eq_ignore_ascii_case("antigravity")
         && durable_session_id.is_none()
@@ -6881,7 +6887,12 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_launch_log_owns_early_source_and_survives_cold_recovery() {
+    fn antigravity_pending_init_holds_sources_then_binds_only_its_native_thread() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("longhouse");
         let agent_dir = home.join("agent");
@@ -6905,13 +6916,38 @@ mod tests {
             .join(&session_id)
             .join(&run_id);
         fs::create_dir_all(&run_dir).unwrap();
-        let log_path = run_dir.join("provider.log");
-        fs::write(&log_path, format!(
-            "ERROR: logging before google.Init: I0906 18:44:45.866822       1 server.go:1153] Created conversation {shadow_id}\n\
-             ERROR: logging before google.Init: I0906 18:44:45.871810       1 session.go:171] Print mode: conversation={native_id}, sending message\n"
-        )).unwrap();
-        // No stdout result, pid, or completed binding yet. This is the real
-        // spawn/discovery race, not a manually pre-bound transcript fixture.
+        let stdout = run_dir.join("stdout.log");
+        // An unrelated malformed historical output and a damaged claim file
+        // must not poison this launch or permanently suppress genuine Shadow.
+        let bad_run = Uuid::new_v4().to_string();
+        registry
+            .claim(
+                &bad_run,
+                &session_id,
+                &Uuid::new_v4().to_string(),
+                None,
+                None,
+                "antigravity",
+            )
+            .unwrap();
+        registry
+            .mark_failed(&bad_run, "historical failure")
+            .unwrap();
+        let bad_dir = run_dir.with_file_name(&bad_run);
+        fs::create_dir_all(&bad_dir).unwrap();
+        fs::write(
+            bad_dir.join("stdout.log"),
+            b"{\"conversation_id\":\"not-a-uuid\",\"status\":\"ERROR\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            agent_dir
+                .join("turn-claims")
+                .join(format!("{}.json", Uuid::new_v4())),
+            b"damaged claim",
+        )
+        .unwrap();
+
         let source = b"{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-09-06T22:07:35Z\",\"content\":\"hello\"}\n";
         let transcript = |id: &str| {
             let path = dir
@@ -6921,8 +6957,6 @@ mod tests {
                 .join(".system_generated/logs/transcript_full.jsonl");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, source).unwrap();
-            // A long-running tool leaves the transcript unchanged beyond the
-            // old five-second grace. Ownership must not expire with its mtime.
             fs::File::options()
                 .write(true)
                 .open(&path)
@@ -6938,7 +6972,44 @@ mod tests {
         let shadow = transcript(&shadow_id);
         temp_env::with_var("LONGHOUSE_HOME", Some(&home), || {
             let mut conn = open_db(Some(&dir.path().join("first.db"))).unwrap();
-            // A durable binding failure must not fall through to Shadow.
+            // Neither a missing init nor a partial write can age out to Shadow,
+            // even after the ordinary five-second hook grace has elapsed.
+            assert!(
+                prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                    .unwrap()
+                    .is_none()
+            );
+            fs::write(&stdout, b"{\"event\":\"init\",\"conversation_id\":\"").unwrap();
+            assert!(
+                prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(prepare_next_envelope(
+                &mut conn,
+                &capabilities(),
+                &shadow,
+                "antigravity",
+                None
+            )
+            .unwrap()
+            .is_none());
+            assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+            drop(conn);
+
+            // Pending ownership also survives a cold shipper restart. Init is
+            // the identity proof; no result or monitor-written binding exists.
+            let mut conn = open_db(Some(&dir.path().join("first.db"))).unwrap();
+            assert!(
+                prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
+                    .unwrap()
+                    .is_none()
+            );
+            fs::write(
+                &stdout,
+                format!("{{\"event\":\"init\",\"conversation_id\":\"{native_id}\"}}\n"),
+            )
+            .unwrap();
             conn.execute_batch("CREATE TRIGGER reject_binding BEFORE INSERT ON session_binding BEGIN SELECT RAISE(FAIL, 'binding unavailable'); END;").unwrap();
             assert!(
                 prepare_next_envelope(&mut conn, &capabilities(), &path, "antigravity", None)
@@ -6956,11 +7027,11 @@ mod tests {
                     .unwrap()
                     .unwrap();
             assert_eq!(unrelated.envelope.session_id, shadow_id);
-            assert_eq!(fs::read(&path).unwrap(), source);
+            assert_eq!(fs::read(&path).unwrap().as_slice(), source);
             drop(conn);
 
-            // Cold recovery does not depend on a live provider, a successful
-            // turn, or the old binding DB surviving. The run log is durable.
+            // A terminal claim without a monitor-written binding still owns
+            // its source through the durable structured stdout after restart.
             registry.mark_failed(&run_id, "engine restarted").unwrap();
             let mut recovered = open_db(Some(&dir.path().join("recovered.db"))).unwrap();
             let prepared =
@@ -6970,12 +7041,13 @@ mod tests {
             assert_eq!(prepared.envelope.session_id, session_id);
             drop(recovered);
 
-            // Legacy completed invocations recover from their confirmed claim
-            // without requiring a process-scoped log that did not exist then.
-            registry
-                .mark_provider_binding(&run_id, &native_id, Some(&path.to_string_lossy()))
-                .unwrap();
-            fs::remove_file(&log_path).unwrap();
+            // Retained single-JSON stdout from deployed versions also recovers
+            // exact ownership without init, logs, or a confirmed binding.
+            fs::write(
+                &stdout,
+                format!("{{\"conversation_id\":\"{native_id}\",\"status\":\"SUCCESS\"}}\n"),
+            )
+            .unwrap();
             let mut legacy = open_db(Some(&dir.path().join("legacy.db"))).unwrap();
             let prepared =
                 prepare_next_envelope(&mut legacy, &capabilities(), &path, "antigravity", None)

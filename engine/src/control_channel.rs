@@ -4509,9 +4509,11 @@ exit 1
 
     #[test]
     fn antigravity_console_claim_survives_dispatch_and_recovers_its_native_source() {
-        let _guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = guard_runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let longhouse_home = temp.path().join("longhouse");
@@ -4531,12 +4533,13 @@ exit 1
 set -eu
 previous=""
 for value in "$@"; do
-  if [ "$previous" = "--log-file" ]; then log="$value"; fi
+  if [ "$previous" = "--output-format" ]; then format="$value"; fi
   previous="$value"
 done
-printf 'ERROR: logging before google.Init: I0906 18:44:45.871810       1 session.go:171] Print mode: conversation={native_id}, sending message\n' > "$log"
+test "$format" = "stream-json"
+printf '%s\n' '{{"event":"init","conversation_id":"{native_id}","init":{{"cwd":"/tmp"}}}}'
 printf '%s\n' '{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-09-06T22:07:35Z","content":"hello"}}' > '{}'
-printf '%s\n' '{{"conversation_id":"{native_id}","status":"SUCCESS","response":"done"}}'
+printf '%s\n' '{{"event":"result","result":{{"conversation_id":"{native_id}","status":"SUCCESS","response":"done"}}}}'
 "#,
                 transcript.display()
             ),
@@ -4554,7 +4557,7 @@ printf '%s\n' '{{"conversation_id":"{native_id}","status":"SUCCESS","response":"
             || {
                 // A current-thread runtime returns from dispatch before the spawned
                 // monitor is polled. Dropping it models losing the engine monitor,
-                // while the provider's exact launch log and output survive.
+                // while the provider's structured stdout survives.
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()

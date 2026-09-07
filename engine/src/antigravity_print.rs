@@ -6,13 +6,13 @@
 //! user authenticated with `GEMINI_API_KEY`, so hook-delivered control is not
 //! universally available. A one-shot print turn is.
 //!
-//! The stock CLI logs `Print mode: conversation=<id>, sending message` before
-//! writing the native transcript. Each invocation gets its own private log so
-//! discovery can resolve that exact thread to its durable turn claim, without
-//! waiting for the terminal stdout result or guessing from a workspace.
+//! Stock `--output-format stream-json` reports native identity in its `init`
+//! event, before the terminal `result`. Discovery reads that same durable stdout
+//! independently of the monitor and holds unowned sources while a Console
+//! launch is still waiting for identity, rather than guessing from a workspace.
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
@@ -104,10 +104,8 @@ pub async fn start_antigravity_print_turn(
     let stderr_path = run_dir.join("stderr.log");
     let stdout_file = private_output_file(&stdout_path)?;
     let stderr_file = private_output_file(&stderr_path)?;
-    let provider_log_path = run_dir.join("provider.log");
-    private_output_file(&provider_log_path)?;
     // Fail before launching if durable ownership cannot be recorded. Discovery
-    // can also reconstruct this binding from the claim and process-scoped log.
+    // can also reconstruct this binding from the claim and structured stdout.
     let db_path = config
         .local_db_path
         .as_deref()
@@ -131,20 +129,13 @@ pub async fn start_antigravity_print_turn(
         )?;
     }
 
-    let mut args = build_antigravity_args(
+    let args = build_antigravity_args(
         &config.prompt,
         config.model.as_deref(),
         config.conversation_id.as_deref(),
         config
             .print_timeout_secs
             .unwrap_or(DEFAULT_PRINT_TIMEOUT_SECS),
-    );
-    args.splice(
-        0..0,
-        [
-            "--log-file".to_string(),
-            provider_log_path.to_string_lossy().into_owned(),
-        ],
     );
     let argv = std::iter::once(config.antigravity_bin.clone())
         .chain(args.iter().cloned())
@@ -316,10 +307,12 @@ async fn monitor_recovered_claim(
     let mut source_bound = false;
     loop {
         if !source_bound {
-            source_bound = sink.bind_observed_transcript().await.unwrap_or_else(|error| {
-                tracing::warn!(run_id = %sink.run_id, %error, "Antigravity source binding is pending");
-                false
-            });
+            source_bound = sink.read_and_bind_transcript(false).await
+                .map(|output| output.conversation_id.is_some())
+                .unwrap_or_else(|error| {
+                    tracing::warn!(run_id = %sink.run_id, %error, "Antigravity source binding is pending");
+                    false
+                });
         }
         if claim_process_liveness(&claim) == ClaimLiveness::Gone {
             let cancel_requested = crate::turn_claims::default_registry()
@@ -396,10 +389,12 @@ async fn monitor_antigravity_print(
     let mut source_bound = false;
     let status = loop {
         if !source_bound {
-            source_bound = sink.bind_observed_transcript().await.unwrap_or_else(|error| {
-                tracing::warn!(run_id = %sink.run_id, %error, "Antigravity source binding is pending");
-                false
-            });
+            source_bound = sink.read_and_bind_transcript(false).await
+                .map(|output| output.conversation_id.is_some())
+                .unwrap_or_else(|error| {
+                    tracing::warn!(run_id = %sink.run_id, %error, "Antigravity source binding is pending");
+                    false
+                });
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -433,7 +428,7 @@ async fn settle_antigravity_claim(
 ) {
     // Ownership is independent of turn success: cancellation and model errors
     // still leave a native transcript that belongs to this Console session.
-    let binding = sink.bind_observed_transcript().await;
+    let output = sink.read_and_bind_transcript(true).await;
     if cancel_requested {
         cleanup_process_group(sink.process_group_id).await;
         sink.post_terminal("run_cancelled", exit_code, None).await;
@@ -446,20 +441,31 @@ async fn settle_antigravity_claim(
             .await;
         return;
     }
-    let Some((conversation_id, status)) = read_print_result(&sink.stdout_path) else {
-        cleanup_process_group(sink.process_group_id).await;
-        sink.post_terminal(
-            "run_failed",
-            exit_code,
-            Some(
-                stderr_tail(stderr_path).unwrap_or_else(|| {
-                    "agy exited without reporting a conversation id".to_string()
-                }),
-            ),
-        )
-        .await;
-        return;
+    let output = match output {
+        Ok(output) if output.finished => output,
+        Ok(_) => {
+            cleanup_process_group(sink.process_group_id).await;
+            sink.post_terminal(
+                "run_failed",
+                exit_code,
+                Some(stderr_tail(stderr_path).unwrap_or_else(|| {
+                    "agy exited without reporting a terminal result".to_string()
+                })),
+            )
+            .await;
+            return;
+        }
+        Err(error) => {
+            cleanup_process_group(sink.process_group_id).await;
+            sink.post_terminal("run_failed", exit_code, Some(error.to_string()))
+                .await;
+            return;
+        }
     };
+    let conversation_id = output
+        .conversation_id
+        .expect("a result has a validated identity");
+    let status = output.status;
     // A reported ERROR is a failed turn even though agy exits 0 for it.
     if status
         .as_deref()
@@ -490,14 +496,6 @@ async fn settle_antigravity_claim(
         .await;
         return;
     }
-    if let Err(error) = binding.and_then(|bound| {
-        anyhow::ensure!(bound, "Antigravity transcript has no durable managed owner");
-        Ok(())
-    }) {
-        sink.post_terminal("run_failed", exit_code, Some(error.to_string()))
-            .await;
-        return;
-    }
     sink.post_terminal("run_completed", exit_code, None).await;
 }
 
@@ -508,9 +506,7 @@ async fn settle_antigravity_claim(
 /// `--print-timeout` as the prompt and answer a question about its own flag,
 /// leaving the real prompt as a stray positional. The ordering here is
 /// load-bearing, not cosmetic.
-/// The provider's one-shot turn arguments, exposed for the release canary.
-/// The Console launcher additionally routes diagnostics to its private run log.
-///
+/// The same provider argv is used by the Console launcher and release canary.
 pub fn console_turn_argv(
     prompt: &str,
     model: Option<&str>,
@@ -529,7 +525,7 @@ fn build_antigravity_args(
     let mut args = vec![
         "--dangerously-skip-permissions".to_string(),
         "--output-format".to_string(),
-        "json".to_string(),
+        "stream-json".to_string(),
         "--print-timeout".to_string(),
         format!("{print_timeout_secs}s"),
     ];
@@ -546,24 +542,89 @@ fn build_antigravity_args(
     args
 }
 
-/// agy reports a failed turn as `status: ERROR` in a result object it still
-/// exits 0 for, so the exit code alone cannot decide whether a turn succeeded.
-fn read_print_result(stdout_path: &Path) -> Option<(String, Option<String>)> {
-    let bytes = std::fs::read(stdout_path).ok()?;
-    let value: Value = serde_json::from_slice(&bytes).ok()?;
-    let conversation_id = value
-        .get("conversation_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)?;
-    let status = value
-        .get("status")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    Some((conversation_id, status))
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PrintOutput {
+    conversation_id: Option<String>,
+    status: Option<String>,
+    finished: bool,
+}
+
+#[derive(Deserialize)]
+struct PrintRecord {
+    event: Option<String>,
+    conversation_id: Option<String>,
+    status: Option<String>,
+    result: Option<PrintResult>,
+}
+
+#[derive(Deserialize)]
+struct PrintResult {
+    conversation_id: String,
+    status: Option<String>,
+}
+
+/// Read only complete JSON values. A partially appended event is pending, not a
+/// failed invocation. Unknown events (including step_update's nested identity)
+/// cannot bind a source or complete a turn. Old single-JSON results remain
+/// readable so already-deployed invocations survive an engine upgrade.
+fn read_print_output(stdout_path: &Path, until_identity: bool) -> Result<PrintOutput> {
+    let file = match File::open(stdout_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PrintOutput::default())
+        }
+        Err(error) => return Err(error).context("reading Antigravity stdout"),
+    };
+    let records =
+        serde_json::Deserializer::from_reader(BufReader::new(file)).into_iter::<PrintRecord>();
+    let mut output = PrintOutput::default();
+    for record in records {
+        let record = match record {
+            Ok(record) => record,
+            Err(error) if error.is_eof() => break,
+            Err(error) => return Err(error).context("parsing Antigravity stdout"),
+        };
+        let (id, status, finished) = match record.event.as_deref() {
+            Some("init") => (
+                record
+                    .conversation_id
+                    .context("Antigravity init has no conversation id")?,
+                None,
+                false,
+            ),
+            Some("result") => {
+                let result = record
+                    .result
+                    .context("Antigravity result event has no result")?;
+                (result.conversation_id, result.status, true)
+            }
+            None => (
+                record
+                    .conversation_id
+                    .context("Antigravity legacy result has no conversation id")?,
+                record.status,
+                true,
+            ),
+            _ => continue,
+        };
+        validate_uuid(&id, "Antigravity conversation id")?;
+        if let Some(existing) = output.conversation_id.as_ref() {
+            anyhow::ensure!(
+                existing == &id,
+                "Antigravity stdout has conflicting conversation identities"
+            );
+        } else {
+            output.conversation_id = Some(id);
+        }
+        if finished {
+            output.finished = true;
+            output.status = status;
+        }
+        if until_identity {
+            break;
+        }
+    }
+    Ok(output)
 }
 
 /// agy writes one append-only transcript per conversation under its brain dir.
@@ -586,54 +647,6 @@ fn antigravity_brain_root() -> Option<PathBuf> {
             .join("antigravity-cli")
             .join("brain"),
     )
-}
-
-/// Read only the invocation's own log, never the shared CLI log or a cwd scan.
-/// Stock agy emits this synchronous record before forwarding the user message.
-/// Keeping it on disk makes discovery independent of the monitor's scheduling
-/// and preserves ownership even if the engine dies before recording a binding.
-fn observed_conversation_id(stdout_path: &Path) -> Result<Option<String>> {
-    let log_path = stdout_path.with_file_name("provider.log");
-    let mut logged_id = None;
-    match File::open(&log_path) {
-        Ok(file) => {
-            for line in BufReader::new(file).lines() {
-                let line = line?;
-                let Some((_, message)) = line.split_once(" session.go:") else {
-                    continue;
-                };
-                let Some((line_number, message)) =
-                    message.split_once("] Print mode: conversation=")
-                else {
-                    continue;
-                };
-                if line_number.is_empty() || !line_number.bytes().all(|c| c.is_ascii_digit()) {
-                    continue;
-                }
-                let Some(id) = message.strip_suffix(", sending message") else {
-                    continue;
-                };
-                validate_uuid(id, "logged Antigravity conversation id")?;
-                logged_id = Some(id.to_string());
-                break;
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).with_context(|| format!("reading {}", log_path.display())),
-    }
-    // Old invocations have only the terminal JSON result. It remains exact
-    // ownership evidence, including for failed turns and cold-start recovery.
-    let id = read_print_result(stdout_path).map(|(id, _)| id);
-    if let Some(id) = id.as_deref() {
-        validate_uuid(id, "Antigravity conversation id")?;
-    }
-    if let (Some(logged), Some(reported)) = (logged_id.as_ref(), id.as_ref()) {
-        anyhow::ensure!(
-            logged == reported,
-            "Antigravity stdout disagrees with the launch log identity"
-        );
-    }
-    Ok(logged_id.or(id))
 }
 
 fn is_antigravity_print_claim(claim: &crate::turn_claims::TurnClaim) -> bool {
@@ -675,45 +688,60 @@ fn bind_source_owner(
     binding.bind_for_thread(&path, session_id, "antigravity", Some(provider_session_id))
 }
 
-/// Resolve only an exact native thread found in a durable Console claim or its
-/// process-scoped launch log. Unrelated Shadow sources are not held or retagged.
-/// Terminal claims are intentionally included: process liveness is not source
-/// ownership, and a failed turn's transcript still belongs to its Console.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SourceOwnership {
+    Managed(String),
+    Pending,
+    Unclaimed,
+}
+
+/// Resolve exact native identity from durable claims or structured stdout.
+/// Unconfirmed nonterminal launches hold unowned sources until identity arrives;
+/// once known, unrelated Shadow sources are released without being retagged.
+/// Terminal claims remain ownership evidence but never create a global hold.
 pub(crate) fn bind_discovered_source(
     conn: &rusqlite::Connection,
     path: &Path,
     claims: &[crate::turn_claims::TurnClaim],
     agent_dir: &Path,
-) -> Result<Option<String>> {
+) -> Result<SourceOwnership> {
     let Some(logs) = path
         .parent()
         .filter(|p| p.file_name().is_some_and(|n| n == "logs"))
     else {
-        return Ok(None);
+        return Ok(SourceOwnership::Unclaimed);
     };
     let Some(system) = logs
         .parent()
         .filter(|p| p.file_name().is_some_and(|n| n == ".system_generated"))
     else {
-        return Ok(None);
+        return Ok(SourceOwnership::Unclaimed);
     };
     let Some(conversation) = system.parent() else {
-        return Ok(None);
+        return Ok(SourceOwnership::Unclaimed);
     };
     let Some(provider_id) = conversation
         .file_name()
         .and_then(|n| n.to_str())
         .filter(|id| Uuid::parse_str(id).is_ok())
     else {
-        return Ok(None);
+        return Ok(SourceOwnership::Unclaimed);
     };
     let mut owner: Option<&str> = None;
+    let mut pending_owner = false;
     for claim in claims
         .iter()
         .filter(|claim| claim.provider == "antigravity")
     {
+        let nonterminal = !matches!(claim.state.as_str(), "terminal" | "failed");
         let id = if claim.provider_identity_confirmed {
-            claim.provider_thread_id.clone()
+            match claim.provider_thread_id.as_deref() {
+                Some(id) if Uuid::parse_str(id).is_ok() => Some(id.to_string()),
+                _ => {
+                    tracing::warn!(run_id = %claim.run_id, "Ignoring invalid confirmed Antigravity identity");
+                    None
+                }
+            }
         } else {
             let stdout = claim
                 .stdout_path
@@ -728,8 +756,15 @@ pub(crate) fn bind_discovered_source(
                         .join(&claim.run_id)
                         .join("stdout.log")
                 });
-            observed_conversation_id(&stdout)?
+            match read_print_output(&stdout, true) {
+                Ok(output) => output.conversation_id,
+                Err(error) => {
+                    tracing::warn!(run_id = %claim.run_id, %error, "Skipping invalid Antigravity claim output");
+                    None
+                }
+            }
         };
+        pending_owner |= nonterminal && id.is_none();
         if id.as_deref() != Some(provider_id) {
             continue;
         }
@@ -743,35 +778,41 @@ pub(crate) fn bind_discovered_source(
     }
     if let Some(session_id) = owner {
         bind_source_owner(conn, path, session_id, provider_id)?;
+        return Ok(SourceOwnership::Managed(session_id.to_string()));
     }
-    Ok(owner.map(str::to_string))
+    Ok(if pending_owner {
+        SourceOwnership::Pending
+    } else {
+        SourceOwnership::Unclaimed
+    })
 }
 
 impl AntigravityPrintSink {
-    async fn bind_observed_transcript(&self) -> Result<bool> {
-        let Some(provider_session_id) = observed_conversation_id(&self.stdout_path)? else {
-            return Ok(false);
+    async fn read_and_bind_transcript(&self, turn_ended: bool) -> Result<PrintOutput> {
+        let output = read_print_output(&self.stdout_path, !turn_ended)?;
+        let Some(provider_session_id) = output.conversation_id.as_deref() else {
+            return Ok(output);
         };
         let transcript = conversation_transcript_path(
             &antigravity_brain_root().context("HOME is unset")?,
-            &provider_session_id,
+            provider_session_id,
         );
         let db_path = self
             .local_db_path
             .as_deref()
             .context("Antigravity Console has no source binding database")?;
-        persist_transcript_binding(db_path, &transcript, &self.session_id, &provider_session_id)?;
+        persist_transcript_binding(db_path, &transcript, &self.session_id, provider_session_id)?;
         crate::turn_claims::default_registry()?.mark_provider_binding(
             &self.run_id,
-            &provider_session_id,
+            provider_session_id,
             Some(&transcript.to_string_lossy()),
         )?;
-        self.post_binding(&provider_session_id, &transcript).await;
+        self.post_binding(provider_session_id, &transcript).await;
         if transcript.is_file() {
-            self.wake_transcript_shipper(&transcript, &provider_session_id)
+            self.wake_transcript_shipper(&transcript, provider_session_id, turn_ended)
                 .await;
         }
-        Ok(true)
+        Ok(output)
     }
 
     async fn post_binding(&self, provider_session_id: &str, transcript: &Path) {
@@ -906,7 +947,12 @@ impl AntigravityPrintSink {
     }
 
     #[cfg(unix)]
-    async fn wake_transcript_shipper(&self, source_path: &Path, provider_session_id: &str) {
+    async fn wake_transcript_shipper(
+        &self,
+        source_path: &Path,
+        provider_session_id: &str,
+        turn_ended: bool,
+    ) {
         let Some(socket_path) = crate::config::get_agent_transcript_wake_socket_path().ok() else {
             return;
         };
@@ -916,13 +962,13 @@ impl AntigravityPrintSink {
         let payload = json!({
             "provider": "antigravity",
             "path": source_path,
-            "phase": "idle",
+            "phase": if turn_ended { "idle" } else { "thinking" },
             "session_id": self.session_id,
             "run_id": self.run_id,
             "turn_id": self.turn_id,
             "provider_turn_id": provider_session_id,
             "client_request_id": self.client_request_id,
-            "wake_reason": "turn_completed",
+            "wake_reason": if turn_ended { "turn_completed" } else { "turn_started" },
             "observed_at_ms": Utc::now().timestamp_millis(),
             "file_len_hint": std::fs::metadata(source_path).ok().map(|metadata| metadata.len()),
         });
@@ -944,7 +990,13 @@ impl AntigravityPrintSink {
     }
 
     #[cfg(not(unix))]
-    async fn wake_transcript_shipper(&self, _source_path: &Path, _provider_session_id: &str) {}
+    async fn wake_transcript_shipper(
+        &self,
+        _source_path: &Path,
+        _provider_session_id: &str,
+        _turn_ended: bool,
+    ) {
+    }
 
     async fn post_events(&self, events: Vec<Value>) {
         for event in events {
@@ -996,6 +1048,154 @@ fn normalized_optional(value: &Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn antigravity_init_wake_and_current_legacy_settlement_preserve_turn_lifecycle() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
+        let dir = tempfile::Builder::new()
+            .prefix("agy-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let home = dir.path().join("home");
+        let longhouse_home = dir.path().join("longhouse");
+        let db_path = dir.path().join("state.db");
+        crate::state::db::open_db(Some(&db_path)).unwrap();
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.as_os_str())),
+            ],
+            || {
+                runtime.block_on(async {
+            async fn receive_wake(listener: &tokio::net::UnixListener) -> Value {
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut bytes).await.unwrap();
+                    serde_json::from_slice(&bytes).unwrap()
+                }).await.unwrap()
+            }
+
+            let registry = crate::turn_claims::default_registry().unwrap();
+            let agent_dir = crate::config::get_agent_dir().unwrap();
+            let session_id = Uuid::new_v4().to_string();
+            let provider_id = Uuid::new_v4().to_string();
+            let transcript = conversation_transcript_path(&antigravity_brain_root().unwrap(), &provider_id);
+            std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+            std::fs::write(&transcript, b"{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-09-06T22:07:35Z\",\"content\":\"hello\"}\n").unwrap();
+            let socket = crate::config::get_agent_transcript_wake_socket_path().unwrap();
+            std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+            let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+            let make_sink = || {
+                let run_id = Uuid::new_v4().to_string();
+                let thread_id = Uuid::new_v4().to_string();
+                registry.claim(&run_id, &session_id, &thread_id, None, None, "antigravity").unwrap();
+                let run_dir = agent_dir.join("antigravity-console").join(&session_id).join(&run_id);
+                std::fs::create_dir_all(&run_dir).unwrap();
+                AntigravityPrintSink {
+                    session_id: session_id.clone(),
+                    thread_id,
+                    turn_id: None,
+                    run_id,
+                    client_request_id: None,
+                    launch_id: Uuid::new_v4().to_string(),
+                    process_group_id: None,
+                    stdout_path: run_dir.join("stdout.log"),
+                    machine_name: "test".to_string(),
+                    local_db_path: Some(db_path.clone()),
+                    runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir().unwrap(),
+                }
+            };
+            let sink = make_sink();
+            std::fs::write(&sink.stdout_path, format!("{{\"event\":\"init\",\"conversation_id\":\"{provider_id}\"}}\n")).unwrap();
+            let early = sink.read_and_bind_transcript(false).await.unwrap();
+            assert!(!early.finished);
+            let wake = receive_wake(&listener).await;
+            assert_eq!(wake["phase"], "thinking");
+            assert_eq!(wake["wake_reason"], "turn_started");
+            assert!(registry.list_nonterminal().unwrap().iter().any(|claim| claim.run_id == sink.run_id));
+            assert_eq!(registry.read(&sink.run_id).unwrap().provider_thread_id.as_deref(), Some(provider_id.as_str()));
+            let result = format!("{{\"event\":\"result\",\"result\":{{\"conversation_id\":\"{provider_id}\",\"status\":\"SUCCESS\",\"response\":\"done\"}}}}\n");
+            OpenOptions::new().append(true).open(&sink.stdout_path).unwrap().write_all(result.as_bytes()).unwrap();
+            settle_antigravity_claim(&sink, false, Some(0), &sink.stdout_path.with_file_name("stderr.log")).await;
+            let wake = receive_wake(&listener).await;
+            assert_eq!(wake["phase"], "idle");
+            assert_eq!(wake["wake_reason"], "turn_completed");
+            assert_eq!(registry.read(&sink.run_id).unwrap().state, "terminal");
+            let terminal = read_outbox_events(&sink.runtime_events_outbox_dir).into_iter()
+                .find(|event| event["run_id"] == sink.run_id && event["kind"] == "terminal_signal").unwrap();
+            assert_eq!(terminal["payload"]["terminal_state"], "run_completed");
+
+            let legacy = make_sink();
+            std::fs::write(&legacy.stdout_path, format!("{{\"conversation_id\":\"{provider_id}\",\"status\":\"SUCCESS\",\"response\":\"done\"}}")).unwrap();
+            settle_antigravity_claim(&legacy, false, Some(0), &legacy.stdout_path.with_file_name("stderr.log")).await;
+            receive_wake(&listener).await;
+            let terminal = read_outbox_events(&legacy.runtime_events_outbox_dir).into_iter()
+                .find(|event| event["run_id"] == legacy.run_id && event["kind"] == "terminal_signal").unwrap();
+            assert_eq!(terminal["payload"]["terminal_state"], "run_completed");
+            let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+            assert_eq!(
+                crate::state::session_binding::SessionBinding::new(&conn)
+                    .get_for_provider(&std::fs::canonicalize(&transcript).unwrap().to_string_lossy(), "antigravity").unwrap(),
+                Some(session_id.clone()),
+            );
+
+            // A launch that terminates without init fails rather than claiming
+            // success, and its pending hold must not outlive the terminal claim.
+            let missing = make_sink();
+            let unrelated = conversation_transcript_path(&antigravity_brain_root().unwrap(), &Uuid::new_v4().to_string());
+            assert_eq!(bind_discovered_source(&conn, &unrelated, &registry.list_all().unwrap(), &agent_dir).unwrap(), SourceOwnership::Pending);
+            settle_antigravity_claim(&missing, false, Some(0), &missing.stdout_path.with_file_name("stderr.log")).await;
+            let terminal = read_outbox_events(&missing.runtime_events_outbox_dir).into_iter()
+                .find(|event| event["run_id"] == missing.run_id && event["kind"] == "terminal_signal").unwrap();
+            assert_eq!(terminal["payload"]["terminal_state"], "run_failed");
+            assert_eq!(bind_discovered_source(&conn, &unrelated, &registry.list_all().unwrap(), &agent_dir).unwrap(), SourceOwnership::Unclaimed);
+        })
+            },
+        );
+    }
+
+    #[test]
+    fn antigravity_conflicting_claims_block_only_their_exact_native_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(dir.path().join("claims"));
+        let conflicted_id = Uuid::new_v4().to_string();
+        let unrelated_id = Uuid::new_v4().to_string();
+        let unrelated_owner = Uuid::new_v4().to_string();
+        for (provider_id, session_id) in [
+            (&conflicted_id, Uuid::new_v4().to_string()),
+            (&conflicted_id, Uuid::new_v4().to_string()),
+            (&unrelated_id, unrelated_owner.clone()),
+        ] {
+            let run_id = Uuid::new_v4().to_string();
+            registry
+                .claim(
+                    &run_id,
+                    &session_id,
+                    &Uuid::new_v4().to_string(),
+                    None,
+                    None,
+                    "antigravity",
+                )
+                .unwrap();
+            registry
+                .mark_provider_binding(&run_id, provider_id, None)
+                .unwrap();
+        }
+        let conn = crate::state::db::open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let claims = registry.list_all().unwrap();
+        let unrelated = conversation_transcript_path(&dir.path().join("brain"), &unrelated_id);
+        assert_eq!(
+            bind_discovered_source(&conn, &unrelated, &claims, dir.path()).unwrap(),
+            SourceOwnership::Managed(unrelated_owner)
+        );
+        let conflicted = conversation_transcript_path(&dir.path().join("brain"), &conflicted_id);
+        assert!(bind_discovered_source(&conn, &conflicted, &claims, dir.path()).is_err());
+    }
 
     #[tokio::test]
     async fn a_cancelled_turn_settles_as_cancelled_not_completed() {
@@ -1097,7 +1297,7 @@ mod tests {
         let args = build_antigravity_args("hello", None, None, 120);
         assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
         assert!(args.contains(&"--output-format".to_string()));
-        assert!(args.contains(&"json".to_string()));
+        assert!(args.contains(&"stream-json".to_string()));
         assert!(args.contains(&"120s".to_string()));
         assert!(!args.contains(&"--input-format".to_string()));
     }
@@ -1117,63 +1317,64 @@ mod tests {
     }
 
     #[test]
-    fn conversation_id_is_read_from_the_result_object() {
-        let dir = std::env::temp_dir().join(format!("agy-print-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("stdout.log");
+    fn structured_init_binds_before_result_and_legacy_results_remain_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stdout.log");
+        let id = "5f62a636-1412-4afe-9cfd-a5079e0a0366";
+        let init = format!(
+            "{{\"event\":\"init\",\"conversation_id\":\"{id}\",\"init\":{{\"cwd\":\"/tmp\"}}}}\n"
+        );
+        std::fs::write(&path, &init).unwrap();
+        let early = read_print_output(&path, true).unwrap();
+        assert_eq!(early.conversation_id.as_deref(), Some(id));
+        assert!(!early.finished);
+        assert!(!read_print_output(&path, false).unwrap().finished);
+
+        let result = format!("{{\"event\":\"result\",\"result\":{{\"conversation_id\":\"{id}\",\"status\":\"SUCCESS\",\"response\":\"done\"}}}}\n");
+        std::fs::write(&path, format!("{init}{result}")).unwrap();
+        let current = read_print_output(&path, false).unwrap();
+        assert_eq!(current.conversation_id.as_deref(), Some(id));
+        assert!(current.finished);
+        assert_eq!(current.status.as_deref(), Some("SUCCESS"));
+
         std::fs::write(
             &path,
-            br#"{"conversation_id":"5f62a636-1412-4afe-9cfd-a5079e0a0366","status":"SUCCESS","response":"ok\n"}"#,
+            format!(
+                "{{\"conversation_id\":\"{id}\",\"status\":\"SUCCESS\",\"response\":\"done\"}}"
+            ),
         )
         .unwrap();
+        assert_eq!(read_print_output(&path, false).unwrap(), current);
+    }
+
+    #[test]
+    fn partial_stdout_waits_but_invalid_or_conflicting_identity_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stdout.log");
         assert_eq!(
-            read_print_result(&path)
-                .map(|(conversation_id, _status)| conversation_id)
-                .as_deref(),
-            Some("5f62a636-1412-4afe-9cfd-a5079e0a0366")
+            read_print_output(&path, false).unwrap(),
+            PrintOutput::default()
         );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn missing_or_unparsable_result_yields_no_conversation_id() {
-        let dir = std::env::temp_dir().join(format!("agy-print-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("stdout.log");
-        std::fs::write(&path, b"not json at all").unwrap();
-        assert_eq!(read_print_result(&path), None);
-        std::fs::write(&path, br#"{"status":"ERROR"}"#).unwrap();
-        assert_eq!(read_print_result(&path), None);
-        std::fs::write(&path, br#"{"conversation_id":"   "}"#).unwrap();
-        assert_eq!(read_print_result(&path), None);
-        assert_eq!(read_print_result(&dir.join("absent.log")), None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn transcript_is_resolved_under_the_conversation_brain_dir() {
-        let home = std::env::temp_dir().join(format!("agy-home-{}", Uuid::new_v4()));
-        let conversation = "abc-123";
-        let logs = home
-            .join(".gemini")
-            .join("antigravity-cli")
-            .join("brain")
-            .join(conversation)
-            .join(".system_generated")
-            .join("logs");
-        std::fs::create_dir_all(&logs).unwrap();
-        let transcript = logs.join("transcript_full.jsonl");
-        std::fs::write(&transcript, b"{}\n").unwrap();
-
-        let previous = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
-        let located = locate_conversation_transcript(conversation);
-        assert_eq!(located.as_deref(), Some(transcript.as_path()));
-        assert_eq!(locate_conversation_transcript("missing-conversation"), None);
-        match previous {
-            Some(value) => std::env::set_var("HOME", value),
-            None => std::env::remove_var("HOME"),
-        }
-        let _ = std::fs::remove_dir_all(&home);
+        std::fs::write(&path, b"{\"event\":\"init\",\"conversation_id\":\"").unwrap();
+        assert_eq!(
+            read_print_output(&path, false).unwrap(),
+            PrintOutput::default()
+        );
+        std::fs::write(&path, b"{\"event\":\"step_update\",\"step_update\":{\"conversation_id\":\"5f62a636-1412-4afe-9cfd-a5079e0a0366\"}}\n").unwrap();
+        assert_eq!(
+            read_print_output(&path, false).unwrap(),
+            PrintOutput::default()
+        );
+        std::fs::write(
+            &path,
+            b"{\"event\":\"init\",\"conversation_id\":\"invalid\"}\n",
+        )
+        .unwrap();
+        assert!(read_print_output(&path, false).is_err());
+        std::fs::write(&path, concat!(
+            "{\"event\":\"init\",\"conversation_id\":\"5f62a636-1412-4afe-9cfd-a5079e0a0366\"}\n",
+            "{\"event\":\"result\",\"result\":{\"conversation_id\":\"ad8d7e16-26e0-4add-b11d-a7841890718d\",\"status\":\"SUCCESS\"}}\n"
+        )).unwrap();
+        assert!(read_print_output(&path, false).is_err());
     }
 }

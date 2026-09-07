@@ -264,10 +264,17 @@ impl TurnClaimRegistry {
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
             }
-            let bytes = fs::read(&path)?;
-            let claim: TurnClaim = serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing turn claim {}", path.display()))?;
-            claims.push(claim);
+            let claim = fs::read(&path)
+                .map_err(anyhow::Error::from)
+                .and_then(|bytes| {
+                    serde_json::from_slice::<TurnClaim>(&bytes).map_err(anyhow::Error::from)
+                });
+            match claim {
+                Ok(claim) => claims.push(claim),
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), %error, "Skipping unreadable turn claim")
+                }
+            }
         }
         claims.sort_by(|left, right| left.claimed_at.cmp(&right.claimed_at));
         Ok(claims)
