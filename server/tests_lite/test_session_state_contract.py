@@ -321,6 +321,10 @@ def test_no_reply_turn_convergence_is_independent_of_run_outcome(end_reason, ren
     assert facts.activity.state == "unknown"
     assert facts.transcript.convergence == expected_convergence
     assert (facts.presentation.transcript is not None) == (expected_convergence == "lagging")
+    if end_reason is not None:
+        assert facts.presentation.primary is not None
+        assert facts.presentation.primary.key == "ended"
+        assert (facts.presentation.primary.tone == "blocked") == (end_reason == "failed")
 
 
 @pytest.mark.parametrize("archive_state", ["current", "pending", None])
@@ -594,6 +598,18 @@ def test_process_gone_ends_run_but_does_not_close_session():
     assert facts.run.lifecycle == "ended"
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.label == "Ended"
+
+
+def test_explicit_legacy_run_failure_is_not_presented_as_an_ordinary_end():
+    facts = _facts(
+        runtime=_runtime(phase=None, confidence="stale", terminal_state="run_failed"),
+        session=_session(ended_at=NOW - timedelta(seconds=2)),
+    )
+
+    assert facts.run is not None
+    assert facts.run.lifecycle == "ended"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.tone == "blocked"
 
 
 def test_explicit_user_close_dominates_all_other_axes():

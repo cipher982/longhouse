@@ -929,7 +929,13 @@ def _primary(
     if activity.state == "quiescent":
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     if run is not None and run.lifecycle == "ended":
-        return SessionPresentationLabel(key="ended", label="Ended", tone="closed", observed_at=run.ended_at)
+        failed = run.end_reason in {"failed", "run_failed"}
+        return SessionPresentationLabel(
+            key="ended",
+            label="Run failed" if failed else "Ended",
+            tone="blocked" if failed else "closed",
+            observed_at=run.ended_at,
+        )
     if mode == "console" and run is not None and run.lifecycle == "running" and not _console_evidence_expired(activity):
         return SessionPresentationLabel(key="executing", label="Working", tone="running", observed_at=run.started_at)
     if (
