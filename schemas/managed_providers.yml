@@ -1194,6 +1194,7 @@ providers:
   - engine/src/discovery.rs
   - engine/src/daemon.rs
   - engine/src/outbox.rs
+  - engine/src/pipeline/parser.rs
   wire_families: [antigravity_conversations, antigravity_hooks]
   observation_sources: [native_archive, hooks]
   normalization_ruleset: antigravity

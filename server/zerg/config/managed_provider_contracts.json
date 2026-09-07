@@ -1927,7 +1927,8 @@
         "server/zerg/services/antigravity_hook_inbox.py",
         "engine/src/discovery.rs",
         "engine/src/daemon.rs",
-        "engine/src/outbox.rs"
+        "engine/src/outbox.rs",
+        "engine/src/pipeline/parser.rs"
       ],
       "wire_families": [
         "antigravity_conversations",
@@ -2279,7 +2280,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "a1f3324927a4e852256b455ad95882bb1e3ef82ff27cbdd773da9344d5a4d76f"
+      "adapter_digest": "d9deb6d2e49b80971ed76e78a78527adcaf2c9b53aaebafc8fd8f35086c9b318"
     },
     {
       "provider": "cursor",

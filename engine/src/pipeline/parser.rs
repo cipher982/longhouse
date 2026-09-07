@@ -2790,15 +2790,33 @@ fn antigravity_user_text(content: &str) -> String {
     let start_tag = "<USER_REQUEST>";
     let end_tag = "</USER_REQUEST>";
     let trimmed = content.trim();
-    if trimmed.starts_with(start_tag) && trimmed.ends_with(end_tag) {
-        let body = trimmed[start_tag.len()..trimmed.len() - end_tag.len()].trim();
-        if !body.is_empty() {
-            return body.to_string();
+    if let Some(wrapped) = trimmed.strip_prefix(start_tag) {
+        if let Some((body, mut trailer)) = wrapped.rsplit_once(end_tag) {
+            trailer = trailer.trim();
+            while !trailer.is_empty() {
+                let mut remaining = None;
+                for (open, close) in [
+                    ("<ADDITIONAL_METADATA>", "</ADDITIONAL_METADATA>"),
+                    ("<USER_SETTINGS_CHANGE>", "</USER_SETTINGS_CHANGE>"),
+                ] {
+                    if let Some(metadata) = trailer.strip_prefix(open) {
+                        remaining = metadata.split_once(close).map(|(_, rest)| rest.trim());
+                        break;
+                    }
+                }
+                let Some(rest) = remaining else {
+                    // Unknown or malformed trailing prose may be user text.
+                    return trimmed.to_string();
+                };
+                trailer = rest;
+            }
+            let body = body.trim();
+            if !body.is_empty() {
+                return body.to_string();
+            }
         }
     }
-    // A tag-looking substring can be quoted in an ordinary request. Without
-    // an exact outer envelope, preserve the provider text and let the UI show
-    // the evidence rather than silently deleting surrounding prose.
+    // A quoted tag is not a provider wrapper. Preserve unproven text.
     trimmed.to_string()
 }
 
@@ -6538,7 +6556,7 @@ mod tests {
                 "type": "USER_INPUT",
                 "status": "DONE",
                 "created_at": "2026-05-21T22:27:41Z",
-                "content": "<USER_REQUEST>\nfix the build\n</USER_REQUEST>"
+                "content": "<USER_REQUEST>\nfix the build\n</USER_REQUEST>\n<ADDITIONAL_METADATA>clock</ADDITIONAL_METADATA>\n<USER_SETTINGS_CHANGE>model</USER_SETTINGS_CHANGE>"
             })
             .to_string(),
             serde_json::json!({
@@ -6619,6 +6637,20 @@ mod tests {
             antigravity_user_text("quoted <USER_REQUEST>fix it</USER_REQUEST> text"),
             "quoted <USER_REQUEST>fix it</USER_REQUEST> text"
         );
+        assert_eq!(
+            antigravity_user_text("<USER_REQUEST>\nfix it\n</USER_REQUEST>\n<ADDITIONAL_METADATA>clock</ADDITIONAL_METADATA>\n<USER_SETTINGS_CHANGE>model</USER_SETTINGS_CHANGE>"),
+            "fix it"
+        );
+        assert_eq!(
+            antigravity_user_text("<USER_REQUEST>quote </USER_REQUEST> literally</USER_REQUEST><ADDITIONAL_METADATA>clock</ADDITIONAL_METADATA>"),
+            "quote </USER_REQUEST> literally"
+        );
+        for unproven in [
+            "<USER_REQUEST>fix it</USER_REQUEST> ordinary trailing prose",
+            "<USER_REQUEST>fix it</USER_REQUEST><ADDITIONAL_METADATA>unfinished",
+        ] {
+            assert_eq!(antigravity_user_text(unproven), unproven);
+        }
     }
 
     /// Helper: write an antigravity transcript and return its path.
