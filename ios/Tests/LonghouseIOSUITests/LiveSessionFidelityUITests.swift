@@ -3,10 +3,10 @@ import XCTest
 import Vision
 
 /// Read-only proof against a caller-created, hidden QA session, never a fixture.
-/// The caller must first prove these markers occur only in final assistant prose
-/// (ask the provider to concatenate marker fragments, not to echo a full marker),
-/// and compare source history before/after this test. Accessibility cannot assign
-/// provider authorship, inspect collapsed tool output, or prove source immutability.
+/// Preflight requires ordered, exact durable assistant replies; accessibility and
+/// screenshot pixels separately prove client rendering. Ask the provider to
+/// concatenate marker fragments so prompt/tool echoes cannot qualify, and compare
+/// source history before/after this test: viewing cannot prove source immutability.
 @MainActor
 final class LiveSessionFidelityUITests: XCTestCase {
     private static let environmentPrefix = "LONGHOUSE_FIDELITY_"
@@ -121,7 +121,7 @@ final class LiveSessionFidelityUITests: XCTestCase {
     }
 
     private func requireHiddenSession(_ configuration: Configuration) async throws {
-        // This GET is only a safety gate, never evidence of client rendering.
+        // Qualify session safety and assistant authorship, never client rendering.
         let url = configuration.serverURL.appendingPathComponent("api/agents/sessions/\(configuration.sessionID)/workspace")
         var request = URLRequest(url: url)
         request.setValue(configuration.authToken, forHTTPHeaderField: "X-Agents-Token")
@@ -141,6 +141,35 @@ final class LiveSessionFidelityUITests: XCTestCase {
               (catalog["id"] as? String)?.lowercased() == configuration.sessionID.lowercased(),
               (catalog["hidden_from_default_timeline"] as? Bool == true || catalog["launch_surface"] as? String == "test") else {
             throw ProofFailure(description: "Selected session must exist on the Runtime Host and be hidden_from_default_timeline")
+        }
+        guard let projection = workspace["projection"] as? [String: Any],
+              projection["has_more"] as? Bool == false,
+              projection["page_offset"] as? Int == 0,
+              let items = projection["items"] as? [[String: Any]] else {
+            throw ProofFailure(description: "Preflight requires a complete projection page to exclude missing or duplicate replies")
+        }
+        var replies: [String] = []
+        for item in items {
+            guard item["kind"] as? String == "event",
+                  (item["session_id"] as? String)?.lowercased() == configuration.sessionID.lowercased(),
+                  let event = item["event"] as? [String: Any] else { continue }
+            let text = (event["content_text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let toolText = event["tool_output_text"] as? String ?? ""
+            // Include extended/duplicate matches rather than filtering them away.
+            // User and tool echoes must not stand in for a missing final reply.
+            guard configuration.markers.contains(where: { text.contains($0) || toolText.contains($0) }) else { continue }
+            guard event["role"] as? String == "assistant",
+                  event["event_origin"] as? String == "durable",
+                  (event["tool_name"] as? String ?? "").isEmpty,
+                  let id = event["id"] as? String, !id.isEmpty,
+                  !configuration.markers.contains(where: toolText.contains),
+                  configuration.markers.contains(text) else {
+                throw ProofFailure(description: "Preflight marker must be an exact durable assistant textual reply without a prompt or tool echo")
+            }
+            replies.append(text)
+        }
+        guard replies == configuration.markers else {
+            throw ProofFailure(description: "Preflight final assistant replies must occur exactly once and in expected order")
         }
     }
 

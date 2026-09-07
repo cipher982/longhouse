@@ -1189,6 +1189,7 @@ providers:
   adapter_sources:
   - server/zerg/services/managed_local_control.py
   - engine/src/managed_antigravity_scan.rs
+  - engine/src/antigravity_print.rs
   wire_families: [antigravity_conversations, antigravity_hooks]
   observation_sources: [native_archive, hooks]
   normalization_ruleset: antigravity

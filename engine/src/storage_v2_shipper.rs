@@ -6830,7 +6830,7 @@ mod tests {
             .path()
             .join("brain")
             .join(provider_id)
-            .join(".system_generated/logs/transcript_full.jsonl");
+            .join(".system_generated/logs/transcript.jsonl");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
@@ -6954,7 +6954,7 @@ mod tests {
                 .path()
                 .join("brain")
                 .join(id)
-                .join(".system_generated/logs/transcript_full.jsonl");
+                .join(".system_generated/logs/transcript.jsonl");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, source).unwrap();
             fs::File::options()

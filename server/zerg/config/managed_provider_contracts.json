@@ -1922,7 +1922,8 @@
       "control_plane_aliases": [],
       "adapter_sources": [
         "server/zerg/services/managed_local_control.py",
-        "engine/src/managed_antigravity_scan.rs"
+        "engine/src/managed_antigravity_scan.rs",
+        "engine/src/antigravity_print.rs"
       ],
       "wire_families": [
         "antigravity_conversations",
@@ -2274,7 +2275,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "f52e657b7a0260553154f309db8e54194db2cf03c13feff2080c12ae136375a3"
+      "adapter_digest": "642ca2284a6746b8974e9bbcf0d4932aa5fdb9332f9622e212fc23db1db69008"
     },
     {
       "provider": "cursor",

@@ -246,22 +246,18 @@ pub async fn recover_antigravity_print_turns(
     local_db_path: Option<PathBuf>,
 ) -> Result<usize> {
     let registry = crate::turn_claims::default_registry()?;
-    // One coherent inventory for the pass; `None` means `ps` was unreadable,
-    // which must leave claims alone rather than settle them.
+    let agent_dir = crate::config::get_agent_dir()?;
+    // One coherent inventory for recorded PIDs. Unrecorded spawns are checked
+    // against their inherited stdout instead of treating a missing PID as dead.
     let inventory = crate::process_identity::try_collect_process_facts_by_pid();
     let mut recovered = 0;
     for claim in registry.list_nonterminal()? {
-        if !is_antigravity_print_claim(&claim) || claim.state != "spawned" {
+        let unrecorded_spawn =
+            claim.provider == "antigravity" && claim.state == "claimed" && claim.adapter.is_none();
+        if !unrecorded_spawn && (!is_antigravity_print_claim(&claim) || claim.state != "spawned") {
             continue;
         }
-        let Some(stdout_path) = claim.stdout_path.as_deref().map(PathBuf::from) else {
-            let _ = registry.mark_terminal(
-                &claim.run_id,
-                "run_failed",
-                Some("Antigravity Console claim has no stdout path".to_string()),
-            );
-            continue;
-        };
+        let stdout_path = claim_stdout_path(&claim, &agent_dir);
         let stderr_path = claim
             .stderr_path
             .as_deref()
@@ -280,7 +276,7 @@ pub async fn recover_antigravity_print_turns(
             local_db_path: local_db_path.clone(),
             runtime_events_outbox_dir: crate::config::get_agent_runtime_events_outbox_dir()?,
         };
-        match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+        match recovered_claim_liveness(&claim, &sink.stdout_path, inventory.as_ref()).await {
             ClaimLiveness::Live => {
                 tokio::spawn(async move {
                     monitor_recovered_claim(claim, stderr_path, sink).await;
@@ -290,13 +286,128 @@ pub async fn recover_antigravity_print_turns(
             ClaimLiveness::Gone => {
                 settle_recovered_dead_claim(&claim, &stderr_path, &sink).await;
             }
-            ClaimLiveness::Unknown => tracing::warn!(
-                run_id = %claim.run_id,
-                "Process inventory unavailable; leaving Antigravity Console turn claim for a later scan"
-            ),
+            ClaimLiveness::Unknown => {
+                tracing::warn!(
+                    run_id = %claim.run_id,
+                    "Execution evidence unavailable; retrying Antigravity Console recovery"
+                );
+                tokio::spawn(async move {
+                    monitor_recovered_claim(claim, stderr_path, sink).await;
+                });
+                recovered += 1;
+            }
         }
     }
     Ok(recovered)
+}
+
+/// A claim is durable before spawn, but the PID is durable only afterwards.
+/// The deterministic stdout is opened before spawn and inherited by the child.
+/// Its absence proves no child was launched; an existing file needs an exact
+/// writer check, not an age cutoff or a guess based on the provider's argv.
+async fn recovered_claim_liveness(
+    claim: &crate::turn_claims::TurnClaim,
+    stdout_path: &Path,
+    inventory: Option<&std::collections::HashMap<u32, crate::process_identity::ProcessFact>>,
+) -> ClaimLiveness {
+    if claim.state != "claimed" || claim.pid.is_some() {
+        return crate::console_adapter::claim_liveness(claim, inventory);
+    }
+    match stdout_path.try_exists() {
+        Ok(false) => return ClaimLiveness::Gone,
+        Ok(true) => {}
+        Err(_) => return ClaimLiveness::Unknown,
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return unrecorded_stdout_liveness(stdout_path);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = Command::new("lsof");
+        command
+            .args(["-nP", "-Fp", "--"])
+            .arg(stdout_path)
+            .kill_on_drop(true);
+        // A normal full process scan on a busy Mac can exceed one second.
+        // Bound recovery without mistaking that ordinary cost for lost evidence.
+        let output = match tokio::time::timeout(Duration::from_secs(5), command.output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => {
+                tracing::debug!(run_id = %claim.run_id, %error, "Cannot inspect Antigravity stdout ownership with lsof");
+                return ClaimLiveness::Unknown;
+            }
+            Err(_) => {
+                tracing::debug!(run_id = %claim.run_id, "Antigravity stdout ownership inspection timed out");
+                return ClaimLiveness::Unknown;
+            }
+        };
+        // lsof exits 1 with no output when no process has this file open.
+        // Warnings and failed inspections are never proof of death.
+        if !output.stderr.is_empty() {
+            tracing::debug!(run_id = %claim.run_id, stderr = %String::from_utf8_lossy(&output.stderr), "Antigravity stdout ownership inspection was incomplete");
+            return ClaimLiveness::Unknown;
+        }
+        if output.status.code() == Some(1) && output.stdout.is_empty() {
+            return ClaimLiveness::Gone;
+        }
+        if output.status.success()
+            && String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+                line.strip_prefix('p')
+                    .is_some_and(|pid| pid.parse::<u32>().is_ok())
+            })
+        {
+            return ClaimLiveness::Live;
+        }
+        ClaimLiveness::Unknown
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    ClaimLiveness::Unknown
+}
+
+#[cfg(target_os = "linux")]
+fn unrecorded_stdout_liveness(stdout_path: &Path) -> ClaimLiveness {
+    use std::os::unix::fs::MetadataExt;
+
+    let inspect = || -> std::io::Result<ClaimLiveness> {
+        let stdout = std::fs::metadata(stdout_path)?;
+        for entry in std::fs::read_dir("/proc")? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+                continue;
+            }
+            let process = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            // A Console child inherits our uid. Other users' inaccessible fd
+            // tables do not make inspection of our own processes incomplete.
+            if process.uid() != unsafe { libc::geteuid() } {
+                continue;
+            }
+            let descriptors = match std::fs::read_dir(entry.path().join("fd")) {
+                Ok(descriptors) => descriptors,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            for descriptor in descriptors {
+                let metadata = match std::fs::metadata(descriptor?.path()) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error),
+                };
+                if metadata.dev() == stdout.dev() && metadata.ino() == stdout.ino() {
+                    return Ok(ClaimLiveness::Live);
+                }
+            }
+        }
+        Ok(ClaimLiveness::Gone)
+    };
+    inspect().unwrap_or_else(|error| {
+        tracing::debug!(path = %stdout_path.display(), %error, "Cannot inspect Antigravity stdout ownership through /proc");
+        ClaimLiveness::Unknown
+    })
 }
 
 async fn monitor_recovered_claim(
@@ -314,7 +425,12 @@ async fn monitor_recovered_claim(
                     false
                 });
         }
-        if claim_process_liveness(&claim) == ClaimLiveness::Gone {
+        let liveness = if claim.state == "claimed" && claim.pid.is_none() {
+            recovered_claim_liveness(&claim, &sink.stdout_path, None).await
+        } else {
+            claim_process_liveness(&claim)
+        };
+        if liveness == ClaimLiveness::Gone {
             let cancel_requested = crate::turn_claims::default_registry()
                 .and_then(|registry| registry.read(&claim.run_id))
                 .ok()
@@ -636,7 +752,7 @@ fn locate_conversation_transcript(conversation_id: &str) -> Option<PathBuf> {
 fn conversation_transcript_path(brain_root: &Path, conversation_id: &str) -> PathBuf {
     brain_root
         .join(conversation_id)
-        .join(".system_generated/logs/transcript_full.jsonl")
+        .join(".system_generated/logs/transcript.jsonl")
 }
 
 fn antigravity_brain_root() -> Option<PathBuf> {
@@ -647,6 +763,20 @@ fn antigravity_brain_root() -> Option<PathBuf> {
             .join("antigravity-cli")
             .join("brain"),
     )
+}
+
+fn claim_stdout_path(claim: &crate::turn_claims::TurnClaim, agent_dir: &Path) -> PathBuf {
+    claim
+        .stdout_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            agent_dir
+                .join("antigravity-console")
+                .join(&claim.session_id)
+                .join(&claim.run_id)
+                .join("stdout.log")
+        })
 }
 
 fn is_antigravity_print_claim(claim: &crate::turn_claims::TurnClaim) -> bool {
@@ -684,6 +814,25 @@ fn bind_source_owner(
             existing == session_id,
             "Antigravity transcript already has another managed owner"
         );
+    }
+    // Old Console versions bound the full mirror. That durable owner still
+    // prevents another session from resuming its thread, but is not a reason
+    // to enroll or wake the mirror again.
+    if transcript
+        .file_name()
+        .is_some_and(|name| name == "transcript.jsonl")
+    {
+        let legacy = crate::storage_v2_shipper::stable_source_path(
+            &transcript.with_file_name("transcript_full.jsonl"),
+        );
+        if let Some(existing) =
+            binding.get_for_provider(&legacy.to_string_lossy(), "antigravity")?
+        {
+            anyhow::ensure!(
+                existing == session_id,
+                "Antigravity transcript already has another managed owner"
+            );
+        }
     }
     binding.bind_for_thread(&path, session_id, "antigravity", Some(provider_session_id))
 }
@@ -743,19 +892,7 @@ pub(crate) fn bind_discovered_source(
                 }
             }
         } else {
-            let stdout = claim
-                .stdout_path
-                .as_ref()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    // The durable claim precedes spawn; this deterministic path is
-                    // also available during the spawn -> mark_spawned write gap.
-                    agent_dir
-                        .join("antigravity-console")
-                        .join(&claim.session_id)
-                        .join(&claim.run_id)
-                        .join("stdout.log")
-                });
+            let stdout = claim_stdout_path(claim, agent_dir);
             match read_print_output(&stdout, true) {
                 Ok(output) => output.conversation_id,
                 Err(error) => {
@@ -1050,7 +1187,189 @@ mod tests {
     use super::*;
 
     #[test]
-    fn antigravity_init_wake_and_current_legacy_settlement_preserve_turn_lifecycle() {
+    fn antigravity_startup_releases_abandoned_pre_spawn_claims_without_mutating_sources() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let longhouse_home = dir.path().join("longhouse");
+        let db_path = dir.path().join("state.db");
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.as_os_str())),
+            ],
+            || {
+                runtime.block_on(async {
+                let registry = crate::turn_claims::default_registry().unwrap();
+                let agent_dir = crate::config::get_agent_dir().unwrap();
+                let native_id = Uuid::new_v4().to_string();
+                let native = conversation_transcript_path(&antigravity_brain_root().unwrap(), &native_id);
+                let shadow = conversation_transcript_path(&antigravity_brain_root().unwrap(), &Uuid::new_v4().to_string());
+                let source = b"{\"step_index\":1,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-09-06T22:07:35Z\",\"content\":\"native answer\"}\n";
+                for path in [&native, &shadow] {
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(path, source).unwrap();
+                }
+                // These are distinct crash boundaries, not elapsed-time cases:
+                // before output setup, before exec, mid-init, and after init.
+                for output in [
+                    None,
+                    Some(String::new()),
+                    Some("{\"event\":\"init\",\"conversation_id\":\"".to_string()),
+                    Some(format!("{{\"event\":\"init\",\"conversation_id\":\"{native_id}\"}}\n")),
+                ] {
+                    let run_id = Uuid::new_v4().to_string();
+                    let session_id = Uuid::new_v4().to_string();
+                    registry.claim(&run_id, &session_id, &Uuid::new_v4().to_string(), None, None, "antigravity").unwrap();
+                    let claim = registry.read(&run_id).unwrap();
+                    let stdout = claim_stdout_path(&claim, &agent_dir);
+                    if let Some(output) = output {
+                        std::fs::create_dir_all(stdout.parent().unwrap()).unwrap();
+                        std::fs::write(&stdout, output).unwrap();
+                    }
+                    let has_identity = read_print_output(&stdout, true).unwrap().conversation_id.is_some();
+                    assert_eq!(
+                        bind_discovered_source(&conn, &shadow, &registry.list_all().unwrap(), &agent_dir).unwrap(),
+                        if has_identity { SourceOwnership::Unclaimed } else { SourceOwnership::Pending },
+                    );
+                    assert_eq!(recover_antigravity_print_turns("test", Some(db_path.clone())).await.unwrap(), 0);
+                    assert_eq!(registry.read(&run_id).unwrap().state, "terminal");
+                    let terminal = read_outbox_events(&crate::config::get_agent_runtime_events_outbox_dir().unwrap())
+                        .into_iter().find(|event| event["run_id"] == run_id && event["kind"] == "terminal_signal").unwrap();
+                    assert_eq!(terminal["payload"]["terminal_state"], "run_failed");
+                    assert_eq!(
+                        bind_discovered_source(&conn, &shadow, &registry.list_all().unwrap(), &agent_dir).unwrap(),
+                        SourceOwnership::Unclaimed,
+                    );
+                    if has_identity {
+                        assert_eq!(
+                            bind_discovered_source(&conn, &native, &registry.list_all().unwrap(), &agent_dir).unwrap(),
+                            SourceOwnership::Managed(session_id),
+                        );
+                    }
+                    assert_eq!(std::fs::read(&native).unwrap(), source);
+                    assert_eq!(std::fs::read(&shadow).unwrap(), source);
+                }
+            })
+            },
+        );
+    }
+
+    #[test]
+    fn antigravity_startup_retains_unrecorded_live_writer_until_identity_and_exit() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let longhouse_home = dir.path().join("longhouse");
+        let db_path = dir.path().join("state.db");
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.as_os_str())),
+            ],
+            || {
+                runtime.block_on(async {
+                use tokio::io::AsyncWriteExt;
+
+                let registry = crate::turn_claims::default_registry().unwrap();
+                let agent_dir = crate::config::get_agent_dir().unwrap();
+                let run_id = Uuid::new_v4().to_string();
+                let session_id = Uuid::new_v4().to_string();
+                let native_id = Uuid::new_v4().to_string();
+                let native = conversation_transcript_path(&antigravity_brain_root().unwrap(), &native_id);
+                let shadow = conversation_transcript_path(&antigravity_brain_root().unwrap(), &Uuid::new_v4().to_string());
+                let source = b"{\"step_index\":1,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-09-06T22:07:35Z\",\"content\":\"native answer\"}\n";
+                std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+                std::fs::write(&native, source).unwrap();
+                registry.claim(&run_id, &session_id, &Uuid::new_v4().to_string(), None, None, "antigravity").unwrap();
+                let stdout = claim_stdout_path(&registry.read(&run_id).unwrap(), &agent_dir);
+                std::fs::create_dir_all(stdout.parent().unwrap()).unwrap();
+                // The child owns the durable output, but the engine died
+                // before persisting any PID, adapter or provider identity.
+                let mut child = Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(format!(
+                        "read first; printf '%s\\n' '{{\"event\":\"init\",\"conversation_id\":\"{native_id}\"}}'; read second; printf '%s\\n' '{{\"event\":\"result\",\"result\":{{\"conversation_id\":\"{native_id}\",\"status\":\"SUCCESS\"}}}}'"
+                    ))
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::from(private_output_file(&stdout).unwrap()))
+                    .kill_on_drop(true)
+                    .spawn().unwrap();
+                assert_eq!(recover_antigravity_print_turns("test", Some(db_path.clone())).await.unwrap(), 1);
+                assert_eq!(registry.read(&run_id).unwrap().state, "claimed");
+                assert_eq!(
+                    bind_discovered_source(&conn, &shadow, &registry.list_all().unwrap(), &agent_dir).unwrap(),
+                    SourceOwnership::Pending,
+                );
+                child.stdin.as_mut().unwrap().write_all(b"\n").await.unwrap();
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !registry.read(&run_id).unwrap().provider_identity_confirmed {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }).await.unwrap();
+                assert_eq!(
+                    bind_discovered_source(&conn, &native, &registry.list_all().unwrap(), &agent_dir).unwrap(),
+                    SourceOwnership::Managed(session_id.clone()),
+                );
+                assert_eq!(
+                    bind_discovered_source(&conn, &shadow, &registry.list_all().unwrap(), &agent_dir).unwrap(),
+                    SourceOwnership::Unclaimed,
+                );
+                child.stdin.as_mut().unwrap().write_all(b"\n").await.unwrap();
+                assert!(child.wait().await.unwrap().success());
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while registry.read(&run_id).unwrap().state != "terminal" {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }).await.unwrap();
+                let terminal = read_outbox_events(&crate::config::get_agent_runtime_events_outbox_dir().unwrap())
+                    .into_iter().find(|event| event["run_id"] == run_id && event["kind"] == "terminal_signal").unwrap();
+                assert_eq!(terminal["payload"]["terminal_state"], "run_completed");
+                assert_eq!(std::fs::read(&native).unwrap(), source);
+            })
+            },
+        );
+    }
+
+    #[test]
+    fn antigravity_legacy_mirror_owner_blocks_cross_session_rebinding() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::state::db::open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let native_id = Uuid::new_v4().to_string();
+        let transcript = conversation_transcript_path(dir.path(), &native_id);
+        let legacy = transcript.with_file_name("transcript_full.jsonl");
+        let session_id = Uuid::new_v4().to_string();
+        bind_source_owner(&conn, &legacy, &session_id, &native_id).unwrap();
+        assert!(
+            bind_source_owner(&conn, &transcript, &Uuid::new_v4().to_string(), &native_id).is_err()
+        );
+        bind_source_owner(&conn, &transcript, &session_id, &native_id).unwrap();
+        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+        for path in [&transcript, &legacy] {
+            assert_eq!(
+                binding
+                    .get_for_provider(
+                        &crate::storage_v2_shipper::stable_source_path(path).to_string_lossy(),
+                        "antigravity"
+                    )
+                    .unwrap(),
+                Some(session_id.clone()),
+            );
+        }
+    }
+
+    #[test]
+    fn antigravity_console_and_discovery_share_one_source_across_current_and_legacy_turns() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1087,6 +1406,9 @@ mod tests {
             let transcript = conversation_transcript_path(&antigravity_brain_root().unwrap(), &provider_id);
             std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
             std::fs::write(&transcript, b"{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-09-06T22:07:35Z\",\"content\":\"hello\"}\n").unwrap();
+            let native_bytes = std::fs::read(&transcript).unwrap();
+            let mirror = transcript.with_file_name("transcript_full.jsonl");
+            std::fs::write(&mirror, &native_bytes).unwrap();
             let socket = crate::config::get_agent_transcript_wake_socket_path().unwrap();
             std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
             let listener = tokio::net::UnixListener::bind(&socket).unwrap();
@@ -1117,6 +1439,14 @@ mod tests {
             let wake = receive_wake(&listener).await;
             assert_eq!(wake["phase"], "thinking");
             assert_eq!(wake["wake_reason"], "turn_started");
+            let providers = crate::discovery::get_providers().into_iter()
+                .filter(|provider| provider.name == "antigravity")
+                .collect::<Vec<_>>();
+            let discovered = crate::discovery::discover_all_files(&providers);
+            let selected = crate::storage_v2_shipper::stable_source_path(&transcript);
+            assert_eq!(discovered, vec![(selected.clone(), "antigravity")]);
+            assert_eq!(crate::storage_v2_shipper::stable_source_path(Path::new(wake["path"].as_str().unwrap())), selected);
+            assert_eq!(crate::discovery::session_path_for_watcher_event(&mirror, &providers), None);
             assert!(registry.list_nonterminal().unwrap().iter().any(|claim| claim.run_id == sink.run_id));
             assert_eq!(registry.read(&sink.run_id).unwrap().provider_thread_id.as_deref(), Some(provider_id.as_str()));
             let result = format!("{{\"event\":\"result\",\"result\":{{\"conversation_id\":\"{provider_id}\",\"status\":\"SUCCESS\",\"response\":\"done\"}}}}\n");
@@ -1131,6 +1461,7 @@ mod tests {
             assert_eq!(terminal["payload"]["terminal_state"], "run_completed");
 
             let legacy = make_sink();
+            registry.mark_provider_binding(&legacy.run_id, &provider_id, Some(&mirror.to_string_lossy())).unwrap();
             std::fs::write(&legacy.stdout_path, format!("{{\"conversation_id\":\"{provider_id}\",\"status\":\"SUCCESS\",\"response\":\"done\"}}")).unwrap();
             settle_antigravity_claim(&legacy, false, Some(0), &legacy.stdout_path.with_file_name("stderr.log")).await;
             receive_wake(&listener).await;
@@ -1143,6 +1474,14 @@ mod tests {
                     .get_for_provider(&std::fs::canonicalize(&transcript).unwrap().to_string_lossy(), "antigravity").unwrap(),
                 Some(session_id.clone()),
             );
+            assert_eq!(
+                crate::state::session_binding::SessionBinding::new(&conn)
+                    .get_for_provider(&std::fs::canonicalize(&mirror).unwrap().to_string_lossy(), "antigravity").unwrap(),
+                None,
+            );
+            assert_eq!(registry.read(&legacy.run_id).unwrap().source_path.as_deref(), Some(transcript.to_string_lossy().as_ref()));
+            assert_eq!(std::fs::read(&transcript).unwrap(), native_bytes);
+            assert_eq!(std::fs::read(&mirror).unwrap(), native_bytes);
 
             // A launch that terminates without init fails rather than claiming
             // success, and its pending hold must not outlive the terminal claim.

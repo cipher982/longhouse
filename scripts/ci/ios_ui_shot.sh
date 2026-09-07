@@ -52,8 +52,11 @@ for suffix in SERVER_URL AUTH_TOKEN SESSION_ID MARKERS_JSON; do
   fi
 done
 set +e
+# Keep the xcresult, test log and screenshots, but do not launch a lengthy
+# sysdiagnose when a screenshot proof or deliberate negative control fails.
 xcodebuild -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
   -derivedDataPath "$DERIVED_DATA_PATH" -resultBundlePath "$OUT/result.xcresult" \
+  -collect-test-diagnostics never \
   -only-testing:"LonghouseIOSUITests/$TEST" test-without-building 2>&1 | tee "$OUT/test.log" | grep -E 'Test Case|\*\* TEST|error:'
 status=${PIPESTATUS[0]}
 set -e

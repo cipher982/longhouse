@@ -4523,7 +4523,7 @@ exit 1
         let transcript = home
             .join(".gemini/antigravity-cli/brain")
             .join(&native_id)
-            .join(".system_generated/logs/transcript_full.jsonl");
+            .join(".system_generated/logs/transcript.jsonl");
         std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
         let fake = temp.path().join("agy");
         write_test_executable(
