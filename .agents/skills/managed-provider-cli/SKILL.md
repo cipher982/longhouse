@@ -119,6 +119,9 @@ Hard Codex contract:
   terminal result timing or diagnostic log text. Pending identity must not let
   its native transcript become an unrelated Shadow session. Keep historical
   malformed claims isolated from unrelated source discovery.
+- Antigravity's source is `.system_generated/logs/transcript_full.jsonl`.
+  The shorter `transcript.jsonl` truncates tool output and stringifies arguments;
+  never ingest both as independent sources or prefer the lossy sibling.
 
 ## Workflows
 

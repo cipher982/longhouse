@@ -14,7 +14,6 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
-
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
@@ -1843,6 +1842,86 @@ def test_search_reports_whether_ranking_saw_every_match(tmp_path, monkeypatch):
             )["ranking_scope"]
             == "recent_bounded"
         )
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("committed_branch", [None, "root", "primary", "subagent"])
+def test_searchd_partial_prose_remains_searchable_without_counting_as_a_reply(tmp_path, committed_branch):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"cursor-partial-prose").hexdigest()
+    now = datetime.now(UTC)
+    now_us = int(now.timestamp() * 1_000_000)
+    rows = [
+        ("prompt", "user", committed_branch),
+        ("failed", "assistant", "abandoned"),
+        ("thinking", "assistant", "reasoning"),
+        ("reply", "assistant", committed_branch),
+    ]
+    records = [
+        {
+            "event_id": event_id,
+            "record_ordinal": ordinal,
+            "order_time_us": now_us + ordinal,
+            "source_position": ordinal,
+            "event_subordinal": 0,
+            "role": role,
+            "content_text": f"partialproof {event_id}",
+            "interaction_kind": "durable_user_message" if role == "user" else None,
+            "tool_name": None,
+            "tool_output_text": None,
+            "tool_call_id": None,
+            "thread_id": None,
+            "branch_kind": branch_kind,
+        }
+        for ordinal, (event_id, role, branch_kind) in enumerate(rows)
+    ]
+    publication = {
+        "session_id": session_id,
+        "generation_id": generation_id,
+        "owner_id": "42",
+        "desired_revision": 1,
+        "object_count": 1,
+        "object_set_hash": object_set_hash([object_id]),
+        "event_count": len(records),
+        "project": "longhouse",
+        "provider": "cursor",
+        "environment": "local",
+        "cwd": "/workspace/longhouse",
+        "git_repo": None,
+        "started_at": now.isoformat(),
+    }
+    try:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=1,
+            provider="cursor",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd="/workspace/longhouse",
+            git_repo=None,
+            opaque_source_id="cursor/session",
+            source_epoch=str(uuid4()),
+            records=records,
+        )
+        store.publish_generation(**publication)
+        results = store.search(**_search_params("partialproof"))["results"]
+        assert {row["event_id"] for row in results} == {"prompt", "failed", "thinking", "reply"}
+        assert {(row["assistant_messages"], row["is_sidechain"]) for row in results} == {(1, int(committed_branch == "subagent"))}
+
+        # Historical publications can be refreshed without re-ingesting raw
+        # records or discarding the derived corpus and its embeddings.
+        connection.execute("UPDATE session_index SET assistant_messages = 3, is_sidechain = 1 WHERE session_id = ?", (session_id,))
+        connection.commit()
+        store.publish_generation(**publication)
+        repaired = store.search(**_search_params("partialproof"))["results"]
+        assert {(row["assistant_messages"], row["is_sidechain"]) for row in repaired} == {(1, int(committed_branch == "subagent"))}
     finally:
         connection.close()
 

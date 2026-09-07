@@ -101,6 +101,7 @@ class SealedRenderObject:
     user_messages: int
     assistant_messages: int
     tool_calls: int
+    abandoned_events: int
     first_user_message_preview: str | None
     last_visible_text_preview: str | None
     reused: bool
@@ -347,8 +348,12 @@ def _aggregate(spec: RenderObjectSpec) -> dict[str, object]:
         "first_order_key": _order_key(spec, records[0]) if records else None,
         "last_order_key": _order_key(spec, records[-1]) if records else None,
         "user_messages": sum(record.role == "user" for record in conversation_records),
-        "assistant_messages": sum(record.role == "assistant" and record.tool_name is None for record in records),
+        "assistant_messages": sum(
+            record.role == "assistant" and record.tool_name is None and record.branch_kind not in {"abandoned", "reasoning"}
+            for record in records
+        ),
         "tool_calls": sum(record.tool_name is not None for record in records),
+        "abandoned_events": sum(record.branch_kind == "abandoned" for record in semantic_records),
         "first_user_message_preview": _preview(first_user),
         "last_visible_text_preview": _preview(last_visible),
     }

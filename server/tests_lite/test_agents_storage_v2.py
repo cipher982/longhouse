@@ -326,6 +326,7 @@ async def test_storage_v2_render_reader_saturation_is_not_reported_as_corruption
                     "generation_id": str(generation_id),
                     "event_count": 1,
                 },
+                "abandoned_events": 0,
                 "objects": [
                     {
                         "object_path": f"render/v2/{'a' * 2}/{'a' * 64}.zst",
@@ -367,6 +368,7 @@ async def test_storage_v2_render_reader_surfaces_semantic_recovery_pending(monke
                 "found": True,
                 "current_generation_id": str(generation_id),
                 "generation": {"generation_id": str(generation_id), "event_count": 1},
+                "abandoned_events": 0,
                 "objects": [
                     {
                         "object_path": "render.zst",
@@ -472,6 +474,7 @@ async def test_storage_v2_claude_tail_stops_after_requested_head_window_without_
                 "found": True,
                 "current_generation_id": str(generation_id),
                 "generation": {"generation_id": str(generation_id), "event_count": 120},
+                "abandoned_events": 0,
                 "objects": manifests,
                 "objects_truncated": False,
             }
@@ -509,6 +512,147 @@ async def test_storage_v2_claude_tail_stops_after_requested_head_window_without_
     assert page["has_more"] is True
     assert "read_admission" in (timing.header_value() or "")
     assert "semantic_recover" in (timing.header_value() or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("anchor", ["start", "tail"])
+async def test_storage_v2_abandoned_prose_has_generation_counts_and_full_head_pages(monkeypatch, anchor):
+    from zerg.services.storage_v2_workspace import _workspace_envelope
+
+    session_id, generation_id, source_epoch = uuid4(), uuid4(), uuid4()
+    decoded_by_path = {}
+    manifests = []
+    for position in range(8):
+        record = RenderRecord(
+            event_id=f"event-{position}",
+            order_time_us=position,
+            source_position=position,
+            event_subordinal=0,
+            role="assistant",
+            content_text=f"reply {position}",
+            interaction_kind="provider_system",
+            branch_kind=None if position in {1, 4, 7} else "abandoned",
+        )
+        object_hash, source_envelope_id = f"{position:064x}", f"{position + 1000:064x}"
+        spec = RenderObjectSpec(
+            session_id=session_id,
+            render_generation=generation_id,
+            parser_revision="engine-parser-v7",
+            ordering_revision="semantic-order-v2",
+            machine_id="cinder",
+            provider="cursor",
+            opaque_source_id="cursor/session",
+            source_epoch=source_epoch,
+            source_envelope_id=source_envelope_id,
+            records=(record,),
+        )
+        object_path = f"render-{position}.zst"
+        decoded_by_path[object_path] = SimpleNamespace(spec=spec, object_hash=object_hash)
+        order_key = json.dumps([position, "cinder", "cursor", "cursor/session", str(source_epoch), position, 0])
+        manifests.append(
+            {
+                "object_path": object_path,
+                "object_hash": object_hash,
+                "source_envelope_id": source_envelope_id,
+                "first_order_key": order_key,
+                "last_order_key": order_key,
+            }
+        )
+
+    class Catalog:
+        async def call(self, method, params, **_kwargs):
+            assert method == "storage.session.render_manifest.v2"
+            after = json.loads(params["after_order_key"]) if params["after_order_key"] else None
+            before = json.loads(params["before_order_key"]) if params["before_order_key"] else None
+            selected = [
+                item
+                for item in manifests
+                if (after is None or json.loads(item["last_order_key"]) > after)
+                and (before is None or json.loads(item["first_order_key"]) < before)
+            ]
+            return {
+                "found": True,
+                "current_generation_id": str(generation_id),
+                "generation": {"generation_id": str(generation_id), "event_count": 8},
+                "abandoned_events": 5,
+                "objects": selected if params["anchor"] == "start" else selected[::-1],
+                "objects_truncated": False,
+            }
+
+    class RenderPool:
+        async def read(self, object_path, *_args, **_kwargs):
+            return decoded_by_path[object_path]
+
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: Catalog())
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: RenderPool())
+    session = SimpleNamespace(
+        provider="cursor",
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        capabilities=SimpleNamespace(live_control_available=False, can_start_turn=False),
+        model_dump=lambda **_kwargs: {"id": str(session_id)},
+    )
+    for branch_mode, expected_ids in (("head", [1, 4, 7]), ("all", list(range(8)))):
+        cursor = None
+        pages = []
+        while True:
+            page = await storage_router.read_storage_v2_session_events_page(
+                session_id=session_id, owner_id="42", cursor=cursor, anchor=anchor, limit=2, branch_mode=branch_mode
+            )
+            workspace = _workspace_envelope(
+                session_id=session_id,
+                session=session,
+                session_commit_seq="1",
+                branch_mode=branch_mode,
+                anchor=anchor,
+                cursor=cursor,
+                storage={},
+                page=page,
+                receipts=[],
+            )
+            projection = workspace["projection"]
+            assert projection["abandoned_events"] == 5
+            assert projection["total"] == len(expected_ids)
+            items = projection["items"]
+            assert items
+            if projection["has_more"]:
+                assert len(items) == 2
+                assert projection["next_cursor"] not in {None, cursor}
+            for item in items:
+                event = item["event"]
+                committed = event["id"] in {"event-1", "event-4", "event-7"}
+                assert event["is_head_branch"] is committed
+                assert event["in_active_context"] is committed
+            pages.append([item["event"]["id"] for item in items])
+            assert len(pages) <= 4
+            if not projection["has_more"]:
+                assert projection["next_cursor"] is None
+                break
+            cursor = projection["next_cursor"]
+        chronological = pages if anchor == "start" else pages[::-1]
+        assert [event_id for items in chronological for event_id in items] == [f"event-{index}" for index in expected_ids]
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_unknown_abandoned_count_requests_repair_instead_of_claiming_zero(monkeypatch):
+    session_id, generation_id = uuid4(), uuid4()
+
+    class Catalog:
+        async def call(self, *_args, **_kwargs):
+            return {
+                "found": True,
+                "current_generation_id": str(generation_id),
+                "generation": {"generation_id": str(generation_id), "event_count": 1},
+                "abandoned_events": None,
+                "objects": [],
+            }
+
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: Catalog())
+    with pytest.raises(storage_router.HTTPException) as raised:
+        await storage_router.read_storage_v2_session_events_page(
+            session_id=session_id, owner_id="42", cursor=None, anchor="tail", limit=2, branch_mode="head"
+        )
+    assert raised.value.status_code == 503
+    assert raised.value.detail["code"] == "branch_projection_pending"
 
 
 @pytest.mark.asyncio
@@ -1501,6 +1645,7 @@ async def test_storage_v2_render_page_drops_one_unreadable_event_instead_of_the_
                 "found": True,
                 "current_generation_id": str(generation_id),
                 "generation": {"generation_id": str(generation_id), "event_count": 2},
+                "abandoned_events": 0,
                 "objects": [
                     {
                         "object_path": "render.zst",

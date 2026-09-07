@@ -3349,18 +3349,22 @@ class CatalogDaemon:
                     "user_messages",
                     "assistant_messages",
                     "tool_calls",
+                    "abandoned_events",
                     "first_user_message_preview",
                     "last_visible_text_preview",
                 }
-                if set(item) != object_expected:
+                count_fields = {"object_id", "event_count", "abandoned_events"}
+                if set(item) not in (object_expected, count_fields):
                     raise ValueError("semantic repair object has invalid fields")
                 if not _is_hash(item["object_id"]):
                     raise ValueError("semantic repair object_id must be lowercase SHA-256 hex")
-                for field in ("event_count", "user_messages", "assistant_messages", "tool_calls"):
+                for field in item.keys() & {"event_count", "user_messages", "assistant_messages", "tool_calls", "abandoned_events"}:
                     value = item[field]
                     if type(value) is not int or not 0 <= value <= 10_000:
                         raise ValueError(f"semantic repair {field} exceeds its bound")
-                for field in ("first_user_message_preview", "last_visible_text_preview"):
+                if item["abandoned_events"] > item["event_count"]:
+                    raise ValueError("semantic repair abandoned_events exceeds event_count")
+                for field in item.keys() & {"first_user_message_preview", "last_visible_text_preview"}:
                     value = item[field]
                     if value is not None:
                         item[field] = _bounded_text(value, f"semantic repair {field}", 2_000)
@@ -4508,15 +4512,17 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
         "user_messages",
         "assistant_messages",
         "tool_calls",
+        "abandoned_events",
         "first_user_message_preview",
         "last_visible_text_preview",
         "semantic_projection_version",
     }
-    legacy_expected = expected - {"semantic_projection_version"}
-    if set(value) not in (expected, legacy_expected):
+    optional = {"semantic_projection_version", "abandoned_events"}
+    if not expected - optional <= set(value) <= expected:
         raise ValueError("render_manifest has invalid fields")
     result = dict(value)
     result.setdefault("semantic_projection_version", 0)
+    result.setdefault("abandoned_events", None)
     result["generation_id"] = _canonical_uuid(result["generation_id"], "generation_id")
     for field in ("parser_revision", "ordering_revision"):
         result[field] = _canonical_storage_text(result[field], field=field, maximum_bytes=128)
@@ -4538,6 +4544,9 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
     ):
         if type(result[field]) is not int or not 0 <= result[field] <= maximum:
             raise ValueError(f"render_manifest.{field} exceeds its bound")
+    abandoned_events = result["abandoned_events"]
+    if abandoned_events is not None and (type(abandoned_events) is not int or not 0 <= abandoned_events <= result["event_count"]):
+        raise ValueError("render_manifest.abandoned_events exceeds its bound")
     if type(result["semantic_projection_version"]) is not int or not 0 <= result["semantic_projection_version"] <= 1:
         raise ValueError("render_manifest.semantic_projection_version is invalid")
     for field, maximum in (

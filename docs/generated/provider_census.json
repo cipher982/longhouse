@@ -1325,7 +1325,8 @@
       "path": "server/tests_lite/test_searchd.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {
@@ -1546,7 +1547,8 @@
       "path": "server/tests_lite/test_storage_v2_render_objects.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {

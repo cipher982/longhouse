@@ -292,15 +292,15 @@ tool = str(tool_call.get("name") or "") if isinstance(tool_call, dict) else ""
 workspace_paths = data.get("workspacePaths") or []
 cwd = str(workspace_paths[0] or "") if isinstance(workspace_paths, list) and workspace_paths else ""
 transcript = str(data.get("transcriptPath") or "")
-# Stock Stop hooks name the full mirror, not the source selected by discovery.
+# The short transcript truncates tool output; always select full native history.
 # Keep presence, managed binding intent, and the completion wake on one source.
 transcript_hint = Path(transcript)
 if (
-    transcript_hint.name == "transcript_full.jsonl"
+    transcript_hint.name == "transcript.jsonl"
     and transcript_hint.parent.name == "logs"
     and transcript_hint.parent.parent.name == ".system_generated"
 ):
-    transcript = str(transcript_hint.with_name("transcript.jsonl"))
+    transcript = str(transcript_hint.with_name("transcript_full.jsonl"))
 step_index = str(data.get("stepIdx") or data.get("step_index") or "")
 managed_provider = (os.environ.get("LONGHOUSE_MANAGED_PROVIDER") or "").strip().lower()
 # Provider subprocesses may inherit a parent Helm session environment. A

@@ -5973,11 +5973,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let transcript = dir
             .path()
-            .join("brain/conversation/.system_generated/logs/transcript.jsonl");
+            .join("brain/conversation/.system_generated/logs/transcript_full.jsonl");
         std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
         std::fs::write(&transcript, b"canonical snapshot\n").unwrap();
-        let mirror = transcript.with_file_name("transcript_full.jsonl");
-        std::fs::write(&mirror, b"full mirror has different tool argument bytes\n").unwrap();
+        let mirror = transcript.with_file_name("transcript.jsonl");
+        std::fs::write(&mirror, b"truncated summary has different bytes\n").unwrap();
         let mut latest_wakes = HashMap::new();
         let wake = |path: PathBuf, observed_at_ms| TranscriptWakeSignal {
             provider: "antigravity".to_string(),

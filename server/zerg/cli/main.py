@@ -23,6 +23,7 @@ from zerg.cli.coordination import tail
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
 from zerg.cli.provider import app as provider_app
+from zerg.cli.render_counts import repair_render_counts
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_install_command
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_smoke_command
 from zerg.cli.serve import hash_password
@@ -635,6 +636,8 @@ def db_reconcile_session_visibility(
             f"failures={len(payload['derived_failures'])}."
         )
 
+
+db_app.command(name="repair-render-counts")(repair_render_counts)
 
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")

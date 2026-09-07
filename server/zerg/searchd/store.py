@@ -41,10 +41,12 @@ _PUBLISH_AGGREGATES_SQL = """
         SUM(CASE WHEN e.role = 'user' AND e.title_eligible = 1
                   AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))
                  THEN 1 ELSE 0 END) AS user_messages,
-        SUM(CASE WHEN e.role = 'assistant' AND e.tool_name IS NULL THEN 1 ELSE 0 END) AS assistant_messages,
+        SUM(CASE WHEN e.role = 'assistant' AND e.tool_name IS NULL
+                  AND (e.branch_kind IS NULL OR e.branch_kind NOT IN ('abandoned', 'reasoning'))
+                 THEN 1 ELSE 0 END) AS assistant_messages,
         SUM(CASE WHEN e.tool_name IS NOT NULL THEN 1 ELSE 0 END) AS tool_calls,
         MAX(CASE
-            WHEN e.branch_kind IS NOT NULL AND e.branch_kind NOT IN ('root', 'primary')
+            WHEN e.branch_kind IS NOT NULL AND e.branch_kind NOT IN ('root', 'primary', 'abandoned', 'reasoning')
             THEN 1 ELSE 0
         END) AS is_sidechain
     FROM projection_membership m

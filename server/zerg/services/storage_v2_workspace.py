@@ -76,7 +76,7 @@ def _event_projection(
                 provider=provider,
             ),
             "timestamp": event["timestamp"],
-            "in_active_context": True,
+            "in_active_context": event.get("branch_kind") != "abandoned",
             "branch_id": None,
             "is_head_branch": event.get("branch_kind") != "abandoned",
             "event_origin": "durable",
@@ -119,8 +119,6 @@ def _workspace_envelope(
     if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The render projection is invalid.")
     abandoned_events = int(page.get("abandoned_events") or 0) if page is not None else 0
-    if branch_mode == "head":
-        events = [event for event in events if event.get("branch_kind") != "abandoned"]
     completed_tool_call_ids = {str(event["tool_call_id"]) for event in events if event.get("role") == "tool" and event.get("tool_call_id")}
     session_run = getattr(getattr(session, "session_state", None), "run", None)
     cursor_run_ended = getattr(session, "provider", None) == "cursor" and getattr(session_run, "lifecycle", None) == "ended"
@@ -142,8 +140,6 @@ def _workspace_envelope(
         )
         for event in events
     ]
-    if branch_mode == "head":
-        total = max(0, total - abandoned_events)
     latest_event_id = str(events[-1]["event_id"]) if events else None
     fingerprint_payload = {
         "session_commit_seq": session_commit_seq,

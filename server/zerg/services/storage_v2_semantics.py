@@ -828,6 +828,7 @@ async def repair_storage_session_semantic_projection(
                     "user_messages": int(aggregate["user_messages"]),
                     "assistant_messages": int(aggregate["assistant_messages"]),
                     "tool_calls": int(aggregate["tool_calls"]),
+                    "abandoned_events": int(aggregate["abandoned_events"]),
                     "first_user_message_preview": aggregate["first_user_message_preview"],
                     "last_visible_text_preview": aggregate["last_visible_text_preview"],
                 }

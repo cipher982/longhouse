@@ -588,6 +588,7 @@ class LiveCatalog:
                     "user_messages": sealed_render.user_messages,
                     "assistant_messages": sealed_render.assistant_messages,
                     "tool_calls": sealed_render.tool_calls,
+                    "abandoned_events": sealed_render.abandoned_events,
                     "first_user_message_preview": sealed_render.first_user_message_preview,
                     "last_visible_text_preview": sealed_render.last_visible_text_preview,
                 },

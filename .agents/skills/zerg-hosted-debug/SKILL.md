@@ -176,6 +176,19 @@ python -m zerg.cli.main migrate --database-url sqlite:////data/longhouse.db --ap
 Heavy migrations can rewrite large archive tables. Treat them as operator
 maintenance, not startup work.
 
+For the render branch-count upgrade, precompute verified counts from immutable
+render files while the old API still serves; no raw-native replay is required:
+
+```bash
+python -m zerg.cli.main db repair-render-counts --database /data/longhouse-live.db --cache /data/cache/render-counts.jsonl
+```
+
+After the updated catalog writer is running, repeat with `--apply`. It preserves
+raw/render bytes, uses current-generation fences, and requires zero missing
+current count facts before success. Do not accept the upgraded API while it
+returns `branch_projection_pending` for historical data. Keep the cache on the
+persistent data mount across container replacement; `--limit` is preflight-only.
+
 ## Watchman Evidence
 
 Ops Watchman records `db_file_stats` observations with the same DB/disk/page

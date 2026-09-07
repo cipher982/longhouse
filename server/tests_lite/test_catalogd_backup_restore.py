@@ -10,8 +10,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from zerg.storage_v2.object_store import B2BackupMirrorObjectStore
-
 from zerg.catalogd.backup import BackupProofError
 from zerg.catalogd.backup import restore_rehearsal
 from zerg.catalogd.backup import verify_restore_point
@@ -21,17 +19,19 @@ from zerg.config import resolve_live_database_url
 from zerg.config import sqlite_file_path
 from zerg.storage_v2.media_objects import MediaObjectSpec
 from zerg.storage_v2.media_objects import seal_media_object
+from zerg.storage_v2.object_store import B2BackupMirrorObjectStore
+from zerg.storage_v2.object_store import FilesystemImmutableObjectStore
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import seal_raw_object
+from zerg.storage_v2.remote_backup import mirror_restore_point
+from zerg.storage_v2.remote_backup import restore_remote_rehearsal
+from zerg.storage_v2.remote_backup import scrub_remote_restore_point
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderRecord
 from zerg.storage_v2.render_objects import read_render_object
 from zerg.storage_v2.render_objects import seal_render_object
-from zerg.storage_v2.object_store import FilesystemImmutableObjectStore
-from zerg.storage_v2.remote_backup import mirror_restore_point
-from zerg.storage_v2.remote_backup import restore_remote_rehearsal
-from zerg.storage_v2.remote_backup import scrub_remote_restore_point
+
 from tests_lite.test_storage_v2_object_store import real_b2_store_or_skip
 
 
@@ -60,6 +60,7 @@ def _render_manifest(*, sealed, generation_id) -> dict[str, object]:
         "user_messages": sealed.user_messages,
         "assistant_messages": sealed.assistant_messages,
         "tool_calls": sealed.tool_calls,
+        "abandoned_events": sealed.abandoned_events,
         "first_user_message_preview": sealed.first_user_message_preview,
         "last_visible_text_preview": sealed.last_visible_text_preview,
     }

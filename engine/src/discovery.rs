@@ -302,14 +302,14 @@ pub fn provider_for_path(
 }
 
 /// Provider hook paths are hints, not permission to enroll a second transcript.
-/// Antigravity's Stop hook names its full mirror; discovery and Console use
-/// transcript.jsonl. Resolve that documented sibling before binding/scheduling,
-/// even when the canonical file is not present yet. Never fall back to the mirror.
+/// Antigravity's transcript.jsonl truncates tool output and stringifies args.
+/// Use its full native transcript for discovery, hooks and Console. Resolve
+/// summary hints even before the full file arrives; never fall back to lossy data.
 pub(crate) fn canonical_transcript_hint<'a>(provider: &str, path: &'a Path) -> Cow<'a, Path> {
     if provider.eq_ignore_ascii_case("antigravity")
         && path
             .file_name()
-            .is_some_and(|name| name == "transcript_full.jsonl")
+            .is_some_and(|name| name == "transcript.jsonl")
         && path.parent().is_some_and(|parent| {
             parent.file_name().is_some_and(|name| name == "logs")
                 && parent.parent().is_some_and(|system| {
@@ -319,7 +319,7 @@ pub(crate) fn canonical_transcript_hint<'a>(provider: &str, path: &'a Path) -> C
                 })
         })
     {
-        Cow::Owned(path.with_file_name("transcript.jsonl"))
+        Cow::Owned(path.with_file_name("transcript_full.jsonl"))
     } else {
         Cow::Borrowed(path)
     }
@@ -411,7 +411,7 @@ fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
             // are configuration or sidecars and are not sessions.
             return path.file_name().and_then(|name| name.to_str()) == Some("logs.json");
         }
-        return path.file_name().and_then(|name| name.to_str()) == Some("transcript.jsonl");
+        return path.file_name().and_then(|name| name.to_str()) == Some("transcript_full.jsonl");
     }
     if provider.name == "claude" && is_workflow_journal(path) {
         // Dynamic-workflow runs write a `journal.jsonl` control ledger alongside
@@ -687,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_provider_ignores_full_transcript_mirror() {
+    fn antigravity_provider_ignores_truncated_transcript_mirror() {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
         let providers = provider_candidates(&home, &claude_root, &home.join(".config"));
@@ -701,11 +701,11 @@ mod tests {
             .join("transcript.jsonl");
         let full_transcript = transcript.with_file_name("transcript_full.jsonl");
 
+        assert_eq!(provider_for_path(&transcript, &providers), None);
         assert_eq!(
-            provider_for_path(&transcript, &providers),
+            provider_for_path(&full_transcript, &providers),
             Some("antigravity")
         );
-        assert_eq!(provider_for_path(&full_transcript, &providers), None);
     }
 
     #[test]

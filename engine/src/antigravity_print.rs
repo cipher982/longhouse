@@ -755,7 +755,7 @@ fn locate_conversation_transcript(conversation_id: &str) -> Option<PathBuf> {
 fn conversation_transcript_path(brain_root: &Path, conversation_id: &str) -> PathBuf {
     brain_root
         .join(conversation_id)
-        .join(".system_generated/logs/transcript.jsonl")
+        .join(".system_generated/logs/transcript_full.jsonl")
 }
 
 fn antigravity_brain_root() -> Option<PathBuf> {
@@ -818,15 +818,15 @@ fn bind_source_owner(
             "Antigravity transcript already has another managed owner"
         );
     }
-    // Old Console versions bound the full mirror. That durable owner still
-    // prevents another session from resuming its thread, but is not a reason
-    // to enroll or wake the mirror again.
+    // Earlier bindings may name the shortened sibling. That durable owner still
+    // prevents another session from taking over; it does not authorize another
+    // source to be enrolled beside the full native transcript.
     if transcript
         .file_name()
-        .is_some_and(|name| name == "transcript.jsonl")
+        .is_some_and(|name| name == "transcript_full.jsonl")
     {
         let legacy = crate::storage_v2_shipper::stable_source_path(
-            &transcript.with_file_name("transcript_full.jsonl"),
+            &transcript.with_file_name("transcript.jsonl"),
         );
         if let Some(existing) =
             binding.get_for_provider(&legacy.to_string_lossy(), "antigravity")?
@@ -1366,7 +1366,7 @@ mod tests {
         let conn = crate::state::db::open_db(Some(&dir.path().join("state.db"))).unwrap();
         let native_id = Uuid::new_v4().to_string();
         let transcript = conversation_transcript_path(dir.path(), &native_id);
-        let legacy = transcript.with_file_name("transcript_full.jsonl");
+        let legacy = transcript.with_file_name("transcript.jsonl");
         let session_id = Uuid::new_v4().to_string();
         bind_source_owner(&conn, &legacy, &session_id, &native_id).unwrap();
         assert!(
@@ -1426,7 +1426,7 @@ mod tests {
             std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
             std::fs::write(&transcript, b"{\"step_index\":0,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-09-06T22:07:35Z\",\"content\":\"hello\"}\n").unwrap();
             let native_bytes = std::fs::read(&transcript).unwrap();
-            let mirror = transcript.with_file_name("transcript_full.jsonl");
+            let mirror = transcript.with_file_name("transcript.jsonl");
             std::fs::write(&mirror, &native_bytes).unwrap();
             let socket = crate::config::get_agent_transcript_wake_socket_path().unwrap();
             std::fs::create_dir_all(socket.parent().unwrap()).unwrap();

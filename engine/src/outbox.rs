@@ -1481,11 +1481,11 @@ mod tests {
         let db = tempfile::NamedTempFile::new().unwrap();
         let transcript = dir
             .path()
-            .join("brain/conversation/.system_generated/logs/transcript.jsonl");
+            .join("brain/conversation/.system_generated/logs/transcript_full.jsonl");
         fs::create_dir_all(transcript.parent().unwrap()).unwrap();
         fs::write(&transcript, b"canonical snapshot\n").unwrap();
-        let mirror = transcript.with_file_name("transcript_full.jsonl");
-        fs::write(&mirror, b"full mirror\n").unwrap();
+        let mirror = transcript.with_file_name("transcript.jsonl");
+        fs::write(&mirror, b"truncated summary\n").unwrap();
         let path = dir.path().join("prs.ANTIGRAVITY.json");
         let payload = serde_json::json!({
             "session_id": "antigravity-session",

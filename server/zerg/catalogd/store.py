@@ -8073,6 +8073,7 @@ class CatalogStore:
                         user_messages=render_manifest["user_messages"],
                         assistant_messages=render_manifest["assistant_messages"],
                         tool_calls=render_manifest["tool_calls"],
+                        abandoned_events=render_manifest.get("abandoned_events"),
                         first_user_message_preview=render_manifest["first_user_message_preview"],
                         last_visible_text_preview=render_manifest["last_visible_text_preview"],
                         semantic_projection_version=render_manifest.get("semantic_projection_version", 0),
@@ -10053,6 +10054,7 @@ class CatalogStore:
             stale_generation = generation_id is not None and requested_generation != current_generation
             generation_row = None
             rows: list[Any] = []
+            abandoned_events: int | None = None
             if deleted is None and requested_generation is not None and not stale_generation:
                 generation_row = (
                     connection.execute(select(generation_table).where(generation_table.c.generation_id == requested_generation))
@@ -10064,6 +10066,19 @@ class CatalogStore:
                     object_table.c.retired_at.is_(None),
                     object_table.c.event_count > 0,
                 )
+                branch_counts = connection.execute(
+                    select(
+                        func.count(),
+                        func.count(object_table.c.abandoned_events),
+                        func.coalesce(func.sum(object_table.c.abandoned_events), 0),
+                    ).where(
+                        object_table.c.generation_id == requested_generation,
+                        object_table.c.retired_at.is_(None),
+                        object_table.c.event_count > 0,
+                    )
+                ).one()
+                if branch_counts[0] == branch_counts[1]:
+                    abandoned_events = int(branch_counts[2])
                 if after_order_key is not None:
                     after_values = tuple(json.loads(after_order_key))
                     statement = statement.where(
@@ -10126,6 +10141,7 @@ class CatalogStore:
                 "stale_generation": stale_generation,
                 "current_generation_id": current_generation,
                 "generation": _render_generation_dto(generation_row) if generation_row is not None else None,
+                "abandoned_events": abandoned_events,
                 "objects": [_render_object_manifest_dto(row) for row in rows],
                 "objects_truncated": objects_truncated,
                 "commit_seq": str(_current_commit_seq(connection)),
@@ -10526,6 +10542,7 @@ class CatalogStore:
             )
             by_id = {str(row["object_id"]): row for row in rows}
             updates: list[tuple[str, dict[str, Any]]] = []
+            has_semantic_corrections = any("user_messages" in item for item in objects)
             for item in objects:
                 object_id = str(item.get("object_id") or "")
                 row = by_id.get(object_id)
@@ -10534,14 +10551,16 @@ class CatalogStore:
                 event_count = item.get("event_count")
                 if type(event_count) is not int or event_count != int(row["event_count"]):
                     return {"conflict": True, "commit_seq": str(_current_commit_seq(connection))}
-                values = {
-                    "user_messages": int(item.get("user_messages") or 0),
-                    "assistant_messages": int(item.get("assistant_messages") or 0),
-                    "tool_calls": int(item.get("tool_calls") or 0),
-                    "first_user_message_preview": item.get("first_user_message_preview"),
-                    "last_visible_text_preview": item.get("last_visible_text_preview"),
-                    "semantic_projection_version": 1,
-                }
+                values = {"abandoned_events": int(item["abandoned_events"])}
+                if "user_messages" in item:
+                    values.update(
+                        user_messages=int(item["user_messages"]),
+                        assistant_messages=int(item["assistant_messages"]),
+                        tool_calls=int(item["tool_calls"]),
+                        first_user_message_preview=item.get("first_user_message_preview"),
+                        last_visible_text_preview=item.get("last_visible_text_preview"),
+                        semantic_projection_version=1,
+                    )
                 if any(row[field] != value for field, value in values.items()):
                     updates.append((object_id, values))
 
@@ -10554,6 +10573,7 @@ class CatalogStore:
                     )
                 )
                 >= 1
+                and updates_by_id.get(str(row["object_id"]), {}).get("abandoned_events", row["abandoned_events"]) is not None
                 for row in rows
             )
             commit_time = _as_aware_utc(observed_at) or datetime.now(UTC)
@@ -10565,7 +10585,9 @@ class CatalogStore:
                         update(render_objects).where(render_objects.c.object_id == object_id).values(**values, commit_seq=commit_seq)
                     )
 
-            needs_recompute = complete_after and (bool(updates) or int(session_row["semantic_projection_version"] or 0) < 1)
+            needs_recompute = (
+                has_semantic_corrections and complete_after and (bool(updates) or int(session_row["semantic_projection_version"] or 0) < 1)
+            )
             if needs_recompute:
                 _recompute_render_generation_projection(
                     connection,
@@ -10576,14 +10598,14 @@ class CatalogStore:
                     reset_derived_title=int(session_row["semantic_projection_version"] or 0) < 1,
                     semantic_projection_version=1,
                 )
-            elif updates:
+            elif updates and has_semantic_corrections:
                 connection.execute(
                     update(sessions)
                     .where(sessions.c.session_id == session_key)
                     .values(semantic_projection_version=0, commit_seq=commit_seq, updated_at=commit_time)
                 )
             reopened_projectors = 0
-            if complete_after:
+            if complete_after and has_semantic_corrections:
                 reopened_projectors = int(
                     connection.execute(
                         update(projectors)
@@ -13911,6 +13933,7 @@ def _render_object_manifest_dto(row) -> dict[str, Any]:
         "user_messages": int(row["user_messages"]),
         "assistant_messages": int(row["assistant_messages"]),
         "tool_calls": int(row["tool_calls"]),
+        "abandoned_events": int(row["abandoned_events"]) if row["abandoned_events"] is not None else None,
         "first_user_message_preview": row["first_user_message_preview"],
         "last_visible_text_preview": row["last_visible_text_preview"],
         "semantic_projection_version": int(row["semantic_projection_version"] or 0),

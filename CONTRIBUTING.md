@@ -108,6 +108,24 @@ checks; long machine identifiers can wrap ambiguously. A provider matrix failure
 must stay visible even when other providers pass. These checks complement
 simlab's connection-recovery scenarios; neither proves cellular-radio behavior.
 
+## Runtime data upgrades
+
+Existing render history needs an explicit branch-count backfill when upgrading
+to generation-wide abandoned-output counts. Prepare a verified cache before
+the API cutover; apply it once the updated catalog writer is running:
+
+```bash
+longhouse-server db repair-render-counts --database /data/longhouse-live.db --cache /data/cache/render-counts.jsonl
+longhouse-server db repair-render-counts --database /data/longhouse-live.db --cache /data/cache/render-counts.jsonl --apply
+```
+
+Use the actual catalog database and immutable-object root for your installation
+(`--object-root` overrides the Runtime Host setting). Preparation reads sealed
+render files, not raw provider archives. Applying uses the catalog writer and
+requires zero missing current facts; neither phase rewrites source history.
+Keep the cache across container replacement. `--limit` samples preparation
+only and cannot be combined with `--apply`.
+
 ## Generated code
 
 Some code is generated — **do not edit it by hand**:

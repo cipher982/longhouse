@@ -209,10 +209,10 @@ async def test_storage_v2_workspace_projects_claude_abandoned_sibling(monkeypatc
         assert kwargs["branch_mode"] in {"head", "all"}
         return {
             "generation_id": str(uuid4()),
-            "events": events,
+            "events": events if kwargs["branch_mode"] == "all" else events[1:],
             "next_cursor": None,
             "has_more": False,
-            "total": 2,
+            "total": 2 if kwargs["branch_mode"] == "all" else 1,
             "abandoned_events": 1,
         }
 
@@ -239,6 +239,9 @@ async def test_storage_v2_workspace_projects_claude_abandoned_sibling(monkeypatc
     assert all_events["projection"]["abandoned_events"] == 1
     assert [item["event"]["content_text"] for item in all_events["projection"]["items"]] == ["first send", "resend"]
     assert all_events["projection"]["items"][0]["event"]["is_head_branch"] is False
+    assert all_events["projection"]["total"] == 2
+    assert all_events["projection"]["items"][0]["event"]["in_active_context"] is False
+    assert all_events["projection"]["items"][1]["event"]["in_active_context"] is True
 
 
 def test_claude_abandoned_sibling_selection_keeps_linear_chain_on_head():

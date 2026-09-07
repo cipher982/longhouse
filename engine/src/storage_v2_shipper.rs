@@ -6860,7 +6860,7 @@ mod tests {
             .path()
             .join("brain")
             .join(provider_id)
-            .join(".system_generated/logs/transcript.jsonl");
+            .join(".system_generated/logs/transcript_full.jsonl");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
@@ -6920,18 +6920,21 @@ mod tests {
     fn antigravity_mirror_hint_cannot_duplicate_a_snapshot_or_erase_later_steps() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(
-            "brain/eb514596-95e0-4e96-a1cc-e355b576127c/.system_generated/logs/transcript.jsonl",
+            "brain/eb514596-95e0-4e96-a1cc-e355b576127c/.system_generated/logs/transcript_full.jsonl",
         );
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mirror = path.with_file_name("transcript_full.jsonl");
+        let mirror = path.with_file_name("transcript.jsonl");
         // The live failure's sources differ in tool argument representation,
         // but name the same native final step. They are not byte-identical.
-        let tool = r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-07T02:15:54Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"\"sleep 6\""}}]}"#;
+        let tool = r#"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-07T02:15:54Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"sleep 6"}}]}"#;
         let reply = r#"{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-07T02:16:02Z","content":"repeated answer"}"#;
-        let native = format!("{tool}\n{reply}\n");
-        let full = native.replace(r#"\"sleep 6\""#, "sleep 6");
+        let result = r#"{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-09-07T02:16:01Z","content":"full tool output retained"}"#;
+        let native = format!("{tool}\n{result}\n{reply}\n");
+        let summary = native
+            .replace("sleep 6", r#"\"sleep 6\""#)
+            .replace("full tool output retained", "[truncated]");
         fs::write(&path, &native).unwrap();
-        fs::write(&mirror, &full).unwrap();
+        fs::write(&mirror, &summary).unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let session_id = "c75c18e2-2726-4ad6-94a4-0756fdb340c4";
         let first = prepare_next_envelope(
@@ -7011,7 +7014,7 @@ mod tests {
             decode_envelope_record_bytes(&next.envelope.records).unwrap(),
             vec![updated.into_bytes()]
         );
-        assert_eq!(fs::read(&mirror).unwrap(), full.into_bytes());
+        assert_eq!(fs::read(&mirror).unwrap(), summary.into_bytes());
     }
 
     #[test]
@@ -7082,7 +7085,7 @@ mod tests {
                 .path()
                 .join("brain")
                 .join(id)
-                .join(".system_generated/logs/transcript.jsonl");
+                .join(".system_generated/logs/transcript_full.jsonl");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, source).unwrap();
             fs::File::options()

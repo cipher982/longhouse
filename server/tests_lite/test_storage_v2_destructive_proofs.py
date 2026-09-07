@@ -8,7 +8,6 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
-
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.server import CatalogDaemon
@@ -74,6 +73,7 @@ def _render_manifest(sealed, generation_id: UUID) -> dict[str, object]:
         "user_messages": sealed.user_messages,
         "assistant_messages": sealed.assistant_messages,
         "tool_calls": sealed.tool_calls,
+        "abandoned_events": sealed.abandoned_events,
         "first_user_message_preview": sealed.first_user_message_preview,
         "last_visible_text_preview": sealed.last_visible_text_preview,
     }

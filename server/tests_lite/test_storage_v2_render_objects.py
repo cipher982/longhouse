@@ -86,6 +86,39 @@ def test_render_object_is_deterministic_verified_and_summarized(tmp_path):
     assert decoded.spec == spec
 
 
+def test_render_summary_counts_only_committed_prose_and_preserves_partial_records(tmp_path):
+    base = _spec()
+    prose = tuple(
+        RenderRecord(
+            event_id=event_id,
+            order_time_us=1_700_000_002_000_000 + index,
+            source_position=20 + index,
+            event_subordinal=0,
+            role="assistant",
+            content_text=event_id,
+            branch_kind=branch_kind,
+        )
+        for index, (event_id, branch_kind) in enumerate(
+            (("committed", "root"), ("private reasoning", "reasoning"), ("failed attempt", "abandoned"))
+        )
+    )
+    spec = replace(base, provider="cursor", records=(*base.records, *prose))
+    sealed = seal_render_object(tmp_path, spec)
+    assert (sealed.event_count, sealed.user_messages, sealed.assistant_messages, sealed.tool_calls, sealed.abandoned_events) == (
+        5,
+        1,
+        1,
+        1,
+        1,
+    )
+    decoded = read_render_object(tmp_path, sealed.object_path, expected_object_hash=sealed.object_hash)
+    assert [(record.event_id, record.branch_kind) for record in decoded.spec.records[-3:]] == [
+        ("committed", "root"),
+        ("private reasoning", "reasoning"),
+        ("failed attempt", "abandoned"),
+    ]
+
+
 def test_render_aggregate_keeps_claude_control_raw_but_excludes_it_from_semantics(tmp_path):
     spec = _spec()
     claude = replace(

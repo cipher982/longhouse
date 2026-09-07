@@ -1253,6 +1253,7 @@ async def _commit_admitted_envelope(
                 "user_messages": sealed_render.user_messages,
                 "assistant_messages": sealed_render.assistant_messages,
                 "tool_calls": sealed_render.tool_calls,
+                "abandoned_events": sealed_render.abandoned_events,
                 "first_user_message_preview": sealed_render.first_user_message_preview,
                 "last_visible_text_preview": sealed_render.last_visible_text_preview,
                 # Claude local-command evidence can arrive in a later raw
@@ -1912,9 +1913,17 @@ async def _read_storage_v2_session_events_page_admitted(
             "render_manifest_invalid",
             "The catalog returned an invalid render manifest.",
         )
+    if manifest.get("abandoned_events") is None:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "branch_projection_pending",
+            "Abandoned event counts require verified semantic repair of this render generation.",
+            headers={"Retry-After": "60"},
+        )
     try:
         generation_id = UUID(str(generation["generation_id"]))
         total = int(generation["event_count"])
+        abandoned_events = int(manifest["abandoned_events"])
     except (KeyError, TypeError, ValueError) as exc:
         raise _http_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1922,6 +1931,12 @@ async def _read_storage_v2_session_events_page_admitted(
             "The catalog returned an invalid render generation.",
         ) from exc
 
+    if abandoned_events < 0 or abandoned_events > total:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "render_manifest_invalid",
+            "The catalog returned invalid abandoned event counts.",
+        )
     workers = get_render_object_worker_pool()
     raw_workers = get_raw_object_worker_pool()
     raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
@@ -2004,6 +2019,8 @@ async def _read_storage_v2_session_events_page_admitted(
                     if claude_generation:
                         claude_semantic_event_ids.add(record.event_id)
                     key = _render_record_order_key(decoded, record)
+                    if branch_mode == "head" and record.branch_kind == "abandoned":
+                        continue
                     if (anchor == "start" and (cursor_key is None or key > cursor_key)) or (
                         anchor == "tail" and (cursor_key is None or key < cursor_key)
                     ):
@@ -2093,7 +2110,11 @@ async def _read_storage_v2_session_events_page_admitted(
             timing.record("sequence_context_seed", semantic_recovery_stats.sequence_context_duration_ms)
 
     abandoned_ids = _claude_abandoned_event_ids(claude_branch_records) if claude_generation else set()
-    abandoned_events = len(abandoned_ids & claude_semantic_event_ids)
+    # Catalog counts cover all explicit abandoned records in the generation,
+    # including objects outside this page. Claude's legacy sibling inference
+    # remains separate and must not double-count explicitly abandoned rows.
+    explicit_abandoned_ids = {record.event_id for _, record in claude_branch_records if record.branch_kind == "abandoned"}
+    abandoned_events += len((abandoned_ids & claude_semantic_event_ids) - explicit_abandoned_ids)
     for _, wire in ordered_events:
         if wire.get("event_id") in abandoned_ids:
             wire["branch_kind"] = "abandoned"
@@ -2130,7 +2151,7 @@ async def _read_storage_v2_session_events_page_admitted(
         "events": [event for _, event in page],
         "next_cursor": (page[-1][1]["cursor"] if anchor == "start" else page[0][1]["cursor"]) if page and has_more else None,
         "has_more": has_more,
-        "total": total,
+        "total": max(0, total - abandoned_events) if branch_mode == "head" else total,
         "abandoned_events": abandoned_events,
     }
 

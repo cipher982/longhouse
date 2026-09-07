@@ -376,6 +376,8 @@ class RenderObject(CatalogBase):
     user_messages = Column(Integer, nullable=False, server_default=text("0"))
     assistant_messages = Column(Integer, nullable=False, server_default=text("0"))
     tool_calls = Column(Integer, nullable=False, server_default=text("0"))
+    # Unknown for historical objects until verified semantic repair/replay.
+    abandoned_events = Column(Integer, nullable=True)
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)
     semantic_projection_version = Column(Integer, nullable=False, server_default=text("0"))

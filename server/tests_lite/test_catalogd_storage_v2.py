@@ -11,7 +11,6 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
-
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.models import CatalogBase
@@ -186,6 +185,7 @@ def _render_manifest(
         "user_messages": 1,
         "assistant_messages": 0,
         "tool_calls": 0,
+        "abandoned_events": 0,
         "first_user_message_preview": "Build it",
         "last_visible_text_preview": "Build it",
     }
@@ -928,6 +928,82 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("semantic_version", [0, 1])
+async def test_render_abandoned_counts_cover_generation_and_repair_unknown_history(daemon_paths, semantic_version):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch, session_id, generation_id = uuid4(), uuid4(), uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    manifests = []
+    try:
+        for index, data in enumerate((b"a\n", b"b\n")):
+            render = _render_manifest(generation_id, seed=data, position=index * 2, source_epoch=epoch, provider="cursor")
+            render["semantic_projection_version"] = semantic_version
+            render["abandoned_events"] = 1 if index == 0 else None
+            manifests.append(render)
+            raw = _raw_params(
+                epoch=epoch,
+                session_id=session_id,
+                start=index * 2,
+                end=index * 2 + 2,
+                records=(data,),
+                sealed_at=now,
+                provider="cursor",
+            )
+            raw.update(render_state="ready", render_manifest=render, projectors=["search-v2"])
+            await client.call("storage.raw_object.commit.v2", raw)
+
+        params = {
+            "session_id": str(session_id),
+            "owner_id": "42",
+            "generation_id": str(generation_id),
+            "anchor": "start",
+            "after_order_key": None,
+            "before_order_key": None,
+            "limit": 1,
+        }
+        pending = await client.call("storage.session.render_manifest.v2", params)
+        assert pending["abandoned_events"] is None
+        assert pending["generation"]["event_count"] == 2
+        before = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+
+        repaired = await client.call(
+            "storage.session.semantic_projection.repair.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "objects": [
+                    {
+                        "object_id": manifests[1]["object_id"],
+                        "event_count": 1,
+                        "abandoned_events": 0,
+                    }
+                ],
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        assert repaired["complete"] is (semantic_version == 1)
+        assert repaired["session"]["semantic_projection_version"] == semantic_version
+        assert {
+            key: repaired["session"][key] for key in ("user_messages", "assistant_messages", "summary_title", "first_user_message_preview")
+        } == {key: before["session"][key] for key in ("user_messages", "assistant_messages", "summary_title", "first_user_message_preview")}
+        first = await client.call("storage.session.render_manifest.v2", params)
+        second = await client.call("storage.session.render_manifest.v2", {**params, "after_order_key": manifests[0]["last_order_key"]})
+        tail = await client.call("storage.session.render_manifest.v2", {**params, "anchor": "tail"})
+        assert [item["object_id"] for item in first["objects"]] == [manifests[0]["object_id"]]
+        assert [item["object_id"] for item in second["objects"]] == [manifests[1]["object_id"]]
+        assert [item["object_id"] for item in tail["objects"]] == [manifests[1]["object_id"]]
+        assert [page["abandoned_events"] for page in (first, second, tail)] == [1, 1, 1]
+        assert [page["generation"]["event_count"] for page in (first, second, tail)] == [2, 2, 2]
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_cursor_product_marker_classifies_storage_ingest_as_hidden_canary(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
@@ -1452,6 +1528,7 @@ async def test_semantic_projection_repair_updates_legacy_catalog_aggregates_and_
                         "user_messages": 1,
                         "assistant_messages": 0,
                         "tool_calls": 0,
+                        "abandoned_events": 0,
                         "first_user_message_preview": "The real prompt",
                         "last_visible_text_preview": "The real prompt",
                     }
@@ -1528,6 +1605,7 @@ async def test_empty_render_object_is_repairable_and_can_complete_semantic_proje
                         "user_messages": 0,
                         "assistant_messages": 0,
                         "tool_calls": 0,
+                        "abandoned_events": 0,
                         "first_user_message_preview": None,
                         "last_visible_text_preview": None,
                     }
@@ -1582,6 +1660,7 @@ async def test_semantic_repair_preserves_an_unrelated_frozen_title(daemon_paths)
                         "user_messages": 1,
                         "assistant_messages": 0,
                         "tool_calls": 0,
+                        "abandoned_events": 0,
                         "first_user_message_preview": "Build it",
                         "last_visible_text_preview": "Build it",
                     }
@@ -1652,6 +1731,7 @@ async def test_semantic_projection_repair_clears_control_only_fallback_title(dae
                         "user_messages": 0,
                         "assistant_messages": 0,
                         "tool_calls": 0,
+                        "abandoned_events": 0,
                         "first_user_message_preview": None,
                         "last_visible_text_preview": None,
                     }
@@ -1913,6 +1993,7 @@ async def test_claude_title_candidates_wait_for_semantic_repair(daemon_paths):
                         "user_messages": 1,
                         "assistant_messages": 0,
                         "tool_calls": 0,
+                        "abandoned_events": 0,
                         "first_user_message_preview": "Build it",
                         "last_visible_text_preview": "Build it",
                     }
@@ -2034,6 +2115,7 @@ async def test_claude_effort_then_real_prompt_reaches_title_generation(daemon_pa
                         "user_messages": aggregate["user_messages"],
                         "assistant_messages": aggregate["assistant_messages"],
                         "tool_calls": aggregate["tool_calls"],
+                        "abandoned_events": aggregate["abandoned_events"],
                         "first_user_message_preview": aggregate["first_user_message_preview"],
                         "last_visible_text_preview": aggregate["last_visible_text_preview"],
                     }
@@ -2474,6 +2556,7 @@ async def test_semantic_repair_revision_keeps_next_render_object_page_visible(da
                         "user_messages": 1,
                         "assistant_messages": 0,
                         "tool_calls": 0,
+                        "abandoned_events": 0,
                         "first_user_message_preview": "Repaired first",
                         "last_visible_text_preview": "Repaired first",
                     }

@@ -524,11 +524,12 @@ def test_antigravity_stop_mirror_hint_keeps_wake_and_binding_on_canonical_source
     script.write_text(_ANTIGRAVITY_HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path)), encoding="utf-8")
     script.chmod(0o755)
     conversation_id = "22222222-2222-4222-8222-222222222222"
-    transcript = tmp_path / "brain" / conversation_id / ".system_generated" / "logs" / "transcript.jsonl"
+    transcript = tmp_path / "brain" / conversation_id / ".system_generated" / "logs" / "transcript_full.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_bytes(b"canonical snapshot\n")
-    mirror = transcript.with_name("transcript_full.jsonl")
-    mirror.write_bytes(b"full mirror with distinct tool argument bytes\n")
+    mirror = transcript.with_name("transcript.jsonl")
+    mirror_bytes = b"truncated summary with distinct tool argument bytes\n"
+    mirror.write_bytes(mirror_bytes)
     # Unix socket paths have a short platform limit; keep the hook home separate
     # from pytest's potentially long transcript fixture path.
     with tempfile.TemporaryDirectory(prefix="lh-agy-") as home:
@@ -567,7 +568,7 @@ def test_antigravity_stop_mirror_hint_keeps_wake_and_binding_on_canonical_source
         assert payload["transcript_path"] == str(transcript)
         state = json.loads((Path(home) / "sessions" / f"{env['LONGHOUSE_MANAGED_SESSION_ID']}.json").read_text())
         assert state["transcript_path"] == str(transcript)
-        assert mirror.read_bytes() == b"full mirror with distinct tool argument bytes\n"
+        assert mirror.read_bytes() == mirror_bytes
 
 
 def test_antigravity_hook_ignores_managed_identity_from_another_provider(tmp_path: Path) -> None:
