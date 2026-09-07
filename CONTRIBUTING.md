@@ -87,7 +87,7 @@ to create explicit hidden proof sessions, then feed their actual assistant repli
 to the real-client checks:
 
 ```bash
-make test-terminal-fidelity-web FIDELITY_CASES=/tmp/cases.json PLAYWRIGHT_BASE_URL=<runtime-url>
+make test-terminal-fidelity-web FIDELITY_CASES=/tmp/cases.json PLAYWRIGHT_BASE_URL=http://127.0.0.1:47200
 make test-terminal-fidelity-ios FIDELITY_CASES=/tmp/cases.json IOS_DESTINATION="platform=iOS Simulator,id=<uuid>"
 ```
 
@@ -96,8 +96,10 @@ The JSON manifest is an array of `{ "name": "...", "session_id": "...",
 whitespace-free final assistant replies, not text copied verbatim into a prompt.
 iOS additionally requires `source_path` and verifies its SHA-256 stays unchanged.
 Use only hidden/test sessions. Set the iOS target explicitly with
-`LONGHOUSE_FIDELITY_SERVER_URL` and `LONGHOUSE_FIDELITY_AUTH_TOKEN`; browser
-authentication follows the existing live Playwright configuration.
+`LONGHOUSE_FIDELITY_SERVER_URL` and `LONGHOUSE_FIDELITY_AUTH_TOKEN`.
+For web, start `make dev` first: its linked-runtime proxy supplies authentication.
+Alternatively use a scratch Runtime Host with auth disabled. The browser proof
+does not silently log in to an arbitrary protected hosted URL.
 These checks use real served data, not API mocks. They retain ordered-reply,
 cold-open/return, screenshots, and timing evidence under
 `artifacts/terminal-fidelity/`. iOS additionally verifies painted final text
