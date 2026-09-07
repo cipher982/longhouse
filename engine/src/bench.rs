@@ -545,7 +545,7 @@ impl ShipBenchResult {
             self.events_shipped as f64 / self.total_seconds.max(1e-9)
         );
         eprintln!(
-            "Ship latency:   p50 {:.1}ms / p95 {:.1}ms",
+            "Repair latency (all outcomes): p50 {:.1}ms / p95 {:.1}ms",
             self.ship_latency_p50_ms, self.ship_latency_p95_ms
         );
         eprintln!(
@@ -809,6 +809,7 @@ pub fn run_benchmark_ship(
                         Err(error) => {
                             failures.fetch_add(1, Ordering::Relaxed);
                             sample.failure = Some(ShipFailureKind::from_error(&error));
+                            eprintln!("Repair envelope failed: {error:#}");
                         }
                     }
                     sample
@@ -862,6 +863,7 @@ pub fn run_benchmark_ship(
                         Err(error) => {
                             live_failures.fetch_add(1, Ordering::Relaxed);
                             sample.failure = Some(ShipFailureKind::from_error(&error));
+                            eprintln!("Live envelope failed: {error:#}");
                         }
                     }
                     sample
@@ -880,7 +882,8 @@ pub fn run_benchmark_ship(
                         ship_samples.push(sample);
                     }
                 }
-                Err(_) => {
+                Err(error) => {
+                    eprintln!("{lane} benchmark task failed: {error}");
                     if lane == "live" {
                         live_failures.fetch_add(1, Ordering::Relaxed);
                         live_task_failures += 1;
