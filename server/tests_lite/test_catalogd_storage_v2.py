@@ -1550,6 +1550,197 @@ async def test_semantic_projection_repair_updates_legacy_catalog_aggregates_and_
 
 
 @pytest.mark.asyncio
+async def test_search_republication_after_count_and_semantic_repair_preserves_indexed_history(daemon_paths, tmp_path):
+    from zerg.searchd.store import SearchStore
+    from zerg.searchd.store import object_set_hash
+    from zerg.searchd.store import open_search_database
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id, generation_id, epoch = uuid4(), uuid4(), uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    search_connection = open_search_database(tmp_path / "search.db")
+    search = SearchStore(search_connection)
+    render = _render_manifest(generation_id, source_epoch=epoch)
+    render.update(event_count=3, assistant_messages=2, semantic_projection_version=0)
+    render.pop("abandoned_events")
+    identity = {"session_id": str(session_id), "generation_id": str(generation_id)}
+
+    async def publish_snapshot(revision):
+        snapshot = await client.call(
+            "storage.session.render_objects.list.v2",
+            {**identity, "snapshot_revision": revision, "after_object_id": None, "limit": 100},
+        )
+        object_ids = [item["object_id"] for item in snapshot["objects"]]
+        search.reuse_indexed_objects(**identity, desired_revision=revision, object_ids=object_ids)
+        return search.publish_generation(
+            **identity,
+            desired_revision=revision,
+            owner_id="42",
+            object_count=snapshot["snapshot_object_count"],
+            event_count=snapshot["snapshot_event_count"],
+            object_set_hash=object_set_hash(object_ids),
+            project="longhouse",
+            provider="codex",
+            environment="local",
+            cwd=None,
+            git_repo=None,
+            started_at=now.isoformat(),
+        )
+
+    async def claim(projector):
+        response = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "repair-regression",
+                "claim_token": str(uuid4()),
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        return response["claimed"][0]
+
+    async def complete(state):
+        await client.call(
+            "projector.state.complete.v2",
+            {
+                "projector": state["projector"],
+                "session_id": str(session_id),
+                "claim_token": state["claim_token"],
+                "completed_revision": int(state["claimed_revision"]),
+                "completed_at": now.isoformat(),
+            },
+        )
+
+    try:
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
+        raw.update(render_state="ready", render_manifest=render, projectors=["search-v2", EMBEDDING_PROJECTOR_ID])
+        committed = await client.call("storage.raw_object.commit.v2", raw)
+        original_revision = int(committed["receipt"]["commit_seq"])
+        search.index_object(
+            **identity,
+            object_id=render["object_id"],
+            desired_revision=original_revision,
+            provider="codex",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd=None,
+            git_repo=None,
+            opaque_source_id="history.jsonl",
+            source_epoch=str(epoch),
+            records=[
+                {
+                    "event_id": f"event-{ordinal}",
+                    "record_ordinal": ordinal,
+                    "order_time_us": int(now.timestamp() * 1_000_000) + ordinal,
+                    "source_position": ordinal,
+                    "event_subordinal": 0,
+                    "role": role,
+                    "interaction_kind": "durable_user_message" if role == "user" else "provider_system",
+                    "content_text": text,
+                    "tool_name": None,
+                    "tool_output_text": None,
+                    "tool_call_id": None,
+                    "thread_id": None,
+                    "branch_kind": branch,
+                }
+                for ordinal, (role, branch, text) in enumerate(
+                    [("user", "root", "Historical needle"), ("assistant", "reasoning", "Thinking"), ("assistant", "root", "Final answer")]
+                )
+            ],
+        )
+        assert (await publish_snapshot(original_revision))["published"] is True
+        await complete(await claim("search-v2"))
+        search.write_episode_embeddings(
+            **identity,
+            owner_id="42",
+            revision=original_revision,
+            model="test-model",
+            dims=2,
+            episodes=[
+                {
+                    "episode_ordinal": 0,
+                    "event_index_start": 0,
+                    "event_index_end": 2,
+                    "content_hash": "a" * 64,
+                    "embedding": b"\0" * 8,
+                }
+            ],
+            complete=True,
+        )
+        await complete(await claim(EMBEDDING_PROJECTOR_ID))
+
+        count_facts = {"object_id": render["object_id"], "event_count": 3, "abandoned_events": 0}
+        semantic_facts = {
+            **count_facts,
+            "user_messages": 1,
+            "assistant_messages": 1,
+            "tool_calls": 0,
+            "first_user_message_preview": "Historical needle",
+            "last_visible_text_preview": "Final answer",
+        }
+        for facts in (count_facts, semantic_facts):
+            repaired = await client.call(
+                "storage.session.semantic_projection.repair.v2",
+                {**identity, "owner_id": "42", "objects": [facts], "observed_at": now.isoformat()},
+            )
+            assert repaired["updated_object_count"] == 1
+            # A fact-only repair must not hide immutable objects from a claim
+            # taken before that repair, even when they were indexed already.
+            assert (await publish_snapshot(original_revision))["published"] is True
+
+        # Model the deployed count repair's old mutation: the current object
+        # is newer than the completed projector fence, but search still owns
+        # its original membership. A requeue must choose a fresh snapshot.
+        engine = create_catalog_engine(database_path)
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "UPDATE render_objects SET commit_seq = ? WHERE object_id = ?",
+                    (int(repaired["commit_seq"]), render["object_id"]),
+                )
+        finally:
+            engine.dispose()
+        requeued = await client.call(
+            "projector.state.requeue.v2",
+            {"projector": "search-v2", "session_ids": [str(session_id)], "observed_at": now.isoformat()},
+        )
+        assert requeued["changed"] is True
+        search_claim = await claim("search-v2")
+        revision = int(search_claim["claimed_revision"])
+        assert revision >= int(repaired["commit_seq"]) > original_revision
+        assert (await publish_snapshot(revision))["published"] is True
+        await complete(search_claim)
+        embedding_claim = await claim(EMBEDDING_PROJECTOR_ID)
+        assert int(embedding_claim["claimed_revision"]) == revision
+        assert search.read_episode_embedding_hashes(session_id=str(session_id), model="test-model")["hashes"] == {"0": "a" * 64}
+
+        query = {
+            "query": "needle",
+            "project": None,
+            "provider": None,
+            "environment": None,
+            "window_start_us": None,
+            "window_end_us": None,
+            "limit": 10,
+            "include_snippets": True,
+            "include_origin_hidden": False,
+        }
+        results = search.search(owner_id="42", **query)["results"]
+        assert [(row["session_id"], row["user_messages"], row["assistant_messages"]) for row in results] == [(str(session_id), 1, 1)]
+        assert search.search(owner_id="other-owner", **query)["results"] == []
+    finally:
+        search_connection.close()
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_empty_render_object_is_repairable_and_can_complete_semantic_projection(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

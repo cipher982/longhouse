@@ -10581,9 +10581,10 @@ class CatalogStore:
             if updates:
                 commit_seq = _advance_commit_seq(connection, commit_time)
                 for object_id, values in updates:
-                    connection.execute(
-                        update(render_objects).where(render_objects.c.object_id == object_id).values(**values, commit_seq=commit_seq)
-                    )
+                    # commit_seq is the immutable object's admission fence.
+                    # Updating derived facts must not remove it from a snapshot
+                    # already claimed by search or embeddings.
+                    connection.execute(update(render_objects).where(render_objects.c.object_id == object_id).values(**values))
 
             needs_recompute = (
                 has_semantic_corrections and complete_after and (bool(updates) or int(session_row["semantic_projection_version"] or 0) < 1)
@@ -11496,7 +11497,7 @@ class CatalogStore:
         session_ids: list[UUID],
         observed_at: datetime,
     ) -> dict[str, Any]:
-        """Reset only explicitly named completed states for coverage repair."""
+        """Requeue explicitly named states against a fresh catalog snapshot."""
 
         table = ProjectorState.__table__
         session_keys = sorted(str(session_id) for session_id in session_ids)
@@ -11515,10 +11516,12 @@ class CatalogStore:
                     "missing_session_ids": missing,
                     "commit_seq": str(_current_commit_seq(connection)),
                 }
+            snapshot_revision = _current_commit_seq(connection)
             changed = [
                 session_id
                 for session_id in session_keys
                 if int(by_session[session_id]["completed_revision"]) != 0
+                or int(by_session[session_id]["desired_revision"]) < snapshot_revision
                 or by_session[session_id]["claimed_revision"] is not None
                 or by_session[session_id]["status"] != "idle"
                 or int(by_session[session_id]["failure_count"] or 0) != 0
@@ -11538,6 +11541,8 @@ class CatalogStore:
                 update(table)
                 .where(table.c.projector == projector, table.c.session_id.in_(changed))
                 .values(
+                    desired_revision=func.max(table.c.desired_revision, commit_seq),
+                    desired_at=observed_at,
                     completed_revision=0,
                     claimed_revision=None,
                     claim_token=None,
@@ -11554,6 +11559,20 @@ class CatalogStore:
                     updated_at=observed_at,
                 )
             )
+            if projector == "search-v2":
+                # Search publication fences embeddings to the same revision.
+                # Keep existing vectors/completions, but make their publication
+                # eligible again once search has completed this fresh snapshot.
+                connection.execute(
+                    update(table)
+                    .where(table.c.projector == EMBEDDING_PROJECTOR_ID, table.c.session_id.in_(changed))
+                    .values(
+                        desired_revision=func.max(table.c.desired_revision, commit_seq),
+                        desired_at=observed_at,
+                        commit_seq=commit_seq,
+                        updated_at=observed_at,
+                    )
+                )
             return {
                 "changed": True,
                 "requeued_session_ids": changed,
