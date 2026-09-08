@@ -1280,7 +1280,6 @@ async def test_canonical_timeline_is_owner_scoped_and_commit_coherent(daemon_pat
         "spool_pending": 0,
         "spool_dead": 0,
         "parse_errors_1h": 0,
-        "consecutive_failures": 0,
         "ship_attempts_1h": 1,
         "ship_successes_1h": 1,
         "ship_rate_limited_1h": 0,

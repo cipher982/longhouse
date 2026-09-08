@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def _collect_cursor_discovery(*, fast: bool) -> dict[str, Any]:
+def _collect_cursor_discovery() -> dict[str, Any]:
     """Read-only discovery of local Cursor agent sessions.
 
     Surfaces cursor-agent ``store.db`` sessions on the machine as *unmanaged*
@@ -13,8 +13,6 @@ def _collect_cursor_discovery(*, fast: bool) -> dict[str, Any]:
     import`` is the durable backfill path. The three axes (control_path,
     liveness_model, state) are kept separate per the local-health contract.
     """
-    if fast:
-        return {"status": "skipped", "skipped_reason": "fast", "sessions": []}
     sessions: list[dict[str, Any]] = []
     legacy_count = 0
     try:

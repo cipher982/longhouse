@@ -75,7 +75,6 @@ _UUID_RE = re.compile(
 )
 
 _WATCHING_REASONS = {
-    "consecutive_failures",
     "connect_errors",
     "server_errors",
     "rate_limited",

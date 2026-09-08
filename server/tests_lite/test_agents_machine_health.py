@@ -107,7 +107,6 @@ def test_hosted_machine_health_projects_storage_and_managed_recovery_facts():
         spool_pending=0,
         spool_dead=0,
         parse_errors_1h=0,
-        consecutive_failures=0,
         ship_attempts_1h=1,
         ship_successes_1h=1,
         ship_rate_limited_1h=0,
@@ -225,7 +224,6 @@ def test_machine_health_surfaces_explicit_archive_pause_without_backlog():
         spool_pending=0,
         spool_dead=0,
         parse_errors_1h=0,
-        consecutive_failures=0,
         ship_attempts_1h=1,
         ship_successes_1h=1,
         ship_rate_limited_1h=0,
@@ -278,7 +276,6 @@ def test_machine_health_prioritizes_dead_letters_over_archive_pause():
         spool_pending=0,
         spool_dead=0,
         parse_errors_1h=0,
-        consecutive_failures=0,
         ship_attempts_1h=1,
         ship_successes_1h=1,
         ship_rate_limited_1h=0,
@@ -406,7 +403,6 @@ _HEARTBEAT_STAMP_DEFAULTS: dict[str, object] = {
     "spool_pending": 0,
     "spool_dead": 0,
     "parse_errors_1h": 0,
-    "consecutive_failures": 0,
     "ship_attempts_1h": 0,
     "ship_successes_1h": 0,
     "ship_rate_limited_1h": 0,
@@ -482,7 +478,6 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(l
         last_ship_latency_ms=220,
         spool_pending=3,
         spool_dead=2,
-        consecutive_failures=1,
         ship_attempts_1h=5,
         ship_successes_1h=3,
         ship_connect_errors_1h=1,
@@ -494,10 +489,15 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(l
         owner_id=owner_id,
         device_id="degraded-machine",
         received_at=pinned_now - timedelta(minutes=2),
-        consecutive_failures=2,
         ship_attempts_1h=4,
         ship_successes_1h=2,
         ship_server_errors_1h=2,
+        raw_json=json.dumps(
+            {
+                "ship_attempts_10m": 3,
+                "ship_connect_errors_10m": 3,
+            }
+        ),
     )
     _apply_heartbeat(
         live_catalog,
@@ -535,7 +535,7 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(l
 
     degraded = payload["machines"][1]
     assert degraded["status"] == "degraded"
-    assert degraded["status_reason"] == "consecutive_failures"
+    assert degraded["status_reason"] == "connect_errors"
     assert degraded["heartbeat_age_seconds"] == 120
 
     filtered = live_catalog_client.get(
@@ -735,6 +735,8 @@ def test_machine_health_route_marks_transport_error_burst_degraded(live_catalog,
         last_ship_result="connect_error",
         raw_json=json.dumps(
             {
+                "ship_attempts_10m": 2,
+                "ship_connect_errors_10m": 2,
                 "last_ship_result": "connect_error",
                 "last_ship_error_kind": "connection_refused",
                 "last_ship_error_message": "connection refused",
@@ -754,7 +756,7 @@ def test_machine_health_route_marks_transport_error_burst_degraded(live_catalog,
     machine = payload["machines"][0]
     assert machine["status"] == "degraded"
     assert machine["status_reason"] == "connect_errors"
-    assert machine["status_summary"] == "2 ship connect error(s) in the last hour. Last error: connection_refused."
+    assert machine["status_summary"] == "2 ship connect error(s) in the last 10 minutes. Last error: connection_refused."
     assert machine["ship_connect_errors_1h"] == 2
     assert machine["last_ship_error_kind"] == "connection_refused"
     assert machine["last_ship_error_message"] == "connection refused"

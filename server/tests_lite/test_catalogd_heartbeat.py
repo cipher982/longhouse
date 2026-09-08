@@ -64,7 +64,6 @@ def _heartbeat(*, device_id: str, received_at: datetime, digest: str) -> dict:
         "spool_pending": 0,
         "spool_dead": 0,
         "parse_errors_1h": 0,
-        "consecutive_failures": 0,
         "ship_attempts_1h": 2,
         "ship_successes_1h": 2,
         "ship_rate_limited_1h": 0,

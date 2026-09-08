@@ -59,7 +59,6 @@ def _serialize_transport_health(
         "spool_pending": sample.spool_pending,
         "spool_dead": sample.spool_dead,
         "parse_errors_1h": sample.parse_errors_1h,
-        "consecutive_failures": sample.consecutive_failures,
         "is_offline": sample.is_offline,
     }
 

@@ -58,7 +58,6 @@ class MachineHealthItemResponse(UTCBaseModel):
     archive_repair: dict[str, Any] = Field(default_factory=dict)
     history_import: HistoryImportSnapshot = Field(default_factory=HistoryImportSnapshot.unavailable)
     parse_errors_1h: int
-    consecutive_failures: int
     disk_free_bytes: int
     is_offline: bool
 

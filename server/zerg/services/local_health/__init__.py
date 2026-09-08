@@ -205,7 +205,6 @@ from .engine_status import _collect_outbox
 from .engine_status import _collect_resolved_sessions_from_engine_status
 from .engine_status import _engine_status_payload
 from .engine_status import _engine_status_resolved_sessions
-from .engine_status import _engine_status_resolved_sessions_issue
 from .engine_status import _mark_managed_session_degraded
 from .engine_status import _parse_iso8601
 from .engine_status import _resolved_engine_managed_session_row
@@ -215,7 +214,6 @@ from .engine_status import _resolved_engine_unmanaged_process_row
 from .engine_status import _resolved_join_key_value
 from .engine_status import _resolved_session_mapping
 from .engine_status import _resolved_session_state
-from .engine_status import _resolved_sessions_unusable_summary
 from .engine_status import _validate_resolved_engine_managed_sessions
 from .launch_readiness import _add_launch_machine_state_reasons
 from .launch_readiness import _add_launch_runner_config_reasons
@@ -470,17 +468,15 @@ def _collect_managed_session_sources(
     *,
     engine_status: dict[str, Any],
     phase_overlay: dict[str, dict[str, str | None]] | None,
-    fast: bool,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     resolved_sessions = _collect_resolved_sessions_from_engine_status(engine_status)
     if resolved_sessions is not None:
         managed_sessions, unmanaged_processes = resolved_sessions
-        if not fast:
-            process_rows = _collect_process_rows()
-            managed_sessions = _validate_resolved_engine_managed_sessions(
-                managed_sessions,
-                process_rows=process_rows,
-            )
+        process_rows = _collect_process_rows()
+        managed_sessions = _validate_resolved_engine_managed_sessions(
+            managed_sessions,
+            process_rows=process_rows,
+        )
         managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
             bridge_sessions=[],
             bridge_orphans=[],
@@ -488,23 +484,19 @@ def _collect_managed_session_sources(
         )
         return managed_summary, managed_sessions, orphan_bridges, unmanaged_processes
 
-    if fast:
-        issue = _engine_status_resolved_sessions_issue(engine_status)
-        return _resolved_sessions_unusable_summary(issue), [], [], []
-    else:
-        with _process_snapshot_scope():
-            provider_processes = _scan_provider_processes()
-            bridge_sessions, orphan_bridges = _collect_managed_codex_sessions(
-                base_dir,
-                phase_overlay=phase_overlay,
-            )
-            bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
-            process_sessions = _collect_managed_sessions_by_process(
-                existing_session_ids=bridge_session_ids,
-                phase_overlay=phase_overlay,
-                scanned_processes=provider_processes,
-            )
-            unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
+    with _process_snapshot_scope():
+        provider_processes = _scan_provider_processes()
+        bridge_sessions, orphan_bridges = _collect_managed_codex_sessions(
+            base_dir,
+            phase_overlay=phase_overlay,
+        )
+        bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
+        process_sessions = _collect_managed_sessions_by_process(
+            existing_session_ids=bridge_session_ids,
+            phase_overlay=phase_overlay,
+            scanned_processes=provider_processes,
+        )
+        unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
 
     managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
         bridge_sessions=bridge_sessions,
@@ -514,7 +506,7 @@ def _collect_managed_session_sources(
     return managed_summary, managed_sessions, orphan_bridges, unmanaged_processes
 
 
-def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = False) -> dict[str, Any]:
+def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]:
     now = _utc_now()
     resolved_base_dir = _coerce_path(claude_dir)
     _machine_state_path, machine_state, _machine_state_error = read_machine_state(resolved_base_dir)
@@ -528,26 +520,19 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     outbox = _collect_outbox(resolved_base_dir, now=now)
     provider_clis = _collect_provider_clis()
     provider_contracts = _collect_provider_contracts()
-    provider_live_proof = collect_provider_live_proof(provider_clis, fast=fast, base_dir=resolved_base_dir)
+    provider_live_proof = collect_provider_live_proof(provider_clis, base_dir=resolved_base_dir)
     provider_live_route_e2e = collect_provider_live_route_e2e(
-        fast=fast,
         base_dir=resolved_base_dir,
         expected_providers=expected_route_providers_from_live_proof(provider_live_proof),
     )
-    provider_release_status = collect_provider_release_status(provider_clis, fast=fast)
+    provider_release_status = collect_provider_release_status(provider_clis)
     capability_proof_records, capability_proof_summary = collect_local_capability_proofs(resolved_base_dir)
     runtime_url = machine_state.runtime_url if machine_state else None
-    if fast:
-        trusted_runtime_proofs = load_cached_provider_capability_proofs(
-            resolved_base_dir,
-            runtime_url=runtime_url,
-        )
-    else:
-        trusted_runtime_proofs = refresh_cached_provider_capability_proofs(
-            resolved_base_dir,
-            runtime_url=runtime_url,
-            token=_read_trimmed_file(get_machine_token_path(resolved_base_dir)),
-        )
+    trusted_runtime_proofs = refresh_cached_provider_capability_proofs(
+        resolved_base_dir,
+        runtime_url=runtime_url,
+        token=_read_trimmed_file(get_machine_token_path(resolved_base_dir)),
+    )
     for provider, records in trusted_runtime_proofs.records_by_provider.items():
         merged = {record.artifact_id: record for record in capability_proof_records.get(provider, ())}
         merged.update({record.artifact_id: record for record in records})
@@ -570,12 +555,9 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         resolved_base_dir,
         engine_status=engine_status,
         phase_overlay=phase_overlay,
-        fast=fast,
     )
-    # The menu bar intentionally uses the fast snapshot path.  Title
-    # provenance is a small bounded Runtime Host read, not a process scan, so
-    # skipping it here left its rows permanently on the local prompt fallback
-    # while `longhouse local-health` (the deep path) showed AI titles.
+    # Title provenance is a small bounded Runtime Host read, so keep the
+    # resolved local session rows consistent with the deep health surface.
     _enrich_managed_session_titles(resolved_base_dir, managed_sessions)
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
@@ -606,9 +588,9 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         resolved_base_dir,
         session_ids=managed_session_ids,
     )
-    provider_hook_diagnostics = _collect_provider_hook_diagnostics(resolved_base_dir, now=now, fast=fast)
-    provider_binding_diagnostics = _collect_provider_binding_diagnostics(resolved_base_dir, now=now, fast=fast)
-    cursor_discovery = _collect_cursor_discovery(fast=fast)
+    provider_hook_diagnostics = _collect_provider_hook_diagnostics(resolved_base_dir, now=now)
+    provider_binding_diagnostics = _collect_provider_binding_diagnostics(resolved_base_dir, now=now)
+    cursor_discovery = _collect_cursor_discovery()
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
         engine_status=engine_status,
@@ -727,7 +709,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     return {
         "schema_version": SCHEMA_VERSION,
         "projection_authority": "machine_preview",
-        "collection_tier": "fast" if fast else "deep",
+        "collection_tier": "deep",
         "collected_at": _to_rfc3339(now),
         "health_state": health_state,
         "severity": severity,

@@ -41,7 +41,7 @@ The release is shipped when the script prints `Release vX.Y.Z shipped and verifi
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse verify-pair
-longhouse local-health --fast --json
+longhouse local-health --json
 ```
 
 For the desktop app, download the DMG from the release and drag-install.

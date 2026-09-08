@@ -137,7 +137,7 @@ public struct SpyHealthActionSink: HealthActionSink {
 
         switch action {
         case .runDoctor:
-            if openTerminal(command: "longhouse local-health --fast --json") {
+            if openTerminal(command: "longhouse local-health --json") {
                 return feedback(
                     for: action,
                     style: .success,

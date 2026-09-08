@@ -153,9 +153,7 @@ def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
     raw_projection = payload.get("local_projection")
     projection = raw_projection if isinstance(raw_projection, Mapping) else {}
     pulse_at = _parse_rfc3339(_normalize_optional_string(projection.get("engine_pulse_at")))
-    generated_at = _parse_rfc3339(_normalize_optional_string(projection.get("generated_at")))
     pulse_age_seconds = int(max(0.0, (now - pulse_at).total_seconds())) if pulse_at is not None else None
-    evidence_age_seconds = int(max(0.0, (now - generated_at).total_seconds())) if generated_at is not None else None
     effective_age_seconds = pulse_age_seconds if pulse_age_seconds is not None else file_age_seconds
 
     return {
@@ -164,7 +162,6 @@ def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
         "fresh": effective_age_seconds <= ENGINE_FRESH_SECONDS,
         "age_seconds": effective_age_seconds,
         "file_age_seconds": file_age_seconds,
-        "evidence_age_seconds": evidence_age_seconds,
         "reconciliation": projection.get("reconciliation") if isinstance(projection.get("reconciliation"), Mapping) else None,
         "payload": payload,
         "error": None,
@@ -219,15 +216,6 @@ def _engine_status_resolved_sessions(engine_status: dict[str, Any]) -> list[Any]
     if not isinstance(raw_rows, list):
         return None
     return raw_rows
-
-
-def _engine_status_resolved_sessions_issue(engine_status: dict[str, Any]) -> str | None:
-    payload = _engine_status_payload(engine_status)
-    if "sessions" not in payload:
-        return "missing"
-    if not isinstance(payload.get("sessions"), list):
-        return "invalid"
-    return None
 
 
 def _resolved_session_mapping(raw_row: Any, field_name: str) -> Mapping[str, Any]:
@@ -350,13 +338,9 @@ def _collect_resolved_sessions_from_engine_status(
         return None
     observed_now = now or datetime.now(timezone.utc)
 
-    # The canonical projection intentionally separates a control lease from
-    # process evidence, but older engine builds omitted the lease timestamp
-    # from each resolved row. The companion managed_sessions ledger still
-    # carries the exact observation and TTL. Use it to prevent an expired
-    # lease from remaining "attached" forever in fast local-health snapshots.
-    # Missing companion evidence stays backward compatible; present but
-    # expired or malformed evidence becomes explicitly unknown.
+    # A resolved row describes the session; the managed lease ledger is the
+    # freshness authority for control. A missing or malformed lease is unknown,
+    # never an implicit attached fallback.
     payload = _engine_status_payload(engine_status)
     raw_managed_leases = payload.get("managed_sessions")
     managed_leases_by_session: dict[str, Mapping[str, Any]] = {}
@@ -397,23 +381,24 @@ def _collect_resolved_sessions_from_engine_status(
             row = _resolved_engine_managed_session_row(raw_row=raw_row)
             session_id = str(row.get("session_id") or "")
             raw_lease = managed_leases_by_session.get(session_id)
-            if raw_lease is not None:
+            reason = None
+            if raw_lease is None:
+                reason = "lease_evidence_missing"
+            else:
                 lease_observed_at = _parse_rfc3339(_normalize_optional_string(raw_lease.get("observed_at")))
                 raw_ttl_ms = raw_lease.get("lease_ttl_ms")
                 ttl_ms = raw_ttl_ms if type(raw_ttl_ms) is int and raw_ttl_ms > 0 else None
-                reason = None
                 if lease_observed_at is None or ttl_ms is None:
                     reason = "lease_evidence_invalid"
                 elif (observed_now - lease_observed_at).total_seconds() * 1000 > ttl_ms:
                     reason = "lease_expired"
-                if reason is not None:
-                    row["state"] = "unknown"
-                    row["bridge_status"] = None
-                    reason_codes = list(row.get("reason_codes") or [])
-                    if reason not in reason_codes:
-                        reason_codes.append(reason)
-                    row["reason_codes"] = reason_codes
-
+            if reason is not None:
+                row["state"] = "unknown"
+                row["bridge_status"] = None
+                reason_codes = list(row.get("reason_codes") or [])
+                if reason not in reason_codes:
+                    reason_codes.append(reason)
+                row["reason_codes"] = reason_codes
             phase_row = phase_by_session.get(session_id)
             if phase_row is not None:
                 raw_phase = _normalize_optional_string(phase_row.get("phase"))
@@ -490,21 +475,6 @@ def _validate_resolved_engine_managed_sessions(
     return validated
 
 
-def _resolved_sessions_unusable_summary(issue: str | None) -> dict[str, Any]:
-    summary = {
-        "attached_count": 0,
-        "detached_count": 0,
-        "degraded_count": 0,
-        "orphan_bridge_count": 0,
-        "latest_activity_at": None,
-    }
-    if issue == "invalid":
-        summary["canonical_sessions_invalid"] = True
-    else:
-        summary["canonical_sessions_missing"] = True
-    return summary
-
-
 __all__ = [
     "_collect_build_identity",
     "_parse_iso8601",
@@ -512,7 +482,6 @@ __all__ = [
     "_collect_outbox",
     "_engine_status_payload",
     "_engine_status_resolved_sessions",
-    "_engine_status_resolved_sessions_issue",
     "_resolved_session_mapping",
     "_resolved_session_state",
     "_resolved_join_key_value",
@@ -523,5 +492,4 @@ __all__ = [
     "_resolved_engine_session_app_server_is_live",
     "_resolved_engine_opencode_server_is_live",
     "_validate_resolved_engine_managed_sessions",
-    "_resolved_sessions_unusable_summary",
 ]

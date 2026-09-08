@@ -113,7 +113,6 @@ private func watchingAttentionSnapshot() -> HealthSnapshot {
                 spoolPendingCount: 0,
                 spoolDeadCount: 0,
                 parseErrorCount1H: 0,
-                consecutiveShipFailures: 0,
                 diskFreeBytes: nil,
                 isOffline: false,
                 recentDeadLetters: nil,
@@ -283,67 +282,23 @@ struct LonghouseMenuBarCoreTests {
         #expect(presentation.headline == "Durable upload proof unavailable for 1 source")
     }
 
+
     @Test
-    func nativePayloadShipFailuresPromoteRetryingTransport() {
-        let snapshot = presentationSnapshot(sessions: [], shipFailures: 5, shipAttempts10m: 5)
+    func transportReasonsPromoteRetryingTransport() {
+        let snapshot = presentationSnapshot(
+            reasons: ["connect_errors"],
+            sessions: []
+        )
 
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
         let transport = presentation.facts.first(where: { $0.id == "transport" })
 
         #expect(presentation.promotion == .inspect)
-        #expect(presentation.headline == "Local upload is retrying")
+        #expect(presentation.headline == "Local upload needs attention")
         #expect(transport?.value == "Retrying")
         #expect(transport?.promotion == .inspect)
     }
 
-    @Test
-    func staleNativeShipFailuresDoNotClaimActiveRetrying() {
-        let snapshot = presentationSnapshot(
-            reasons: ["engine_status_stale"], sessions: [], shipFailures: 5, engineFresh: false
-        )
-
-        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
-        let transport = presentation.facts.first(where: { $0.id == "transport" })
-
-        #expect(presentation.promotion == .unavailable)
-        #expect(presentation.headline == "Current local status unavailable")
-        #expect(transport?.value == "Unknown")
-        #expect(transport?.promotion == .unavailable)
-    }
-
-    @Test
-    func inactiveNativeShipFailuresDoNotClaimActiveRetrying() {
-        let snapshot = presentationSnapshot(
-            sessions: [], shipFailures: 8, shipAttempts10m: 0
-        )
-
-        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
-        let transport = presentation.facts.first(where: { $0.id == "transport" })
-
-        #expect(presentation.promotion == .normal)
-        #expect(presentation.headline == "No sessions running")
-        #expect(transport?.value == "Connected")
-        #expect(transport?.promotion == .normal)
-    }
-
-    @Test
-    func decodesActiveShipWindowFromNativePayload() throws {
-        let data = Data(
-            """
-            {
-              "consecutive_ship_failures": 8,
-              "ship_attempts_10m": 0
-            }
-            """.utf8
-        )
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-
-        let payload = try decoder.decode(EngineStatusPayload.self, from: data)
-
-        #expect(payload.consecutiveShipFailures == 8)
-        #expect(payload.shipAttempts10m == 0)
-    }
 
     @Test
     func freshNativeEngineCountsAsRunningWhenServiceEvidenceIsAbsent() {
@@ -1136,7 +1091,6 @@ struct LonghouseMenuBarCoreTests {
                         error: nil
                     ),
                     parseErrorCount1H: 0,
-                    consecutiveShipFailures: 0,
                     diskFreeBytes: nil,
                     isOffline: false,
                     recentDeadLetters: [],
@@ -1440,7 +1394,7 @@ struct LonghouseMenuBarCoreTests {
         )
 
         #expect(invocation.launchPath == executableURL.path)
-        #expect(invocation.arguments == ["local-health", "--fast", "--json"])
+        #expect(invocation.arguments == ["local-health", "--json"])
     }
 
     @Test
@@ -1798,7 +1752,6 @@ struct LonghouseMenuBarCoreTests {
                     spoolPendingCount: 1,
                     spoolDeadCount: 0,
                     parseErrorCount1H: 0,
-                    consecutiveShipFailures: 0,
                     diskFreeBytes: nil,
                     isOffline: false,
                     recentDeadLetters: nil,
@@ -1825,7 +1778,7 @@ struct LonghouseMenuBarCoreTests {
             severity: "yellow",
             headline: "Longhouse archive repair is draining",
             reasons: ["archive_repair_draining"],
-            suggestedActions: ["Inspect archive backlog: longhouse local-health --fast --json"],
+            suggestedActions: ["Inspect archive backlog: longhouse local-health --json"],
             attention: AttentionSnapshot(
                 state: "watching",
                 summary: nil
@@ -1855,7 +1808,6 @@ struct LonghouseMenuBarCoreTests {
                         latestError: "storage lane busy"
                     ),
                     parseErrorCount1H: 0,
-                    consecutiveShipFailures: 0,
                     diskFreeBytes: nil,
                     isOffline: false,
                     recentDeadLetters: nil,
@@ -1886,7 +1838,6 @@ struct LonghouseMenuBarCoreTests {
                         maxRetryCount: 0, latestError: nil
                     ),
                     parseErrorCount1H: 0,
-                    consecutiveShipFailures: 0,
                     diskFreeBytes: nil,
                     isOffline: false,
                     recentDeadLetters: nil,
@@ -1898,49 +1849,6 @@ struct LonghouseMenuBarCoreTests {
         #expect(drained.collectedAt == "2026-04-08T01:52:01Z")
     }
 
-    @Test
-    func attentionSummaryExplainsConsecutiveShippingFailures() {
-        let snapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-04-08T01:52:00Z",
-            healthState: "degraded",
-            severity: "yellow",
-            headline: "Longhouse shipping is degraded",
-            reasons: ["consecutive_failures"],
-            suggestedActions: ["Run: longhouse machine repair"],
-            attention: AttentionSnapshot(
-                state: "needs_attention",
-                summary: "Longhouse is still running, but this state is persistent or actionable enough to inspect."
-            ),
-            service: nil,
-            engineStatus: EngineStatusSnapshot(
-                path: nil,
-                exists: true,
-                fresh: true,
-                ageSeconds: 4,
-                payload: EngineStatusPayload(
-                    version: "0.1.16",
-                    daemonPid: 123,
-                    lastShipAt: "2026-04-08T01:51:00Z",
-                    spoolPendingCount: 0,
-                    spoolDeadCount: 0,
-                    parseErrorCount1H: 0,
-                    consecutiveShipFailures: 3,
-                    diskFreeBytes: nil,
-                    isOffline: false,
-                    recentDeadLetters: nil,
-                    lastUpdated: "2026-04-08T01:52:00Z"
-                ),
-                error: nil
-            ),
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: nil
-        )
-
-        #expect(snapshot.attentionSummaryLabel.contains("3 consecutive shipping failures"))
-        #expect(snapshot.attentionSummaryLabel.contains("still failing to connect"))
-    }
 
     @Test
     func managedAttentionOverridesDisplaySeverity() throws {
@@ -2005,7 +1913,6 @@ struct LonghouseMenuBarCoreTests {
                     spoolPendingCount: 0,
                     spoolDeadCount: 0,
                     parseErrorCount1H: 0,
-                    consecutiveShipFailures: 0,
                     diskFreeBytes: nil,
                     isOffline: false,
                     recentDeadLetters: nil,
@@ -2099,42 +2006,43 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.recentTouchTitle(snapshot.recentTouches[1]) == "crims · Codex")
     }
 
+
     @Test
-    func decodesAttentionAndKeepsLegacyFallbackWhenAbsent() throws {
+    func decodesAttentionFromCanonicalTransportReason() throws {
         let watchingData = Data("""
         {
           "health_state": "degraded",
           "severity": "yellow",
-          "headline": "Longhouse shipping is degraded",
-          "reasons": ["consecutive_failures"],
+          "headline": "Local upload needs attention",
+          "reasons": ["connect_errors"],
           "suggested_actions": [],
           "attention": {
             "state": "watching",
             "headline": "Longhouse is retrying quietly",
-            "summary": "Recent local shipping retries are recorded in diagnostics, but there is no durable backlog or repair step yet.",
-            "reasons": ["consecutive_failures"],
+            "summary": "Recent local shipping retries need inspection.",
+            "reasons": ["connect_errors"],
             "suggested_actions": []
           }
         }
         """.utf8)
-        let legacyData = Data("""
+        let noAttentionData = Data("""
         {
           "health_state": "degraded",
           "severity": "yellow",
-          "headline": "Longhouse shipping is degraded",
-          "reasons": ["consecutive_failures"],
+          "headline": "Local upload needs attention",
+          "reasons": ["connect_errors"],
           "suggested_actions": []
         }
         """.utf8)
 
         let watching = try HealthSnapshotDecoder.decode(data: watchingData)
-        let legacy = try HealthSnapshotDecoder.decode(data: legacyData)
+        let noAttention = try HealthSnapshotDecoder.decode(data: noAttentionData)
 
         #expect(watching.attention?.normalizedState == "watching")
         #expect(watching.needsMenuBarAttention == false)
         #expect(watching.effectiveHeadline == "Longhouse is retrying quietly")
-        #expect(legacy.attention == nil)
-        #expect(legacy.needsMenuBarAttention == true)
+        #expect(noAttention.attention == nil)
+        #expect(noAttention.needsMenuBarAttention == true)
     }
 
     @Test
@@ -2821,7 +2729,7 @@ struct LonghouseMenuBarCoreTests {
         let store = SnapshotStore(
             source: CLIHealthSnapshotSource(
                 launchPath: tempDir.appendingPathComponent("longhouse-local-health").path,
-                arguments: ["--fast", "--json"]
+                arguments: ["--json"]
             ),
             cacheURL: cacheURL,
             transientRetryDelay: 0.01
@@ -3273,7 +3181,7 @@ struct LonghouseMenuBarCoreTests {
 
         let source = CLIHealthSnapshotSource(
             launchPath: binary,
-            arguments: ["local-health", "--fast", "--json"],
+            arguments: ["local-health", "--json"],
             commandTimeoutSeconds: 10
         )
         // The assertion is simply that this does not throw. A producer whose
@@ -3290,7 +3198,7 @@ struct LonghouseMenuBarCoreTests {
           "collected_at": "2026-08-04T20:00:00Z",
           "health_state": "degraded",
           "severity": "yellow",
-          "headline": "Longhouse native fast health needs attention",
+          "headline": "Longhouse native health needs attention",
           "reasons": ["storage_v2_sources_proof_unknown"],
           "suggested_actions": ["Update Longhouse and inspect the retained source evidence."],
           "suggested_action_ids": ["inspect_storage_source"],
@@ -3407,8 +3315,6 @@ private func presentationSnapshot(
     storageBlockKind: String? = nil,
     storageUnresolved: Int? = nil,
     storagePending: Int = 0,
-    shipFailures: Int = 0,
-    shipAttempts10m: Int? = nil,
     isOffline: Bool = false,
     engineFresh: Bool = true,
     serviceStatus: String? = "running"
@@ -3438,9 +3344,8 @@ private func presentationSnapshot(
                     blockedBytes: 0, latestBlockKind: storageBlockKind, latestBlockDetail: nil,
                     byteLimit: 1_073_741_824, error: nil
                 ),
-                parseErrorCount1H: 0, consecutiveShipFailures: shipFailures, diskFreeBytes: nil,
+                parseErrorCount1H: 0, diskFreeBytes: nil,
                 isOffline: isOffline, recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z",
-                shipAttempts10m: shipAttempts10m
             ),
             error: nil
         ),

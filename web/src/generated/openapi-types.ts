@@ -4432,11 +4432,6 @@ export interface components {
              */
             parse_error_count_1h: number;
             /**
-             * Consecutive Ship Failures
-             * @default 0
-             */
-            consecutive_ship_failures: number;
-            /**
              * Ship Attempts 1H
              * @default 0
              */
@@ -4930,8 +4925,6 @@ export interface components {
             history_import?: components["schemas"]["HistoryImportSnapshot-Output"];
             /** Parse Errors 1H */
             parse_errors_1h: number;
-            /** Consecutive Failures */
-            consecutive_failures: number;
             /** Disk Free Bytes */
             disk_free_bytes: number;
             /** Is Offline */

@@ -5758,13 +5758,7 @@ def local_transport_is_currently_healthy(data: dict[str, Any]) -> bool:
     if str(transport.get("status") or "") == "healthy":
         return int(spool.get("pending_count") or 0) == 0
 
-    transport_health = data.get("transport_health") or {}
-    return (
-        str(transport_health.get("status") or "") != "offline"
-        and transport_health.get("last_ship_result") == "ok"
-        and int(transport_health.get("consecutive_failures") or 0) == 0
-        and int(transport_health.get("spool_pending") or 0) == 0
-    )
+    return False
 
 
 def batch_local_health_preflight() -> dict[str, Any]:

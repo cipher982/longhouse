@@ -37,7 +37,7 @@ def _write_executable(path: Path) -> Path:
     return path
 
 
-NATIVE_ARGV_TAIL = ["local-health", "--fast", "--json"]
+NATIVE_ARGV_TAIL = ["local-health", "--json"]
 
 
 def test_snapshot_command_is_the_installed_native_facade(monkeypatch, tmp_path: Path):

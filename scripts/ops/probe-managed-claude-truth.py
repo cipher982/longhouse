@@ -144,10 +144,8 @@ def ps_row(pid: Any) -> dict[str, Any] | None:
     }
 
 
-def collect_local_health(*, fast: bool) -> dict[str, Any] | None:
+def collect_local_health() -> dict[str, Any] | None:
     cmd = ["longhouse", "local-health", "--json"]
-    if fast:
-        cmd.append("--fast")
     proc = run_cmd(cmd, timeout=30)
     data = safe_json_loads(proc.stdout or "")
     if isinstance(data, dict):
@@ -460,7 +458,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--longhouse-home", type=Path, default=Path.home() / ".longhouse")
     parser.add_argument("--duration-secs", type=float, default=0.0, help="Repeat observations for this many seconds.")
     parser.add_argument("--interval-secs", type=float, default=1.0)
-    parser.add_argument("--fast-local-health", action="store_true")
     parser.add_argument("--skip-hosted", action="store_true")
     parser.add_argument("--case-id", default="managed_claude_warm_live_graceful_close")
     parser.add_argument("--profile-class", default="warm_realtime")
@@ -495,7 +492,7 @@ def main() -> int:
     logged_auto_selection = False
     while first or time.monotonic() < deadline:
         first = False
-        local = collect_local_health(fast=args.fast_local_health)
+        local = collect_local_health()
         if not selected_session_id:
             selected_session_id = select_session_id(local, None)
             if selected_session_id and not logged_auto_selection:

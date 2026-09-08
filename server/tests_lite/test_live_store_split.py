@@ -124,7 +124,6 @@ def _machine_heartbeat(*, managed_sessions: list[dict]) -> dict:
         "daemon_pid": 12345,
         "spool_pending_count": 0,
         "parse_error_count_1h": 0,
-        "consecutive_ship_failures": 0,
         "disk_free_bytes": 50_000_000_000,
         "is_offline": False,
         "managed_sessions": managed_sessions,

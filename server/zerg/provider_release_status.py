@@ -412,19 +412,7 @@ def _is_warning_release_status(info: dict[str, Any]) -> bool:
 
 def collect_provider_release_status(
     provider_clis: dict[str, Any],
-    *,
-    fast: bool = False,
 ) -> dict[str, Any]:
-    if fast:
-        return {
-            "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
-            "enabled": False,
-            "skipped_reason": "fast_local_health",
-            "statuses": {},
-            "blocking_count": 0,
-            "warning_count": 0,
-        }
-
     statuses: dict[str, Any] = {}
     providers = sorted(set(provider_clis) | set(managed_provider_names()))
     for provider in providers:

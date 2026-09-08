@@ -33,7 +33,6 @@
       "spool_pending_count": 31,
       "spool_dead_count": 3,
       "parse_error_count_1h": 2,
-      "consecutive_ship_failures": 5,
       "disk_free_bytes": 972963840,
       "is_offline": true,
       "recent_dead_letters": [

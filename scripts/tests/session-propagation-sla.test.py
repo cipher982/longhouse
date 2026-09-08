@@ -185,7 +185,7 @@ def test_batch_preflight_accepts_current_healthy_transport_schema() -> None:
     assert profiler.local_transport_is_currently_healthy(
         {
             "health_state": "degraded",
-            "reasons": ["engine_evidence_stale"],
+            "reasons": ["engine_reconciliation_failed"],
             "transport": {"status": "healthy"},
             "spool": {"pending_count": 0},
         }

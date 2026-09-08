@@ -18,7 +18,7 @@ def _add_archive_backlog_reason(
         reasons.append("archive_dead_lettered")
         _with_action(
             actions,
-            "Inspect retained archive evidence: longhouse local-health --fast --json",
+            "Inspect retained archive evidence: longhouse local-health --json",
         )
         _with_action(
             actions,
@@ -28,7 +28,7 @@ def _add_archive_backlog_reason(
         reasons.append("archive_repair_paused")
         _with_action(
             actions,
-            "Inspect archive repair state: longhouse local-health --fast --json",
+            "Inspect archive repair state: longhouse local-health --json",
         )
         return
     if archive_pending_ranges <= 0 and archive_pending_bytes <= 0:
@@ -39,7 +39,7 @@ def _add_archive_backlog_reason(
         reasons.append("archive_backlog_pending")
     _with_action(
         actions,
-        "Inspect archive backlog: longhouse local-health --fast --json",
+        "Inspect archive backlog: longhouse local-health --json",
     )
 
 

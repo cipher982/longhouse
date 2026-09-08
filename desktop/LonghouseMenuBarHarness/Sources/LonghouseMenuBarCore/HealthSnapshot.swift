@@ -612,29 +612,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "Shipping has \(backlog) waiting. Repair now logs each phase: reconcile runtime, replay backlog, then collect health."
     }
 
-    /// A failure streak is current only while the engine has attempted a ship
-    /// in its active window. Older engine payloads lack that window, so retain
-    /// the legacy count as the compatibility fallback.
-    var currentShippingFailureCount: Int {
-        guard engineStatus?.fresh != false,
-              let payload = engineStatus?.payload else {
-            return 0
-        }
-        let failures = payload.consecutiveShipFailures ?? 0
-        guard let attempts = payload.shipAttempts10m else {
-            return failures
-        }
-        return attempts > 0 ? failures : 0
-    }
-
-    private var shippingFailureAttentionLabel: String? {
-        let failures = currentShippingFailureCount
-
-        guard failures > 0 else {
-            return nil
-        }
-        return "\(failures) consecutive shipping failure\(failures == 1 ? "" : "s") recorded. Repair now shows whether it is replaying data or still failing to connect."
-    }
 
     public var latestActivityLabel: String {
         latestActivityLabel(relativeTo: Date())
@@ -951,9 +928,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         String(engineStatus?.payload?.parseErrorCount1H ?? 0)
     }
 
-    public var consecutiveFailuresLabel: String {
-        String(engineStatus?.payload?.consecutiveShipFailures ?? 0)
-    }
 
     public var launchStateLabel: String {
         launchReadiness?.state ?? "-"
@@ -1097,9 +1071,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             if let shippingBacklogAttentionLabel {
                 return shippingBacklogAttentionLabel
             }
-            if let shippingFailureAttentionLabel {
-                return shippingFailureAttentionLabel
-            }
             if let primaryReason {
                 return "\(primaryReason). Refresh or inspect logs if this keeps aging."
             }
@@ -1111,9 +1082,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         case .red:
             if let shippingBacklogAttentionLabel {
                 return shippingBacklogAttentionLabel
-            }
-            if let shippingFailureAttentionLabel {
-                return shippingFailureAttentionLabel
             }
             if let primaryReason {
                 return "\(primaryReason). Repair is the fastest path to restore shipping."
@@ -1433,8 +1401,6 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
     public let archiveBacklog: ArchiveBacklogStatus?
     public let storageV2Outbox: StorageV2OutboxStatus?
     public let parseErrorCount1H: Int?
-    public let consecutiveShipFailures: Int?
-    public let shipAttempts10m: Int?
     public let diskFreeBytes: UInt64?
     public let isOffline: Bool?
     public let localProjection: LocalProjectionStatus?
@@ -1453,14 +1419,12 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         archiveBacklog: ArchiveBacklogStatus? = nil,
         storageV2Outbox: StorageV2OutboxStatus? = nil,
         parseErrorCount1H: Int?,
-        consecutiveShipFailures: Int?,
         diskFreeBytes: UInt64?,
         isOffline: Bool?,
         localProjection: LocalProjectionStatus? = nil,
         recentDeadLetters: [DeadLetterSnapshot]?,
         lastUpdated: String?,
         build: BuildIdentityRecord? = nil,
-        shipAttempts10m: Int? = nil
     ) {
         self.version = version
         self.daemonPid = daemonPid
@@ -1470,8 +1434,6 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         self.archiveBacklog = archiveBacklog
         self.storageV2Outbox = storageV2Outbox
         self.parseErrorCount1H = parseErrorCount1H
-        self.consecutiveShipFailures = consecutiveShipFailures
-        self.shipAttempts10m = shipAttempts10m
         self.diskFreeBytes = diskFreeBytes
         self.isOffline = isOffline
         self.localProjection = localProjection
@@ -1489,8 +1451,6 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case archiveBacklog
         case storageV2Outbox
         case parseErrorCount1H = "parseErrorCount1h"
-        case consecutiveShipFailures
-        case shipAttempts10m = "shipAttempts10M"
         case diskFreeBytes
         case isOffline
         case localProjection
@@ -1541,14 +1501,12 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
             archiveBacklog: try container.decodeIfPresent(ArchiveBacklogStatus.self, forKey: .archiveBacklog),
             storageV2Outbox: storageV2Outbox,
             parseErrorCount1H: try container.decodeIfPresent(Int.self, forKey: .parseErrorCount1H),
-            consecutiveShipFailures: try container.decodeIfPresent(Int.self, forKey: .consecutiveShipFailures),
             diskFreeBytes: try container.decodeIfPresent(UInt64.self, forKey: .diskFreeBytes),
             isOffline: try container.decodeIfPresent(Bool.self, forKey: .isOffline),
             localProjection: try container.decodeIfPresent(LocalProjectionStatus.self, forKey: .localProjection),
             recentDeadLetters: try container.decodeIfPresent([DeadLetterSnapshot].self, forKey: .recentDeadLetters),
             lastUpdated: try container.decodeIfPresent(String.self, forKey: .lastUpdated),
             build: try container.decodeIfPresent(BuildIdentityRecord.self, forKey: .build),
-            shipAttempts10m: try container.decodeIfPresent(Int.self, forKey: .shipAttempts10m)
         )
     }
 }

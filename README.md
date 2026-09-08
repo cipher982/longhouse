@@ -115,7 +115,7 @@ Binding beyond localhost without auth is refused by default — `longhouse-serve
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash  # install or upgrade the native pair
-longhouse local-health --fast --json                   # diagnose
+longhouse local-health --json                             # diagnose
 longhouse machine repair                               # restart a configured machine
 longhouse machine repair --repair-service              # install/repair its native service
 ```

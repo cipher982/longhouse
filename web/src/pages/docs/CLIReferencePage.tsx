@@ -122,7 +122,7 @@ longhouse machine repair --repair-service`}
         paired, whether the agent is running, and what it can see.
       </p>
       <CodeBlock title="terminal">
-        {`longhouse local-health --fast --json`}
+        {`longhouse local-health --json`}
       </CodeBlock>
 
       <h3>longhouse shipping</h3>

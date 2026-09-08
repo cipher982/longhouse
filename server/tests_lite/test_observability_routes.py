@@ -201,7 +201,6 @@ def _seed_heartbeat(
     version: str = "0.6.0",
     spool_pending: int = 0,
     spool_dead: int = 0,
-    consecutive_failures: int = 0,
     raw_json: str | None = None,
 ) -> AgentHeartbeat:
     heartbeat = AgentHeartbeat(
@@ -210,9 +209,8 @@ def _seed_heartbeat(
         version=version,
         spool_pending=spool_pending,
         spool_dead=spool_dead,
-        consecutive_failures=consecutive_failures,
         ship_attempts_1h=4,
-        ship_successes_1h=4 if spool_dead == 0 and consecutive_failures == 0 else 2,
+        ship_successes_1h=4 if spool_dead == 0 else 2,
         disk_free_bytes=1_000,
         is_offline=0,
         raw_json=raw_json,
@@ -244,7 +242,6 @@ def _apply_catalog_heartbeat(
         "spool_pending": 0,
         "spool_dead": 0,
         "parse_errors_1h": 0,
-        "consecutive_failures": 0,
         "ship_attempts_1h": 0,
         "ship_successes_1h": 0,
         "ship_rate_limited_1h": 0,
@@ -355,7 +352,6 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
             device_id="broken-machine",
             received_at=pinned_now - timedelta(minutes=2),
             spool_dead=1,
-            consecutive_failures=1,
         )
         _seed_heartbeat(
             db,
@@ -444,7 +440,6 @@ def test_machine_health_route_reads_the_live_catalog(live_catalog, live_catalog_
         device_id="broken-machine",
         received_at=now - timedelta(minutes=2),
         spool_dead=1,
-        consecutive_failures=1,
         ship_attempts_1h=4,
         ship_successes_1h=2,
     )

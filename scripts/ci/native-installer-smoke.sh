@@ -201,7 +201,7 @@ IDENTITY_EOF
 
 snapshot_upgrade_state() {
   local stage="$1"
-  smoke_command 60 "$installed" local-health --fast --json > "$EVIDENCE_DIR/$stage-health.json"
+  smoke_command 60 "$installed" local-health --json > "$EVIDENCE_DIR/$stage-health.json"
   "$NODE_BIN" - "$HOME_DIR" "$EVIDENCE_DIR/$stage-health.json" "$RUNTIME_PORT" \
     > "$EVIDENCE_DIR/$stage-state.json" <<'STATE_EOF'
 const fs = require("fs");
@@ -347,7 +347,7 @@ second_release="$(readlink "$HOME_DIR/.local/share/longhouse/current")"
 [[ "$first_release" != "$second_release" ]]
 [[ -x "$installed" ]]
 smoke_command 60 "$installed" verify-pair > /dev/null
-smoke_command 60 "$installed" local-health --fast --json > /dev/null
+smoke_command 60 "$installed" local-health --json > /dev/null
 if [[ "$REMOTE_RELEASE" == "1" ]]; then
   check_identity target "$EXPECTED_VERSION" "$EXPECTED_COMMIT"
 fi

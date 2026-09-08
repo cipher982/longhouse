@@ -247,7 +247,6 @@ _MACHINE_HEALTH_HEARTBEAT_FIELDS = frozenset(
         "spool_pending",
         "spool_dead",
         "parse_errors_1h",
-        "consecutive_failures",
         "ship_attempts_1h",
         "ship_successes_1h",
         "ship_rate_limited_1h",

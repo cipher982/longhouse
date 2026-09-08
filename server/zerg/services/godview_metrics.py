@@ -289,7 +289,6 @@ def _refresh_live_device_gauges() -> None:
             metrics.device_ship_latency_ms.labels(device=device, quantile="p95").set(float(row.ship_latency_p95_ms_1h))
         metrics.device_spool_pending.labels(device=device).set(float(row.spool_pending or 0))
         metrics.device_spool_dead.labels(device=device).set(float(row.spool_dead or 0))
-        metrics.device_consecutive_ship_failures.labels(device=device).set(float(row.consecutive_failures or 0))
         metrics.device_parse_errors_1h.labels(device=device).set(float(row.parse_errors_1h or 0))
         metrics.device_disk_free_bytes.labels(device=device).set(float(row.disk_free_bytes or 0))
         metrics.device_reported_offline.labels(device=device).set(1.0 if row.is_offline else 0.0)

@@ -1,4 +1,13 @@
 import SwiftUI
+private let menuBarUnavailableReasons: Set<String> = [
+    "engine_status_missing", "engine_status_unreadable", "engine_status_stale",
+    "engine_offline", "transport_unavailable",
+]
+private let menuBarTransportAttentionReasons: Set<String> = [
+    "ship_stalled", "connect_errors", "server_errors", "rate_limited",
+    "retryable_client_errors",
+]
+
 
 public enum MenuBarPromotion: String, Equatable, Sendable {
     case normal
@@ -85,17 +94,16 @@ extension HealthSnapshot {
             "service_stopped", "spool_dead", "desktop_app_setup_required",
             "desktop_app_wrong_install_location",
         ]
-        let unavailableReasons: Set<String> = [
-            "engine_status_missing", "engine_status_unreadable", "engine_status_stale",
-        ]
-        let inspectReasons: Set<String> = [
+        let inspectReasons: Set<String> = Set([
             "archive_dead_lettered", "archive_repair_paused", "orphaned_managed_bridge",
             "managed_session_control_degraded", "provider_release_blocked",
             "storage_v2_sources_proof_unknown", "managed_launch_recovery_active",
-            "managed_launch_recovery_exhausted",
-            "consecutive_failures", "connect_errors", "server_errors",
-            "rate_limited", "retryable_client_errors",
-        ]
+            "managed_launch_recovery_exhausted", "parse_errors",
+            "payload_rejected", "payload_too_large",
+        ]).union(menuBarTransportAttentionReasons)
+        let transportAttentionReason = reasons.first {
+            menuBarTransportAttentionReasons.contains($0)
+        }
         // This producer red state is deliberately row-level: the engine has
         // preserved the session, but the phase contract is newer than this
         // client. Keep it visible in the session row without turning an
@@ -103,7 +111,6 @@ extension HealthSnapshot {
         // native red state remains machine-wide repair unless a concrete
         // repair reason already says so.
         let rowLevelRedReasons: Set<String> = ["managed_unknown_phase"]
-        let shippingFailures = currentShippingFailureCount
         let storageBlockRequiresRepair = self.storageBlockRequiresRepair
         let storageBlockIsRecovering = self.storageBlockIsRecovering
         let nativeRedRequiresRepair = parsedSeverity == .red
@@ -118,9 +125,9 @@ extension HealthSnapshot {
             promotion = .repair
         } else if needsUser > 0 {
             promotion = .needsUser
-        } else if storageBlockIsRecovering || storageBlockProofUnknown || degraded > 0 || orphanBridgeCount > 0 || shippingFailures > 0 || !inspectReasons.isDisjoint(with: reasons) {
+        } else if storageBlockIsRecovering || storageBlockProofUnknown || degraded > 0 || orphanBridgeCount > 0 || transportAttentionReason != nil || !inspectReasons.isDisjoint(with: reasons) {
             promotion = .inspect
-        } else if !unavailableReasons.isDisjoint(with: reasons)
+        } else if !menuBarUnavailableReasons.isDisjoint(with: reasons)
             || engineStatus?.error != nil
             || engineStatus?.fresh == false {
             promotion = .unavailable
@@ -147,10 +154,10 @@ extension HealthSnapshot {
             headline = "Durable upload proof unavailable for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
         case .inspect where reasons.contains("managed_launch_recovery_exhausted"):
             headline = "Managed session recovery needs attention"
+        case .inspect where transportAttentionReason != nil:
+            headline = "Local upload needs attention"
         case .inspect where degraded > 0:
             headline = "Remote control unavailable for \(degraded) session\(degraded == 1 ? "" : "s")"
-        case .inspect where shippingFailures > 0:
-            headline = "Local upload is retrying"
         case .inspect where orphanBridgeCount > 0:
             headline = "\(orphanBridgeCount) background process\(orphanBridgeCount == 1 ? "" : "es") need cleanup"
         case .inspect:
@@ -188,7 +195,7 @@ extension HealthSnapshot {
     }
 
     private func menuBarSystemFacts(relativeTo referenceDate: Date) -> [MenuBarSystemFact] {
-        // Native fast health intentionally has no service-manager block. A
+        // Native health intentionally has no service-manager block. A
         // fresh engine pulse with a daemon pid is sufficient local-process
         // evidence; otherwise the panel reports Unknown instead of inventing
         // a service failure.
@@ -239,10 +246,12 @@ extension HealthSnapshot {
             durablePromotion = .normal
         }
 
+        let transportAttentionReason = reasons.first {
+            menuBarTransportAttentionReasons.contains($0)
+        }
         let transportValue: String
         let transportDetail: String?
         let transportPromotion: MenuBarPromotion
-        let shippingFailures = currentShippingFailureCount
         if !hasEngineEvidence {
             transportValue = "Unknown"
             transportDetail = "no engine evidence"
@@ -255,9 +264,13 @@ extension HealthSnapshot {
             transportValue = "Offline"
             transportDetail = "data retained locally"
             transportPromotion = .unavailable
-        } else if shippingFailures > 0 {
+        } else if let unavailableReason = reasons.first(where: { menuBarUnavailableReasons.contains($0) }) {
+            transportValue = "Unknown"
+            transportDetail = unavailableReason.replacingOccurrences(of: "_", with: " ")
+            transportPromotion = .unavailable
+        } else if let transportAttentionReason {
             transportValue = "Retrying"
-            transportDetail = "\(shippingFailures) consecutive ship failure\(shippingFailures == 1 ? "" : "s")"
+            transportDetail = transportAttentionReason.replacingOccurrences(of: "_", with: " ")
             transportPromotion = .inspect
         } else {
             transportValue = "Connected"

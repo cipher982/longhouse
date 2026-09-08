@@ -104,17 +104,7 @@ def _recent_claude_transcript_paths(provider_config_dir: Path, *, now: datetime)
     return [path for _, path in candidates[:PROVIDER_HOOK_DIAGNOSTIC_FILE_LIMIT]]
 
 
-def _collect_provider_hook_diagnostics(base_dir: Path, *, now: datetime, fast: bool) -> dict[str, Any]:
-    if fast:
-        return {
-            "schema_version": 1,
-            "state": "skipped",
-            "skipped_reason": "fast_local_health",
-            "recent_error_count": 0,
-            "deleted_cwd_error_count": 0,
-            "events": [],
-        }
-
+def _collect_provider_hook_diagnostics(base_dir: Path, *, now: datetime) -> dict[str, Any]:
     provider_config_dir = _provider_config_dir_for_hook_diagnostics(base_dir)
     if provider_config_dir is None:
         return {

@@ -11,7 +11,7 @@ use chrono::DateTime;
 use chrono::Utc;
 
 pub const PID_REUSE_TOLERANCE_SECS: i64 = 120;
-const PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_millis(750);
+const PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessFact {
