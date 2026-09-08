@@ -1163,6 +1163,69 @@ describe("SessionsPage", () => {
     expect(within(screen.getByTestId("session-row")).getByText("Finished 10m ago")).toBeInTheDocument();
   });
 
+  it("toggles include_hidden through the filter popover and displays view all chip", async () => {
+    const user = userEvent.setup();
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [makeTimelineCard({ id: "session-1" })],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    // Open filter popover
+    const filterButton = screen.getByRole("button", { name: /^Filters/ });
+    await user.click(filterButton);
+
+    // Toggle view all
+    const viewAllCheckbox = screen.getByRole("checkbox", { name: /view all/i });
+    expect(viewAllCheckbox).not.toBeChecked();
+    await user.click(viewAllCheckbox);
+
+    // Should pass include_hidden: true to useAgentSessions
+    await waitFor(() => {
+      expect(mockUseAgentSessions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ include_hidden: true }),
+        expect.anything(),
+      );
+    });
+
+    // Chip should be visible
+    expect(screen.getByText("view all")).toBeInTheDocument();
+  });
+
+  it("calls setSessionTimelineVisibility when hide button on session row is clicked", async () => {
+    const user = userEvent.setup();
+    const hideSpy = vi.spyOn(agentsApi, "setSessionTimelineVisibility").mockResolvedValue({
+      session_id: "session-1",
+      hidden: true,
+    });
+
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [makeTimelineCard({ id: "session-1" })],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    const hideButton = screen.getByTestId("session-row-hide-button");
+    await user.click(hideButton);
+
+    expect(hideSpy).toHaveBeenCalledWith("session-1", true);
+    hideSpy.mockRestore();
+  });
+
 
 
 

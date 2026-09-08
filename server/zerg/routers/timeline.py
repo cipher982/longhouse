@@ -341,6 +341,10 @@ async def list_timeline_sessions(
         False,
         description="Include Hatch automation sessions in otherwise default-hidden lists",
     ),
+    include_hidden: bool = Query(
+        False,
+        description="Include user-hidden and automation-hidden sessions (View All mode)",
+    ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -365,6 +369,7 @@ async def list_timeline_sessions(
         hide_autonomous=hide_autonomous,
         include_automation=include_automation,
         device_id=device_id,
+        include_hidden=include_hidden,
         days_back=days_back,
         query=query,
         limit=effective_limit,
@@ -415,6 +420,10 @@ async def stream_timeline_sessions(
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
+    include_hidden: bool = Query(
+        False,
+        description="Include user-hidden and automation-hidden sessions (View All mode)",
+    ),
     limit: int = Query(20, ge=1, description="Max results (server clamps to 100)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     sort: Optional[str] = Query(
@@ -448,6 +457,7 @@ async def stream_timeline_sessions(
         limit=effective_limit,
         offset=offset,
         sort=sort,
+        include_hidden=include_hidden,
         mode=mode,
         context_mode=context_mode,
     )

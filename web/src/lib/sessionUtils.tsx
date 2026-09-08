@@ -339,6 +339,7 @@ export interface SessionsUrlState {
   provider: string;
   deviceId: string;
   hideAutonomous: boolean;
+  includeHidden: boolean;
   daysBack: number;
   searchQuery: string;
   aiSearch: boolean;
@@ -375,6 +376,7 @@ export function readSessionsUrlState(
     provider: searchParams.get("provider") || "",
     deviceId,
     hideAutonomous: searchParams.get("hide_autonomous") !== "false",
+    includeHidden: searchParams.get("include_hidden") === "true",
     daysBack: parsePositiveIntParam(
       searchParams.get("days_back"),
       DEFAULT_DAYS_BACK,
@@ -407,6 +409,7 @@ export function buildSessionsSearchParams(
   if (state.searchQuery && state.sortOrder !== DEFAULT_SORT_ORDER)
     params.set("sort", state.sortOrder);
   if (!state.hideAutonomous) params.set("hide_autonomous", "false");
+  if (state.includeHidden) params.set("include_hidden", "true");
   if (state.limit !== PAGE_SIZE) params.set("limit", String(state.limit));
 
   return params;

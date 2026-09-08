@@ -5372,6 +5372,7 @@ class CatalogStore:
         include_test: bool,
         hide_autonomous: bool,
         include_automation: bool,
+        include_hidden: bool = False,
         device_id: str | None,
         days_back: int,
         limit: int,
@@ -5407,16 +5408,17 @@ class CatalogStore:
             )
             legacy_where = [
                 or_(func.coalesce(card.c.last_activity_at, card.c.started_at) >= since, legacy_unread),
-                card.c.user_hidden_from_timeline == 0,
                 catalog.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
             ]
             storage_where = [
                 or_(storage.c.last_activity_at >= since, storage_unread),
-                storage.c.user_hidden_from_timeline == 0,
                 storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
             ]
+            if not include_hidden:
+                legacy_where.append(card.c.user_hidden_from_timeline == 0)
+                storage_where.append(storage.c.user_hidden_from_timeline == 0)
             # Storage-v2 providers do not always repeat launch identity in
             # their native transcript metadata. The live catalog is the
             # authoritative identity for a managed session, so a durable
@@ -5460,13 +5462,13 @@ class CatalogStore:
             if environment is not None:
                 legacy_where.append(card.c.environment == environment)
                 storage_where.append(storage_environment == environment)
-            elif not include_test and not include_automation:
+            elif not include_test and not include_automation and not include_hidden:
                 legacy_where.append(card.c.environment.notin_(("test", "e2e")))
                 storage_where.append(storage_environment.notin_(("test", "e2e")))
             if device_id is not None:
                 legacy_where.append(card.c.device_id == device_id)
                 storage_where.append(storage_device == device_id)
-            if hide_autonomous:
+            if hide_autonomous and not include_hidden:
                 legacy_where.append(
                     or_(
                         card.c.user_messages > 0,
@@ -5484,7 +5486,7 @@ class CatalogStore:
                         storage_empty_open,
                     )
                 )
-            if not include_automation:
+            if not include_automation and not include_hidden:
                 legacy_worker_only = primary_worker_only_clause(card, LiveSessionThread.__table__)
                 storage_worker_only = primary_worker_only_clause(storage, LiveSessionThread.__table__)
                 legacy_where.append(

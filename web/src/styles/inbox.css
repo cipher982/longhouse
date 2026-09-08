@@ -213,6 +213,10 @@
   .inbox-row[data-closed="true"] {
     opacity: 0.78;
   }
+  .inbox-row[data-user-hidden="true"] {
+    opacity: 0.55;
+  }
+
 
   /* ---------- Drag state ----------
    * dnd-kit applies a CSS transform to the dragging item that follows the
@@ -265,6 +269,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .inbox-row-hidden-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 4px;
+    border-radius: var(--radius-xs, 3px);
+    background: color-mix(in srgb, var(--color-legacy-bg-hover) 80%, transparent);
+    border: 1px solid var(--color-border-muted);
+    color: var(--text-muted);
+    margin-right: var(--space-2);
+    flex-shrink: 0;
+    line-height: 1.3;
+  }
+
 
   .inbox-row-summary {
     font-size: var(--inbox-row-font);
@@ -307,6 +328,63 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .inbox-row-time {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-1);
+  }
+
+  .inbox-row-hide-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--color-legacy-bg-surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 80ms ease;
+    flex-shrink: 0;
+  }
+
+  .inbox-row:hover .inbox-row-hide-btn,
+  .inbox-row:focus-within .inbox-row-hide-btn,
+  .inbox-row[data-user-hidden="true"] .inbox-row-hide-btn {
+    display: inline-flex;
+  }
+
+  .inbox-row-hide-btn:hover {
+    background: var(--color-legacy-bg-hover);
+    color: var(--text-primary);
+    border-color: var(--color-border-primary);
+  }
+
+  .session-hide-toast {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .session-hide-undo-btn {
+    background: none;
+    border: none;
+    color: var(--color-brand-primary, #60a5fa);
+    cursor: pointer;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: var(--radius-xs);
+    text-decoration: underline;
+  }
+
+  .session-hide-undo-btn:hover {
+    opacity: 0.85;
+  }
+
 
   .inbox-row-status {
     grid-area: status;
