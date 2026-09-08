@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
+
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.models import CatalogBase

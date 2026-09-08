@@ -125,6 +125,26 @@ directory. This is an operator qualification, not a credential-dependent gate
 on every push. `make test-terminal-fidelity-gate-helper` checks its failure
 boundaries without a provider or simulator.
 
+Every run records what it exercised. A dogfood build and an installed release
+pass the same stages, so a green run says nothing on its own about the binaries
+a person can download. Add `--require-released-build` to refuse anything but a
+published release across the Runtime Host, CLI and engine:
+
+```bash
+make test-terminal-fidelity-gate ARGS="--require-released-build --server-url ... --device-id ... --provider codex --cwd ... --ios-destination '...'"
+```
+
+Use it after installing a release into a clean environment, to qualify the
+release itself rather than the working tree. A build counts as released only
+when the remote's own `refs/tags/v<version>` names its commit; both the
+`channel` field and a local tag are things a working tree can assert about
+itself. The check needs network access and refuses when it cannot reach the
+remote. Each summary ends with a receipt naming the
+product build identities, provider readiness and verdicts, which boundary
+failed, the retained evidence path, and the next supported command for that
+boundary. No current proof records a provider *version*, so the receipt reports
+readiness rather than claiming a provider build it does not have.
+
 Historical indexing is a separate qualification from upload receipts. On the
 Runtime Host, supply a JSON array of session UUIDs (or objects with `session_id`):
 

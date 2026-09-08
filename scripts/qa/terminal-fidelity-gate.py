@@ -42,6 +42,9 @@ from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS = ("interrupted-client-recovery", "client-network-recovery")
+# Named rather than resolved through `origin`, which is local configuration a
+# checkout can point anywhere. What "published" means cannot be a local claim.
+CANONICAL_REMOTE = "https://github.com/cipher982/longhouse.git"
 REQUIRED_STAGES = ("preflight", "console", "manifest", "web", "ios", "simlab-up", "simlab", "simlab-down")
 SIMLAB_STATE = ROOT / "artifacts/simlab/current/simlab.json"
 
@@ -210,6 +213,104 @@ def passing(summary: dict) -> bool:
     )
 
 
+# What to run next for each boundary. A verdict that names the failed stage but
+# not the command that reproduces it sends the reader back through this file.
+NEXT_COMMAND = {
+    "preflight": "read preflight.json; every entry there is a precondition, not a result",
+    "console": "make test-console-served-state-e2e ARGS='--api-url <url> --device-id <id> --provider <name> --cwd <dir>'",
+    "manifest": "inspect the console-<provider>-proof.json files; no provider produced a usable case",
+    "web": "make test-terminal-fidelity-web FIDELITY_CASES=<cases.json> PLAYWRIGHT_BASE_URL=<url>",
+    "ios": "make test-terminal-fidelity-ios FIDELITY_CASES=<cases.json> IOS_DESTINATION=<destination>",
+    "simlab-up": "python scripts/qa/simlab.py up --build",
+    "simlab": "make simlab-run SCENARIOS='interrupted-client-recovery client-network-recovery'",
+    "simlab-down": "python scripts/qa/simlab.py down",
+}
+
+
+def receipt(summary: dict, output: Path) -> dict:
+    """Say what was exercised, which boundary failed, and what to run next."""
+
+    provenance = summary["stages"].get("preflight", {}).get("release_provenance") or {}
+    # Mirror passing() exactly. A missing or not_run stage is a failed boundary,
+    # not a silent pass; treating it as one reported "unknown" for the most
+    # common failure there is -- a stage that never got to run.
+    failed = next(
+        (name for name in REQUIRED_STAGES if summary["stages"].get(name, {}).get("status") != "pass"),
+        None,
+    )
+    if failed is None and any(item.get("status") != "pass" for item in summary["providers"]):
+        failed = "console"
+    return {
+        "product_build": provenance.get("components"),
+        "released_build": provenance.get("released"),
+        # No current proof carries a provider *version*: the Console report has
+        # none and the machine directory reports readiness only. Record what
+        # exists under its real name rather than an empty provider_builds that
+        # would read as "no providers" instead of "not captured anywhere".
+        "provider_readiness": (summary["stages"].get("preflight") or {}).get("machine", {}).get("provider_readiness"),
+        "provider_verdicts": {
+            item.get("provider"): item.get("verdict") for item in summary["providers"] if isinstance(item, dict)
+        },
+        "failed_boundary": failed,
+        "evidence": str(output / (f"{failed}.json" if failed else "summary.json")),
+        "next_command": NEXT_COMMAND.get(failed or "", ""),
+    }
+
+
+def release_provenance(server_build: object) -> dict:
+    """What the run is about to exercise: a published release, or a dev build.
+
+    Installed and dogfood builds pass the same stages, so a green run says
+    nothing on its own about the binaries a person can actually download.
+    `channel` is "release" only for a build cut by scripts/ops/release.sh; a
+    dirty tree disqualifies one regardless of channel.
+    """
+
+    local = json.loads(capture(["longhouse", "build-identity", "--json"]))
+    parts = {"server": server_build, "cli": local.get("facade"), "engine": local.get("engine")}
+
+    def from_a_published_tag(build: object) -> bool:
+        # `channel` is self-attested, so is a local tag, and so is `origin`.
+        # Only the canonical remote's own refs say what was actually published,
+        # so ask it by name, and treat an unanswerable question as "not
+        # released" rather than as permission to proceed.
+        if not isinstance(build, dict):
+            return False
+        if build.get("channel") != "release" or build.get("dirty") is not False:
+            return False
+        version, commit = build.get("version"), build.get("commit")
+        if not isinstance(version, str) or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            return False
+        if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+            return False
+        try:
+            listing = capture(
+                ["git", "ls-remote", CANONICAL_REMOTE, f"refs/tags/v{version}", f"refs/tags/v{version}^{{}}"],
+                cwd=ROOT,
+                timeout=60,
+            )
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+            return False
+        published = {line.split("\t")[0] for line in listing.splitlines() if "\t" in line}
+        return commit in published
+
+    released = {name: from_a_published_tag(build) for name, build in parts.items()}
+    return {
+        "released": all(released.values()),
+        "components": {
+            name: {
+                "released": released[name],
+                "version": build.get("version") if isinstance(build, dict) else None,
+                "commit_short": build.get("commit_short") if isinstance(build, dict) else None,
+                "channel": build.get("channel") if isinstance(build, dict) else None,
+                "dirty": build.get("dirty") if isinstance(build, dict) else None,
+            }
+            for name, build in parts.items()
+        },
+        "engine_path": local.get("engine_path"),
+    }
+
+
 def preflight(args: argparse.Namespace, token: str, home: Path) -> dict:
     if sys.platform != "darwin":
         raise RuntimeError("all stages require macOS with Xcode and an installed iOS Simulator; no stages are skipped")
@@ -271,8 +372,21 @@ const browser = await chromium.launch();
 console.log(JSON.stringify({path, version: browser.version()}));
 await browser.close();"""
     chromium = json.loads(capture(["bun", "-e", browser_probe], cwd=ROOT / "e2e", timeout=45))
+    provenance = release_provenance(server.get("build"))
+    if args.require_released_build and not provenance["released"]:
+        unreleased = ", ".join(
+            f"{name} {value['version']} ({value['channel']}{', dirty' if value['dirty'] else ''})"
+            for name, value in sorted(provenance["components"].items())
+            if not value["released"]
+        )
+        raise RuntimeError(
+            "--require-released-build was given and these are not published releases: "
+            f"{unreleased}. Install the release and re-link before qualifying it; a dogfood "
+            "build passing this gate says nothing about what a person can download."
+        )
     return {
         "status": "pass",
+        "release_provenance": provenance,
         "simulator_udid": udid,
         "platform": platform.platform(),
         "server_build": server.get("build"),
@@ -318,6 +432,11 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, help="new directory; default artifacts/terminal-fidelity/gate-<unique UTC timestamp>")
     parser.add_argument("--stage-timeout", type=seconds, default=1800, help="finite per-stage ceiling in seconds (default 1800)")
     parser.add_argument("--turn-timeout", type=seconds, default=180)
+    parser.add_argument(
+        "--require-released-build",
+        action="store_true",
+        help="refuse to run unless the server, CLI and engine are published releases rather than dev builds",
+    )
     args = parser.parse_args()
     if args.device_id == "all" or any(not re.fullmatch(r"[a-z][a-z0-9_-]*", name) or name == "all" for name in args.provider):
         parser.error("choose one explicit machine and named representative providers, not 'all'")
@@ -553,10 +672,23 @@ def main() -> int:
         for name, result in summary["stages"].items():
             save(output / f"{name}.json", result, token)
         summary["status"] = "pass" if passing(summary) and "error" not in summary else "fail"
+        try:
+            summary["receipt"] = receipt(summary, output)
+        except Exception as error:  # a cleanup helper must never lose the verdict
+            summary["receipt"] = {"error": redact(f"{type(error).__name__}: {error}", token)}
         persist()
         if lock:
             lock.close()
-    print(f"[fidelity-gate] {summary['status']}; evidence: {output / 'summary.json'}")
+    mark = summary["receipt"]
+    if summary["status"] != "pass" and mark.get("failed_boundary"):
+        print(f"[fidelity-gate] failed at {mark['failed_boundary']}; evidence: {mark['evidence']}", flush=True)
+        if mark.get("next_command"):
+            print(f"[fidelity-gate] next: {mark['next_command']}", flush=True)
+    print(
+        f"[fidelity-gate] {summary['status']}"
+        f"; released build: {mark.get('released_build')}"
+        f"; evidence: {output / 'summary.json'}"
+    )
     return 0 if summary["status"] == "pass" else 1
 
 

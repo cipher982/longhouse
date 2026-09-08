@@ -948,6 +948,16 @@ fn antigravity_session_id_from_path(path: &Path) -> Option<String> {
     }
     None
 }
+fn cursor_session_id_from_path(path: &Path) -> Option<String> {
+    if !path.components().any(|part| part.as_os_str() == "agent-transcripts") {
+        return None;
+    }
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| Uuid::parse_str(stem).ok())
+        .map(|uuid| uuid.to_string())
+}
+
 
 /// Scan the start of a JSONL file for Codex `session_meta` identity fields.
 ///
@@ -1834,6 +1844,18 @@ fn finalize_workspace_metadata(metadata: &mut SessionMetadata, path: &Path) {
                 metadata.cwd = Some(workspace.cwd);
                 if metadata.git_repo.is_none() {
                     metadata.git_repo = workspace.git_repo;
+                }
+            }
+        } else if let Some(conversation_id) = cursor_session_id_from_path(path) {
+            if let Some(store) = crate::cursor_visibility::configured_cursor_store(&conversation_id) {
+                if let Some(facts) = crate::cursor_store::cursor_workspace_facts(&store) {
+                    metadata.cwd = Some(facts.0);
+                    if metadata.project.is_none() {
+                        metadata.project = facts.1;
+                    }
+                    if metadata.git_repo.is_none() {
+                        metadata.git_repo = facts.2;
+                    }
                 }
             }
         }
@@ -6203,6 +6225,47 @@ mod tests {
             Some(workspace.to_string_lossy().as_ref())
         );
         assert_eq!(result.metadata.project.as_deref(), Some("g55"));
+    }
+
+    #[test]
+    fn cursor_transcript_recovers_its_workspace_from_the_sidecar() {
+        let temp = tempfile::tempdir().unwrap();
+        let id = "c94550f6-05a7-42f5-89f1-cda6c41e5634";
+        let cursor_home = temp.path().join(".cursor");
+        let session_dir = cursor_home.join("chats/project_hash").join(id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(session_dir.join("store.db"), b"").unwrap();
+        let workspace = temp.path().join("my-repo");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            session_dir.join("meta.json"),
+            format!(r#"{{"schemaVersion":1,"cwd":"{}"}}"#, workspace.display()),
+        )
+        .unwrap();
+
+        let transcript = cursor_home
+            .join("projects/my-repo/agent-transcripts")
+            .join(id)
+            .join(format!("{id}.jsonl"));
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(
+            &transcript,
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}"#,
+        )
+        .unwrap();
+
+        let previous = std::env::var_os("CURSOR_HOME");
+        std::env::set_var("CURSOR_HOME", &cursor_home);
+        let result = parse_session_file(&transcript, 0).unwrap();
+        match previous {
+            Some(val) => std::env::set_var("CURSOR_HOME", val),
+            None => std::env::remove_var("CURSOR_HOME"),
+        }
+        assert_eq!(
+            result.metadata.cwd.as_deref(),
+            Some(workspace.to_string_lossy().as_ref())
+        );
+        assert_eq!(result.metadata.project.as_deref(), Some("my-repo"));
     }
 
     #[test]

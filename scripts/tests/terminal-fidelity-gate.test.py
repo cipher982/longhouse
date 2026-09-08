@@ -22,6 +22,21 @@ SESSION = "00000000-0000-4000-8000-000000000002"
 OTHER_SESSION = "00000000-0000-4000-8000-000000000003"
 
 
+def published_commit(tag: str) -> str | None:
+    """The remote's own commit for a tag, or None when the remote is unreachable."""
+
+    try:
+        listing = gate.capture(
+            ["git", "ls-remote", gate.CANONICAL_REMOTE, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
+            cwd=gate.ROOT,
+            timeout=60,
+        )
+    except Exception:
+        return None
+    rows = [line.split("\t")[0] for line in listing.splitlines() if "\t" in line]
+    return rows[-1] if rows else None
+
+
 class FidelityBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -94,6 +109,168 @@ class FidelityBoundaryTests(unittest.TestCase):
                 summary["stages"][name] = stage
         summary["providers"].append({"provider": "cursor", "status": "fail"})
         self.assertFalse(gate.passing(summary))
+
+    def test_a_dev_build_is_not_a_released_build(self):
+        # The positive case must be a really published tag, because the remote
+        # is the authority the check uses; a local tag can only ever fail.
+        tag = "v0.1.46"
+        commit = published_commit(tag)
+        if commit is None:
+            self.skipTest("remote tags unreachable; the released check is network-backed by design")
+        release = {
+            "version": tag.removeprefix("v"),
+            "commit": commit,
+            "commit_short": commit[:8],
+            "channel": "release",
+            "dirty": False,
+        }
+        dev = {**release, "channel": "dev"}
+        dirty_release = {**release, "dirty": True}
+
+        def provenance(server, cli, engine):
+            # Stub only the build-identity call. The tag lookup must stay real:
+            # it is the half of this check that a working tree cannot forge.
+            original = gate.capture
+
+            def capture(command, **kwargs):
+                if command[0] == "longhouse":
+                    return json.dumps({"facade": cli, "engine": engine, "engine_path": "/x"})
+                return original(command, **kwargs)
+
+            gate.capture = capture
+            try:
+                return gate.release_provenance(server)
+            finally:
+                gate.capture = original
+
+        self.assertTrue(provenance(release, release, release)["released"])
+        self.assertFalse(provenance(dev, release, release)["released"])
+        self.assertFalse(provenance(release, dev, release)["released"])
+        self.assertFalse(provenance(release, release, dev)["released"])
+        # A dirty tree disqualifies a build whatever its channel claims.
+        self.assertFalse(provenance(release, release, dirty_release)["released"])
+        self.assertFalse(provenance(release, release, None)["released"])
+
+    def test_the_published_ref_is_read_from_the_canonical_remote_not_origin(self):
+        """`origin` is local configuration and can be pointed anywhere."""
+
+        seen = []
+        original = gate.capture
+        build = {"version": "0.0.1", "commit": "0" * 40, "commit_short": "0" * 8, "channel": "release", "dirty": False}
+
+        def capture(command, **kwargs):
+            if command[0] == "longhouse":
+                return json.dumps({"facade": build, "engine": build, "engine_path": "/x"})
+            seen.append(command)
+            return ""
+
+        gate.capture = capture
+        try:
+            gate.release_provenance(build)
+        finally:
+            gate.capture = original
+        self.assertTrue(seen)
+        for command in seen:
+            self.assertEqual(command[:3], ["git", "ls-remote", gate.CANONICAL_REMOTE])
+
+    def test_a_locally_created_tag_cannot_make_a_build_released(self):
+        """A clean tree can run `git tag v<version> HEAD`; the remote cannot be told to."""
+
+        head = gate.capture(["git", "rev-parse", "HEAD"], cwd=gate.ROOT)
+        # 0.0.1 is not, and will not be, a published Longhouse release.
+        forged = {
+            "version": "0.0.1",
+            "commit": head,
+            "commit_short": head[:8],
+            "channel": "release",
+            "dirty": False,
+        }
+        original = gate.capture
+
+        def capture(command, **kwargs):
+            if command[0] == "longhouse":
+                return json.dumps({"facade": forged, "engine": forged, "engine_path": "/x"})
+            if command[:2] == ["git", "ls-remote"]:
+                # Stand in for the local tag the reviewer created: rev-parse
+                # would resolve it, and ls-remote against origin does not.
+                return ""
+            return original(command, **kwargs)
+
+        gate.capture = capture
+        try:
+            result = gate.release_provenance(forged)
+        finally:
+            gate.capture = original
+        self.assertFalse(result["released"])
+
+    def test_a_release_channel_claim_without_a_matching_tag_is_not_released(self):
+        """`channel` is self-attested; the published ref is not."""
+
+        forged = {"version": "9.9.9", "commit": "0" * 40, "commit_short": "00000000", "channel": "release", "dirty": False}
+        original = gate.capture
+
+        def capture(command, **kwargs):
+            if command[0] == "longhouse":
+                return json.dumps({"facade": forged, "engine": forged, "engine_path": "/x"})
+            return original(command, **kwargs)
+
+        gate.capture = capture
+        try:
+            result = gate.release_provenance(forged)
+        finally:
+            gate.capture = original
+        self.assertFalse(result["released"])
+        self.assertFalse(any(item["released"] for item in result["components"].values()))
+
+    def test_receipt_names_the_first_failed_boundary_and_its_next_command(self):
+        summary = {
+            "stages": {
+                "preflight": {
+                    "status": "pass",
+                    "release_provenance": {"released": False, "components": {}},
+                    "machine": {"provider_readiness": {"codex": {"state": "ready"}}},
+                },
+                "console": {"status": "pass"},
+                "manifest": {"status": "pass"},
+                "web": {"status": "fail"},
+                "ios": {"status": "not_run"},
+            },
+            # The production shape: the Console child reports a verdict word.
+            "providers": [{"provider": "codex", "status": "pass", "verdict": "green"}],
+        }
+        mark = gate.receipt(summary, Path("/evidence"))
+        self.assertEqual(mark["failed_boundary"], "web")
+        self.assertEqual(mark["evidence"], "/evidence/web.json")
+        self.assertIn("test-terminal-fidelity-web", mark["next_command"])
+        self.assertIs(mark["released_build"], False)
+        self.assertEqual(mark["provider_verdicts"], {"codex": "green"})
+        self.assertEqual(mark["provider_readiness"], {"codex": {"state": "ready"}})
+
+    def test_receipt_reports_a_failed_provider_when_every_stage_looks_green(self):
+        summary = {
+            "stages": {name: {"status": "pass"} for name in gate.REQUIRED_STAGES},
+            "providers": [{"provider": "codex", "status": "fail", "verdict": "red"}],
+        }
+        mark = gate.receipt(summary, Path("/evidence"))
+        self.assertEqual(mark["failed_boundary"], "console")
+
+    def test_receipt_names_a_stage_that_never_ran(self):
+        """A missing status is a failed boundary, not a silent pass."""
+
+        summary = {"stages": {"preflight": {"status": "pass"}}, "providers": []}
+        mark = gate.receipt(summary, Path("/evidence"))
+        self.assertEqual(mark["failed_boundary"], "console")
+        self.assertEqual(mark["evidence"], "/evidence/console.json")
+
+    def test_receipt_survives_a_successful_run(self):
+        summary = {
+            "stages": {name: {"status": "pass"} for name in gate.REQUIRED_STAGES},
+            "providers": [{"provider": "codex", "status": "pass", "verdict": "green"}],
+        }
+        mark = gate.receipt(summary, Path("/evidence"))
+        self.assertIsNone(mark["failed_boundary"])
+        self.assertEqual(mark["evidence"], "/evidence/summary.json")
+        self.assertEqual(mark["next_command"], "")
 
     def test_timed_out_child_retains_output_without_credentials_and_never_passes(self):
         token = "private-runtime-token-for-test"
