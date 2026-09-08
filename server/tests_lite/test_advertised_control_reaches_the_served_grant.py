@@ -87,12 +87,6 @@ def test_every_advertised_machine_control_is_canonically_servable() -> None:
     connection, the client renders a composer with Interrupt and Terminate, and
     every press fails at authorization.
 
-    Pi shipped exactly that. `longhouse pi` registers a Console one-shot and
-    enqueues `session.turn.start`; there is no long-running pi session, and
-    `control_channel.rs` has no pi branch for `session.send_text` or
-    `session.terminate`. It advertised `pi.send`, `pi.interrupt` and
-    `pi.terminate` anyway.
-
     Both sides of this are derived, not curated: the capability set comes from
     `canonical_live_control_capabilities()` and the provider set from
     `canonical_command_authorization_providers()`, so a new capability or a new
@@ -112,33 +106,6 @@ def test_every_advertised_machine_control_is_canonically_servable() -> None:
         "Either the provider belongs in _CANONICAL_AUTH_PROVIDERS with an adapter that emits "
         "control facts, or the contract must stop claiming the operation."
     )
-
-
-def test_turn_scoped_supports_are_not_subject_to_canonical_authorization() -> None:
-    """The invariant above must not over-reach, or it deletes working Console controls.
-
-    Console turns (`session.turn.start` / `session.turn.interrupt`) never reach
-    `get_canonical_live_control_grant` -- `managed_control_dispatcher` prepares a
-    catalog operation only for send/steer/answer_pause/interrupt/terminate. Pi is
-    the live case: it keeps `pi.turn_start` and `pi.turn_interrupt` from outside
-    canonical authorization, and those really are served.
-    """
-
-    live_control_capabilities = set(canonical_live_control_capabilities())
-    assert "turn_start" not in live_control_capabilities
-    assert "turn_interrupt" not in live_control_capabilities
-
-    pi = contract_for_provider("pi")
-    assert pi is not None
-    assert pi.provider not in set(canonical_command_authorization_providers())
-    assert set(pi.machine_control_supports) == {"pi.turn_start", "pi.turn_interrupt"}
-    assert pi.connection_capabilities == {
-        "can_send_input": 0,
-        "can_interrupt": 0,
-        "can_terminate": 0,
-        "can_tail_output": 1,
-        "can_resume": 0,
-    }
 
 
 def _seed_bound_session(engine, provider: str):

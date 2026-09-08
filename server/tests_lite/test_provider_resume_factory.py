@@ -27,6 +27,8 @@ def test_launch_provider_resume_factory_matrix(provider: str, scenario: str) -> 
     assert result["status"] == "pass", result
     assert result["evidence_class"] == "hermetic"
     assert all(result["assertions"].values())
+    if scenario == "console_thread_continue":
+        assert result["observation"]["distinct_run"] is True
 
 
 def test_maintenance_provider_resume_is_typed_and_side_effect_free() -> None:

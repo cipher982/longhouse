@@ -88,21 +88,34 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
         machine_id = "factory-machine"
         cwd = "/workspace/longhouse"
         now = datetime.now(UTC).replace(microsecond=0)
-        initial = await client.call(
-            "session.launch.local.create.v2",
-            {
-                "launch": _launch_payload(
-                    provider=provider,
-                    transport=contract.managed_transport.value,
-                    session_id=session_id,
-                    provider_thread_id=provider_thread_id,
-                    machine_id=machine_id,
-                    cwd=cwd,
-                    now=now,
-                )
-            },
-        )
-        await _confirm(client, session_id, initial["run_id"], machine_id, now)
+        if scenario == "console_thread_continue":
+            initial_run_id = await _create_console_resume_fixture(
+                client,
+                database_path,
+                provider=provider,
+                session_id=session_id,
+                provider_thread_id=provider_thread_id,
+                machine_id=machine_id,
+                cwd=cwd,
+                now=now,
+            )
+        else:
+            initial = await client.call(
+                "session.launch.local.create.v2",
+                {
+                    "launch": _launch_payload(
+                        provider=provider,
+                        transport=contract.managed_transport.value,
+                        session_id=session_id,
+                        provider_thread_id=provider_thread_id,
+                        machine_id=machine_id,
+                        cwd=cwd,
+                        now=now,
+                    )
+                },
+            )
+            await _confirm(client, session_id, initial["run_id"], machine_id, now)
+            initial_run_id = initial["run_id"]
         resume_clock = now + timedelta(seconds=3)
         try:
             if scenario == "helm_live_reattach":
@@ -117,14 +130,15 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                     resume_clock,
                 )
             else:
-                await _end_run(
-                    client,
-                    provider,
-                    session_id,
-                    initial["run_id"],
-                    machine_id,
-                    resume_clock,
-                )
+                if scenario != "console_thread_continue":
+                    await _end_run(
+                        client,
+                        provider,
+                        session_id,
+                        initial_run_id,
+                        machine_id,
+                        resume_clock,
+                    )
                 if scenario == "helm_cold_resume":
                     observation = await _cold_resume_observation(
                         client,
@@ -134,7 +148,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                         provider_thread_id,
                         machine_id,
                         cwd,
-                        initial["run_id"],
+                        initial_run_id,
                         resume_clock,
                     )
                 elif scenario == "resume_identity_continuity":
@@ -198,8 +212,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
                         database_path,
                         session_id,
                         provider_thread_id,
-                        machine_id,
-                        cwd,
+                        initial_run_id,
                         resume_clock,
                     )
                 elif scenario == "console_thread_fork":
@@ -341,6 +354,74 @@ async def _confirm(client: CatalogClient, session_id: str, run_id: str, machine_
     )
 
 
+async def _create_console_resume_fixture(
+    client: CatalogClient,
+    database_path: Path,
+    *,
+    provider: str,
+    session_id: str,
+    provider_thread_id: str,
+    machine_id: str,
+    cwd: str,
+    now: datetime,
+) -> str:
+    """Birth a real Console shell, then seed its already-ended provider run."""
+    thread_id = str(uuid4())
+    await client.call(
+        "session.console.create.v2",
+        {
+            "session": {
+                "session_id": session_id,
+                "thread_id": thread_id,
+                "owner_id": 7,
+                "provider": provider,
+                "device_id": machine_id,
+                "cwd": cwd,
+                "project": "longhouse",
+                "provider_config": {"permission_mode": "bypass"},
+                "launch_actor": "automation",
+                "launch_surface": "test",
+                "environment": "test",
+                "origin_kind": "console",
+                "hidden_from_default_timeline": 1,
+                "started_at": now.isoformat(),
+            }
+        },
+    )
+    initial_run_id = str(uuid4())
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    try:
+        with Session(engine) as db:
+            db.add(
+                LiveSessionThreadAlias(
+                    thread_id=thread_id,
+                    provider=provider,
+                    alias_kind="provider_session_id",
+                    alias_value=provider_thread_id,
+                    first_seen_at=now - timedelta(seconds=1),
+                    last_seen_at=now,
+                )
+            )
+            db.add(
+                LiveSessionRun(
+                    id=initial_run_id,
+                    thread_id=thread_id,
+                    provider=provider,
+                    host_id=machine_id,
+                    cwd=cwd,
+                    launch_origin="longhouse_spawned",
+                    started_at=now - timedelta(seconds=1),
+                    ended_at=now,
+                    exit_status="fixture_completed",
+                )
+            )
+            db.commit()
+    finally:
+        engine.dispose()
+    return initial_run_id
+
+
 async def _cold_resume_observation(
     client: CatalogClient,
     database_path: Path,
@@ -415,30 +496,9 @@ async def _console_thread_continue_observation(
     database_path: Path,
     session_id: str,
     provider_thread_id: str,
-    machine_id: str,
-    cwd: str,
+    initial_run_id: str,
     now: datetime,
 ) -> dict[str, Any]:
-    setup_engine = create_catalog_engine(database_path)
-    initialize_catalog_schema(setup_engine)
-    try:
-        with Session(setup_engine) as db:
-            alias = (
-                db.query(LiveSessionThreadAlias)
-                .filter(
-                    LiveSessionThreadAlias.alias_kind == "provider_session_id",
-                    LiveSessionThreadAlias.alias_value == provider_thread_id,
-                )
-                .one()
-            )
-            thread = db.get(LiveSessionThread, alias.thread_id)
-            assert thread is not None
-            thread.device_id = machine_id
-            thread.cwd = cwd
-            thread.provider_config_json = json.dumps({"permission_mode": "bypass"})
-            db.commit()
-    finally:
-        setup_engine.dispose()
     result = await client.call(
         "session.console.turn.enqueue.v2",
         {
@@ -471,7 +531,8 @@ async def _console_thread_continue_observation(
                 "turn_created": result.get("created") is True,
                 "used_helm_resume_transaction": launch_attempt is not None,
                 "same_provider_thread": turn.resume_provider_thread_id == provider_thread_id,
-                "console_run_created": turn.run_id is not None,
+                "distinct_run": turn.run_id is not None and turn.run_id != initial_run_id,
+                "console_run_created": turn.run_id is not None and turn.run_id != initial_run_id,
             }
     finally:
         engine.dispose()

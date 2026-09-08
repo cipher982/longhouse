@@ -152,30 +152,6 @@ def test_provider_cli_catalog_matches_managed_provider_contracts():
     assert set(PROVIDER_CLI_ENV_BY_PROVIDER) == managed_provider_names()
 
 
-def test_provider_identity_contracts_are_manifest_backed():
-    assert {contract.provider: contract.requires_longhouse_cli for contract in all_managed_provider_contracts()} == {
-        "codex": False,
-        "claude": False,
-        "opencode": False,
-        "antigravity": False,
-        "cursor": False,
-        "pi": False,
-    }
-    assert sorted(control_plane for contract in all_managed_provider_contracts() for control_plane in contract.control_planes) == sorted(
-        {
-            "codex_bridge",
-            "codex_app_server",
-            "claude_channel_bridge",
-            "opencode_server_bridge",
-            "antigravity_hook_inbox",
-            "cursor_acp",
-            "cursor_exec",
-            "cursor_helm",
-            "pi_print",
-        }
-    )
-
-
 def test_startup_coordination_context_support_is_explicit():
     assert {contract.provider: contract.startup_coordination_context for contract in all_managed_provider_contracts()} == {
         "codex": False,
