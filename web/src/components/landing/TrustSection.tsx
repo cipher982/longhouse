@@ -14,7 +14,7 @@ const faqs: FAQ[] = [
   {
     question: "Which sessions can I control?",
     answer:
-      "Sessions started outside Longhouse are searchable and inspectable. Sessions started through Longhouse can also be controlled: send the next instruction, interrupt a turn, and resume where the provider supports it. Mid-turn steering works on Claude Code and Codex. With Cursor Agent, OpenCode, and Pi Agent, your message lands when the current turn ends; Pi cannot resume a dead session yet.",
+      "Sessions started outside Longhouse are searchable and inspectable. Sessions started through Longhouse can also be controlled: send the next instruction, interrupt a turn, and resume where the provider supports it. Mid-turn steering works on Claude Code, Codex, and Pi Agent. With Cursor Agent and OpenCode, your message lands when the current turn ends.",
   },
   {
     question: "What happens when my laptop sleeps?",
@@ -29,7 +29,7 @@ const faqs: FAQ[] = [
   {
     question: "Which providers are strongest today?",
     answer:
-      "Claude Code and Codex have the full set: launch, send, interrupt, mid-turn steering, and resume. Cursor Agent and OpenCode do everything except mid-turn steering; your next instruction lands when the turn ends. Pi Agent can launch, send, and interrupt, but resume is not wired up yet. Antigravity can launch and send through its hook channel, but interrupt and resume are not available. The provider list above is generated from the provider contract, so it is the exact answer.",
+      "Claude Code, Codex, and Pi Agent support launch, send, interrupt, mid-turn steering, and resume. Cursor Agent and OpenCode support everything except mid-turn steering; your next instruction lands when the turn ends. Antigravity can launch and send through its hook channel, but interrupt and resume are not available. The provider list above is generated from the provider contract.",
   },
   {
     question: "Where is my data stored?",
@@ -54,7 +54,7 @@ export function TrustSection() {
           {faqs.map((faq, index) => (
             <div
               key={index}
-              className={`landing-faq-item ${openIndex === index ? 'open' : ''}`}
+              className={`landing-faq-item ${openIndex === index ? "open" : ""}`}
             >
               <button
                 className="landing-faq-question"
@@ -63,7 +63,7 @@ export function TrustSection() {
               >
                 <span>{faq.question}</span>
                 <span className="landing-faq-toggle">
-                  {openIndex === index ? '−' : '+'}
+                  {openIndex === index ? "−" : "+"}
                 </span>
               </button>
               <div className="landing-faq-answer">

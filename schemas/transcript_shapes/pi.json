@@ -3,32 +3,32 @@
  "shapes": {
   "branch_summary": {
    "classification": "state:branch",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["fromId", "id", "parentId", "summary", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId", "summary"]
   },
   "compaction": {
    "classification": "signal:context.compaction",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["firstKeptEntryId", "id", "parentId", "summary", "timestamp", "tokensBefore", "type"],
    "required_keys": ["type", "id", "parentId", "summary", "tokensBefore"]
   },
   "custom": {
    "classification": "extension:state",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["customType", "data", "id", "parentId", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId", "customType"]
   },
   "custom_message": {
    "classification": "extension:message",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["content", "customType", "display", "id", "parentId", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId", "customType", "content"]
@@ -36,31 +36,31 @@
   "message/assistant/text": {
    "classification": "transcript:assistant",
    "first_seen_version": "0.1.0",
-   "last_seen_version": "3",
+   "last_seen_version": "0.1.0",
    "entrypoints": [],
    "keys": ["id", "message", "message.content", "message.content[].text", "message.content[].type", "message.role", "parentId", "timestamp", "type", "version"],
    "required_keys": ["type", "message.role", "message.content"]
   },
   "message/assistant/text+thinking+toolCall": {
    "classification": "transcript:assistant_tool",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["id", "message", "message.api", "message.content", "message.content[].arguments", "message.content[].id", "message.content[].name", "message.content[].text", "message.content[].thinking", "message.content[].type", "message.model", "message.provider", "message.role", "message.stopReason", "message.usage", "message.usage.cacheRead", "message.usage.cacheWrite", "message.usage.input", "message.usage.output", "message.usage.totalTokens", "parentId", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId", "message.role", "message.content", "message.content[].arguments"]
   },
   "message/toolResult/image": {
    "classification": "provider_tool:result_image",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["id", "message", "message.content", "message.content[].data", "message.content[].mimeType", "message.content[].type", "message.isError", "message.role", "message.toolCallId", "message.toolName", "parentId", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId", "message.role", "message.toolCallId", "message.content"]
   },
   "message/user/image+text": {
    "classification": "transcript:user_with_image",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["id", "message", "message.content", "message.content[].data", "message.content[].mimeType", "message.content[].text", "message.content[].type", "message.role", "parentId", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId", "message.role", "message.content"]
@@ -68,39 +68,39 @@
   "message/user/text": {
    "classification": "transcript:user",
    "first_seen_version": "0.1.0",
-   "last_seen_version": "3",
+   "last_seen_version": "0.1.0",
    "entrypoints": [],
    "keys": ["id", "message", "message.content", "message.content[].text", "message.content[].type", "message.role", "parentId", "timestamp", "type", "version"],
    "required_keys": ["type", "message.role", "message.content"]
   },
   "model_change": {
    "classification": "state:model",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["id", "modelId", "parentId", "provider", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId", "provider", "modelId"]
   },
   "session": {
    "classification": "state:session_header",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["cwd", "id", "timestamp", "type", "version"],
    "required_keys": ["type", "id", "cwd"]
   },
   "session_info": {
    "classification": "state:session_info",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["id", "name", "parentId", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId"]
   },
   "thinking_level_change": {
    "classification": "state:thinking_level",
-   "first_seen_version": "3",
-   "last_seen_version": "3",
+   "first_seen_version": null,
+   "last_seen_version": null,
    "entrypoints": [],
    "keys": ["id", "parentId", "thinkingLevel", "timestamp", "type"],
    "required_keys": ["type", "id", "parentId", "thinkingLevel"]
