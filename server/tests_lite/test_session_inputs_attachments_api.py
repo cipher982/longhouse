@@ -383,7 +383,6 @@ def _machine_heartbeat(*, device_id: str, now: datetime, raw_json: str | None = 
         "spool_pending": 0,
         "spool_dead": 0,
         "parse_errors_1h": 0,
-        "consecutive_failures": 0,
         "ship_attempts_1h": 1,
         "ship_successes_1h": 1,
         "ship_rate_limited_1h": 0,

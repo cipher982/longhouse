@@ -188,25 +188,9 @@ def _status_for_artifact(payload: dict[str, Any], *, freshness_status: str) -> s
 
 def collect_provider_live_route_e2e(
     *,
-    fast: bool = False,
     base_dir: Path | None = None,
     expected_providers: Iterable[str] | None = None,
 ) -> dict[str, Any]:
-    if fast:
-        return {
-            "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
-            "enabled": False,
-            "configured": False,
-            "status": "skipped",
-            "applies": False,
-            "skipped_reason": "fast_local_health",
-            "coverage_status": "not_evaluated",
-            "expected_providers": [],
-            "covered_providers": [],
-            "missing_providers": [],
-            "unexpected_providers": [],
-        }
-
     path = configured_provider_live_route_e2e_path(base_dir)
     payload, error = _read_json_file(path)
     source = {"source": "file", "path": str(path), "error": error}

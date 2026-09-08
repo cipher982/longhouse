@@ -55,10 +55,7 @@ def test_red_matching_local_version_blocks(monkeypatch, tmp_path: Path) -> None:
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="codex-cli 0.133.0\n", stderr=""),
     )
 
-    status = prs.collect_provider_release_status(
-        {"codex": {"path": "/opt/homebrew/bin/codex"}},
-        fast=False,
-    )
+    status = prs.collect_provider_release_status({"codex": {"path": "/opt/homebrew/bin/codex"}})
 
     assert status["blocking_count"] == 1
     assert status["statuses"]["codex"]["status"] == "blocked"
@@ -521,10 +518,3 @@ def test_generic_status_dir_missing_provider_artifacts_are_not_configured(monkey
     assert status["statuses"]["claude"]["status"] == "not_configured"
     assert status["statuses"]["opencode"]["status"] == "not_configured"
     assert status["statuses"]["antigravity"]["status"] == "not_configured"
-
-
-def test_fast_local_health_skips_provider_status() -> None:
-    status = prs.collect_provider_release_status({"codex": {"path": "/opt/homebrew/bin/codex"}}, fast=True)
-
-    assert status["enabled"] is False
-    assert status["skipped_reason"] == "fast_local_health"

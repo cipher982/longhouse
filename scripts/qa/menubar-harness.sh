@@ -422,7 +422,6 @@ case "$cmd" in
     # capture needs the window on screen.
     CAPTURE_SETTLE_SECONDS=14 capture_window_render_args "$app_bin" "$output" \
       --health-exec "$ARTIFACT_DIR/nonexistent-local-health" \
-      --health-arg --fast \
       --health-arg --json
     ;;
   smoke)

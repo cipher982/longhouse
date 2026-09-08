@@ -66,6 +66,20 @@ def test_fresh_managed_lease_preserves_attached_state() -> None:
     assert managed[0]["reason_codes"] == []
 
 
+def test_missing_managed_lease_becomes_unknown() -> None:
+    now = datetime.now(UTC)
+    status = _engine_status(observed_at=now)
+    status["payload"]["managed_sessions"] = []
+
+    resolved = _collect_resolved_sessions_from_engine_status(status, now=now)
+
+    assert resolved is not None
+    managed, _unmanaged = resolved
+    assert managed[0]["state"] == "unknown"
+    assert managed[0]["bridge_status"] is None
+    assert managed[0]["reason_codes"] == ["lease_evidence_missing"]
+
+
 def test_expired_managed_lease_never_fetches_a_remote_title(tmp_path, monkeypatch) -> None:
     def refuse_urlopen(*_args, **_kwargs):
         raise AssertionError("expired lease triggered remote title hydration")

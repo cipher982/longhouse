@@ -189,17 +189,8 @@ def _status_for_provider(
 def collect_provider_live_proof(
     provider_clis: dict[str, Any],
     *,
-    fast: bool = False,
     base_dir: Path | None = None,
 ) -> dict[str, Any]:
-    if fast:
-        return {
-            "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
-            "enabled": False,
-            "skipped_reason": "fast_local_health",
-            "statuses": {},
-        }
-
     statuses: dict[str, Any] = {}
     providers = sorted((set(provider_clis) | set(managed_provider_names())) & set(SUPPORTED_LIVE_PROOF_PROVIDERS))
     for provider in providers:

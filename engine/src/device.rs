@@ -20,7 +20,6 @@ const ENGINE_STALE_SECONDS: u64 = 120;
 const CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT: u64 = 2;
 const TRANSPORT_ERROR_DEGRADED_MIN_COUNT: u64 = 3;
 const TRANSPORT_ERROR_DEGRADED_MIN_RATE: f64 = 0.25;
-const CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT: u64 = 2;
 const DEFAULT_FALLBACK_SCAN_SECS: u64 = 300;
 const DEFAULT_SPOOL_REPLAY_SECS: u64 = 30;
 const OUTCOME_RECOVERY_ACTIVE_GRACE: Duration = Duration::from_secs(10);
@@ -85,7 +84,7 @@ struct DeviceCommandStatus<'a> {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct NativeFastLocalHealth {
+struct NativeLocalHealth {
     schema_version: u64,
     collection_tier: &'static str,
     health_state: String,
@@ -110,8 +109,6 @@ struct NativeEngineStatus {
     age_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     file_age_seconds: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    evidence_age_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -151,11 +148,11 @@ pub struct NativeManagedLaunchRecoveryStatus {
     pub scan_error: bool,
 }
 
-/// The envelope `longhouse local-health --fast --json` emits for Longhouse.app.
+/// The envelope `longhouse local-health --json` emits for Longhouse.app.
 ///
 /// The Desktop app decodes this into `HealthSnapshot`, whose `severity` and
 /// `suggested_actions` are non-optional and whose `managed_sessions` is an
-/// array. The native fast payload satisfied none of that, so the app could not
+/// array. The native payload satisfied none of that, so the app could not
 /// decode it at all.
 ///
 /// Contract rule for every field here: an omission must render as **unknown**
@@ -280,7 +277,7 @@ struct NativeRepairPlan {
     headline: String,
     reasons: Vec<String>,
     machine_state: NativeMachineStateStatus,
-    engine_health: NativeFastLocalHealth,
+    engine_health: NativeLocalHealth,
     suggested_actions: Vec<NativeRepairAction>,
     notes: Vec<&'static str>,
 }
@@ -318,9 +315,9 @@ struct NativeRepairExecution {
     machine_state: NativeMachineStateStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     service: Option<NativeRepairServiceStatus>,
-    before_health: NativeFastLocalHealth,
+    before_health: NativeLocalHealth,
     #[serde(skip_serializing_if = "Option::is_none")]
-    after_health: Option<NativeFastLocalHealth>,
+    after_health: Option<NativeLocalHealth>,
     notes: Vec<String>,
 }
 
@@ -633,7 +630,7 @@ pub fn cmd_shipping_discard(source_epoch: &str, confirm: bool) -> anyhow::Result
 
 pub fn cmd_device_local_health(json: bool, state_root: Option<&Path>) -> anyhow::Result<()> {
     let status_path = engine_status_path(state_root)?;
-    let health = collect_native_fast_local_health(&status_path);
+    let health = collect_native_local_health(&status_path);
     if json {
         // JSON is what Longhouse.app consumes, so it must satisfy the Desktop
         // contract. The human-readable path keeps the terse operator view.
@@ -642,7 +639,7 @@ pub fn cmd_device_local_health(json: bool, state_root: Option<&Path>) -> anyhow:
             serde_json::to_string_pretty(&collect_native_desktop_health(state_root, health)?)?
         );
     } else {
-        print_native_fast_local_health(&health);
+        print_native_local_health(&health);
     }
     Ok(())
 }
@@ -656,7 +653,7 @@ fn machine_token_path(state_root: Option<&Path>) -> anyhow::Result<PathBuf> {
 
 fn collect_native_desktop_health(
     state_root: Option<&Path>,
-    fast: NativeFastLocalHealth,
+    health: NativeLocalHealth,
 ) -> anyhow::Result<NativeDesktopHealth> {
     let status_path = engine_status_path(state_root)?;
     let engine_payload = std::fs::read_to_string(&status_path)
@@ -677,7 +674,7 @@ fn collect_native_desktop_health(
         .map(|path| path.display().to_string());
 
     Ok(native_desktop_health_from_parts(
-        fast,
+        health,
         engine_payload,
         machine_state.as_ref(),
         token_path,
@@ -797,27 +794,27 @@ fn machine_state_path(state_root: Option<&Path>) -> anyhow::Result<PathBuf> {
     Ok(config::get_machine_dir()?.join("state.json"))
 }
 
-fn collect_native_fast_local_health(status_path: &Path) -> NativeFastLocalHealth {
+fn collect_native_local_health(status_path: &Path) -> NativeLocalHealth {
     match std::fs::metadata(status_path) {
         Ok(metadata) => {
             let age_seconds = metadata.modified().ok().map(age_seconds_since);
             match std::fs::read_to_string(status_path) {
                 Ok(raw) => match serde_json::from_str::<Value>(&raw) {
-                    Ok(Value::Object(map)) => native_fast_health_from_parts(
+                    Ok(Value::Object(map)) => native_health_from_parts(
                         status_path,
                         true,
                         age_seconds,
                         Some(Value::Object(map)),
                         None,
                     ),
-                    Ok(_) => native_fast_health_from_parts(
+                    Ok(_) => native_health_from_parts(
                         status_path,
                         true,
                         age_seconds,
                         None,
                         Some("engine status payload must be a JSON object".to_string()),
                     ),
-                    Err(err) => native_fast_health_from_parts(
+                    Err(err) => native_health_from_parts(
                         status_path,
                         true,
                         age_seconds,
@@ -825,7 +822,7 @@ fn collect_native_fast_local_health(status_path: &Path) -> NativeFastLocalHealth
                         Some(format!("parsing engine status JSON: {err}")),
                     ),
                 },
-                Err(err) => native_fast_health_from_parts(
+                Err(err) => native_health_from_parts(
                     status_path,
                     true,
                     age_seconds,
@@ -835,9 +832,9 @@ fn collect_native_fast_local_health(status_path: &Path) -> NativeFastLocalHealth
             }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            native_fast_health_from_parts(status_path, false, None, None, None)
+            native_health_from_parts(status_path, false, None, None, None)
         }
-        Err(err) => native_fast_health_from_parts(
+        Err(err) => native_health_from_parts(
             status_path,
             false,
             None,
@@ -986,23 +983,19 @@ fn collect_managed_launch_recovery(
     }
 }
 
-fn native_fast_health_from_parts(
+fn native_health_from_parts(
     status_path: &Path,
     exists: bool,
     age_seconds: Option<u64>,
     payload: Option<Value>,
     error: Option<String>,
-) -> NativeFastLocalHealth {
+) -> NativeLocalHealth {
     let object = payload.as_ref().and_then(Value::as_object);
     let local_projection = object
         .and_then(|value| value.get("local_projection"))
         .and_then(Value::as_object);
     let pulse_age_seconds = local_projection
         .and_then(|value| value.get("engine_pulse_at"))
-        .and_then(Value::as_str)
-        .and_then(rfc3339_age_seconds);
-    let evidence_age_seconds = local_projection
-        .and_then(|value| value.get("generated_at"))
         .and_then(Value::as_str)
         .and_then(rfc3339_age_seconds);
     let effective_age_seconds = pulse_age_seconds.or(age_seconds);
@@ -1142,12 +1135,6 @@ fn native_fast_health_from_parts(
         .and_then(Value::as_object)
         .and_then(|value| value.get("state"))
         .and_then(Value::as_str);
-    if evidence_age_seconds
-        .map(|age| age > ENGINE_FRESH_SECONDS)
-        .unwrap_or(false)
-    {
-        reasons.push("engine_evidence_stale".to_string());
-    }
     if reconciliation_state == Some("failed") {
         reasons.push("engine_reconciliation_failed".to_string());
     }
@@ -1184,11 +1171,7 @@ fn native_fast_health_from_parts(
     if managed_launch_recovery.scan_error {
         reasons.push("managed_launch_recovery_unreadable".to_string());
     }
-    if !matches!(
-        transport.status_reason.as_str(),
-        "healthy" | "transport_unavailable"
-    ) && !reasons.contains(&transport.status_reason)
-    {
+    if transport.status_reason != "healthy" && !reasons.contains(&transport.status_reason) {
         reasons.push(transport.status_reason.clone());
     }
 
@@ -1233,16 +1216,16 @@ fn native_fast_health_from_parts(
         "Managed session recovery needs attention"
     } else {
         match health_state.as_str() {
-            "healthy" => "Longhouse native fast health is healthy",
-            "degraded" => "Longhouse native fast health needs attention",
-            _ => "Longhouse native fast health is broken",
+            "healthy" => "Longhouse native health is healthy",
+            "degraded" => "Longhouse native health needs attention",
+            _ => "Longhouse native health is broken",
         }
     }
     .to_string();
 
-    NativeFastLocalHealth {
+    NativeLocalHealth {
         schema_version: 1,
-        collection_tier: "native_fast",
+        collection_tier: "native",
         health_state,
         headline,
         reasons,
@@ -1256,7 +1239,6 @@ fn native_fast_health_from_parts(
                     .unwrap_or(false),
             age_seconds: effective_age_seconds,
             file_age_seconds: age_seconds,
-            evidence_age_seconds,
             error,
             last_updated: object
                 .and_then(|value| value.get("last_updated"))
@@ -1287,10 +1269,10 @@ fn native_fast_health_from_parts(
     }
 }
 
-/// Project the native fast health plus raw engine evidence into the envelope
+/// Project the native health plus raw engine evidence into the envelope
 /// Longhouse.app can decode.
 fn native_desktop_health_from_parts(
-    fast: NativeFastLocalHealth,
+    health: NativeLocalHealth,
     engine_payload: Option<Value>,
     machine_state: Option<&Value>,
     token_path: Option<String>,
@@ -1321,7 +1303,7 @@ fn native_desktop_health_from_parts(
     let detached_count = count_with_state("detached");
     let degraded_count = count_with_state("degraded");
 
-    let severity = match fast.health_state.as_str() {
+    let severity = match health.health_state.as_str() {
         "healthy" => "green",
         "degraded" => "yellow",
         _ => "red",
@@ -1340,40 +1322,40 @@ fn native_desktop_health_from_parts(
     });
 
     let suggested_actions =
-        native_desktop_suggested_actions(engine_payload.as_ref(), &fast.reasons);
-    let suggested_action_ids = native_desktop_suggested_action_ids(&fast.reasons);
+        native_desktop_suggested_actions(engine_payload.as_ref(), &health.reasons);
+    let suggested_action_ids = native_desktop_suggested_action_ids(&health.reasons);
 
     NativeDesktopHealth {
         schema_version: 1,
-        collection_tier: "native_fast",
+        collection_tier: "native",
         collected_at: now,
-        health_state: fast.health_state,
+        health_state: health.health_state,
         severity,
-        headline: fast.headline,
-        reasons: fast.reasons,
+        headline: health.headline,
+        reasons: health.reasons,
         suggested_actions,
         suggested_action_ids,
         engine_status: NativeDesktopEngineStatus {
-            path: fast.engine_status.path,
-            exists: fast.engine_status.exists,
-            fresh: fast.engine_status.fresh,
-            age_seconds: fast.engine_status.age_seconds,
-            error: fast.engine_status.error,
+            path: health.engine_status.path,
+            exists: health.engine_status.exists,
+            fresh: health.engine_status.fresh,
+            age_seconds: health.engine_status.age_seconds,
+            error: health.engine_status.error,
             payload: native_desktop_engine_payload(engine_payload.as_ref()),
         },
-        transport: fast.transport,
-        spool: fast.spool,
+        transport: health.transport,
+        spool: health.spool,
         managed_summary: NativeDesktopManagedSummary {
             attached_count,
             detached_count,
             degraded_count,
             latest_activity_at: None,
         },
-        managed_launch_recovery: fast.managed_launch_recovery,
+        managed_launch_recovery: health.managed_launch_recovery,
         managed_sessions: session_rows,
         realtime,
-        control_channel: fast.control_channel,
-        build: fast.build,
+        control_channel: health.control_channel,
+        build: health.build,
     }
 }
 
@@ -1394,7 +1376,6 @@ fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
         "storage_v2_outbox",
         "archive_backlog",
         "parse_error_count_1h",
-        "consecutive_ship_failures",
         "disk_free_bytes",
         "is_offline",
         "local_projection",
@@ -1411,27 +1392,26 @@ fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
 
 fn native_desktop_action_text(action_id: &str) -> String {
     match action_id {
-        "inspect_local_health" => "Run: longhouse local-health --fast --json".to_string(),
+        "inspect_local_health" => "Run: longhouse local-health --json".to_string(),
         "inspect_storage_source" => {
             "Run: longhouse shipping inspect --json and inspect the retained source evidence."
                 .to_string()
         }
         "inspect_storage_outbox" => {
-            "Inspect the storage-v2 outbox with: longhouse local-health --fast --json".to_string()
+            "Inspect the storage-v2 outbox with: longhouse local-health --json".to_string()
         }
         "inspect_shipping" => {
             "Inspect shipping evidence with: longhouse shipping inspect --json".to_string()
         }
         "inspect_transport" => {
-            "Inspect transport and retry state with: longhouse local-health --fast --json"
-                .to_string()
+            "Inspect transport and retry state with: longhouse local-health --json".to_string()
         }
         "inspect_managed_session" => {
             "Inspect the affected managed session and local recovery files.".to_string()
         }
         "repair_machine" => "Run: longhouse machine repair --repair-service --json".to_string(),
         "free_disk_space" => {
-            "Free local disk space, then rerun: longhouse local-health --fast --json".to_string()
+            "Free local disk space, then rerun: longhouse local-health --json".to_string()
         }
         "stop_managed_bridge" => "Inspect the exact managed bridge before stopping it.".to_string(),
         "inspect_archive" => "Inspect archive repair state with: longhouse doctor".to_string(),
@@ -1504,7 +1484,7 @@ fn native_desktop_suggested_actions(
     }
     if has_storage_outbox_action {
         actions.extend([
-            "Run: longhouse local-health --fast --json".to_string(),
+            "Run: longhouse local-health --json".to_string(),
             "Inspect the storage-v2 outbox error in engine-status.json.".to_string(),
         ]);
     }
@@ -1559,7 +1539,6 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             | "engine_status_aging"
             | "engine_status_sessions_invalid"
             | "engine_status_sessions_missing"
-            | "engine_evidence_stale"
             | "engine_reconciliation_failed" => "inspect_local_health",
             "storage_v2_sources_blocked"
             | "storage_v2_sources_unresolved"
@@ -1571,15 +1550,11 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             | "transport_unavailable"
             | "server_errors"
             | "connect_errors"
+            | "ship_stalled"
             | "rate_limited"
             | "retryable_client_errors" => "inspect_transport",
-            "payload_rejected"
-            | "payload_too_large"
-            | "parse_errors"
-            | "consecutive_failures"
-            | "spool_dead"
-            | "spool_dead_letters"
-            | "outbox_stuck" => "inspect_shipping",
+            "payload_rejected" | "payload_too_large" | "parse_errors" | "spool_dead"
+            | "spool_dead_letters" | "outbox_stuck" => "inspect_shipping",
             "archive_dead_lettered" | "archive_repair_paused" => "inspect_archive",
             "disk_critically_low" | "disk_low" => "free_disk_space",
             "managed_session_control_degraded"
@@ -1677,7 +1652,7 @@ fn rfc3339_age_seconds(value: &str) -> Option<u64> {
 fn collect_native_repair_plan(state_root: Option<&Path>) -> anyhow::Result<NativeRepairPlan> {
     let status_path = engine_status_path(state_root)?;
     let machine_path = machine_state_path(state_root)?;
-    let engine_health = collect_native_fast_local_health(&status_path);
+    let engine_health = collect_native_local_health(&status_path);
     let machine_state = collect_native_machine_state(&machine_path);
     Ok(native_repair_plan_from_parts(
         engine_health,
@@ -1724,7 +1699,7 @@ where
 {
     let status_path = engine_status_path(state_root)?;
     let machine_path = machine_state_path(state_root)?;
-    let before_health = collect_native_fast_local_health(&status_path);
+    let before_health = collect_native_local_health(&status_path);
     let machine_state = collect_native_machine_state(&machine_path);
 
     if !machine_state.configured {
@@ -1884,7 +1859,7 @@ where
 
     match restart_runner(&command) {
         Ok(()) => {
-            let after_health = collect_native_fast_local_health(&status_path);
+            let after_health = collect_native_local_health(&status_path);
             Ok(native_repair_execution_result(
                 false,
                 "completed",
@@ -1903,7 +1878,7 @@ where
                 Some(after_health),
                 vec![
                     "Native repair restarted only the existing service manager entry.",
-                    "Fast health is sampled immediately after restart and may still be warming up.",
+                    "Native health is sampled immediately after restart and may still be warming up.",
                 ],
             ))
         }
@@ -1954,7 +1929,7 @@ fn native_repair_state_recovery<F>(
     db_path: &Path,
     machine_state: NativeMachineStateStatus,
     service: NativeRepairServiceStatus,
-    before_health: NativeFastLocalHealth,
+    before_health: NativeLocalHealth,
     status_path: &Path,
     mut command_runner: F,
 ) -> NativeRepairExecution
@@ -2080,7 +2055,7 @@ where
 
     match command_runner(start_command) {
         Ok(()) => {
-            let after_health = collect_native_fast_local_health(status_path);
+            let after_health = collect_native_local_health(status_path);
             native_repair_execution_result(
                 false,
                 "completed",
@@ -2139,13 +2114,13 @@ fn native_repair_execution_result(
     actions: Vec<NativeRepairExecutionAction>,
     machine_state: NativeMachineStateStatus,
     service: Option<NativeRepairServiceStatus>,
-    before_health: NativeFastLocalHealth,
-    after_health: Option<NativeFastLocalHealth>,
+    before_health: NativeLocalHealth,
+    after_health: Option<NativeLocalHealth>,
     notes: Vec<&'static str>,
 ) -> NativeRepairExecution {
     NativeRepairExecution {
         schema_version: 1,
-        collection_tier: "native_fast_write",
+        collection_tier: "native_write",
         repair_mode: "existing_service_restart",
         dry_run,
         state: state.to_string(),
@@ -2172,7 +2147,7 @@ where
 {
     let status_path = engine_status_path(state_root)?;
     let machine_path = machine_state_path(state_root)?;
-    let before_health = collect_native_fast_local_health(&status_path);
+    let before_health = collect_native_local_health(&status_path);
     let machine_status = collect_native_machine_state(&machine_path);
 
     if platform == NativeServicePlatform::Unsupported {
@@ -2385,7 +2360,7 @@ where
         }
     }
 
-    let after_health = collect_native_fast_local_health(&status_path);
+    let after_health = collect_native_local_health(&status_path);
     Ok(native_service_repair_execution_result(
         false,
         "completed",
@@ -2397,7 +2372,7 @@ where
         Some(after_health),
         vec![
             "Native service repair wrote only the service artifact and log directory.",
-            "Fast health is sampled immediately after service activation and may still be warming up.",
+            "Native health is sampled immediately after service activation and may still be warming up.",
         ],
     ))
 }
@@ -2409,13 +2384,13 @@ fn native_service_repair_execution_result<S: Into<String>>(
     actions: Vec<NativeRepairExecutionAction>,
     machine_state: NativeMachineStateStatus,
     service: Option<NativeRepairServiceStatus>,
-    before_health: NativeFastLocalHealth,
-    after_health: Option<NativeFastLocalHealth>,
+    before_health: NativeLocalHealth,
+    after_health: Option<NativeLocalHealth>,
     notes: Vec<S>,
 ) -> NativeRepairExecution {
     NativeRepairExecution {
         schema_version: 1,
-        collection_tier: "native_fast_write",
+        collection_tier: "native_write",
         repair_mode: "service_artifact",
         dry_run,
         state: state.to_string(),
@@ -2660,7 +2635,7 @@ fn machine_state_hash(
 }
 
 fn native_repair_plan_from_parts(
-    engine_health: NativeFastLocalHealth,
+    engine_health: NativeLocalHealth,
     machine_state: NativeMachineStateStatus,
     state_root: Option<String>,
 ) -> NativeRepairPlan {
@@ -2719,7 +2694,7 @@ fn native_repair_plan_from_parts(
 
     NativeRepairPlan {
         schema_version: 1,
-        collection_tier: "native_fast",
+        collection_tier: "native",
         read_only: true,
         recommendation: recommendation.to_string(),
         headline: headline.to_string(),
@@ -2734,7 +2709,7 @@ fn native_repair_plan_from_parts(
     }
 }
 
-fn engine_health_needs_repair(health: &NativeFastLocalHealth) -> bool {
+fn engine_health_needs_repair(health: &NativeLocalHealth) -> bool {
     health.reasons.iter().any(|reason| {
         matches!(
             reason.as_str(),
@@ -2744,7 +2719,7 @@ fn engine_health_needs_repair(health: &NativeFastLocalHealth) -> bool {
 }
 
 fn repair_actions_with_inspection(
-    health: &NativeFastLocalHealth,
+    health: &NativeLocalHealth,
     state_root: Option<&str>,
 ) -> Vec<NativeRepairAction> {
     let mut actions = vec![NativeRepairAction {
@@ -2765,7 +2740,7 @@ fn repair_actions_with_inspection(
 }
 
 fn inspect_actions(
-    health: &NativeFastLocalHealth,
+    health: &NativeLocalHealth,
     state_root: Option<&str>,
 ) -> Vec<NativeRepairAction> {
     let mut actions = vec![NativeRepairAction {
@@ -3822,42 +3797,36 @@ fn native_transport_status(
         .unwrap_or(false);
     let spool_dead = get_u64(object, "spool_dead_count");
     let parse_errors = get_u64(object, "parse_error_count_1h");
-    let consecutive_failures = get_u64(object, "consecutive_ship_failures");
     let payload_rejections = get_u64(object, "ship_payload_rejections_1h");
     let payload_too_large = get_u64(object, "ship_payload_too_large_1h");
-    let attempts_active = get_optional_u64(object, "ship_attempts_10m")
-        .unwrap_or_else(|| get_u64(object, "ship_attempts_1h"));
-    let connect_errors = get_optional_u64(object, "ship_connect_errors_10m")
-        .unwrap_or_else(|| get_u64(object, "ship_connect_errors_1h"));
-    let server_errors = get_optional_u64(object, "ship_server_errors_10m")
-        .unwrap_or_else(|| get_u64(object, "ship_server_errors_1h"));
-    let rate_limited = get_optional_u64(object, "ship_rate_limited_10m")
-        .unwrap_or_else(|| get_u64(object, "ship_rate_limited_1h"));
-    let retryable_client_errors = get_optional_u64(object, "ship_retryable_client_errors_10m")
-        .unwrap_or_else(|| get_u64(object, "ship_retryable_client_errors_1h"));
+    let attempts_active = object.get("ship_attempts_10m").and_then(Value::as_u64);
+    let connect_errors = get_u64(object, "ship_connect_errors_10m");
+    let server_errors = get_u64(object, "ship_server_errors_10m");
+    let rate_limited = get_u64(object, "ship_rate_limited_10m");
+    let retryable_client_errors = get_u64(object, "ship_retryable_client_errors_10m");
     let last_ship_result = object.get("last_ship_result").and_then(Value::as_str);
 
     let connect_error_burst = is_transport_error_burst(
         connect_errors,
-        attempts_active,
+        attempts_active.unwrap_or(0),
         last_ship_result,
         "connect_error",
     );
     let server_error_burst = is_transport_error_burst(
         server_errors,
-        attempts_active,
+        attempts_active.unwrap_or(0),
         last_ship_result,
         "server_error",
     );
     let rate_limited_burst = is_transport_error_burst(
         rate_limited,
-        attempts_active,
+        attempts_active.unwrap_or(0),
         last_ship_result,
         "rate_limited",
     );
     let retryable_client_error_burst = is_transport_error_burst(
         retryable_client_errors,
-        attempts_active,
+        attempts_active.unwrap_or(0),
         last_ship_result,
         "retryable_client_error",
     );
@@ -3888,13 +3857,11 @@ fn native_transport_status(
             "parse_errors",
             &format!("{parse_errors} parse error(s) in the last hour."),
         )
-    } else if consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT
-        && attempts_active > 0
-    {
+    } else if attempts_active.is_none() {
         transport_status(
-            "degraded",
-            "consecutive_failures",
-            &format!("{consecutive_failures} consecutive ship failure(s)."),
+            "unknown",
+            "transport_unavailable",
+            "Shipping transport window is unavailable.",
         )
     } else if connect_error_burst {
         transport_status(
@@ -4056,10 +4023,6 @@ fn get_u64(object: &serde_json::Map<String, Value>, key: &str) -> u64 {
     object.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
-fn get_optional_u64(object: &serde_json::Map<String, Value>, key: &str) -> Option<u64> {
-    object.get(key).and_then(Value::as_u64)
-}
-
 fn age_seconds_since(modified: SystemTime) -> u64 {
     SystemTime::now()
         .duration_since(modified)
@@ -4067,7 +4030,7 @@ fn age_seconds_since(modified: SystemTime) -> u64 {
         .unwrap_or(0)
 }
 
-fn print_native_fast_local_health(health: &NativeFastLocalHealth) {
+fn print_native_local_health(health: &NativeLocalHealth) {
     println!("{} ({})", health.headline, health.health_state);
     println!("Engine");
     println!("  status file: {}", health.engine_status.path);
@@ -4160,17 +4123,17 @@ mod tests {
             "runtime_url": "https://example.longhouse.ai",
             "machine_name": "cinder",
         });
-        let fast = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             Path::new("/tmp/engine-status.json"),
             true,
             Some(0),
             Some(engine_payload.clone()),
             None,
         );
-        assert_eq!(fast.engine_status.local_database_bytes, Some(123456));
+        assert_eq!(health.engine_status.local_database_bytes, Some(123456));
 
         let envelope = native_desktop_health_from_parts(
-            fast,
+            health,
             Some(engine_payload),
             Some(&machine_state),
             Some("/tmp/device-token".to_string()),
@@ -4206,6 +4169,23 @@ mod tests {
     }
 
     #[test]
+    fn native_transport_health_reports_parse_errors() {
+        let payload = json!({
+            "parse_error_count_1h": 2,
+            "ship_attempts_10m": 1,
+        });
+
+        let transport = native_transport_status(payload.as_object());
+
+        assert_eq!(transport.status, "degraded");
+        assert_eq!(transport.status_reason, "parse_errors");
+        assert_eq!(
+            transport.status_summary,
+            "2 parse error(s) in the last hour."
+        );
+    }
+
+    #[test]
     fn desktop_envelope_never_promotes_unmanaged_rows_to_managed_sessions() {
         let mut sessions = (0..47)
             .map(|index| {
@@ -4225,7 +4205,7 @@ mod tests {
             "bridge": {"status": "ready"}
         }));
         let engine_payload = json!({"sessions": sessions});
-        let fast = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             Path::new("/tmp/engine-status.json"),
             true,
             Some(0),
@@ -4234,7 +4214,7 @@ mod tests {
         );
 
         let value = serde_json::to_value(native_desktop_health_from_parts(
-            fast,
+            health,
             Some(engine_payload),
             None,
             None,
@@ -4315,7 +4295,7 @@ mod tests {
             vec![
                 "Inspect retained source evidence with longhouse shipping inspect --source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json before retrying or discarding it.",
                 "Automatic managed-launch recovery has stopped. Inspect the affected session and local recovery files, then use the scoped managed-session action.",
-                "Run: longhouse local-health --fast --json",
+                "Run: longhouse local-health --json",
             ]
         );
     }
@@ -4408,7 +4388,10 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(pos, 100, "discard must advance lane position so daemon does not re-read from 0");
+            assert_eq!(
+                pos, 100,
+                "discard must advance lane position so daemon does not re-read from 0"
+            );
 
             // Inspect should succeed read-only without errors
             cmd_shipping_inspect(Some(&epoch.to_string()), true).unwrap();
@@ -4449,6 +4432,7 @@ mod tests {
             "version": "0.1.33",
             "daemon_pid": 4242,
             "last_updated": "2026-08-03T16:00:00Z",
+            "ship_attempts_10m": 0,
             "sessions": [{
                 "session_id": "00000000-0000-4000-8000-000000000001",
                 "provider": "claude",
@@ -4474,7 +4458,7 @@ mod tests {
             "runtime_url": "https://example.longhouse.ai",
             "machine_name": "example-machine",
         });
-        let fast = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             Path::new("/example/.longhouse/agent/engine-status.json"),
             true,
             Some(0),
@@ -4482,7 +4466,7 @@ mod tests {
             None,
         );
         serde_json::to_value(native_desktop_health_from_parts(
-            fast,
+            health,
             Some(engine_payload),
             Some(&machine_state),
             Some("/example/.longhouse/machine/device-token".to_string()),
@@ -4551,7 +4535,7 @@ mod tests {
             shape(&emitted),
             "native envelope no longer matches the Swift consumer fixture.\n\
              Regenerate it with:\n  \
-             cargo run --bin longhouse -- local-health --fast --json > {}",
+             cargo run --bin longhouse -- local-health --json > {}",
             fixture_path.display()
         );
         // The false-negative the Desktop contract forbids must stay absent.
@@ -4566,7 +4550,7 @@ mod tests {
             "runtime_url": "https://example.longhouse.ai",
             "machine_name": "cinder",
         });
-        let fast = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             Path::new("/tmp/engine-status.json"),
             false,
             None,
@@ -4575,7 +4559,7 @@ mod tests {
         );
 
         let envelope = native_desktop_health_from_parts(
-            fast,
+            health,
             None,
             Some(&machine_state),
             None,
@@ -4629,10 +4613,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_fresh_status_file() {
+    fn native_local_health_reports_fresh_status_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(2),
@@ -4640,7 +4624,7 @@ mod tests {
                 "last_updated": "2026-06-29T00:00:00Z",
                 "daemon_pid": 1234,
                 "spool_pending_count": 0,
-                "spool_dead_count": 0,
+                "ship_attempts_10m": 0,
                 "is_offline": false,
                 "managed_sessions": [{"session_id": "s1"}],
                 "control_channel": {"status": "connected"},
@@ -4650,7 +4634,7 @@ mod tests {
         );
 
         assert_eq!(health.schema_version, 1);
-        assert_eq!(health.collection_tier, "native_fast");
+        assert_eq!(health.collection_tier, "native");
         assert_eq!(health.health_state, "healthy");
         assert_eq!(health.transport.status, "healthy");
         assert!(health.engine_status.fresh);
@@ -4667,10 +4651,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_blocked_storage_sources() {
+    fn native_local_health_reports_blocked_storage_sources() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(2),
@@ -4694,15 +4678,16 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_unreadable_storage_outbox() {
+    fn native_local_health_reports_unreadable_storage_outbox() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(2),
             Some(json!({
-                "storage_v2_outbox": {"error": "database locked"}
+                "storage_v2_outbox": {"error": "database locked"},
+                "ship_attempts_10m": 0
             })),
             None,
         );
@@ -4718,7 +4703,7 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_prioritizes_broken_outbox_headline_over_exhausted_recovery() {
+    fn native_local_health_prioritizes_broken_outbox_headline_over_exhausted_recovery() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         let retry_dir = path
@@ -4732,7 +4717,7 @@ mod tests {
             r#"{"recovery_exhausted":true}"#,
         )
         .unwrap();
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(2),
@@ -4753,10 +4738,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_does_not_treat_malformed_storage_count_as_zero() {
+    fn native_local_health_does_not_treat_malformed_storage_count_as_zero() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(2),
@@ -4764,7 +4749,8 @@ mod tests {
                 "storage_v2_outbox": {
                     "blocked_source_count": 2.0,
                     "unresolved_blocked_source_count": 0
-                }
+                },
+                "ship_attempts_10m": 0
             })),
             None,
         );
@@ -4789,10 +4775,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_explicit_archive_pause_without_backlog() {
+    fn native_local_health_reports_explicit_archive_pause_without_backlog() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(2),
@@ -4802,7 +4788,8 @@ mod tests {
                     "mode": "paused",
                     "pending_ranges": 0,
                     "pending_bytes": 0
-                }
+                },
+                "ship_attempts_10m": 0
             })),
             None,
         );
@@ -4818,10 +4805,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_archive_dead_letters() {
+    fn native_local_health_reports_archive_dead_letters() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(2),
@@ -4831,7 +4818,8 @@ mod tests {
                     "mode": "trickle",
                     "dead_ranges": 2,
                     "dead_bytes": 4096
-                }
+                },
+                "ship_attempts_10m": 0
             })),
             None,
         );
@@ -4847,10 +4835,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_unresolved_storage_sources_as_broken() {
+    fn native_local_health_reports_unresolved_storage_sources_as_broken() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(2),
@@ -4878,10 +4866,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_does_not_infer_legacy_source_proof() {
+    fn native_local_health_does_not_infer_legacy_source_proof() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(2),
@@ -4907,10 +4895,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_missing_status_file() {
+    fn native_local_health_reports_missing_status_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(&path, false, None, None, None);
+        let health = native_health_from_parts(&path, false, None, None, None);
 
         assert_eq!(health.health_state, "broken");
         assert_eq!(health.engine_status.exists, false);
@@ -4920,10 +4908,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_stale_status_file() {
+    fn native_local_health_reports_stale_status_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(ENGINE_STALE_SECONDS + 1),
@@ -4937,11 +4925,11 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_prefers_projection_pulse_over_file_age() {
+    fn native_local_health_uses_projection_pulse_for_freshness() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         let now = chrono::Utc::now().to_rfc3339();
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(ENGINE_STALE_SECONDS + 1),
@@ -4955,9 +4943,8 @@ mod tests {
             None,
         );
 
-        assert_eq!(health.health_state, "degraded");
         assert!(health.engine_status.fresh);
-        assert!(health
+        assert!(!health
             .reasons
             .contains(&"engine_evidence_stale".to_string()));
         assert!(health.engine_status.age_seconds.unwrap_or_default() <= 1);
@@ -4973,11 +4960,11 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_surfaces_failed_reconciliation() {
+    fn native_local_health_surfaces_failed_reconciliation() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         let now = chrono::Utc::now().to_rfc3339();
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(1),
@@ -4999,11 +4986,11 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_rejects_stale_projection_pulse_on_fresh_file() {
+    fn native_local_health_rejects_stale_projection_pulse_on_fresh_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         let stale = (chrono::Utc::now() - chrono::Duration::seconds(180)).to_rfc3339();
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(1),
@@ -5023,10 +5010,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_unreadable_status_payload() {
+    fn native_local_health_reports_unreadable_status_payload() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(1),
@@ -5045,10 +5032,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_transport_payload_rejection() {
+    fn native_local_health_reports_transport_payload_rejection() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(1),
@@ -5068,10 +5055,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_reports_transport_error_burst() {
+    fn native_local_health_reports_transport_error_burst() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(1),
@@ -5092,10 +5079,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_ignores_recovered_server_error_rate() {
+    fn native_local_health_ignores_recovered_server_error_rate() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             Some(1),
@@ -5116,16 +5103,16 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_clamps_future_mtime_to_fresh() {
+    fn native_local_health_clamps_future_mtime_to_fresh() {
         let future = SystemTime::now() + std::time::Duration::from_secs(60);
         assert_eq!(age_seconds_since(future), 0);
     }
 
     #[test]
-    fn native_fast_local_health_reports_unknown_mtime_as_degraded() {
+    fn native_local_health_reports_unknown_mtime_as_degraded() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let health = native_fast_health_from_parts(
+        let health = native_health_from_parts(
             &path,
             true,
             None,
@@ -5145,13 +5132,13 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_collects_malformed_status_file() {
+    fn native_local_health_collects_malformed_status_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{not-json").unwrap();
 
-        let health = collect_native_fast_local_health(&path);
+        let health = collect_native_local_health(&path);
 
         assert_eq!(health.health_state, "broken");
         assert!(health
@@ -5168,7 +5155,7 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_collects_state_root_status_file() {
+    fn native_local_health_collects_state_root_status_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = engine_status_path(Some(dir.path())).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -5184,15 +5171,18 @@ mod tests {
         )
         .unwrap();
 
-        let health = collect_native_fast_local_health(&path);
+        let health = collect_native_local_health(&path);
 
-        assert_eq!(health.health_state, "healthy");
+        assert_eq!(health.health_state, "degraded");
+        assert!(health
+            .reasons
+            .contains(&"transport_unavailable".to_string()));
         assert_eq!(health.engine_status.path, path.display().to_string());
         assert!(health.engine_status.exists);
     }
 
     #[test]
-    fn native_fast_local_health_collects_transport_failure_from_status_file() {
+    fn native_local_health_collects_transport_failure_from_status_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -5209,7 +5199,7 @@ mod tests {
         )
         .unwrap();
 
-        let health = collect_native_fast_local_health(&path);
+        let health = collect_native_local_health(&path);
 
         assert_eq!(health.health_state, "broken");
         assert_eq!(health.transport.status_reason, "payload_rejected");
@@ -5254,7 +5244,7 @@ mod tests {
     }
 
     #[test]
-    fn native_fast_local_health_state_root_resolves_agent_status_path() {
+    fn native_local_health_state_root_resolves_agent_status_path() {
         let root = PathBuf::from("/tmp/longhouse-state");
         assert_eq!(
             engine_status_path(Some(&root)).unwrap(),
@@ -5268,14 +5258,15 @@ mod tests {
         let status_path = dir.path().join("agent").join("engine-status.json");
         let machine_path = dir.path().join("machine").join("state.json");
         let plan = native_repair_plan_from_parts(
-            native_fast_health_from_parts(
+            native_health_from_parts(
                 &status_path,
                 true,
                 Some(2),
                 Some(json!({
                     "spool_pending_count": 0,
                     "spool_dead_count": 0,
-                    "is_offline": false
+                    "is_offline": false,
+                    "ship_attempts_10m": 0
                 })),
                 None,
             ),
@@ -5302,7 +5293,7 @@ mod tests {
         let status_path = dir.path().join("agent").join("engine-status.json");
         let machine_path = dir.path().join("machine").join("state.json");
         let plan = native_repair_plan_from_parts(
-            native_fast_health_from_parts(&status_path, false, None, None, None),
+            native_health_from_parts(&status_path, false, None, None, None),
             NativeMachineStateStatus {
                 path: machine_path.display().to_string(),
                 exists: true,
@@ -5329,7 +5320,7 @@ mod tests {
         let status_path = dir.path().join("agent").join("engine-status.json");
         let machine_path = dir.path().join("machine").join("state.json");
         let plan = native_repair_plan_from_parts(
-            native_fast_health_from_parts(
+            native_health_from_parts(
                 &status_path,
                 true,
                 Some(ENGINE_STALE_SECONDS + 1),
@@ -5362,7 +5353,7 @@ mod tests {
         let status_path = dir.path().join("agent").join("engine-status.json");
         let machine_path = dir.path().join("machine").join("state.json");
         let plan = native_repair_plan_from_parts(
-            native_fast_health_from_parts(
+            native_health_from_parts(
                 &status_path,
                 true,
                 Some(2),
@@ -5406,7 +5397,7 @@ mod tests {
 
         let status_path = dir.path().join("agent").join("engine-status.json");
         let plan = native_repair_plan_from_parts(
-            native_fast_health_from_parts(
+            native_health_from_parts(
                 &status_path,
                 true,
                 Some(2),
@@ -5447,7 +5438,7 @@ mod tests {
 
         let status_path = dir.path().join("agent").join("engine-status.json");
         let plan = native_repair_plan_from_parts(
-            native_fast_health_from_parts(
+            native_health_from_parts(
                 &status_path,
                 true,
                 Some(2),
@@ -5490,7 +5481,7 @@ mod tests {
         let status_path = dir.path().join("agent").join("engine-status.json");
         let machine_path = dir.path().join("machine").join("state.json");
         let plan = native_repair_plan_from_parts(
-            native_fast_health_from_parts(
+            native_health_from_parts(
                 &status_path,
                 true,
                 Some(2),
@@ -5536,7 +5527,8 @@ mod tests {
             serde_json::to_string(&json!({
                 "spool_pending_count": 0,
                 "spool_dead_count": 0,
-                "is_offline": false
+                "is_offline": false,
+                "ship_attempts_10m": 0
             }))
             .unwrap(),
         )
@@ -6813,7 +6805,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         // The list has to be non-empty to be trusted: an empty one means the
         // provider scan produced nothing, which is a broken observation rather
         // than proof that no session exists.
-        let gone = native_fast_health_from_parts(
+        let gone = native_health_from_parts(
             &path,
             true,
             Some(1),
@@ -6828,7 +6820,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
             gone.reasons
         );
 
-        let present = native_fast_health_from_parts(
+        let present = native_health_from_parts(
             &path,
             true,
             Some(1),
@@ -6845,7 +6837,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         // No observations at all is broken observation, not an empty machine.
         // Suppressing here would hide every degraded launch at exactly the
         // moment the scanner that would prove otherwise has failed.
-        let unobservable = native_fast_health_from_parts(
+        let unobservable = native_health_from_parts(
             &path,
             true,
             Some(0),
@@ -6913,9 +6905,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
     fn stopped_registration_retry_is_not_a_current_fault_without_scan_rows() {
         let root = tempfile::tempdir().unwrap();
         let agent_dir = root.path().join("agent");
-        let retry_dir = agent_dir
-            .join("managed-local")
-            .join("registration-retries");
+        let retry_dir = agent_dir.join("managed-local").join("registration-retries");
         std::fs::create_dir_all(&retry_dir).unwrap();
         std::fs::write(
             retry_dir.join("departed.json"),

@@ -761,9 +761,9 @@ enum DeviceCommands {
         json: bool,
     },
 
-    /// Print a native fast local health snapshot from engine-status.json
+    /// Print the native local-health snapshot used by Longhouse.app
     LocalHealth {
-        /// Emit the native fast local health snapshot as JSON
+        /// Emit the local health snapshot as JSON
         #[arg(long)]
         json: bool,
 

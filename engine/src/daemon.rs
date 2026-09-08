@@ -27,7 +27,7 @@ use tokio::task::JoinSet;
 
 use crate::config::{self, ShipperConfig};
 use crate::discovery::{self, ProviderConfig};
-use crate::error_tracker::ConsecutiveErrorTracker;
+use crate::error_tracker::ErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::flight::FlightRecorder;
 use crate::heartbeat;
@@ -252,7 +252,7 @@ impl OfflineState {
 #[derive(Clone)]
 struct PathTaskContext {
     client: ShipperClient,
-    tracker: ConsecutiveErrorTracker,
+    tracker: ErrorTracker,
     ship_stats: RecentShipStatsTracker,
     limiter: std::sync::Arc<crate::scheduler::AdaptiveLimiter>,
     /// Reusable shipper-DB connections. Schema bootstrap has already run
@@ -410,7 +410,6 @@ struct ProjectionBuildInput {
     managed_snapshot_complete: bool,
     unmanaged_snapshot_complete: bool,
     db_path: PathBuf,
-    tracker: ConsecutiveErrorTracker,
     parse_tracker: RecentIssueTracker,
     ship_stats: RecentShipStatsTracker,
     is_offline: bool,
@@ -792,7 +791,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     }
 
     // 5. Create error tracker (shared across all ship operations)
-    let tracker = ConsecutiveErrorTracker::new();
+    let tracker = ErrorTracker::new();
     let parse_tracker = RecentIssueTracker::new();
     let ship_stats = RecentShipStatsTracker::new();
     let flight_recorder = config
@@ -1273,7 +1272,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                         unmanaged_snapshot_complete:
                                             last_projected_unmanaged_snapshot_complete,
                                         db_path: projection_db_path.clone(),
-                                        tracker: tracker.clone(),
                                         parse_tracker: parse_tracker.clone(),
                                         ship_stats: ship_stats.clone(),
                                         is_offline: offline.is_offline,
@@ -1635,7 +1633,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 unmanaged_snapshot_complete:
                                     last_projected_unmanaged_snapshot_complete,
                                 db_path: projection_db_path.clone(),
-                                tracker: tracker.clone(),
                                 parse_tracker: parse_tracker.clone(),
                                 ship_stats: ship_stats.clone(),
                                 is_offline: offline.is_offline,
@@ -2015,7 +2012,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         unmanaged_snapshot_complete:
                             last_projected_unmanaged_snapshot_complete,
                         db_path: projection_db_path.clone(),
-                        tracker: tracker.clone(),
                         parse_tracker: parse_tracker.clone(),
                         ship_stats: ship_stats.clone(),
                         is_offline: offline.is_offline,
@@ -2052,7 +2048,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         unmanaged_snapshot_complete:
                             last_projected_unmanaged_snapshot_complete,
                         db_path: projection_db_path.clone(),
-                        tracker: tracker.clone(),
                         parse_tracker: parse_tracker.clone(),
                         ship_stats: ship_stats.clone(),
                         is_offline: offline.is_offline,
@@ -2555,7 +2550,6 @@ fn maybe_start_projection_build(
             managed_snapshot_complete,
             unmanaged_snapshot_complete,
             db_path,
-            tracker,
             parse_tracker,
             ship_stats,
             is_offline,
@@ -2574,7 +2568,6 @@ fn maybe_start_projection_build(
             .map(|conn| {
                 let mut projection = build_local_status_projection(
                     &conn,
-                    &tracker,
                     &parse_tracker,
                     &ship_stats,
                     is_offline,
@@ -2609,7 +2602,6 @@ fn maybe_start_projection_build(
 #[allow(clippy::too_many_arguments)]
 fn build_local_status_projection(
     conn: &rusqlite::Connection,
-    tracker: &ConsecutiveErrorTracker,
     parse_tracker: &RecentIssueTracker,
     ship_stats: &RecentShipStatsTracker,
     is_offline: bool,
@@ -2632,7 +2624,6 @@ fn build_local_status_projection(
     let stats = heartbeat::HeartbeatStats {
         conn,
         spool: &spool,
-        tracker,
         parse_tracker,
         ship_stats,
         is_offline,
@@ -5205,7 +5196,6 @@ mod tests {
             storage_v2_outbox:
                 crate::state::pending_source_envelope::StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
-            consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
             ship_rate_limited_1h: 0,
@@ -5401,7 +5391,6 @@ mod tests {
     fn test_build_local_status_projection_uses_cached_unmanaged_bindings() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
-        let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
         let ship_stats = RecentShipStatsTracker::new();
         let cached = vec![unmanaged_binding("sess-cached", 42)];
@@ -5409,7 +5398,6 @@ mod tests {
 
         let projection = build_local_status_projection(
             &conn,
-            &tracker,
             &parse_tracker,
             &ship_stats,
             false,
@@ -5447,7 +5435,6 @@ mod tests {
     fn test_build_local_status_projection_sequences_only_digest_changes() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
-        let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
         let ship_stats = RecentShipStatsTracker::new();
         let cached = vec![unmanaged_binding("sess-cached", 42)];
@@ -5455,7 +5442,6 @@ mod tests {
 
         let first = build_local_status_projection(
             &conn,
-            &tracker,
             &parse_tracker,
             &ship_stats,
             false,
@@ -5476,7 +5462,6 @@ mod tests {
         );
         let second = build_local_status_projection(
             &conn,
-            &tracker,
             &parse_tracker,
             &ship_stats,
             false,
@@ -5498,7 +5483,6 @@ mod tests {
         let changed = vec![unmanaged_binding("sess-cached", 43)];
         let third = build_local_status_projection(
             &conn,
-            &tracker,
             &parse_tracker,
             &ship_stats,
             false,

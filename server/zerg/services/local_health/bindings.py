@@ -60,23 +60,8 @@ def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
     return latest
 
 
-def _collect_provider_binding_diagnostics(base_dir: Path, *, now: datetime, fast: bool) -> dict[str, Any]:
-    """Summarize recently observed provider-session-binding diagnostics.
-
-    Read-only over the local agent SQLite DB via the same guarded ``mode=ro``
-    path as the other local-health readers — deliberately NOT through the ORM
-    sessionmaker, and never against hosted state. Reports *observed* diagnostics
-    (conflict/missing observation rows), not authoritative current session
-    state; see ``provider_binding_diagnostics.py``.
-
-    Returns ``{"status": "skipped"}`` on the fast path and
-    ``{"status": "unavailable", ...}`` on any DB error, so consumers never
-    confuse "not checked" with "clean".
-    """
-
-    if fast:
-        return {"status": "skipped", "skipped_reason": "fast"}
-
+def _collect_provider_binding_diagnostics(base_dir: Path, *, now: datetime) -> dict[str, Any]:
+    """Summarize recent provider-session-binding observations from the local DB."""
     db_path = get_agent_db_path(base_dir)
     if not db_path.exists():
         return {"status": "unavailable", "skipped_reason": "db_missing"}

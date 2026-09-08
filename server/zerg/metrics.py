@@ -501,12 +501,6 @@ try:
         labelnames=("device",),
     )
 
-    device_consecutive_ship_failures = Gauge(
-        "longhouse_device_consecutive_ship_failures",
-        "Per-device consecutive ship failures from the latest heartbeat",
-        labelnames=("device",),
-    )
-
     device_parse_errors_1h = Gauge(
         "longhouse_device_parse_errors_1h",
         "Per-device parse errors in the last hour from the latest heartbeat",
@@ -635,7 +629,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     device_ship_latency_ms = _NoopGauge()  # type: ignore[assignment]
     device_spool_pending = _NoopGauge()  # type: ignore[assignment]
     device_spool_dead = _NoopGauge()  # type: ignore[assignment]
-    device_consecutive_ship_failures = _NoopGauge()  # type: ignore[assignment]
     device_parse_errors_1h = _NoopGauge()  # type: ignore[assignment]
     device_disk_free_bytes = _NoopGauge()  # type: ignore[assignment]
     device_reported_offline = _NoopGauge()  # type: ignore[assignment]

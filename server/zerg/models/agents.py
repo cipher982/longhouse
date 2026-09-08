@@ -687,7 +687,6 @@ class AgentHeartbeat(AgentsBase):
     spool_pending = Column(Integer, default=0)
     spool_dead = Column(Integer, default=0)
     parse_errors_1h = Column(Integer, default=0)
-    consecutive_failures = Column(Integer, default=0)
     ship_attempts_1h = Column(Integer, default=0)
     ship_successes_1h = Column(Integer, default=0)
     ship_rate_limited_1h = Column(Integer, default=0)

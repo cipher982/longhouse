@@ -687,7 +687,7 @@ print_success() {
     echo ""
     echo "Native device commands:"
     echo "  longhouse auth --url <url>  Store a device token from LONGHOUSE_DEVICE_TOKEN"
-    echo "  longhouse local-health --fast --json"
+    echo "  longhouse local-health --json"
     echo "  longhouse machine repair --dry-run"
     echo ""
     echo "For help: longhouse --help"

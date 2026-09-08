@@ -506,7 +506,7 @@ def test_local_health_cursor_discovery(tmp_path: Path) -> None:
     original = lh.iter_local_cursor_session_summaries
     lh.iter_local_cursor_session_summaries = lambda: ct.iter_local_cursor_session_summaries(cursor_root)
     try:
-        deep = _collect_cursor_discovery(fast=False)
+        deep = _collect_cursor_discovery()
         assert deep["status"] == "ok"
         assert deep["session_count"] == 1
         row = deep["sessions"][0]
@@ -518,9 +518,6 @@ def test_local_health_cursor_discovery(tmp_path: Path) -> None:
         assert row["legacy_format"] is False
         assert deep["legacy_format_count"] == 0
 
-        fast = _collect_cursor_discovery(fast=True)
-        assert fast["status"] == "skipped"
-        assert fast["sessions"] == []
     finally:
         lh.iter_local_cursor_session_summaries = original
 

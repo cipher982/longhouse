@@ -36,7 +36,6 @@ _ACTION_IDS_BY_REASON: dict[str, str] = {
     "engine_status_missing": "inspect_local_health",
     "engine_status_unreadable": "inspect_local_health",
     "engine_status_stale": "inspect_local_health",
-    "engine_evidence_stale": "inspect_local_health",
     "engine_reconciliation_failed": "inspect_local_health",
     "engine_status_age_unknown": "inspect_local_health",
     "engine_status_aging": "inspect_local_health",
@@ -54,10 +53,10 @@ _ACTION_IDS_BY_REASON: dict[str, str] = {
     "connect_errors": "inspect_transport",
     "rate_limited": "inspect_transport",
     "retryable_client_errors": "inspect_transport",
+    "ship_stalled": "inspect_transport",
     "payload_rejected": "inspect_shipping",
     "payload_too_large": "inspect_shipping",
     "parse_errors": "inspect_shipping",
-    "consecutive_failures": "inspect_shipping",
     "spool_dead": "inspect_shipping",
     "spool_dead_letters": "inspect_shipping",
     "outbox_stuck": "inspect_shipping",
@@ -134,7 +133,6 @@ class _HealthClassificationContext:
     engine_exists: bool
     engine_error: Any
     engine_age: Any
-    engine_evidence_age: Any
     engine_reconciliation_state: str | None
     spool_pending: int
     archive_state: str
@@ -197,7 +195,6 @@ def _add_transport_health_reasons(
     if any(
         reason in transport_assessment.reasons
         for reason in (
-            "consecutive_failures",
             "connect_errors",
             "server_errors",
             "rate_limited",
@@ -214,7 +211,7 @@ def _add_transport_health_reasons(
     if "spool_dead" in transport_assessment.reasons:
         _with_action(
             actions,
-            "Inspect shipping state: longhouse local-health --fast --json",
+            "Inspect shipping state: longhouse local-health --json",
         )
 
 
@@ -496,7 +493,7 @@ def _degraded_shipping_flag(
         return True
     # Transport severity is delegated to the shared reducer. Keep local overlays
     # here, but let transport_assessment remain the shipping-state source of truth.
-    if transport_assessment is not None and transport_assessment.status in ("offline", "degraded"):
+    if transport_assessment is not None and transport_assessment.status in ("offline", "degraded", "unknown"):
         return True
     if outbox_count > 0 and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS:
         return True
@@ -776,7 +773,6 @@ def _health_classification_context(
         engine_exists=bool(engine_status.get("exists")),
         engine_error=engine_status.get("error"),
         engine_age=engine_status.get("age_seconds"),
-        engine_evidence_age=engine_status.get("evidence_age_seconds"),
         engine_reconciliation_state=str((engine_status.get("reconciliation") or {}).get("state") or "").strip() or None,
         spool_pending=spool_pending,
         archive_state=archive_state,
@@ -862,11 +858,10 @@ def _collect_health_reasons(
         canonical_sessions_missing=context.canonical_sessions_missing,
         canonical_sessions_invalid=context.canonical_sessions_invalid,
     )
-    if context.engine_evidence_age is not None and context.engine_evidence_age > ENGINE_FRESH_SECONDS:
-        reasons.append("engine_evidence_stale")
     if context.engine_reconciliation_state == "failed":
         reasons.append("engine_reconciliation_failed")
         _with_action(actions, f"Inspect logs: {context.engine_log_path}")
+
     _add_spool_pending_reason(
         reasons,
         spool_pending=context.spool_pending,
@@ -906,7 +901,7 @@ def _collect_health_reasons(
         _with_action(actions, "Update Longhouse and inspect the retained source evidence.")
     if context.storage_outbox_error:
         reasons.append("storage_v2_outbox_unreadable")
-        _with_action(actions, "Run: longhouse local-health --fast --json")
+        _with_action(actions, "Run: longhouse local-health --json")
         _with_action(actions, "Inspect the storage-v2 outbox error in engine-status.json.")
     _add_managed_session_reasons(
         reasons,
@@ -1162,7 +1157,7 @@ def _classify_health(
         managed_recovery_active_count=context.managed_recovery_active_count,
         managed_recovery_scan_error=context.managed_recovery_scan_error,
     )
-    if "engine_evidence_stale" in reasons or "engine_reconciliation_failed" in reasons:
+    if "engine_reconciliation_failed" in reasons:
         degraded = True
 
     if broken:

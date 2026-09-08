@@ -361,7 +361,6 @@ public final class SnapshotStore: ObservableObject {
         return current?.isOffline != next.isOffline
             || (current?.spoolPendingCount ?? 0 > 0) != (next.spoolPendingCount ?? 0 > 0)
             || (current?.spoolDeadCount ?? 0 > 0) != (next.spoolDeadCount ?? 0 > 0)
-            || (current?.consecutiveShipFailures ?? 0 > 0) != (next.consecutiveShipFailures ?? 0 > 0)
             || currentArchive?.state != nextArchive?.state
             || currentArchive?.mode != nextArchive?.mode
             || (currentArchive?.pendingRanges ?? 0 > 0) != (nextArchive?.pendingRanges ?? 0 > 0)

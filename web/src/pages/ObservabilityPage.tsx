@@ -689,10 +689,6 @@ function MachineHealthPanel({ machines }: { machines: MachineHealthItemResponse[
               <span className="observability-stat-label">Dead spool</span>
               <span className="observability-stat-value">{machine.spool_dead}</span>
             </div>
-            <div className="observability-machine-stat">
-              <span className="observability-stat-label">Failures</span>
-              <span className="observability-stat-value">{machine.consecutive_failures}</span>
-            </div>
           </div>
           <HistoryImportPanel historyImport={machine.history_import} />
           <div className="observability-machine-card__actions">

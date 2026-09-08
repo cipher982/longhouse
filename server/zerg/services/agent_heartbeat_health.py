@@ -40,10 +40,10 @@ _MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {
     "server_errors": "inspect_transport",
     "rate_limited": "inspect_transport",
     "retryable_client_errors": "inspect_transport",
+    "ship_stalled": "inspect_transport",
     "payload_rejected": "inspect_shipping",
     "payload_too_large": "inspect_shipping",
     "parse_errors": "inspect_shipping",
-    "consecutive_failures": "inspect_shipping",
     "spool_dead": "inspect_shipping",
     "spool_dead_letters": "inspect_shipping",
     "outbox_stuck": "inspect_shipping",
@@ -58,7 +58,6 @@ _MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {
     "engine_status_aging": "inspect_local_health",
     "engine_status_sessions_invalid": "inspect_local_health",
     "engine_status_sessions_missing": "inspect_local_health",
-    "engine_evidence_stale": "inspect_local_health",
     "engine_reconciliation_failed": "inspect_local_health",
     "storage_v2_sources_blocked": "inspect_storage_source",
     "storage_v2_sources_unresolved": "inspect_storage_source",
@@ -136,7 +135,6 @@ class MachineTransportHealthSummary:
     archive_repair: dict[str, Any]
     history_import: HistoryImportSnapshot
     parse_errors_1h: int
-    consecutive_failures: int
     disk_free_bytes: int
     is_offline: bool
 
@@ -197,7 +195,7 @@ def _filter_machine_transport_health(
     status: str | None,
     limit: int,
 ) -> tuple[list[MachineTransportHealthSummary], int]:
-    if status:
+    if status is not None:
         summaries = [item for item in summaries if item.status == status]
     summaries.sort(
         key=lambda item: (
@@ -221,7 +219,6 @@ def _decode_catalog_heartbeat(row: dict[str, Any]) -> dict[str, Any]:
         "spool_pending": 0,
         "spool_dead": 0,
         "parse_errors_1h": 0,
-        "consecutive_failures": 0,
         "ship_attempts_1h": 0,
         "ship_successes_1h": 0,
         "ship_rate_limited_1h": 0,
@@ -300,7 +297,6 @@ def build_machine_transport_health_summary(
     local_facts = _local_health_facts_from_heartbeat(row)
     history_import = _history_import_from_heartbeat(row)
     parse_errors_1h = sample.parse_errors_1h
-    consecutive_failures = sample.consecutive_failures
     ship_rate_limited_1h = sample.ship_rate_limited_1h
     ship_server_errors_1h = sample.ship_server_errors_1h
     ship_payload_rejections_1h = sample.ship_payload_rejections_1h
@@ -384,7 +380,6 @@ def build_machine_transport_health_summary(
         archive_repair=archive_repair,
         history_import=history_import,
         parse_errors_1h=parse_errors_1h,
-        consecutive_failures=consecutive_failures,
         disk_free_bytes=disk_free_bytes,
         is_offline=is_offline,
     )

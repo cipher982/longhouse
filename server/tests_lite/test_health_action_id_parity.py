@@ -24,7 +24,6 @@ def test_python_health_producers_use_the_canonical_action_contract() -> None:
 
     shared_reasons = {
         "connect_errors",
-        "consecutive_failures",
         "parse_errors",
         "payload_rejected",
         "payload_too_large",
@@ -34,6 +33,7 @@ def test_python_health_producers_use_the_canonical_action_contract() -> None:
         "server_errors",
         "spool_dead",
         "spool_dead_letters",
+        "ship_stalled",
     }
     for reason in shared_reasons:
         assert _ACTION_IDS_BY_REASON[reason] == canonical[reason]

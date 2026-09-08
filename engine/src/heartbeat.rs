@@ -36,7 +36,6 @@ use crate::managed_opencode_scan::OpenCodeServerObservation;
 static DAEMON_STARTED_AT: OnceLock<String> = OnceLock::new();
 static MACHINE_BOOT_ID: OnceLock<Option<String>> = OnceLock::new();
 use crate::config;
-use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::shipping::client::ShipperClient;
 use crate::shipping_stats::RecentShipStatsTracker;
@@ -80,7 +79,6 @@ pub struct HeartbeatPayload {
     #[serde(default)]
     pub storage_v2_outbox: StorageV2OutboxSnapshot,
     pub parse_error_count_1h: u32,
-    pub consecutive_ship_failures: u32,
     pub ship_attempts_1h: u32,
     pub ship_successes_1h: u32,
     pub ship_rate_limited_1h: u32,
@@ -642,7 +640,6 @@ pub struct ManagedSessionLease {
 pub struct HeartbeatStats<'a> {
     pub conn: &'a rusqlite::Connection,
     pub spool: &'a Spool<'a>,
-    pub tracker: &'a ConsecutiveErrorTracker,
     pub parse_tracker: &'a RecentIssueTracker,
     pub ship_stats: &'a RecentShipStatsTracker,
     pub is_offline: bool,
@@ -680,7 +677,6 @@ impl HeartbeatPayload {
             &storage_v2_outbox,
         );
         let parse_error_count_1h = stats.parse_tracker.count_last_hour();
-        let consecutive_ship_failures = stats.tracker.consecutive_count();
         let local_database_bytes = allocated_database_bytes(stats.conn).ok();
         let disk_free_bytes = get_disk_free();
         let ship_stats = stats.ship_stats.summary();
@@ -700,7 +696,6 @@ impl HeartbeatPayload {
             archive_backlog,
             storage_v2_outbox,
             parse_error_count_1h,
-            consecutive_ship_failures,
             ship_attempts_1h: ship_stats.ship_attempts_1h,
             ship_successes_1h: ship_stats.ship_successes_1h,
             ship_rate_limited_1h: ship_stats.ship_rate_limited_1h,
@@ -3399,7 +3394,6 @@ mod tests {
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
-            consecutive_ship_failures: 2,
             ship_attempts_1h: 7,
             ship_successes_1h: 5,
             ship_rate_limited_1h: 1,
@@ -3442,7 +3436,6 @@ mod tests {
         assert_eq!(parsed["daemon_pid"], 12345);
         assert_eq!(parsed["spool_pending_count"], 5);
         assert_eq!(parsed["spool_dead_count"], 1);
-        assert_eq!(parsed["consecutive_ship_failures"], 2);
         assert_eq!(parsed["ship_attempts_1h"], 7);
         assert_eq!(parsed["ship_successes_1h"], 5);
         assert_eq!(parsed["ship_attempts_10m"], 4);
@@ -3490,7 +3483,6 @@ mod tests {
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
-            consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
             ship_rate_limited_1h: 0,
@@ -4642,7 +4634,6 @@ mod tests {
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
-            consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
             ship_rate_limited_1h: 0,
@@ -4690,7 +4681,6 @@ mod tests {
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let spool = Spool::new(&conn);
-        let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
         let ship_stats = RecentShipStatsTracker::new();
         let payload = HeartbeatPayload {
@@ -4708,7 +4698,6 @@ mod tests {
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
-            consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
             ship_rate_limited_1h: 0,
@@ -4756,7 +4745,6 @@ mod tests {
         let stats = HeartbeatStats {
             conn: &conn,
             spool: &spool,
-            tracker: &tracker,
             parse_tracker: &parse_tracker,
             ship_stats: &ship_stats,
             is_offline: false,
@@ -4852,7 +4840,6 @@ mod tests {
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let spool = Spool::new(&conn);
-        let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
         let ship_stats = RecentShipStatsTracker::new();
 
@@ -4883,7 +4870,6 @@ mod tests {
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
-            consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
             ship_rate_limited_1h: 0,
@@ -4920,7 +4906,6 @@ mod tests {
         let stats = HeartbeatStats {
             conn: &conn,
             spool: &spool,
-            tracker: &tracker,
             parse_tracker: &parse_tracker,
             ship_stats: &ship_stats,
             is_offline: false,
@@ -4956,7 +4941,6 @@ mod tests {
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let spool = Spool::new(&conn);
-        let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
         let ship_stats = RecentShipStatsTracker::new();
         let payload = HeartbeatPayload {
@@ -4974,7 +4958,6 @@ mod tests {
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
-            consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
             ship_rate_limited_1h: 0,
@@ -5011,7 +4994,6 @@ mod tests {
         let stats = HeartbeatStats {
             conn: &conn,
             spool: &spool,
-            tracker: &tracker,
             parse_tracker: &parse_tracker,
             ship_stats: &ship_stats,
             is_offline: false,
@@ -5642,7 +5624,11 @@ mod tests {
             Vec::new(),
             contracts.iter().map(|_| 0u8).collect(),
         ]);
-        let heartbeats = contracts.len().div_ceil(shares[6]).max(readiness.len().div_ceil(shares[4])) + 1;
+        let heartbeats = contracts
+            .len()
+            .div_ceil(shares[6])
+            .max(readiness.len().div_ceil(shares[4]))
+            + 1;
 
         for rotation in 0..heartbeats {
             let identities = reducer_evidence_identities(
@@ -6110,7 +6096,6 @@ mod tests {
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
-            consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
             ship_successes_1h: 0,
             ship_rate_limited_1h: 0,

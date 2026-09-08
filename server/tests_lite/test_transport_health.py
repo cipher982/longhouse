@@ -21,20 +21,28 @@ def test_transport_health_builders_keep_heartbeat_and_local_payload_in_sync():
         spool_pending=0,
         spool_dead=0,
         parse_errors_1h=0,
-        consecutive_failures=0,
         ship_attempts_1h=20,
         ship_successes_1h=15,
         ship_connect_errors_1h=5,
         is_offline=0,
+        raw_json=json.dumps(
+            {
+                "ship_attempts_10m": 5,
+                "ship_connect_errors_10m": 5,
+                "last_ship_result": "connect_error",
+            }
+        ),
     )
     payload = {
         "spool_pending_count": 0,
         "spool_dead_count": 0,
         "parse_error_count_1h": 0,
-        "consecutive_ship_failures": 0,
         "ship_attempts_1h": 20,
         "ship_successes_1h": 15,
         "ship_connect_errors_1h": 5,
+        "ship_attempts_10m": 5,
+        "ship_connect_errors_10m": 5,
+        "last_ship_result": "connect_error",
         "is_offline": False,
     }
 
@@ -49,8 +57,24 @@ def test_transport_health_builders_keep_heartbeat_and_local_payload_in_sync():
     assert heartbeat_assessment == local_assessment
     assert heartbeat_assessment.status == "degraded"
     assert heartbeat_assessment.status_reason == "connect_errors"
-    assert heartbeat_assessment.status_summary == "5 ship connect error(s) in the last hour."
+    assert heartbeat_assessment.status_summary == "5 ship connect error(s) in the last 10 minutes."
     assert heartbeat_assessment.reasons == ("connect_errors",)
+
+
+def test_transport_health_marks_missing_engine_transport_evidence_unknown():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+            "is_offline": False,
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "unknown"
+    assert assessment.status_reason == "transport_unavailable"
+    assert assessment.reasons == ("transport_unavailable",)
 
 
 def test_transport_health_uses_active_window_to_clear_recovered_hourly_burst():
@@ -63,7 +87,6 @@ def test_transport_health_uses_active_window_to_clear_recovered_hourly_burst():
             "ship_successes_10m": 4,
             "ship_connect_errors_10m": 0,
             "last_ship_result": "ok",
-            "consecutive_ship_failures": 0,
             "spool_pending_count": 0,
             "spool_dead_count": 0,
         }
@@ -84,7 +107,6 @@ def test_transport_health_keeps_recovered_server_error_burst_healthy():
             "ship_successes_10m": 473,
             "ship_server_errors_10m": 201,
             "last_ship_result": "ok",
-            "consecutive_ship_failures": 0,
             "spool_pending_count": 2760,
             "spool_dead_count": 0,
         }
@@ -108,7 +130,6 @@ def test_transport_health_degrades_for_active_connect_burst():
             "ship_successes_10m": 5,
             "ship_connect_errors_10m": 3,
             "last_ship_result": "ok",
-            "consecutive_ship_failures": 0,
             "spool_pending_count": 0,
             "spool_dead_count": 0,
         }
@@ -146,7 +167,6 @@ def test_transport_health_keeps_single_current_connect_error_healthy():
             "ship_successes_1h": 11,
             "ship_connect_errors_1h": 1,
             "last_ship_result": "connect_error",
-            "consecutive_ship_failures": 1,
             "spool_pending_count": 1,
             "spool_dead_count": 0,
         }
@@ -166,8 +186,9 @@ def test_transport_health_degrades_for_repeated_current_connect_errors():
             "ship_attempts_1h": 12,
             "ship_successes_1h": 10,
             "ship_connect_errors_1h": 2,
+            "ship_attempts_10m": 2,
+            "ship_connect_errors_10m": 2,
             "last_ship_result": "connect_error",
-            "consecutive_ship_failures": 2,
             "spool_pending_count": 1,
             "spool_dead_count": 0,
         }
@@ -176,25 +197,9 @@ def test_transport_health_degrades_for_repeated_current_connect_errors():
     assessment = assess_transport_health(sample)
 
     assert assessment.status == "degraded"
-    assert assessment.status_reason == "consecutive_failures"
-    assert assessment.reasons == ("consecutive_failures", "connect_errors")
+    assert assessment.status_reason == "connect_errors"
+    assert assessment.reasons == ("connect_errors",)
 
-
-def test_transport_health_ignores_stale_consecutive_failures_without_active_attempts():
-    sample = transport_health_sample_from_engine_status_payload(
-        {
-            "ship_attempts_10m": 0,
-            "ship_attempts_1h": 0,
-            "consecutive_ship_failures": 8,
-            "spool_pending_count": 0,
-            "spool_dead_count": 0,
-        }
-    )
-
-    assessment = assess_transport_health(sample)
-
-    assert assessment.status == "healthy"
-    assert assessment.reasons == ()
 
 def test_transport_health_keeps_recovered_transient_connect_errors_healthy():
     sample = transport_health_sample_from_engine_status_payload(
@@ -203,7 +208,6 @@ def test_transport_health_keeps_recovered_transient_connect_errors_healthy():
             "ship_successes_1h": 12,
             "ship_connect_errors_1h": 2,
             "last_ship_result": "ok",
-            "consecutive_ship_failures": 0,
             "spool_pending_count": 0,
             "spool_dead_count": 0,
         }
@@ -296,6 +300,8 @@ def test_transport_health_surfaces_last_transport_error_detail():
         "ship_attempts_1h": 20,
         "ship_successes_1h": 18,
         "ship_connect_errors_1h": 2,
+        "ship_attempts_10m": 2,
+        "ship_connect_errors_10m": 2,
         "last_ship_result": "connect_error",
         "last_ship_error_kind": "timeout",
         "last_ship_error_message": "request timed out after 60s",
@@ -320,7 +326,7 @@ def test_transport_health_surfaces_last_transport_error_detail():
 
     assert assessment.status == "degraded"
     assert assessment.status_reason == "connect_errors"
-    assert assessment.status_summary == "2 ship connect error(s) in the last hour. Last error: timeout."
+    assert assessment.status_summary == "2 ship connect error(s) in the last 10 minutes. Last error: timeout."
 
 
 def test_current_heartbeats_with_a_stale_last_ship_are_degraded_not_healthy():

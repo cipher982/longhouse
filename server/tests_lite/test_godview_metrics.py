@@ -50,7 +50,6 @@ def test_device_gauges_use_live_heartbeat_stamps_in_catalog_mode(tmp_path, monke
                 spool_pending=7,
                 spool_dead=1,
                 parse_errors_1h=2,
-                consecutive_failures=3,
                 disk_free_bytes=8192,
                 is_offline=0,
             )
@@ -64,7 +63,6 @@ def test_device_gauges_use_live_heartbeat_stamps_in_catalog_mode(tmp_path, monke
     godview.refresh_device_gauges()
 
     assert _gauge_value(metrics.device_spool_pending, device="catalog-device") == 7.0
-    assert _gauge_value(metrics.device_consecutive_ship_failures, device="catalog-device") == 3.0
 
 
 @pytest.mark.asyncio

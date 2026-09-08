@@ -119,7 +119,7 @@ longhouse antigravity  # Antigravity CLI, send only`}
         menu bar says something is wrong:
       </p>
       <CodeBlock title="terminal">
-        {`longhouse local-health --fast --json
+        {`longhouse local-health --json
 longhouse machine repair
 longhouse machine repair --repair-service`}
       </CodeBlock>

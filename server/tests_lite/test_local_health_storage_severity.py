@@ -280,7 +280,7 @@ def test_unreadable_storage_outbox_is_broken_and_actionable():
     reasons, actions = _collect_health_reasons(context, transport_assessment=None)
     assert reasons == ["storage_v2_outbox_unreadable"]
     assert actions == [
-        "Run: longhouse local-health --fast --json",
+        "Run: longhouse local-health --json",
         "Inspect the storage-v2 outbox error in engine-status.json.",
     ]
 
@@ -323,7 +323,7 @@ def test_null_storage_outbox_is_broken_and_actionable():
     assert headline == "Source upload state unavailable"
     assert reasons == ["storage_v2_outbox_unreadable"]
     assert actions == [
-        "Run: longhouse local-health --fast --json",
+        "Run: longhouse local-health --json",
         "Inspect the storage-v2 outbox error in engine-status.json.",
     ]
 
@@ -349,7 +349,7 @@ def test_non_string_storage_outbox_error_is_broken_and_actionable():
     assert headline == "Source upload state unavailable"
     assert reasons == ["storage_v2_outbox_unreadable"]
     assert actions == [
-        "Run: longhouse local-health --fast --json",
+        "Run: longhouse local-health --json",
         "Inspect the storage-v2 outbox error in engine-status.json.",
     ]
 

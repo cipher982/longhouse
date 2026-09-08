@@ -164,12 +164,8 @@ def test_local_health_section_omits_orm_and_reports_unavailable(tmp_path, monkey
 
     # Point the agent DB path at a non-existent file -> unavailable, never raises.
     missing_dir = tmp_path / "no-such-home"
-    result = local_health._collect_provider_binding_diagnostics(missing_dir, now=NOW, fast=False)
+    result = local_health._collect_provider_binding_diagnostics(missing_dir, now=NOW)
     assert result["status"] == "unavailable"
-
-    # Fast path is skipped.
-    fast = local_health._collect_provider_binding_diagnostics(missing_dir, now=NOW, fast=True)
-    assert fast["status"] == "skipped"
 
 
 def test_local_health_reader_cutoff_matches_sqlalchemy_storage(tmp_path):
@@ -200,7 +196,7 @@ def test_local_health_reader_cutoff_matches_sqlalchemy_storage(tmp_path):
     finally:
         db.close()
 
-    result = local_health._collect_provider_binding_diagnostics(base_dir, now=NOW, fast=False)
+    result = local_health._collect_provider_binding_diagnostics(base_dir, now=NOW)
     assert result["status"] == "ok"
     assert result["missing_count"] == 1
     assert result["affected_provider_session_ids"] == ["ses_recent"]

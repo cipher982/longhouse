@@ -63,7 +63,7 @@ enum Commands {
     VerifyPair,
     /// Store or clear the device credentials used by native Longhouse commands.
     Auth(AuthArgs),
-    /// Print the native fast local-health snapshot used by Longhouse.app.
+    /// Print the native local-health snapshot used by Longhouse.app.
     LocalHealth(LocalHealthArgs),
     /// Repair native Machine Agent service state without invoking Python.
     Machine {
@@ -226,9 +226,6 @@ struct ClaudeLaunchArgs {
 
 #[derive(Args)]
 struct LocalHealthArgs {
-    /// Return the native snapshot immediately.
-    #[arg(long)]
-    fast: bool,
     /// Emit the snapshot as JSON.
     #[arg(long)]
     json: bool,
@@ -693,7 +690,6 @@ fn shell_quote_path(path: &Path) -> String {
 }
 
 fn native_local_health(args: LocalHealthArgs) -> anyhow::Result<()> {
-    let _ = args.fast;
     let mut command = Command::new(paired_engine_path()?);
     command.args(["device", "local-health"]);
     if args.json {
@@ -4795,12 +4791,11 @@ mod tests {
     }
 
     #[test]
-    fn local_health_parser_keeps_desktop_fast_shape() {
-        let cli = Cli::try_parse_from(["longhouse", "local-health", "--fast", "--json"]).unwrap();
+    fn local_health_parser_accepts_json() {
+        let cli = Cli::try_parse_from(["longhouse", "local-health", "--json"]).unwrap();
         let Commands::LocalHealth(args) = cli.command.unwrap() else {
             panic!("expected local-health command");
         };
-        assert!(args.fast);
         assert!(args.json);
     }
 

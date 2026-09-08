@@ -205,19 +205,19 @@ def _seed_heartbeat(
     received_at: datetime,
     version: str = "0.6.0",
     spool_dead: int = 0,
-    consecutive_failures: int = 0,
     is_offline: int = 0,
+    raw_json: str | None = None,
 ) -> AgentHeartbeat:
     heartbeat = AgentHeartbeat(
         device_id=device_id,
         received_at=received_at,
         version=version,
         spool_dead=spool_dead,
-        consecutive_failures=consecutive_failures,
         ship_attempts_1h=4,
-        ship_successes_1h=4 if spool_dead == 0 and consecutive_failures == 0 else 2,
+        ship_successes_1h=4 if spool_dead == 0 else 2,
         disk_free_bytes=1_000,
         is_offline=is_offline,
+        raw_json=raw_json,
     )
     db.add(heartbeat)
     db.commit()
@@ -338,7 +338,6 @@ def test_slow_turns_route_returns_managed_completed_turns_with_machine_health(tm
             device_id="broken-machine",
             received_at=pinned_now - timedelta(minutes=2),
             spool_dead=1,
-            consecutive_failures=1,
         )
         _seed_heartbeat(
             db,
@@ -495,7 +494,7 @@ def test_slow_turns_route_supports_filters_machine_status_and_pagination(tmp_pat
             db,
             device_id="degraded-machine",
             received_at=pinned_now - timedelta(minutes=2),
-            consecutive_failures=2,
+            raw_json='{"ship_attempts_10m": 2, "ship_server_errors_10m": 2, "last_ship_result": "server_error"}',
         )
         fastest_broken_turn_id = int(fastest_broken.id)
 

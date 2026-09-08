@@ -177,19 +177,6 @@
           "legendFormat": "offline"
         }
       ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Device consecutive ship failures",
-      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 35 },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "longhouse_device_consecutive_ship_failures{device=~\"$device\"}",
-          "legendFormat": "{{device}}"
-        }
-      ]
     }
   ]
 }

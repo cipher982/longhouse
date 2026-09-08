@@ -396,7 +396,6 @@ class HeartbeatIn(BaseModel):
     update: dict[str, object] | None = None
     history_import: HistoryImportSnapshot | None = None
     parse_error_count_1h: int = 0
-    consecutive_ship_failures: int = 0
     ship_attempts_1h: int = 0
     ship_successes_1h: int = 0
     ship_rate_limited_1h: int = 0
@@ -859,7 +858,6 @@ async def ingest_heartbeat(
             _spool = payload.spool_pending_count
             _spool_dead = payload.spool_dead_count
             _parse_err = payload.parse_error_count_1h
-            _consec = payload.consecutive_ship_failures
             _ship_attempts = payload.ship_attempts_1h
             _ship_successes = payload.ship_successes_1h
             _ship_rate_limited = payload.ship_rate_limited_1h
@@ -913,7 +911,6 @@ async def ingest_heartbeat(
                 "spool_pending": _spool,
                 "spool_dead": _spool_dead,
                 "parse_errors_1h": _parse_err,
-                "consecutive_failures": _consec,
                 "ship_attempts_1h": _ship_attempts,
                 "ship_successes_1h": _ship_successes,
                 "ship_rate_limited_1h": _ship_rate_limited,

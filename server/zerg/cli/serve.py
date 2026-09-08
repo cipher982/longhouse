@@ -742,8 +742,6 @@ def status(
                 typer.echo(f"  Spool pending:  {payload['spool_pending_count']}")
             if payload.get("spool_dead_count"):
                 typer.secho(f"  Spool dead:     {payload['spool_dead_count']}", fg=typer.colors.RED)
-            if payload.get("consecutive_ship_failures"):
-                typer.secho(f"  Ship failures:  {payload['consecutive_ship_failures']}", fg=typer.colors.YELLOW)
         else:
             typer.echo(f"  Engine status:  not found ({engine.get('path', '~/.longhouse/agent/engine-status.json')})")
 

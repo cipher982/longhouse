@@ -66,7 +66,7 @@ def build_snapshot_arguments() -> list[str]:
         facade = str(canonical)
     else:
         facade = shutil.which("longhouse") or str(canonical)
-    return [facade, "local-health", "--fast", "--json"]
+    return [facade, "local-health", "--json"]
 
 
 def default_install_desktop_app() -> bool:

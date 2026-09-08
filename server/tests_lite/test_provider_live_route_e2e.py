@@ -172,15 +172,6 @@ def test_route_e2e_stale_artifact_does_not_apply(monkeypatch, tmp_path: Path) ->
     assert proof["freshness_status"] == "stale"
 
 
-def test_fast_local_health_skips_route_e2e() -> None:
-    proof = route_e2e.collect_provider_live_route_e2e(fast=True)
-
-    assert proof["enabled"] is False
-    assert proof["configured"] is False
-    assert proof["status"] == "skipped"
-    assert proof["skipped_reason"] == "fast_local_health"
-
-
 def test_expected_route_providers_from_live_proof_uses_current_applying_sidecars() -> None:
     expected = route_e2e.expected_route_providers_from_live_proof(
         {

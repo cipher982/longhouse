@@ -1,6 +1,6 @@
 {
   "collected_at": "2026-08-03T16:00:00Z",
-  "collection_tier": "native_fast",
+  "collection_tier": "native",
   "engine_status": {
     "age_seconds": 0,
     "exists": true,
@@ -36,7 +36,7 @@
       "version": "0.1.33"
     }
   },
-  "headline": "Longhouse native fast health is healthy",
+  "headline": "Longhouse native health is healthy",
   "health_state": "healthy",
   "managed_launch_recovery": {
     "active_count": 0,

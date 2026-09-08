@@ -25,7 +25,6 @@
       "spool_pending_count": 0,
       "spool_dead_count": 0,
       "parse_error_count_1h": 0,
-      "consecutive_ship_failures": 0,
       "disk_free_bytes": 37299638272,
       "is_offline": false,
       "recent_dead_letters": [],

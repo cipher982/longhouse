@@ -19,7 +19,7 @@
     {
       "id": "local-health",
       "status": "available",
-      "native_target_command": "longhouse local-health --fast --json",
+      "native_target_command": "longhouse local-health --json",
       "providers": "all",
       "provider_binary_ownership": "not_applicable",
       "token_policy": "no_token",
