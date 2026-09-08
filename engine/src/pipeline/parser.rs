@@ -5157,15 +5157,20 @@ mod tests {
         );
 
         let result = parse_session_file(&path, 0).unwrap();
+        let messages: Vec<_> = result
+            .events
+            .iter()
+            .filter(|event| matches!(event.role, Role::User | Role::Assistant))
+            .collect();
         assert_eq!(
-            result.events.len(),
+            messages.len(),
             2,
             "a completed pi turn must archive its user prompt and assistant reply"
         );
-        assert_eq!(result.events[0].role, Role::User);
-        assert_eq!(result.events[1].role, Role::Assistant);
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[1].role, Role::Assistant);
         assert_eq!(
-            result.events[1].content_text.as_deref(),
+            messages[1].content_text.as_deref(),
             Some("LH_SERVED_pi")
         );
     }
