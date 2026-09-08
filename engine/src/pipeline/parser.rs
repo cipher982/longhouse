@@ -304,7 +304,7 @@ struct RawMessage {
     /// puts it at the top level, so this is the third of three placements.
     role: Option<String>,
     model: Option<String>,
-    #[serde(rename = "stopReason")]
+    #[serde(rename = "stopReason", alias = "stop_reason")]
     stop_reason: Option<String>,
     #[serde(rename = "errorMessage")]
     error_message: Option<String>,

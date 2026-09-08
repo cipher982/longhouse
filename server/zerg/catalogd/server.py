@@ -2245,10 +2245,11 @@ class CatalogDaemon:
             "limit",
             "offset",
         }
-        canonical_expected = expected | {"owner_id", "include_state_heads"}
-        if set(request.params) not in (expected, canonical_expected):
-            return self._error(request, "invalid_request", "session.timeline.list.v2 has invalid parameters")
         params = dict(request.params)
+        params.setdefault("include_hidden", False)
+        canonical_expected = expected | {"owner_id", "include_state_heads"}
+        if set(params) not in (expected, canonical_expected):
+            return self._error(request, "invalid_request", "session.timeline.list.v2 has invalid parameters")
         for field, maximum in (("project", 255), ("provider", 64), ("environment", 32), ("device_id", 255)):
             value = params[field]
             if value is not None and (not isinstance(value, str) or not value or len(value) > maximum):

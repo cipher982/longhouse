@@ -24,6 +24,7 @@ class SessionListParams:
     mode: str | None
     context_mode: str
     include_automation: bool = False
+    include_hidden: bool = False
 
 
 @dataclass(frozen=True)

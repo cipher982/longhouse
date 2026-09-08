@@ -13410,6 +13410,8 @@ export interface operations {
                 days_back?: number;
                 /** @description Search query for content */
                 query?: string | null;
+                /** @description Include user-hidden and automation-hidden sessions (View All mode) */
+                include_hidden?: boolean;
                 /** @description Max results (server clamps to 100) */
                 limit?: number;
                 /** @description Offset for pagination */
@@ -13680,6 +13682,8 @@ export interface operations {
                 hide_autonomous?: boolean;
                 /** @description Include Hatch automation sessions in otherwise default-hidden lists */
                 include_automation?: boolean;
+                /** @description Include user-hidden and automation-hidden sessions (View All mode) */
+                include_hidden?: boolean;
                 /** @description Filter by device ID */
                 device_id?: string | null;
                 /** @description Days to look back */
