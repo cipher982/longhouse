@@ -579,23 +579,31 @@ async def preview_timeline_session(
 async def get_timeline_filters(
     response: Response,
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
+    include_hidden: bool = Query(False, description="Include hidden and automation sessions in filter values"),
     current_user=Depends(get_current_browser_caller),
 ):
     response.headers["Cache-Control"] = "private, max-age=60"
 
-    projects: set[str] = set()
-    providers: set[str] = set()
-    machines: set[str] = set()
-    for offset in range(0, 1000, 100):
+    from collections import Counter
+
+    project_counts: Counter[str] = Counter()
+    project_recency: dict[str, datetime] = {}
+    provider_counts: Counter[str] = Counter()
+    machine_counts: Counter[str] = Counter()
+
+    min_dt = datetime.min.replace(tzinfo=timezone.utc)
+
+    for offset in range(0, 300, 100):
         listed = await asyncio.to_thread(
             list_live_catalog_sessions,
             params=TimelineSessionListParams(
                 project=None,
                 provider=None,
                 environment=None,
-                include_test=False,
-                hide_autonomous=False,
-                include_automation=True,
+                include_test=include_hidden,
+                hide_autonomous=not include_hidden,
+                include_automation=include_hidden,
+                include_hidden=include_hidden,
                 device_id=None,
                 days_back=days_back,
                 query=None,
@@ -609,13 +617,33 @@ async def get_timeline_filters(
         )
         for session in listed.sessions:
             if session.project:
-                projects.add(session.project)
-            providers.add(session.provider)
+                project_counts[session.project] += 1
+                if session.last_activity_at:
+                    dt = session.last_activity_at
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if session.project not in project_recency or dt > project_recency[session.project]:
+                        project_recency[session.project] = dt
+            if session.provider:
+                provider_counts[session.provider] += 1
             if session.device_id:
-                machines.add(session.device_id)
+                machine_counts[session.device_id] += 1
         if offset + len(listed.sessions) >= listed.total or not listed.sessions:
             break
-    return FiltersResponse(projects=sorted(projects), providers=sorted(providers), machines=sorted(machines))
+
+    ranked_projects = sorted(
+        project_counts.keys(),
+        key=lambda p: (project_counts[p], project_recency.get(p, min_dt)),
+        reverse=True,
+    )
+    ranked_providers = sorted(provider_counts.keys(), key=lambda p: provider_counts[p], reverse=True)
+    ranked_machines = sorted(machine_counts.keys(), key=lambda m: machine_counts[m], reverse=True)
+
+    return FiltersResponse(
+        projects=ranked_projects[:25],
+        providers=ranked_providers,
+        machines=ranked_machines,
+    )
 
 
 @router.post("/sessions/{session_id}/action", response_model=SessionActionResponse)

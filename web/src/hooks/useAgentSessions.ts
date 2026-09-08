@@ -191,10 +191,10 @@ export function useAgentSessionPreview(sessionId: string | null, lastN: number =
 /**
  * Hook to fetch distinct filters for sessions.
  */
-export function useAgentSessionFilters(daysBack: number = 90, enabled: boolean = true) {
+export function useAgentSessionFilters(daysBack: number = 90, enabled: boolean = true, includeHidden: boolean = false) {
   return useQuery<AgentFiltersResponse>({
-    queryKey: ["agent-session-filters", daysBack],
-    queryFn: () => fetchAgentFilters(daysBack),
+    queryKey: ["agent-session-filters", daysBack, includeHidden],
+    queryFn: () => fetchAgentFilters(daysBack, includeHidden),
     enabled,
     staleTime: 5 * 60_000,
     gcTime: 10 * 60_000,
@@ -204,8 +204,8 @@ export function useAgentSessionFilters(daysBack: number = 90, enabled: boolean =
 /**
  * Hook to fetch distinct filter values (alias for timeline usage).
  */
-export function useAgentFilters(daysBack: number = 90, enabled: boolean = true) {
-  return useAgentSessionFilters(daysBack, enabled);
+export function useAgentFilters(daysBack: number = 90, enabled: boolean = true, includeHidden: boolean = false) {
+  return useAgentSessionFilters(daysBack, enabled, includeHidden);
 }
 
 /**

@@ -46,18 +46,20 @@ export function FilterSection({
   options,
   onChange,
   loading,
+  scrollable = false,
 }: {
   label: string;
   value: string;
   options: string[];
   onChange: (v: string) => void;
   loading?: boolean;
+  scrollable?: boolean;
 }) {
   if (options.length === 0 && !loading) return null;
   return (
     <div className="filter-section" data-filter-section={label.toLowerCase()}>
       <div className="filter-section-label">{label}</div>
-      <div className="filter-section-options">
+      <div className={`filter-section-options${scrollable ? " filter-section-options--scrollable" : ""}`}>
         <button
           type="button"
           className={`filter-option-btn${!value ? " filter-option-btn--active" : ""}`}
@@ -117,7 +119,6 @@ export interface FilterPopoverProps {
   provider: string; setProvider: (v: string) => void; providerOptions: string[];
   deviceId: string; setDeviceId: (v: string) => void; machineOptions: string[];
   daysBack: number; setDaysBack: (v: number) => void;
-  hideAutonomous: boolean; setHideAutonomous: (v: boolean) => void;
   includeHidden: boolean; setIncludeHidden: (v: boolean) => void;
   filtersLoading: boolean;
 }
@@ -128,12 +129,11 @@ export function FilterPopover({
   provider, setProvider, providerOptions,
   deviceId, setDeviceId, machineOptions,
   daysBack, setDaysBack,
-  hideAutonomous, setHideAutonomous,
   includeHidden, setIncludeHidden,
   filtersLoading,
 }: FilterPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; right: number; maxHeight: number } | null>(null);
 
   useClickOutside({
     refs: [ref, anchorRef],
@@ -146,7 +146,12 @@ export function FilterPopover({
   useEffect(() => {
     if (!anchorRef.current) return;
     const rect = anchorRef.current.getBoundingClientRect();
-    setPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
+    const availableHeight = window.innerHeight - rect.bottom - 24;
+    setPos({
+      top: rect.bottom + 8,
+      right: window.innerWidth - rect.right,
+      maxHeight: Math.max(260, Math.min(520, availableHeight)),
+    });
   }, [anchorRef]);
 
   if (!pos) return null;
@@ -158,28 +163,36 @@ export function FilterPopover({
       role="region"
       aria-label="Session filters"
       className="sessions-filter-popover"
-      style={{ top: pos.top, right: pos.right }}
+      style={{ top: pos.top, right: pos.right, maxHeight: pos.maxHeight }}
     >
       <FilterSection label="Provider" value={provider} options={providerOptions} onChange={setProvider} loading={filtersLoading} />
       <FilterSection label="Machine" value={deviceId} options={machineOptions} onChange={setDeviceId} loading={filtersLoading} />
-      <FilterSection label="Project" value={project} options={projectOptions} onChange={setProject} loading={filtersLoading} />
+      <FilterSection
+        label="Project"
+        value={project}
+        options={projectOptions}
+        onChange={setProject}
+        loading={filtersLoading}
+        scrollable={projectOptions.length > 6}
+      />
       <DaysSection value={daysBack} onChange={setDaysBack} />
-      <label className="sessions-filter-toggle-label">
-        <input
-          type="checkbox"
-          checked={!hideAutonomous}
-          onChange={(e) => setHideAutonomous(!e.target.checked)}
-        />
-        show autonomous
-      </label>
-      <label className="sessions-filter-toggle-label" style={{ marginTop: 6 }}>
-        <input
-          type="checkbox"
-          checked={includeHidden}
-          onChange={(e) => setIncludeHidden(e.target.checked)}
-        />
-        view all (include hidden & automation)
-      </label>
-    </div>
+      <div className="sessions-filter-divider" />
+      <div className="sessions-filter-toggle-row">
+        <div className="sessions-filter-toggle-text">
+          <span className="sessions-filter-toggle-title">View all sessions</span>
+          <span className="sessions-filter-toggle-desc">Include hidden, test, and background automation</span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={includeHidden}
+          aria-label="View all sessions (include hidden and automation)"
+          className={`sessions-filter-switch${includeHidden ? " sessions-filter-switch--active" : ""}`}
+          onClick={() => setIncludeHidden(!includeHidden)}
+        >
+          <span className="sessions-filter-switch-thumb" />
+        </button>
+      </div>
+      </div>
   );
 }
