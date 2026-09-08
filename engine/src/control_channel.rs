@@ -49,7 +49,6 @@ use std::path::{Path, PathBuf};
 const COMMAND_SEND_TEXT: &str = "session.send_text";
 const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
-const COMMAND_FOLLOW_UP_TEXT: &str = "session.follow_up_text";
 const COMMAND_ANSWER_PAUSE: &str = "session.answer_pause";
 const COMMAND_TERMINATE: &str = "session.terminate";
 const COMMAND_RUN_ONCE: &str = "session.run_once";
@@ -1503,41 +1502,6 @@ async fn execute_command(
                 Err(err) => Err(CommandError::command_failed(err)),
             }
         }
-        COMMAND_FOLLOW_UP_TEXT => {
-            let text = payload_required_string(&payload, "text")?;
-            let provider = payload_optional_string(&payload, "provider")
-                .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
-            if provider != "pi" {
-                return Err(CommandError {
-                    code: "unsupported_command".to_string(),
-                    message: format!("{provider} does not support native follow-up delivery here"),
-                });
-            }
-            let summary = crate::pi_helm_control::dispatch(
-                &session_id,
-                crate::pi_helm_control::CommandKind::FollowUp,
-                Some(&text),
-                None,
-                Some(
-                    payload
-                        .get("longhouse_control_grant")
-                        .unwrap_or(&Value::Null),
-                ),
-            )
-            .await
-            .map_err(|error| CommandError {
-                code: error.code().to_string(),
-                message: error.message().to_string(),
-            })?;
-            Ok(json!({
-                "exit_code": 0,
-                "stdout": "",
-                "stderr": "",
-                "provider": "pi",
-                "transport": crate::pi_helm_control::PI_HELM_TRANSPORT,
-                "provider_session_id": summary.provider_session_id,
-            }))
-        }
         COMMAND_ANSWER_PAUSE => {
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
@@ -2957,7 +2921,6 @@ mod tests {
         ("pi", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("pi", "send", COMMAND_SEND_TEXT),
         ("pi", "steer", COMMAND_STEER_TEXT),
-        ("pi", "follow_up", COMMAND_FOLLOW_UP_TEXT),
         ("pi", "interrupt", COMMAND_INTERRUPT),
         ("pi", "terminate", COMMAND_TERMINATE),
     ];

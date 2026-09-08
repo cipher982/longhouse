@@ -26,8 +26,8 @@ from urllib.request import urlopen
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import event_text
 from zerg.qa.live_session_toolkit import start_transcript_shipper
-from zerg.qa.provider_adapters.pi import pi_native_shadow_taxonomy
-from zerg.qa.provider_adapters.pi import pi_transcript_rows
+from zerg.qa.pi_native import pi_native_shadow_taxonomy
+from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
@@ -244,6 +244,20 @@ def _served_controls(snapshot: dict[str, Any]) -> bool:
     )
 
 
+def _wait_runtime_control_identity(url: str, token: str, session_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    expected = f"connection:{state['connection_id']}:{state['lease_generation']}"
+
+    def observe() -> dict[str, Any] | None:
+        diagnostic = _runtime_diagnostic(url, token, session_id)
+        shadow = diagnostic.get("shadow") or {}
+        chosen = (shadow.get("fact_sources") or {}).get("control") or {}
+        if chosen.get("subject_key") == expected and _served_controls({"diagnostic": diagnostic}):
+            return diagnostic
+        return None
+
+    return _wait(observe, timeout=30, description=f"served Pi control identity {expected}")
+
+
 def _wait_runtime_convergence(
     url: str,
     token: str,
@@ -344,6 +358,42 @@ def _stale_frame(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _send_live(url: str, token: str, session_id: str, text: str, *, timeout: float = 30) -> dict[str, Any]:
+    request = Request(
+        f"{url.rstrip('/')}/api/agents/sessions/{session_id}/send-live",
+        data=json.dumps({"message": text}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-Agents-Token": token},
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("accepted") is not True:
+        raise RuntimeError(f"Runtime Host did not accept Pi follow-up: {payload}")
+    return payload
+
+
+def _wait_native_abort(
+    session_file: Path,
+    *,
+    minimum_source_offset: int,
+    timeout: float = 30,
+) -> dict[str, Any] | None:
+    def observe() -> dict[str, Any] | None:
+        if not session_file.is_file():
+            return None
+        rows, metadata, taxonomy = _native_snapshot(session_file)
+        for row in rows:
+            if int(row.get("source_offset") or 0) < minimum_source_offset:
+                continue
+            message = row.get("message") if isinstance(row.get("message"), dict) else {}
+            stop_reason = str(message.get("stop_reason") or "").strip().lower()
+            if row.get("type") == "assistant" and stop_reason in {"aborted", "cancelled", "canceled"}:
+                return {"row": row, "metadata": metadata, "taxonomy": taxonomy}
+        return None
+
+    return _wait(observe, timeout=timeout, description="native Pi aborted message")
+
+
 def _process_record(pid: object, expected_birth: object, label: str) -> dict[str, Any]:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return {"label": label, "pid": pid, "birth_matches": False, "pgid": None, "alive": False}
@@ -406,6 +456,71 @@ def _pgid_dead(pgid: object) -> bool:
     except PermissionError:
         return False
     return False
+
+
+def _recorded_owner_status(record: dict[str, Any]) -> str:
+    pid = record.get("pid")
+    expected_birth = record.get("expected_birth")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or not expected_birth:
+        return "invalid"
+    if not record["alive"]:
+        return "dead"
+    if record.get("birth") == str(expected_birth):
+        return "alive"
+    if record.get("birth"):
+        return "reused"
+    return "unknown"
+
+
+def _wait_recorded_execution_owners_dead(
+    home: Path,
+    session_id: str,
+    expected_state: dict[str, Any],
+    *,
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    expected_identities = {
+        label: {
+            "pid": expected_state.get(f"{label}_pid"),
+            "birth": expected_state.get(f"{label}_process_start_time"),
+        }
+        for label in ("launcher", "provider")
+    }
+    deadline = time.monotonic() + timeout
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        state = None
+        for path in _state_paths(home):
+            try:
+                candidate = _read_json(path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if candidate.get("session_id") == session_id:
+                state = candidate
+                break
+        owner_records = [_process_record(identity["pid"], identity["birth"], label) for label, identity in expected_identities.items()]
+        owner_status = {record["label"]: _recorded_owner_status(record) for record in owner_records}
+        state_identity_matches = bool(state) and all(
+            state.get(f"{label}_pid") == identity["pid"] and state.get(f"{label}_process_start_time") == identity["birth"]
+            for label, identity in expected_identities.items()
+        )
+        last = {
+            "state_status": state.get("status") if state else None,
+            "terminal_reason": state.get("terminal_reason") if state else None,
+            "state_identity_matches": state_identity_matches,
+            "owner_status": owner_status,
+            "owners": owner_records,
+        }
+        if (
+            state
+            and state.get("status") == "stopped"
+            and state.get("terminal_reason") == "remote_terminate"
+            and state_identity_matches
+            and all(status in {"dead", "reused"} for status in owner_status.values())
+        ):
+            return {"status": "pass", **last}
+        time.sleep(0.2)
+    raise RuntimeError(f"timed out waiting for terminated Pi Helm execution owners: {last}")
 
 
 def _cleanup_receipt(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -619,6 +734,16 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "binding": runtime_launch["binding"],
             "served_controls": _served_controls(runtime_launch["snapshot"]),
         }
+        local_health = subprocess.run(
+            [str(args.longhouse_cli), "local-health", "--json", "--state-root", env["LONGHOUSE_HOME"]],
+            cwd=workspace,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        (root / "local-health.json").write_text(local_health.stdout, encoding="utf-8")
         observations["launch_registration"] = (
             observations["machine_registration"]["authenticated"] is True
             and current_state.get("provider") == "pi"
@@ -687,7 +812,12 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         steer_native = _wait_native_marker(session_file, steer_marker, minimum_source_offset=steer_offset)
         follow_marker = f"PI_HELM_FOLLOW_{os.urandom(8).hex()}"
         follow_offset = session_file.stat().st_size
-        follow = _run_engine(args.engine, "follow-up", session_id, env, text=f"After this turn, reply with {follow_marker}.")
+        follow = _send_live(
+            str(args.api_url),
+            str(args.agents_token),
+            session_id,
+            f"After this turn, reply with {follow_marker}.",
+        )
         follow_native = _wait_native_marker(session_file, follow_marker, minimum_source_offset=follow_offset)
         observations["steer_active"] = (
             active["accepted"]
@@ -728,18 +858,35 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "stale_generation",
             "session_not_attached",
         }
-        reload_snapshot = _runtime_snapshot(args.api_url, args.agents_token, session_id)
+        _wait_runtime_control_identity(args.api_url, args.agents_token, session_id, reloaded)
+        reload_marker = f"PI_HELM_RELOADED_{os.urandom(8).hex()}"
+        reload_offset = session_file.stat().st_size
+        reload_send = _send_live(args.api_url, args.agents_token, session_id, f"Reply with exactly {reload_marker}.")
+        reload_native = _wait_native_marker(session_file, reload_marker, minimum_source_offset=reload_offset)
+        reload_flush = shipper.flush("pi-helm-reload")
+        reload_snapshot = _wait_runtime_convergence(
+            args.api_url,
+            args.agents_token,
+            session_id,
+            str(reloaded.get("provider_session_id") or ""),
+            reload_marker,
+        )["snapshot"]
         reload_binding = _runtime_binding(
             reload_snapshot,
             session_id=session_id,
             provider_session_id=str(reloaded.get("provider_session_id") or ""),
         )
         observations["reload_runtime"] = {
+            "send": reload_send,
+            "native": reload_native,
+            "flush": reload_flush,
             "binding": reload_binding,
             "served_controls": _served_controls(reload_snapshot),
         }
         observations["reload_rebind"] = (
             observations["reload_rebind"] is True
+            and reload_send["accepted"]
+            and reload_native["assistant_marker_rows"] == 1
             and reload_binding["one_session"]
             and reload_binding["one_thread"]
             and reload_binding["provider"] == "pi"
@@ -751,14 +898,14 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         replaced = _wait_state(
             home,
             session_id=session_id,
-            predicate=lambda item: item.get("provider_session_id") and item.get("provider_session_id") != replacement_before,
+            predicate=lambda item: item.get("session_file") and item.get("provider_session_id") != replacement_before,
             timeout=30,
         )
         observations["session_replacement_rebind"] = (
             bool(replaced.get("provider_session_id")) and replaced.get("provider_session_id") != replacement_before
         )
         current_state = replaced
-        session_file = Path(str(replaced.get("session_file") or session_file))
+        session_file = Path(str(replaced["session_file"]))
         for label in ("launcher", "provider"):
             owned_processes.append(
                 _process_record(
@@ -767,15 +914,11 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                     label,
                 )
             )
-        replacement_native = _native_snapshot(session_file)
-        observations["replacement_binding"] = {
-            "provider_session_id": replaced.get("provider_session_id"),
-            "native_header_id": replacement_native[1].get("provider_session_id"),
-            "native_file_present": session_file.is_file(),
-        }
         replacement_marker = f"PI_HELM_REPLACED_{os.urandom(8).hex()}"
-        replacement_offset = session_file.stat().st_size
-        replacement_send = _run_engine(args.engine, "send", session_id, env, text=f"Reply with exactly {replacement_marker}.")
+        # Pi reserves the path at /new and materializes it on the first turn.
+        replacement_offset = session_file.stat().st_size if session_file.is_file() else 0
+        _wait_runtime_control_identity(args.api_url, args.agents_token, session_id, replaced)
+        replacement_send = _send_live(args.api_url, args.agents_token, session_id, f"Reply with exactly {replacement_marker}.")
         replacement_native = _wait_native_marker(
             session_file,
             replacement_marker,
@@ -795,12 +938,12 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "flush": replacement_flush,
             "binding": runtime_replacement["binding"],
         }
-        observations["replacement_binding"].update(
-            {
-                "native_header_id": replacement_native["metadata"].get("provider_session_id"),
-                "current_invocation_rows": len(replacement_native["invocation_rows"]),
-            }
-        )
+        observations["replacement_binding"] = {
+            "provider_session_id": replaced.get("provider_session_id"),
+            "native_header_id": replacement_native["metadata"].get("provider_session_id"),
+            "native_file_present": session_file.is_file(),
+            "current_invocation_rows": len(replacement_native["invocation_rows"]),
+        }
 
         abort_started = _run_engine(
             args.engine,
@@ -818,6 +961,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             )
         except RuntimeError:
             abort_active_state = {}
+        abort_offset = session_file.stat().st_size
         abort = _run_engine(args.engine, "abort", session_id, env)
         try:
             aborted_state = _wait_state(
@@ -828,19 +972,59 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             )
         except RuntimeError:
             aborted_state = {}
+        try:
+            abort_native = _wait_native_abort(session_file, minimum_source_offset=abort_offset)
+        except RuntimeError as exc:
+            abort_native = None
+            observations["abort_native_wait_error"] = f"{type(exc).__name__}: {exc}"
+        observations["abort_native_evidence"] = abort_native
         observations["abort_native"] = (
             abort_started["accepted"]
             and bool(abort_active_state)
             and abort["accepted"]
             and bool(aborted_state)
             and aborted_state.get("phase") not in {"running", "thinking"}
+            and abort_native is not None
         )
+        terminate_state = dict(current_state)
         terminate = _run_engine(args.engine, "terminate", session_id, env)
-        launch.close()
+        observations["terminate_owned"] = False
+        try:
+            termination_wait = _wait_recorded_execution_owners_dead(
+                home,
+                session_id,
+                terminate_state,
+            )
+            observations["terminate_owner_wait"] = termination_wait
+        finally:
+            # The facade is only a terminal wrapper. The recorded launcher and
+            # provider owners must be dead before this close can precede resume.
+            launch.close()
         observations["terminate_owned"] = terminate["accepted"] and not launch.alive()
+        if not observations["terminate_owned"]:
+            raise RuntimeError("Pi Helm terminate was not proven after the recorded execution owners exited")
 
         resume_marker = f"PI_HELM_RESUME_{os.urandom(8).hex()}"
         resume_offset = session_file.stat().st_size
+        terminated_run_id = terminate_state.get("run_id")
+        resumed_provider_session_id = terminate_state.get("provider_session_id")
+        resumed_file = session_file.resolve()
+
+        def is_fresh_resume_state(item: dict[str, Any]) -> bool:
+            state_file = item.get("session_file")
+            try:
+                same_file = bool(state_file) and Path(str(state_file)).resolve() == resumed_file
+            except OSError:
+                same_file = False
+            return (
+                item.get("ready") is True
+                and item.get("status") in {"ready", "running"}
+                and item.get("run_id")
+                and item.get("run_id") != terminated_run_id
+                and item.get("provider_session_id") == resumed_provider_session_id
+                and same_file
+            )
+
         resume = ProviderPtySession.start(
             argv=[
                 str(args.longhouse_cli),
@@ -864,7 +1048,12 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             thread_name="pi-helm-cold-resume-terminal-drain",
         )
         sessions.append(resume)
-        resumed_state = _wait_state(home, session_id=session_id, predicate=lambda item: item.get("ready") is True, timeout=45)
+        resumed_state = _wait_state(
+            home,
+            session_id=session_id,
+            predicate=is_fresh_resume_state,
+            timeout=45,
+        )
         for label in ("launcher", "provider"):
             owned_processes.append(
                 _process_record(
@@ -896,11 +1085,22 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and runtime_resume["binding"]["provider_session_bound"]
         )
         resume_terminate = _run_engine(args.engine, "terminate", session_id, env)
-        resume.close()
+        try:
+            if not resume_terminate["accepted"]:
+                raise RuntimeError("Pi cold-resume termination was not accepted")
+            observations["resume_terminate_owner_wait"] = _wait_recorded_execution_owners_dead(
+                home,
+                session_id,
+                resumed_state,
+            )
+        finally:
+            resume.close()
         observations["resume_terminate"] = resume_terminate
         observations["cleanup"] = _cleanup_receipt(owned_processes)
         observations["terminate_owned"] = (
             terminate["accepted"]
+            and resume_terminate["accepted"]
+            and observations["resume_terminate_owner_wait"]["status"] == "pass"
             and not launch.alive()
             and not resume.alive()
             and observations["cleanup"]["provider_process_dead"] is True

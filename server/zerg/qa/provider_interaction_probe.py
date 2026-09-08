@@ -42,11 +42,12 @@ from zerg.qa.claude_conversation_reset import _wait
 from zerg.qa.codex_auth import CodexAuthError
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.managed_claude_live import strip_terminal_controls
+from zerg.qa.pi_native import pi_native_model_evidence
+from zerg.qa.pi_native import pi_transcript_rows
+from zerg.qa.pi_native import session_file_for_id
 from zerg.qa.provider_adapters.pi import PI_LIVE_ENV
+from zerg.qa.provider_adapters.pi import PI_MODEL_ENV
 from zerg.qa.provider_adapters.pi import PI_PROVIDER
-from zerg.qa.provider_adapters.pi import _newest_session_file  # noqa: SLF001
-from zerg.qa.provider_adapters.pi import pi_qualification_model
-from zerg.qa.provider_adapters.pi import pi_transcript_rows
 from zerg.qa.provider_interaction_semantics import MIN_NEGATIVE_PROOF_QUIESCENCE_SECONDS
 from zerg.qa.provider_interaction_semantics import raw_event_digest
 from zerg.qa.provider_interaction_semantics import semantic_boundary_fixture
@@ -2262,6 +2263,7 @@ def _pi_model_probe(
     assert contract is not None
     probe = next(row for row in contract.interaction_probes if row.probe_id == "pi_print_model")
     invocation = uuid4().hex
+    native_session_id = str(uuid4())
     output_root = artifact_root / "pi-model" / invocation
     output_root.mkdir(parents=True, exist_ok=False)
     workspace = output_root / "workspace"
@@ -2270,10 +2272,11 @@ def _pi_model_probe(
     session_dir.mkdir()
     env = dict(environment)
     secrets = _secret_values(env)
-    requested_model = pi_qualification_model()
-    input_sequence = [f"pi -p <prompt> --provider openrouter --model {requested_model} --session-dir <workspace>"]
+    requested_model = str(env.get(PI_MODEL_ENV) or "").strip()
+    input_sequence = [f"pi -p <prompt> --provider openrouter --model {requested_model} --session-dir <workspace> --session-id <native-id>"]
     live_opted_in = str(env.get(PI_LIVE_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
     api_key = str(env.get("OPENROUTER_API_KEY") or "").strip()
+    model_pinned = bool(str(env.get(PI_MODEL_ENV) or "").strip())
     if not live_opted_in:
         row = _probe_status_row(
             probe,
@@ -2292,6 +2295,15 @@ def _pi_model_probe(
             submitted_input_sequence=input_sequence,
         )
         return [row], []
+    if not model_pinned:
+        row = _probe_status_row(
+            probe,
+            status="blocked",
+            failure_code="pi_model_not_pinned",
+            message="pi_print_model requires LONGHOUSE_PI_QUALIFICATION_MODEL for a live model turn.",
+            submitted_input_sequence=input_sequence,
+        )
+        return [row], []
     marker = f"LONGHOUSE_PI_PROBE_{uuid4().hex}"
     prompt = f"Reply with exactly {marker} and nothing else."
     argv = [
@@ -2304,8 +2316,8 @@ def _pi_model_probe(
         requested_model,
         "--session-dir",
         str(session_dir),
-        "--no-context-files",
-        "--no-tools",
+        "--session-id",
+        native_session_id,
     ]
     stdout_path = output_root / "stdout.log"
     stderr_path = output_root / "stderr.log"
@@ -2336,7 +2348,7 @@ def _pi_model_probe(
     _redact_terminal_file(stderr_path, secrets=secrets)
     _redact_terminal_file(terminal_path, secrets=secrets)
     terminal_evidence = _terminal_evidence(terminal_path, artifact_root=artifact_root, secrets=secrets)
-    transcript = _newest_session_file(session_dir)
+    transcript = session_file_for_id(session_dir, native_session_id)
     native_rows: list[dict[str, Any]] = []
     if transcript is not None:
         evidence = _file_evidence(transcript, artifact_root=artifact_root)
@@ -2344,7 +2356,6 @@ def _pi_model_probe(
             native_rows.append(evidence)
     transcript_rows, provider_session_id, metadata = pi_transcript_rows(transcript) if transcript is not None else ([], None, {})
     raw_events = _pi_transcript_json_events(transcript) if transcript is not None else []
-    observed_model = metadata.get("model")
     assistant_rows = [row for row in transcript_rows if row.get("role") == "assistant" and str(row.get("text") or "").strip()]
     assistant_text = " ".join(str(row.get("text") or "") for row in assistant_rows)
     marker_matched = marker in assistant_text
@@ -2356,6 +2367,8 @@ def _pi_model_probe(
         completion_signal="process_exit",
         completion_status=result.returncode,
     )
+    model_evidence = pi_native_model_evidence(capture_path, source_canary="pi_print_model", api_key_configured=bool(api_key))
+    observed_model = model_evidence.get("model") if model_evidence is not None else None
     transcript_bound = bool(provider_session_id) and bool(metadata.get("has_header"))
     if transcript is None or not transcript_bound:
         row = _probe_status_row(
@@ -2381,8 +2394,7 @@ def _pi_model_probe(
             raw_events=raw_events,
         )
         return [row], stream_source_rows or native_rows
-    if observed_model and marker_matched:
-        model_change_event = next((event for event in raw_events if event.get("type") == "model_change"), None)
+    if model_evidence is not None and marker_matched:
         row = _probe_status_row(
             probe,
             status="observed",
@@ -2398,37 +2410,13 @@ def _pi_model_probe(
         row["capture_receipt"] = capture_receipt
         row["native_source_root"] = str(artifact_root.resolve())
         row["provider_model"] = str(observed_model)
-        source_artifacts = [
-            {
-                "path": str(capture_path.resolve()),
-                "sha256": _sha256(capture_path),
-                "kind": "provider_jsonl_stream",
-                "event_type": "model_change",
-                "event_sha256": raw_event_digest(model_change_event) if model_change_event is not None else None,
-            }
-        ]
-        row["live_model_evidence"] = {
-            "source_canary": "pi_print_model",
-            "operation_evidence": {"live_token_behavior": {"status": "pass", "level": "live_token"}},
-            "model": str(observed_model),
-            "auth": {
-                "credential_mode": "api_key",
-                "api_key_source": "env",
-                "api_key_configured": bool(api_key),
-            },
-            "result_event": {
-                "provider": PI_PROVIDER,
-                "modelId": str(observed_model),
-                "type": "model_change",
-            },
-            "source_artifacts": source_artifacts,
-        }
+        row["live_model_evidence"] = model_evidence
         return [row], stream_source_rows
     row = _probe_status_row(
         probe,
         status="blocked",
         failure_code="pi_print_model_metadata_missing",
-        message="pi -p produced a transcript, but the model_change/assistant binding is incomplete.",
+        message="pi -p produced no successful final assistant reply with native model accounting.",
         terminal_evidence=terminal_evidence,
         native_source_rows=stream_source_rows or native_rows,
         submitted_input_sequence=input_sequence,

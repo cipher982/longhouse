@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 260,
+  "file_count": 262,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -817,7 +817,8 @@
       "path": "server/tests_lite/test_catalogd_heartbeat.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "pi"
       ]
     },
     {
@@ -972,6 +973,13 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_live_catalog_control.py",
+      "providers": [
+        "codex",
+        "pi"
       ]
     },
     {
@@ -1875,6 +1883,13 @@
       "providers": [
         "claude",
         "cursor"
+      ]
+    },
+    {
+      "path": "server/zerg/routers/session_chat.py",
+      "providers": [
+        "claude",
+        "pi"
       ]
     },
     {

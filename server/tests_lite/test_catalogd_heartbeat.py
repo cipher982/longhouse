@@ -139,12 +139,20 @@ def _schema_v3_evidence(*, session_id: str, run_id: str, observed_at: datetime) 
     }
 
 
-def _schema_v3_control_evidence(*, session_id: str, observed_at: datetime, run_id: str | None = None) -> dict:
-    connection_id = str(uuid4())
-    lease_generation = str(uuid4())
+def _schema_v3_control_evidence(
+    *,
+    session_id: str,
+    observed_at: datetime,
+    run_id: str | None = None,
+    connection_id: str | None = None,
+    lease_generation: str | None = None,
+    provider: str = "codex",
+) -> dict:
+    connection_id = connection_id or str(uuid4())
+    lease_generation = lease_generation or str(uuid4())
     fact = {
         "authority_class": "provider_control",
-        "provider": "codex",
+        "provider": provider,
         "session_id": session_id,
         "provider_session_id": f"provider-{session_id}",
         "connection_id": connection_id,
@@ -712,6 +720,108 @@ async def test_shadow_reducer_binds_control_identity_in_heartbeat_transaction(da
     assert stored["adapter_connection_id"] == evidence["control"][0]["connection_id"]
     assert stored["lease_generation"] == evidence["control"][0]["lease_generation"]
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shadow_reducer_rebinds_only_new_same_run_generation(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_SHADOW_REDUCER_INGEST_ENABLED", "1")
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    run_id = str(uuid4())
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="pi",
+                environment="production",
+                device_id="cinder",
+                started_at=now,
+                primary_thread_id=thread_id,
+            )
+        )
+        connection.execute(
+            LiveSessionThread.__table__.insert().values(
+                id=thread_id,
+                session_id=session_id,
+                provider="pi",
+                branch_kind="root",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionRun.__table__.insert().values(
+                id=run_id,
+                thread_id=thread_id,
+                provider="pi",
+                host_id="cinder",
+                launch_origin="longhouse_spawned",
+                started_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionConnection.__table__.insert().values(
+                run_id=run_id,
+                control_plane="pi_helm_channel",
+                acquisition_kind="spawned_control",
+                state="attached",
+                device_id="cinder",
+                acquired_at=now,
+                last_health_at=now,
+            )
+        )
+    engine.dispose()
+
+    first = _schema_v3_control_evidence(session_id=session_id, run_id=run_id, observed_at=now, provider="pi")
+    first_pair = (first["control"][0]["connection_id"], first["control"][0]["lease_generation"])
+    rotated_at = now + timedelta(seconds=10)
+    second = _schema_v3_control_evidence(session_id=session_id, run_id=run_id, observed_at=rotated_at, provider="pi")
+    second_pair = (second["control"][0]["connection_id"], second["control"][0]["lease_generation"])
+    stale_at = now + timedelta(seconds=5)
+    stale = _schema_v3_control_evidence(
+        session_id=session_id,
+        run_id=run_id,
+        observed_at=stale_at,
+        connection_id=first_pair[0],
+        lease_generation=first_pair[1],
+        provider="pi",
+    )
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        for index, (observed_at, evidence) in enumerate(((now, first), (rotated_at, second), (stale_at, stale)), start=1):
+            result = await client.call(
+                "machine.heartbeat.apply.v2",
+                {
+                    "heartbeat": {
+                        **_heartbeat(device_id="cinder", received_at=observed_at, digest=f"rotation-{index}"),
+                        "raw_json": json.dumps({"machine_evidence": evidence}),
+                    },
+                    "managed_leases": [_lease(session_id=session_id, observed_at=observed_at, provider="pi")],
+                    "managed_leases_present": True,
+                    "owner_id": 7,
+                },
+            )
+            if index == 2:
+                assert result["shadow_reducer"]["identity_binding"]["bound"] == 1
+            if index == 3:
+                assert result["shadow_reducer"]["identity_binding"]["mismatched"] == 1
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        stored = connection.execute(LiveSessionConnection.__table__.select()).mappings().one()
+    engine.dispose()
+    assert (stored["adapter_connection_id"], stored["lease_generation"]) == second_pair
 
 
 @pytest.mark.asyncio

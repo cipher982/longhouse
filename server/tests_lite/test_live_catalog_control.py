@@ -43,18 +43,22 @@ from zerg.services.live_control_catalog import wake_next_live_catalog_input
 from zerg.services.live_session_inputs import upsert_live_input_receipt
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import ManagedControlDispatchResult
+from zerg.services.managed_provider_contracts import contract_for_provider
 
 
-def _seed_live_control(db):
+def _seed_live_control(db, *, provider: str = "codex"):
     now = datetime.now(timezone.utc)
     session_id = uuid4()
     thread_id = uuid4()
     run_id = uuid4()
     db.add(LiveUser(id=7, email="owner@example.com", is_active=True))
+    contract = contract_for_provider(provider)
+    assert contract is not None
+    capabilities = contract.connection_capabilities
     db.add(
         LiveSessionCatalog(
             session_id=str(session_id),
-            provider="codex",
+            provider=provider,
             environment="production",
             project="longhouse",
             device_id="cinder",
@@ -70,7 +74,7 @@ def _seed_live_control(db):
         LiveSession(
             session_id=str(session_id),
             owner_id="7",
-            provider="codex",
+            provider=provider,
             device_id="cinder",
             state="attached",
             started_at=now,
@@ -82,7 +86,7 @@ def _seed_live_control(db):
         LiveSessionThread(
             id=str(thread_id),
             session_id=str(session_id),
-            provider="codex",
+            provider=provider,
             branch_kind="root",
             is_primary=1,
             created_at=now,
@@ -93,7 +97,7 @@ def _seed_live_control(db):
         LiveSessionRun(
             id=str(run_id),
             thread_id=str(thread_id),
-            provider="codex",
+            provider=provider,
             host_id="cinder",
             cwd="/workspace/longhouse",
             launch_origin="longhouse_spawned",
@@ -103,13 +107,13 @@ def _seed_live_control(db):
     db.add(
         LiveSessionConnection(
             run_id=str(run_id),
-            control_plane="codex_bridge",
+            control_plane=contract.control_plane,
             acquisition_kind="spawned_control",
             state="attached",
             device_id="cinder",
-            can_send_input=1,
-            can_interrupt=1,
-            can_terminate=1,
+            can_send_input=capabilities["can_send_input"],
+            can_interrupt=capabilities["can_interrupt"],
+            can_terminate=capabilities["can_terminate"],
             acquired_at=now,
             last_health_at=now,
         )
@@ -122,12 +126,13 @@ def _seed_canonical_idle_facts(db, session_id):
     now = datetime.now(timezone.utc)
     run = db.query(LiveSessionRun).filter(LiveSessionRun.ended_at.is_(None)).one()
     connection = db.query(LiveSessionConnection).filter(LiveSessionConnection.run_id == run.id).one()
+    provider = db.query(LiveSessionCatalog.provider).filter(LiveSessionCatalog.session_id == str(session_id)).one()[0]
     connection.adapter_connection_id = f"connection-{session_id}"
     connection.lease_generation = f"lease-{session_id}"
     db.flush()
     activity = {
         "authority_class": "provider_runtime",
-        "provider": "codex",
+        "provider": provider,
         "session_id": str(session_id),
         "run_id": str(run.id),
         "kind": "idle",
@@ -138,7 +143,7 @@ def _seed_canonical_idle_facts(db, session_id):
     }
     control = {
         "authority_class": "provider_control",
-        "provider": "codex",
+        "provider": provider,
         "session_id": str(session_id),
         "run_id": str(run.id),
         "connection_id": connection.adapter_connection_id,
@@ -444,6 +449,89 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
         assert receipt.status == "delivered"
         assert receipt.client_request_id == "catalog-control-1"
         assert receipt.archive_session_input_id is None
+
+
+@pytest.mark.asyncio
+async def test_pi_auto_and_queue_inputs_use_one_immediate_native_send_path(tmp_path, monkeypatch):
+    from zerg.catalogd.schema import initialize_catalog_schema
+    from zerg.catalogd.store import CatalogStore
+
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'pi-live.db'}")
+    initialize_live_database(engine)
+    initialize_catalog_schema(engine)
+    factory = make_sessionmaker(engine)
+    with factory() as db:
+        session_id = _seed_live_control(db, provider="pi")
+        _seed_canonical_idle_facts(db, session_id)
+
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "get_live_write_session_factory", lambda: factory)
+    catalog_store = CatalogStore(engine)
+    commands: list[dict[str, object]] = []
+
+    class _CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            if method == "session.input.receipt.read.v2":
+                return catalog_store.read_input_receipt(**params)
+            if method == "session.input.receipt.upsert.v2":
+                receipt = dict(params["receipt"])
+                if receipt["expires_at"] is not None:
+                    receipt["expires_at"] = datetime.fromisoformat(receipt["expires_at"])
+                return catalog_store.upsert_input_receipt(receipt=receipt)
+            if method == "session.input.finish.v2":
+                return catalog_store.finish_queued_input(**params)
+            if method == "session.input.recent.list.v2":
+                return catalog_store.list_recent_input_receipts(**params)
+            raise AssertionError(method)
+
+    import zerg.services.managed_control_dispatcher as dispatcher
+
+    class _Registry:
+        def supports(self, **_kwargs):
+            return True
+
+    async def fake_dispatch(**kwargs):
+        commands.append(kwargs)
+        return ManagedControlDispatchResult(
+            ok=True,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            data={"exit_code": 0},
+        )
+
+    monkeypatch.setattr(dispatcher, "dispatch_managed_control_command", fake_dispatch)
+    monkeypatch.setattr(dispatcher, "get_machine_control_channel_registry", lambda: _Registry())
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
+    monkeypatch.setattr(
+        "zerg.services.catalog_read_gateway.session_snapshot",
+        lambda value, *, owner_id: catalog_store.read_session(session_id=value, owner_id=owner_id),
+    )
+
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+    with factory() as db:
+        session = load_live_control_session_snapshot(session_id, owner_id=7)
+        assert session is not None
+        auto = await _create_session_input_response(
+            source_session=session,
+            owner_id=7,
+            body=SessionInputRequest(text="native idle send", client_request_id="pi-auto"),
+            db=db,
+        )
+        queued = await _create_session_input_response(
+            source_session=session,
+            owner_id=7,
+            body=SessionInputRequest(text="native busy queue", intent="queue", client_request_id="pi-queue"),
+            db=db,
+        )
+
+    assert auto.outcome == "sent"
+    assert queued.outcome == "sent"
+    assert [command["command_type"] for command in commands] == ["session.send_text", "session.send_text"]
+    assert [command["payload"]["text"] for command in commands] == ["native idle send", "native busy queue"]
+    with factory() as db:
+        receipts = db.query(LiveSessionInputReceipt).order_by(LiveSessionInputReceipt.created_at.asc()).all()
+        assert [receipt.status for receipt in receipts] == ["delivered", "delivered"]
+        assert [receipt.intent for receipt in receipts] == ["auto", "queue"]
 
 
 @pytest.mark.asyncio

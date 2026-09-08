@@ -76,6 +76,52 @@ class ConsoleTurnInterrupt:
     error: str | None = None
 
 
+async def _persist_native_binding_result(catalog, *, turn: dict[str, object], response_message: dict[str, object]) -> None:
+    """Persist the exact native file/UUID returned by a Console adapter.
+
+    Pi also emits this binding through its runtime outbox. Recording the adapter
+    result here closes the race where a terminal turn claims the next FIFO item
+    before that outbox event reaches catalogd.
+    """
+
+    if str(turn.get("provider") or "").strip().lower() != "pi":
+        return
+    result = response_message.get("result")
+    if not isinstance(result, dict):
+        return
+    provider_session_id = str(result.get("provider_thread_id") or result.get("provider_session_id") or "").strip()
+    source_path = str(result.get("session_file") or "").strip()
+    if not provider_session_id or not source_path:
+        return
+    from zerg.services.session_runtime import RuntimeEventIngest
+
+    occurred_at = datetime.now(timezone.utc)
+    event = RuntimeEventIngest(
+        runtime_key=f"pi:{turn['session_id']}",
+        session_id=UUID(str(turn["session_id"])),
+        thread_id=UUID(str(turn["thread_id"])),
+        run_id=UUID(str(turn["run_id"])),
+        provider="pi",
+        device_id=str(turn.get("device_id") or "").strip() or None,
+        source="console_turn_start",
+        kind="binding_signal",
+        occurred_at=occurred_at,
+        dedupe_key=f"console-binding:{turn['run_id']}:{provider_session_id}:{source_path}",
+        payload={"provider_session_id": provider_session_id, "source_path": source_path},
+    )
+    try:
+        await catalog.call(
+            "session.runtime.apply.v2",
+            {"events": [event.model_dump(mode="json")]},
+            timeout_seconds=1.0,
+        )
+    except Exception:
+        # The native outbox remains the durable retry path. Do not report a
+        # started provider turn as failed solely because this fast writeback
+        # raced catalogd availability.
+        logger.warning("Failed to persist Pi Console native binding result", exc_info=True)
+
+
 async def interrupt_console_turn(
     db: Session | None,
     *,
@@ -208,6 +254,8 @@ async def enqueue_catalog_console_turn(
         }
         if turn.get("resume_provider_thread_id"):
             payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
+        if turn.get("resume_session_file"):
+            payload["resume_session_file"] = turn["resume_session_file"]
         if turn.get("fork_from_provider_thread_id"):
             payload["fork_from_provider_thread_id"] = turn["fork_from_provider_thread_id"]
         logger.info(
@@ -279,6 +327,8 @@ async def enqueue_catalog_console_turn(
         if response_message.get("ok") is not True:
             error_code = response_error_code or "provider_launch_failed"
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
+        else:
+            await _persist_native_binding_result(client, turn=turn, response_message=response_message)
 
     state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
     update_result = await client.call(
@@ -462,6 +512,8 @@ async def dispatch_catalog_claimed_turn(
         }
         if turn.get("resume_provider_thread_id"):
             payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
+        if turn.get("resume_session_file"):
+            payload["resume_session_file"] = turn["resume_session_file"]
         if turn.get("fork_from_provider_thread_id"):
             payload["fork_from_provider_thread_id"] = turn["fork_from_provider_thread_id"]
         response = await control.send_command(
@@ -509,6 +561,8 @@ async def dispatch_catalog_claimed_turn(
             detail = message.get("error") if isinstance(message.get("error"), dict) else {}
             error_code = str(detail.get("code") or "provider_launch_failed")
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
+        else:
+            await _persist_native_binding_result(catalog, turn=turn, response_message=message)
     state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
     update_result = await catalog.call(
         "session.console.turn.update.v2",

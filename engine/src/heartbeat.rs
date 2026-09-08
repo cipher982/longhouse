@@ -842,10 +842,39 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
         })
         .collect();
     activity.sort();
+    // Replacing a controller changes command authority even while idle.
+    // Observation timestamps refresh evidence, not this semantic identity.
+    let mut control: Vec<String> = payload
+        .machine_evidence
+        .iter()
+        .flat_map(|evidence| evidence.control.iter())
+        .map(|fact| {
+            let mut operations: Vec<&str> =
+                fact.granted_operations.iter().map(String::as_str).collect();
+            operations.sort_unstable();
+            format!(
+                "{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{:?}",
+                fact.provider,
+                fact.session_id,
+                fact.run_id.as_deref().unwrap_or(""),
+                fact.provider_session_id.as_deref().unwrap_or(""),
+                fact.connection_id.as_deref().unwrap_or(""),
+                fact.lease_generation.as_deref().unwrap_or(""),
+                fact.ownership,
+                fact.state,
+                fact.terminal_attached,
+                fact.bridge_status.as_deref().unwrap_or(""),
+                fact.thread_subscription_status.as_deref().unwrap_or(""),
+                operations,
+            )
+        })
+        .collect();
+    control.sort_unstable();
     let signature = format!(
-        "sessions=[{}]|activity=[{}]",
+        "sessions=[{}]|activity=[{}]|control=[{}]",
         sessions.join(";"),
-        activity.join(";")
+        activity.join(";"),
+        control.join(";")
     );
     let mut hasher = Sha256::new();
     hasher.update(signature.as_bytes());
@@ -1213,8 +1242,13 @@ pub fn filter_unmanaged_bindings_owned_by_managed_observations(
         }
     }
     for observation in pi_observations {
-        if observation.live {
+        // `live` is control readiness. Process ownership is narrower and still
+        // provable while the channel is starting or degraded: the scanner only
+        // sets these flags after matching the recorded PID birth identity.
+        if observation.launcher_alive {
             managed_pids.extend(observation.launcher_pid);
+        }
+        if observation.provider_alive {
             managed_pids.extend(observation.provider_pid);
         }
     }
@@ -4312,6 +4346,77 @@ mod tests {
         }
     }
 
+    fn test_pi_observation(
+        status: &str,
+        live: bool,
+        launcher_alive: bool,
+        provider_alive: bool,
+    ) -> PiHelmObservation {
+        PiHelmObservation {
+            session_id: "managed-pi".to_string(),
+            provider_session_id: Some("pi-native".to_string()),
+            run_id: Some("run-managed-pi".to_string()),
+            connection_id: Some("connection-managed-pi".to_string()),
+            lease_generation: Some("lease-managed-pi".to_string()),
+            state_file: PathBuf::from("/tmp/managed-pi.json"),
+            session_file: Some(PathBuf::from("/tmp/pi-native.jsonl")),
+            socket_path: Some(PathBuf::from("/tmp/pi-native.sock")),
+            cwd: Some("/tmp/project".to_string()),
+            launcher_pid: Some(200),
+            launcher_process_start_time: Some("launcher-birth".to_string()),
+            provider_pid: Some(201),
+            provider_process_start_time: Some("provider-birth".to_string()),
+            started_at: "2026-05-05T12:00:00Z".to_string(),
+            updated_at: "2026-05-05T12:00:02Z".to_string(),
+            phase: Some("thinking".to_string()),
+            tool_name: None,
+            status: status.to_string(),
+            launcher_alive,
+            provider_alive,
+            live,
+        }
+    }
+
+    #[test]
+    fn filters_pi_binding_by_birth_verified_identity_before_channel_ready() {
+        let observation = test_pi_observation("starting", false, true, true);
+        let bindings = vec![
+            test_binding("pi", "pi-native", 201),
+            test_binding("pi", "real-unmanaged", 999),
+        ];
+
+        let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
+            bindings,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[observation],
+        );
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
+    }
+
+    #[test]
+    fn keeps_pi_binding_when_recorded_pid_birth_is_missing_or_reused() {
+        for observation in [
+            test_pi_observation("degraded", false, false, false),
+            test_pi_observation("degraded", false, true, false),
+        ] {
+            let bindings = vec![test_binding("pi", "pi-native", 201)];
+            let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
+                bindings.clone(),
+                &[],
+                &[],
+                &[],
+                &[],
+                &[observation],
+            );
+            assert_eq!(filtered, bindings);
+        }
+    }
+
     #[test]
     fn filters_unmanaged_codex_binding_owned_by_bridge_thread() {
         let mut obs = test_observation("managed-codex", "ws://127.0.0.1:45683/session");
@@ -6451,6 +6556,43 @@ mod tests {
                 "2026-08-01T13:10:57Z"
             )])),
             "digest must stay stable for an unchanged observation"
+        );
+    }
+
+    #[test]
+    fn snapshot_digest_tracks_control_rotation_not_freshness() {
+        let now = parse_utc(Some("2026-05-05T12:00:02Z")).unwrap();
+        let mut payload = digest_test_payload();
+        let mut evidence = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[test_pi_observation("ready", true, true, true)],
+            &[],
+            &[],
+            &RunWindowIndex::default(),
+            true,
+            true,
+            now,
+            Some(&[]),
+            0,
+        );
+        evidence.activity.clear();
+        payload.machine_evidence = Some(evidence);
+        let before = session_snapshot_digest(&payload);
+        payload.machine_evidence.as_mut().unwrap().control[0].observed_at =
+            "2026-05-05T12:00:03Z".to_string();
+        assert_eq!(before, session_snapshot_digest(&payload));
+        let control = &mut payload.machine_evidence.as_mut().unwrap().control[0];
+        control.connection_id = Some("renewed-connection".to_string());
+        control.lease_generation = Some("renewed-generation".to_string());
+        assert_ne!(
+            before,
+            session_snapshot_digest(&payload),
+            "control rotation must trigger a heartbeat without a new model turn"
         );
     }
 

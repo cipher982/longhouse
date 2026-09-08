@@ -74,7 +74,6 @@ pub struct PiHelmCommandSummary {
 pub(crate) enum CommandKind {
     Send,
     Steer,
-    FollowUp,
     Abort,
     Terminate,
 }
@@ -84,7 +83,6 @@ impl CommandKind {
         match self {
             Self::Send => "send",
             Self::Steer => "steer",
-            Self::FollowUp => "follow_up",
             Self::Abort => "abort",
             Self::Terminate => "terminate",
         }

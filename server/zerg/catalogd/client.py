@@ -47,6 +47,7 @@ _SAFE_RETRY_METHODS = {
     # returns the reserved grant or observes the already-terminal operation.
     "control.command.prepare.v2",
     "control.operation.finish.v2",
+    "session.runtime.apply.v2",
     "ping.v2",
     "schema.v2",
     "session.prefix.resolve.v2",

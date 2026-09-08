@@ -1826,6 +1826,7 @@ providers:
   - engine/src/pi_print.rs
   - engine/src/pi_session.rs
   - server/zerg/qa/provider_adapters/pi.py
+  - server/zerg/qa/pi_native.py
   wire_families: [pi_jsonl]
   observation_sources: [native_archive, managed_bridge]
   normalization_ruleset: pi
@@ -1835,13 +1836,13 @@ providers:
   interaction_probes:
   - probe_id: pi_print_model
     surface: console
-    input_sequence: ["pi -p <prompt> --provider openrouter --model <fixture-model> --session-dir <workspace>"]
+    input_sequence: ["pi -p <prompt> --provider openrouter --model <fixture-model> --session-dir <workspace> --session-id <native-id>"]
     acknowledgement_oracle: pi_print_model_metadata
     native_sources: [native_archive, managed_bridge]
     # Pi's transcript JSONL is the native qualification record: the session
     # header pins the session id, and the message entries bind the selected
     # model and the completed provider turn.
-    raw_markers: ["modelId", "provider"]
+    raw_markers: ["model", "provider", "usage", "stopReason"]
     raw_output_markers: ["message"]
     expected_interaction_kind: provider_system
     expected_title_eligibility: false

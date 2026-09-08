@@ -57,6 +57,9 @@ previous owner exits, `longhouse pi --resume-session <session-id>` opens a
 new TUI on the exact native session file; it is not live terminal attachment.
 Pi Console uses the configured tools, context, model, and local credentials
 and resumes that native history in a new process for each turn.
+Keep Pi's Node runtime current: Node 23.6.1 lacks the Zstandard API used by
+some model HTTP responses and can crash stock Pi. Longhouse does not replace
+your Pi or Node installation.
 
 OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer. Cursor Helm supports send, interrupt, terminate, and reattach but not active-turn steer or pause-answer. Antigravity is the narrowest of the six: it launches under Longhouse's hook inbox and accepts send, but not interrupt, terminate, or reattach — and it refuses to start at all if its hook is not installed, rather than opening an unmanaged session wearing a managed session id.
 

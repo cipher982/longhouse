@@ -464,10 +464,7 @@ impl PiHelmServer {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        if !matches!(
-            kind.as_str(),
-            "send" | "steer" | "follow_up" | "abort" | "terminate"
-        ) {
+        if !matches!(kind.as_str(), "send" | "steer" | "abort" | "terminate") {
             return channel_error("bad_request", "unknown Pi Helm command");
         }
         let request_id = Uuid::new_v4().to_string();
@@ -1331,25 +1328,25 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     } else {
         command.arg("--session-id").arg(&target.provider_thread_id);
     }
-    let identity = ManagedIdentity::new(ManagedProvider::Pi, &session_id)
-        .with_run_id(&server.current_state().run_id);
-    identity.apply(
-        &mut command,
-        &[
-            (
-                "LONGHOUSE_PI_HELM_CHANNEL_PATH",
-                socket.to_string_lossy().as_ref(),
-            ),
-            (
-                "LONGHOUSE_PI_HELM_CHANNEL_TOKEN",
-                server.current_state().channel_token.as_str(),
-            ),
-            (
-                "LONGHOUSE_PI_HELM_INITIAL_PROMPT",
-                config.prompt.as_deref().unwrap_or(""),
-            ),
-        ],
-    );
+    ManagedIdentity::new(ManagedProvider::Pi, &session_id)
+        .with_run_id(&server.current_state().run_id)
+        .apply(
+            &mut command,
+            &[
+                (
+                    "LONGHOUSE_PI_HELM_CHANNEL_PATH",
+                    socket.to_string_lossy().as_ref(),
+                ),
+                (
+                    "LONGHOUSE_PI_HELM_CHANNEL_TOKEN",
+                    server.current_state().channel_token.as_str(),
+                ),
+                (
+                    "LONGHOUSE_PI_HELM_INITIAL_PROMPT",
+                    config.prompt.as_deref().unwrap_or(""),
+                ),
+            ],
+        );
     let server_for_spawn = server.clone();
     let exit_code = match run_pi_provider(&mut command, &server, |pid| {
         let mut guard = server_for_spawn

@@ -398,6 +398,7 @@ def _live_console_turn_dto(
     message: str | None = None,
     client_request_id: str | None = None,
     provider_config: str | None = None,
+    resume_session_file: str | None = None,
 ) -> dict[str, Any]:
     return {
         "turn_id": turn.id,
@@ -412,9 +413,28 @@ def _live_console_turn_dto(
         "client_request_id": client_request_id,
         "provider_config": json.loads(provider_config or "{}"),
         "resume_provider_thread_id": turn.resume_provider_thread_id,
+        "resume_session_file": resume_session_file,
         "fork_from_provider_thread_id": turn.fork_from_provider_thread_id,
         "error": turn.error,
     }
+
+
+def _live_thread_source_path(orm: Session, *, thread_id: str, provider: str) -> str | None:
+    row = (
+        orm.query(LiveSessionThreadAlias.alias_value)
+        .filter(
+            LiveSessionThreadAlias.thread_id == str(thread_id),
+            LiveSessionThreadAlias.provider == str(provider),
+            LiveSessionThreadAlias.alias_kind == "source_path",
+        )
+        .order_by(
+            LiveSessionThreadAlias.last_seen_at.desc(),
+            LiveSessionThreadAlias.first_seen_at.desc(),
+            LiveSessionThreadAlias.id.desc(),
+        )
+        .first()
+    )
+    return str(row[0]).strip() if row and str(row[0] or "").strip() else None
 
 
 def _canonical_outbox_value(value: Any) -> Any:
@@ -2314,9 +2334,12 @@ class CatalogStore:
                     # the next Console turn can resume the provider thread.
                     if event.kind == "binding_signal":
                         provider_session_id = str((event.payload or {}).get("provider_session_id") or "").strip()
+                        source_path = str((event.payload or {}).get("source_path") or "").strip()
                         if provider_session_id and event.session_id is not None:
                             catalog = orm.get(LiveSessionCatalog, str(event.session_id))
                             thread_id = str(event.thread_id or (catalog.primary_thread_id if catalog is not None else ""))
+                            if not thread_id:
+                                continue
                             # Query without thread_id: the routing index makes
                             # (provider, alias_value) unique per native id, so a
                             # row on another thread is a conflict, not an insert.
@@ -2354,6 +2377,30 @@ class CatalogStore:
                                     alias.thread_id,
                                     thread_id,
                                 )
+                            if source_path:
+                                source_alias = (
+                                    orm.query(LiveSessionThreadAlias)
+                                    .filter(
+                                        LiveSessionThreadAlias.thread_id == thread_id,
+                                        LiveSessionThreadAlias.provider == event.provider,
+                                        LiveSessionThreadAlias.alias_kind == "source_path",
+                                        LiveSessionThreadAlias.alias_value == source_path,
+                                    )
+                                    .first()
+                                )
+                                if source_alias is None:
+                                    orm.add(
+                                        LiveSessionThreadAlias(
+                                            thread_id=thread_id,
+                                            provider=event.provider,
+                                            alias_kind="source_path",
+                                            alias_value=source_path,
+                                            first_seen_at=event.occurred_at or observed_at,
+                                            last_seen_at=event.occurred_at or observed_at,
+                                        )
+                                    )
+                                else:
+                                    source_alias.last_seen_at = event.occurred_at or observed_at
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -3747,10 +3794,27 @@ class CatalogStore:
                 ):
                     orm.rollback()
                     return {"found": False}
+                if str(session.origin_kind or "").strip().lower() != "console":
+                    orm.rollback()
+                    return {"found": True, "unavailable": "not_console_session"}
                 thread = orm.get(LiveSessionThread, str(session.primary_thread_id))
                 if thread is None or not thread.device_id or not thread.cwd:
                     orm.rollback()
                     return {"found": True, "unavailable": "execution_target_missing"}
+                execution_owner = (
+                    orm.query(LiveSessionRun.id)
+                    .join(LiveSessionConnection, LiveSessionConnection.run_id == LiveSessionRun.id)
+                    .filter(
+                        LiveSessionRun.thread_id == thread.id,
+                        LiveSessionRun.ended_at.is_(None),
+                        LiveSessionConnection.acquisition_kind.in_(("spawned_control", "adopted_control")),
+                        LiveSessionConnection.released_at.is_(None),
+                    )
+                    .first()
+                )
+                if execution_owner is not None:
+                    orm.rollback()
+                    return {"found": True, "unavailable": "execution_owner_conflict"}
                 if str(session.provider or "").strip().lower() == "pi":
                     from zerg.services.live_catalog_launch import normalize_console_provider_config
 
@@ -3777,6 +3841,11 @@ class CatalogStore:
                         message=existing_receipt.text,
                         client_request_id=existing_receipt.client_request_id,
                         provider_config=thread.provider_config_json,
+                        resume_session_file=_live_thread_source_path(
+                            orm,
+                            thread_id=thread.id,
+                            provider=session.provider,
+                        ),
                     )
                     orm.rollback()
                     return {
@@ -3801,6 +3870,7 @@ class CatalogStore:
                     )
                     .first()
                 )
+                source_path = _live_thread_source_path(orm, thread_id=thread.id, provider=session.provider)
                 receipt = LiveSessionInputReceipt(
                     id=receipt_id,
                     owner_id=data["owner_id"],
@@ -3860,6 +3930,7 @@ class CatalogStore:
                     message=receipt.text,
                     client_request_id=receipt.client_request_id,
                     provider_config=thread.provider_config_json,
+                    resume_session_file=source_path,
                 )
             except BaseException:
                 orm.rollback()
@@ -3905,6 +3976,9 @@ class CatalogStore:
                         message=receipt.text if receipt is not None else None,
                         client_request_id=receipt.client_request_id if receipt is not None else None,
                         provider_config=thread.provider_config_json if thread is not None else None,
+                        resume_session_file=(
+                            _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
+                        ),
                     )
                     orm.rollback()
                     return {
@@ -3919,9 +3993,13 @@ class CatalogStore:
                 terminal_states = {"completed", "failed", "cancelled"}
                 if turn.state in terminal_states:
                     if next_state != turn.state:
+                        thread = orm.get(LiveSessionThread, turn.thread_id)
                         result = _live_console_turn_dto(
                             turn,
                             client_request_id=receipt.client_request_id if receipt is not None else None,
+                            resume_session_file=(
+                                _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
+                            ),
                         )
                         orm.rollback()
                         return {
@@ -3955,10 +4033,19 @@ class CatalogStore:
                             message=next_receipt.text if next_receipt is not None else None,
                             client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
                             provider_config=thread.provider_config_json if thread is not None else None,
+                            resume_session_file=(
+                                _live_thread_source_path(orm, thread_id=thread.id, provider=starting.provider)
+                                if thread is not None
+                                else None
+                            ),
                         )
+                    thread = orm.get(LiveSessionThread, turn.thread_id)
                     result = _live_console_turn_dto(
                         turn,
                         client_request_id=receipt.client_request_id if receipt is not None else None,
+                        resume_session_file=(
+                            _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
+                        ),
                     )
                     orm.rollback()
                     return {
@@ -4054,11 +4141,20 @@ class CatalogStore:
                             message=next_receipt.text if next_receipt is not None else None,
                             client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
                             provider_config=thread.provider_config_json if thread is not None else None,
+                            resume_session_file=(
+                                _live_thread_source_path(orm, thread_id=thread.id, provider=next_turn.provider)
+                                if thread is not None
+                                else None
+                            ),
                         )
                 orm.commit()
+                thread = orm.get(LiveSessionThread, turn.thread_id)
                 result = _live_console_turn_dto(
                     turn,
                     client_request_id=receipt.client_request_id if receipt is not None else None,
+                    resume_session_file=(
+                        _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
+                    ),
                 )
             except BaseException:
                 orm.rollback()
@@ -4102,6 +4198,11 @@ class CatalogStore:
                             message=receipt.text,
                             client_request_id=receipt.client_request_id,
                             provider_config=thread.provider_config_json,
+                            resume_session_file=_live_thread_source_path(
+                                orm,
+                                thread_id=thread.id,
+                                provider=turn.provider,
+                            ),
                         )
                         for turn, receipt, thread in rows
                     ],
@@ -14274,7 +14375,7 @@ def _apply_shadow_reducer(
             # The reducer was one of three per-fact loops in this transaction.
             # Timing the other two separately answers whether they matter at
             # production fact mixes, rather than assuming they do.
-            identity_binding = _bind_control_evidence_identities(connection, facts)
+            identity_binding = _bind_control_evidence_identities(connection, facts, device_id=str(heartbeat["device_id"]))
             timer.mark("bind_identities")
             run_terminal = _apply_exact_run_terminal_evidence(connection, facts)
             timer.mark("run_terminal")
@@ -14369,12 +14470,14 @@ def _apply_exact_run_terminal_evidence(connection, facts) -> dict[str, int]:
     return counts
 
 
-def _bind_control_evidence_identities(connection, facts) -> dict[str, int]:
-    """Bind adapter UUIDs to their exact catalog connection, once.
+def _bind_control_evidence_identities(connection, facts, *, device_id: str) -> dict[str, int]:
+    """Bind adapter UUIDs to their exact catalog connection and generation.
 
     The adapter identity is exposed to command preparation once bound. Boolean
     capability grants remain the authorization authority until the explicit
-    Phase 4 command cutover.
+    Phase 4 command cutover. A same-run rotation is accepted only when the
+    incoming observation is newer than the bound fact and is the sole incoming
+    generation for that session/run; otherwise the old grant remains fenced.
     """
 
     from zerg.services.managed_provider_contracts import contract_for_provider
@@ -14383,6 +14486,23 @@ def _bind_control_evidence_identities(connection, facts) -> dict[str, int]:
     run_table = LiveSessionRun.__table__
     thread_table = LiveSessionThread.__table__
     counts = {"bound": 0, "matched": 0, "unbound": 0, "mismatched": 0}
+    incoming_generations: dict[tuple[str, str, str, str], set[tuple[str, str]]] = {}
+    for fact in facts:
+        if fact.family != "control":
+            continue
+        value = fact.value
+        session_id = str(value.get("session_id") or "").strip()
+        run_id = str(value.get("run_id") or "").strip()
+        provider = str(value.get("provider") or "").strip().lower()
+        connection_id = str(value.get("connection_id") or "").strip()
+        generation = str(value.get("lease_generation") or "").strip()
+        if session_id and run_id and provider and connection_id and generation:
+            contract = contract_for_provider(provider)
+            if contract is not None:
+                incoming_generations.setdefault(
+                    (session_id, run_id, provider, contract.control_plane),
+                    set(),
+                ).add((connection_id, generation))
     for fact in facts:
         if fact.family != "control":
             continue
@@ -14403,6 +14523,7 @@ def _bind_control_evidence_identities(connection, facts) -> dict[str, int]:
             connection.execute(
                 select(
                     connection_table.c.id,
+                    run_table.c.provider,
                     connection_table.c.adapter_connection_id,
                     connection_table.c.lease_generation,
                 )
@@ -14414,6 +14535,7 @@ def _bind_control_evidence_identities(connection, facts) -> dict[str, int]:
                 .where(
                     connection_table.c.run_id == run_id,
                     connection_table.c.control_plane == contract.control_plane,
+                    connection_table.c.device_id == device_id,
                     thread_table.c.session_id == session_id,
                 )
                 .limit(1)
@@ -14424,16 +14546,57 @@ def _bind_control_evidence_identities(connection, facts) -> dict[str, int]:
         if row is None:
             counts["unbound"] += 1
             continue
+        if str(row["provider"] or "").strip().lower() != str(value.get("provider") or "").strip().lower():
+            counts["mismatched"] += 1
+            continue
         current_adapter = str(row["adapter_connection_id"] or "")
         current_generation = str(row["lease_generation"] or "")
         if current_adapter == adapter_connection_id and current_generation == lease_generation:
             counts["matched"] += 1
             continue
-        if current_adapter or current_generation:
+        if (current_adapter or current_generation) and (
+            str(value.get("provider") or "").strip().lower() != "pi"
+            or current_adapter == adapter_connection_id
+            or current_generation == lease_generation
+        ):
             counts["mismatched"] += 1
             continue
+        target = (str(session_id), str(run_id), str(value.get("provider") or "").strip().lower(), contract.control_plane)
+        if len(incoming_generations.get(target, ())) != 1:
+            counts["mismatched"] += 1
+            continue
+        if current_adapter or current_generation:
+            if not current_adapter or not current_generation:
+                counts["mismatched"] += 1
+                continue
+            old_subject = f"connection:{current_adapter}:{current_generation}"
+            old_observations = list(
+                connection.execute(
+                    select(FactHead.observed_at).where(
+                        FactHead.family == "control",
+                        FactHead.subject_key == old_subject,
+                        FactHead.session_id == session_id,
+                    )
+                ).scalars()
+            )
+            old_observed_at = max(
+                (_as_aware_utc(value) for value in old_observations if _as_aware_utc(value) is not None),
+                default=None,
+            )
+            incoming_observed_at = _as_aware_utc(fact.observed_at)
+            if old_observed_at is None or incoming_observed_at is None or incoming_observed_at <= old_observed_at:
+                counts["mismatched"] += 1
+                continue
         collision = connection.execute(
-            select(connection_table.c.id).where(connection_table.c.adapter_connection_id == adapter_connection_id).limit(1)
+            select(connection_table.c.id)
+            .where(
+                connection_table.c.id != row["id"],
+                or_(
+                    connection_table.c.adapter_connection_id == adapter_connection_id,
+                    connection_table.c.lease_generation == lease_generation,
+                ),
+            )
+            .limit(1)
         ).scalar_one_or_none()
         if collision is not None:
             counts["mismatched"] += 1
@@ -14442,8 +14605,8 @@ def _bind_control_evidence_identities(connection, facts) -> dict[str, int]:
             update(connection_table)
             .where(
                 connection_table.c.id == row["id"],
-                connection_table.c.adapter_connection_id.is_(None),
-                connection_table.c.lease_generation.is_(None),
+                connection_table.c.adapter_connection_id == row["adapter_connection_id"],
+                connection_table.c.lease_generation == row["lease_generation"],
             )
             .values(
                 adapter_connection_id=adapter_connection_id,

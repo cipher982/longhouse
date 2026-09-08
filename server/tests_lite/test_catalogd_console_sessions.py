@@ -26,7 +26,6 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveUser
-from zerg.services.agents.session_graph_writes import primary_thread_id_for_session
 from zerg.services.console_turns import CatalogConsoleTurn
 from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -582,14 +581,8 @@ async def test_agents_console_turn_uses_catalog_without_cold_session(monkeypatch
     }
 
 
-def test_local_launch_shell_binds_thread_execution_target_for_console(tmp_path):
-    """Console dispatch must not see `execution_target_missing` after a launch.
-
-    Regression: `create_live_launch_catalog_shell` created LiveSessionThread
-    without device_id/cwd, so `enqueue_console_turn` refused every managed-local
-    Helm session (``execution_target_missing``) — the launch shell is the one
-    binding the thread rows the console target check reads.
-    """
+def test_helm_launch_cannot_acquire_a_console_execution_owner(tmp_path):
+    """Console dispatch cannot take execution ownership from a Helm session."""
     engine = create_catalog_engine(tmp_path / "catalog-launch-target.db")
     initialize_catalog_schema(engine)
     store = CatalogStore(engine)
@@ -615,26 +608,19 @@ def test_local_launch_shell_binds_thread_execution_target_for_console(tmp_path):
                 "project": "pi-dogfood",
                 "display_name": "ai",
                 "managed_session_name": "pi-managed-1",
-                "permission_mode": "bypass",
+                "permission_mode": "provider_local",
                 "launch_actor": "cli",
-                "launch_surface": "terminal",
-                "managed_transport": "pi_print",
+                "launch_surface": "qa",
+                "managed_transport": "pi_helm_channel",
                 "attach_command": "",
                 "provider_config": {
                     "pi_provider": "openrouter",
-                    "model": "deepseek/deepseek-v4-flash-latest",
+                    "model": "deepseek/deepseek-v4-flash-0731",
                 },
             },
         }
     )
     assert created["created"] is True
-    thread = None
-    with Session(engine) as db:
-        thread = db.get(LiveSessionThread, str(primary_thread_id_for_session(session_id)))
-        assert thread is not None
-        assert thread.device_id == "cinder"
-        assert thread.cwd == "/tmp/pi-dogfood"
-        assert json.loads(thread.provider_config_json or "{}").get("pi_provider") == "openrouter"
     turn = store.enqueue_console_turn(
         data={
             "session_id": str(session_id),
@@ -644,9 +630,7 @@ def test_local_launch_shell_binds_thread_execution_target_for_console(tmp_path):
             "created_at": now,
         }
     )
-    assert "unavailable" not in turn
-    assert turn["turn"]["provider"] == "pi"
-    assert turn["turn"]["provider_config"]["pi_provider"] == "openrouter"
+    assert turn == {"found": True, "unavailable": "not_console_session"}
 
 
 def _seed_branch_parent(engine, *, owner_id: int = 1):

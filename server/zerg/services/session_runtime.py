@@ -761,28 +761,38 @@ def _record_binding_signal_alias(db: Session, event: RuntimeEventIngest) -> None
     if event.session_id is None:
         return
     provider_session_id = str((event.payload or {}).get("provider_session_id") or "").strip()
-    if not provider_session_id:
+    source_path = str((event.payload or {}).get("source_path") or "").strip()
+    if not provider_session_id and not source_path:
         return
     session = db.get(AgentSession, event.session_id)
     if session is None:
         return
     thread = ensure_primary_thread(db, session)
-    try:
+    if provider_session_id:
+        try:
+            record_thread_alias(
+                db,
+                thread=thread,
+                provider=event.provider,
+                alias_kind="provider_session_id",
+                alias_value=provider_session_id,
+            )
+        except ProviderSessionAliasConflict as exc:
+            logger.warning(
+                "Provider session binding conflict during runtime binding_signal: "
+                "provider=%s provider_session_id=%s existing_thread_id=%s requested_thread_id=%s",
+                exc.provider,
+                exc.provider_session_id,
+                exc.existing_thread_id,
+                exc.requested_thread_id,
+            )
+    if source_path:
         record_thread_alias(
             db,
             thread=thread,
             provider=event.provider,
-            alias_kind="provider_session_id",
-            alias_value=provider_session_id,
-        )
-    except ProviderSessionAliasConflict as exc:
-        logger.warning(
-            "Provider session binding conflict during runtime binding_signal: "
-            "provider=%s provider_session_id=%s existing_thread_id=%s requested_thread_id=%s",
-            exc.provider,
-            exc.provider_session_id,
-            exc.existing_thread_id,
-            exc.requested_thread_id,
+            alias_kind="source_path",
+            alias_value=source_path,
         )
 
 

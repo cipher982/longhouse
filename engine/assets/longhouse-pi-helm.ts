@@ -94,7 +94,7 @@ export default function (pi: ExtensionAPI) {
       }
       return;
     }
-    if (kind === "send" || kind === "steer" || kind === "follow_up" || kind === "abort" || kind === "terminate") {
+    if (kind === "send" || kind === "steer" || kind === "abort" || kind === "terminate") {
       if (!acceptingCommands) {
         if (deferredCommands.length < MAX_DEFERRED_COMMANDS) deferredCommands.push(frame);
         return;
@@ -218,16 +218,10 @@ export default function (pi: ExtensionAPI) {
     let reply: Frame = { kind: "command_result", request_id: requestId, ok: false };
     try {
       const text = typeof command.text === "string" ? command.text : "";
-      if (["send", "steer", "follow_up"].includes(String(kind)) && !text.trim()) {
+      if (["send", "steer"].includes(String(kind)) && !text.trim()) {
         throw new Error("Pi Helm input text must not be empty");
       }
       if (kind === "send") {
-        if (!ctx.isIdle()) throw new Error("Pi provider is not idle");
-        await Promise.resolve(pi.sendUserMessage(text, { expandPromptTemplates: false }));
-      } else if (kind === "steer") {
-        if (ctx.isIdle()) throw new Error("Pi provider has no active turn to steer");
-        await Promise.resolve(pi.sendUserMessage(text, { deliverAs: "steer", expandPromptTemplates: false }));
-      } else if (kind === "follow_up") {
         if (ctx.isIdle()) {
           await Promise.resolve(pi.sendUserMessage(text, { expandPromptTemplates: false }));
         } else {
@@ -236,6 +230,9 @@ export default function (pi: ExtensionAPI) {
             expandPromptTemplates: false,
           }));
         }
+      } else if (kind === "steer") {
+        if (ctx.isIdle()) throw new Error("Pi provider has no active turn to steer");
+        await Promise.resolve(pi.sendUserMessage(text, { deliverAs: "steer", expandPromptTemplates: false }));
       } else if (kind === "abort") {
         await Promise.resolve(ctx.abort());
       } else if (kind === "terminate") {

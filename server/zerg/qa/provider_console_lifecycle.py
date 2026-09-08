@@ -582,7 +582,7 @@ def _retain_flush_diagnostics(receipt: Mapping[str, object]) -> dict[str, object
 
 def _pid_dead(pid: object) -> bool:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return True
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -594,7 +594,7 @@ def _pid_dead(pid: object) -> bool:
 
 def _process_group_dead(pgid: object) -> bool:
     if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
-        return True
+        return False
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
@@ -605,6 +605,16 @@ def _process_group_dead(pgid: object) -> bool:
 
 
 def _wait_owned_processes_dead(claims: list[dict[str, Any]], timeout: float = 15) -> bool:
+    if not claims or not any(
+        isinstance(claim.get("pid"), int)
+        and not isinstance(claim.get("pid"), bool)
+        and claim.get("pid", 0) > 0
+        and isinstance(claim.get("process_group_id"), int)
+        and not isinstance(claim.get("process_group_id"), bool)
+        and claim.get("process_group_id", 0) > 0
+        for claim in claims
+    ):
+        return False
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if all(_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id")) for claim in claims):

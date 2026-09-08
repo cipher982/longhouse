@@ -1001,7 +1001,7 @@ enum PiHelmCommands {
         #[arg(long)]
         url: Option<String>,
     },
-    /// Send input only when the native Pi session is idle.
+    /// Send input to the native Pi session, using Pi's follow-up queue while busy.
     Send {
         #[arg(long)]
         session_id: String,
@@ -1012,15 +1012,6 @@ enum PiHelmCommands {
     },
     /// Queue native Pi steering input for the next model call.
     Steer {
-        #[arg(long)]
-        session_id: String,
-        #[arg(long)]
-        text: String,
-        #[arg(long)]
-        state_root: Option<PathBuf>,
-    },
-    /// Queue native Pi follow-up input after the active run settles.
-    FollowUp {
         #[arg(long)]
         session_id: String,
         #[arg(long)]
@@ -1435,7 +1426,6 @@ fn command_name(command: &Commands) -> &'static str {
             PiHelmCommands::Launch { .. } => "pi-helm-launch",
             PiHelmCommands::Send { .. } => "pi-helm-send",
             PiHelmCommands::Steer { .. } => "pi-helm-steer",
-            PiHelmCommands::FollowUp { .. } => "pi-helm-follow-up",
             PiHelmCommands::Abort { .. } => "pi-helm-abort",
             PiHelmCommands::Terminate { .. } => "pi-helm-terminate",
         },
@@ -2250,29 +2240,6 @@ fn main() -> anyhow::Result<()> {
                         .block_on(pi_helm_control::dispatch(
                             &session_id,
                             pi_helm_control::CommandKind::Steer,
-                            Some(&text),
-                            state_root.as_deref(),
-                            None,
-                        ))
-                        .map_err(|error| anyhow::anyhow!(error))?;
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&json!({
-                            "ok": true,
-                            "provider_session_id": summary.provider_session_id,
-                            "status": summary.status,
-                        }))?
-                    );
-                }
-                PiHelmCommands::FollowUp {
-                    session_id,
-                    text,
-                    state_root,
-                } => {
-                    let summary = rt
-                        .block_on(pi_helm_control::dispatch(
-                            &session_id,
-                            pi_helm_control::CommandKind::FollowUp,
                             Some(&text),
                             state_root.as_deref(),
                             None,

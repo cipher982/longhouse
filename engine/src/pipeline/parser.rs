@@ -248,26 +248,15 @@ struct RawLine {
     git_branch: Option<String>,
     #[serde(default, deserialize_with = "deserialize_release_version")]
     version: Option<String>,
-    #[serde(rename = "parentSession")]
-    parent_session: Option<String>,
     provider: Option<String>,
     #[serde(rename = "modelId")]
     model_id: Option<String>,
     #[serde(rename = "thinkingLevel")]
     thinking_level: Option<String>,
-    #[serde(rename = "customType")]
-    custom_type: Option<String>,
-    data: Option<Box<RawValue>>,
-    #[serde(rename = "targetId")]
-    target_id: Option<String>,
     label: Option<String>,
     name: Option<String>,
     #[serde(rename = "tokensBefore")]
     tokens_before: Option<u64>,
-    #[serde(rename = "fromId")]
-    from_id: Option<String>,
-    #[serde(rename = "firstKeptEntryId")]
-    first_kept_entry_id: Option<String>,
     #[serde(rename = "isSidechain")]
     is_sidechain: Option<bool>,
     /// Claude user rows carry these flags for provider-authored metadata such
@@ -314,8 +303,6 @@ struct RawMessage {
     /// message:{role, content}}`. Claude encodes it as the line type and Cursor
     /// puts it at the top level, so this is the third of three placements.
     role: Option<String>,
-    api: Option<String>,
-    provider: Option<String>,
     model: Option<String>,
     #[serde(rename = "stopReason")]
     stop_reason: Option<String>,
@@ -323,18 +310,8 @@ struct RawMessage {
     error_message: Option<String>,
     timestamp: Option<Value>,
     summary: Option<String>,
-    #[serde(rename = "fromId")]
-    from_id: Option<String>,
-    #[serde(rename = "tokensBefore")]
-    tokens_before: Option<u64>,
     command: Option<String>,
     output: Option<String>,
-    #[serde(rename = "exitCode")]
-    exit_code: Option<i64>,
-    cancelled: Option<bool>,
-    #[serde(rename = "customType")]
-    custom_type: Option<String>,
-    display: Option<bool>,
     #[serde(rename = "toolCallId")]
     tool_call_id: Option<String>,
     #[serde(rename = "toolName")]

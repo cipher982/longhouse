@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from zerg.qa.pi_console_tool_producer import pi_console_tool_assertions
 from zerg.qa.pi_helm_lifecycle import _cleanup_receipt
-from zerg.qa.provider_adapters.pi import pi_native_shadow_taxonomy
+from zerg.qa.pi_native import pi_native_model_evidence
+from zerg.qa.pi_native import pi_native_shadow_taxonomy
 
 
 def test_pi_native_taxonomy_pairs_native_tool_call_and_result() -> None:
@@ -59,3 +62,51 @@ def test_pi_helm_cleanup_oracle_does_not_accept_missing_process_identity() -> No
     assert receipt["status"] == "fail"
     assert receipt["provider_process_dead"] is False
     assert receipt["no_orphan_provider_processes"] is False
+
+
+def test_pi_accounting_includes_tool_rounds_but_never_hides_a_failed_tail(tmp_path) -> None:
+    transcript = tmp_path / "native.jsonl"
+    events = [
+        {"type": "session", "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+        {
+            "type": "message",
+            "id": "tool-round",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "toolCall", "id": "read-1", "name": "read", "arguments": {}}],
+                "stopReason": "toolUse",
+                "model": "fixture-model",
+                "usage": {"input": 8, "output": 2, "cost": {"total": 0.2}},
+            },
+        },
+        {
+            "type": "message",
+            "id": "final-reply",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "The tool finished."}],
+                "stopReason": "stop",
+                "model": "fixture-model",
+                "usage": {"input": 12, "output": 3, "cost": {"total": 0.3}},
+            },
+        },
+    ]
+    transcript.write_text("\n".join(json.dumps(event) for event in events) + "\n")
+    evidence = pi_native_model_evidence(transcript, source_canary="fixture", api_key_configured=True)
+    assert evidence is not None
+    assert evidence["result_event"]["usage"]["input"] == 20
+    assert evidence["result_event"]["usage"]["output"] == 5
+    assert evidence["result_event"]["total_cost_usd"] == 0.5
+
+    with transcript.open("a") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "type": "message",
+                    "id": "failed-next-turn",
+                    "message": {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "provider failed"},
+                }
+            )
+            + "\n"
+        )
+    assert pi_native_model_evidence(transcript, source_canary="fixture", api_key_configured=True) is None

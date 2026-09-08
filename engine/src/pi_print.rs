@@ -419,7 +419,11 @@ async fn monitor_pi_print(child: &mut Child, stderr_path: &Path, mut sink: PiPri
                 cleanup_process_group(sink.process_group_id).await;
                 let (terminal_state, reason) = terminal_state_for_projection(
                     &projection,
-                    status.success(),
+                    if status.success() {
+                        PiProcessExitEvidence::Succeeded
+                    } else {
+                        PiProcessExitEvidence::Failed
+                    },
                     cancel_requested,
                     drain_error.as_deref(),
                     pending.is_empty(),
@@ -495,7 +499,7 @@ async fn monitor_recovered_claim(
             }
             let (terminal_state, reason) = terminal_state_for_projection(
                 &projection,
-                true,
+                PiProcessExitEvidence::Unknown,
                 cancel_requested,
                 None,
                 pending.is_empty(),
@@ -550,7 +554,7 @@ async fn settle_recovered_dead_claim(
     }
     let (terminal_state, reason) = terminal_state_for_projection(
         &projection,
-        true,
+        PiProcessExitEvidence::Unknown,
         claim.cancel_requested_at.is_some(),
         stream_error.as_deref(),
         pending.is_empty(),
@@ -607,7 +611,6 @@ struct PiStreamProjection {
     assistant_message_index: u64,
     current_assistant: Option<PiAssistantProjection>,
     final_stop_reason: Option<String>,
-    agent_end_seen: bool,
     agent_settled: bool,
     native_error: Option<String>,
 }
@@ -633,7 +636,6 @@ impl PiStreamProjection {
                 self.identity_confirmed = true;
             }
             Some("agent_start") => {
-                self.agent_end_seen = false;
                 self.agent_settled = false;
                 self.final_stop_reason = None;
                 self.native_error = None;
@@ -693,7 +695,6 @@ impl PiStreamProjection {
                         .map(str::to_string);
                 }
             }
-            Some("agent_end") => self.agent_end_seen = true,
             Some("agent_settled") => self.agent_settled = true,
             Some("error") => {
                 self.native_error = event
@@ -732,25 +733,34 @@ fn message_text(message: &Value) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PiProcessExitEvidence {
+    Succeeded,
+    Failed,
+    Unknown,
+}
+
 fn terminal_state_for_projection(
     projection: &PiStreamProjection,
-    process_succeeded: bool,
+    process_exit: PiProcessExitEvidence,
     cancel_requested: bool,
     stream_error: Option<&str>,
     output_drained: bool,
     source_bound: bool,
 ) -> (&'static str, Option<String>) {
+    // As with the other Console adapters, an owned cancellation takes
+    // precedence over the nonzero exit caused by our SIGINT.
     if cancel_requested {
         return ("run_cancelled", None);
     }
-    if let Some(error) = stream_error.or(projection.native_error.as_deref()) {
-        return ("run_failed", Some(error.to_string()));
-    }
-    if !process_succeeded {
+    if process_exit == PiProcessExitEvidence::Failed {
         return (
             "run_failed",
             Some("Pi process exited unsuccessfully".to_string()),
         );
+    }
+    if let Some(error) = stream_error.or(projection.native_error.as_deref()) {
+        return ("run_failed", Some(error.to_string()));
     }
     if !output_drained {
         return (
@@ -770,7 +780,7 @@ fn terminal_state_for_projection(
             Some("Pi JSON stream never confirmed its native session identity".to_string()),
         );
     }
-    if !projection.agent_end_seen || !projection.agent_settled {
+    if !projection.agent_settled {
         return (
             "run_failed",
             Some("Pi exited before agent_settled".to_string()),
@@ -1369,13 +1379,20 @@ mod tests {
             json!({"type":"session","id":provider_id}),
             json!({"type":"agent_start"}),
             json!({"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error"}}),
-            json!({"type":"agent_end","messages":[]}),
             json!({"type":"agent_settled"}),
         ] {
             projection.apply(provider_id, &event).unwrap();
         }
         assert_eq!(
-            terminal_state_for_projection(&projection, true, false, None, true, true).0,
+            terminal_state_for_projection(
+                &projection,
+                PiProcessExitEvidence::Succeeded,
+                false,
+                None,
+                true,
+                true,
+            )
+            .0,
             "run_failed"
         );
         projection
@@ -1385,25 +1402,70 @@ mod tests {
             "type":"message_end",
             "message":{"role":"assistant","content":[{"type":"text","text":"recovered"}],"stopReason":"stop"}
         })).unwrap();
-        projection
-            .apply(provider_id, &json!({"type":"agent_end","messages":[]}))
-            .unwrap();
         assert_eq!(
-            terminal_state_for_projection(&projection, true, false, None, true, true).0,
+            terminal_state_for_projection(
+                &projection,
+                PiProcessExitEvidence::Succeeded,
+                false,
+                None,
+                true,
+                true,
+            )
+            .0,
             "run_failed"
         );
         projection
             .apply(provider_id, &json!({"type":"agent_settled"}))
             .unwrap();
         assert_eq!(
-            terminal_state_for_projection(&projection, true, false, None, true, true).0,
+            terminal_state_for_projection(
+                &projection,
+                PiProcessExitEvidence::Succeeded,
+                false,
+                None,
+                true,
+                true,
+            )
+            .0,
             "run_completed"
+        );
+        assert_eq!(
+            terminal_state_for_projection(
+                &projection,
+                PiProcessExitEvidence::Unknown,
+                false,
+                None,
+                true,
+                true,
+            )
+            .0,
+            "run_completed"
+        );
+        assert_eq!(
+            terminal_state_for_projection(
+                &projection,
+                PiProcessExitEvidence::Failed,
+                false,
+                None,
+                true,
+                true,
+            )
+            .0,
+            "run_failed"
         );
         projection
             .apply(provider_id, &json!({"type":"agent_start"}))
             .unwrap();
         assert_eq!(
-            terminal_state_for_projection(&projection, true, false, None, true, true).0,
+            terminal_state_for_projection(
+                &projection,
+                PiProcessExitEvidence::Succeeded,
+                false,
+                None,
+                true,
+                true,
+            )
+            .0,
             "run_failed"
         );
     }

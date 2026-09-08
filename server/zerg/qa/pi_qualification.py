@@ -1,15 +1,9 @@
-"""Exact-binary Pi CLI contract plus opt-in real-print qualification.
+"""Exact-build Pi qualification with opt-in native model and tool turns.
 
-Pi (npm @earendil-works/pi-coding-agent) is a standalone Bun coding-agent
-CLI whose release lane pins an observed install the same way Cursor's does:
-there is no staged-release feed the factory can hand the bridge, so the
-qualification request names an exact binary tree. The profile verifies the
-exact executable identity and, when live credentials are present
-(OPENROUTER_API_KEY plus the LONGHOUSE_PI_LIVE opt-in), runs real pi ``-p``
-turns through the universal Pi harness adapter (launch + send) so the
-transcript JSONL is parsed, bound, and ingested as live evidence. Without the
-live opt-in the adapter reports an honest blocked/unsupported payload and the
-profile stays blocked rather than spending tokens.
+The published npm installation is bound by executable identity. Live runs
+exercise stock tool-enabled print, exact native-file continuation, and native
+JSONL accounting. Without explicit credentials, model pin, and live opt-in,
+the profile stays blocked rather than spending tokens.
 """
 
 from __future__ import annotations
@@ -39,12 +33,17 @@ _PROFILE = identity.IdentityProfile(
 
 def _live_enabled() -> bool:
     """True only when this run should spend a real pi model turn."""
-    return bool((os.environ.get("OPENROUTER_API_KEY") or "").strip()) and os.environ.get("LONGHOUSE_PI_LIVE") in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return (
+        bool((os.environ.get("OPENROUTER_API_KEY") or "").strip())
+        and bool((os.environ.get("LONGHOUSE_PI_QUALIFICATION_MODEL") or "").strip())
+        and os.environ.get("LONGHOUSE_PI_LIVE")
+        in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    )
 
 
 def run(request_path: Path, output_root: Path) -> dict[str, Any]:
@@ -52,6 +51,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     # this module eagerly, and the router must stay importable under
     # `python -S` (no sqlalchemy/site-packages) per
     # test_router_imports_without_optional_server_dependencies.
+    from zerg.qa.pi_native import pi_native_model_evidence  # noqa: PLC0415
     from zerg.qa.provider_adapters.pi import PI_LIVE_ENV  # noqa: PLC0415
     from zerg.qa.provider_adapters.pi import PiHarnessAdapter  # noqa: PLC0415
     from zerg.qa.universal_agent_harness import STATUS_BLOCKED  # noqa: PLC0415
@@ -127,6 +127,14 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
             "resume_argv_used": bool(send.get("exact_resume_file")),
         },
     }
+    if live_enabled and tool_call.get("session_file"):
+        model_evidence = pi_native_model_evidence(
+            Path(tool_call["session_file"]),
+            source_canary=PROFILE,
+            api_key_configured=bool(os.environ.get("OPENROUTER_API_KEY")),
+        )
+        if model_evidence is not None:
+            observation["live_model_evidence"] = model_evidence
     identity.atomic_json(output_root / "request.json", request)
     identity.atomic_json(output_root / "raw-observation.json", observation)
     return observation
