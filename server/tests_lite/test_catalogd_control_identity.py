@@ -14,6 +14,8 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 
+DEVICE_ID = "cinder"
+
 
 def _control_fact(*, session_id: str, run_id: str, connection_id: str, lease_generation: str) -> ReducerFact:
     observed_at = datetime.now(UTC)
@@ -82,6 +84,7 @@ def test_control_evidence_identity_binding_is_write_once(tmp_path):
                 control_plane="codex_bridge",
                 acquisition_kind="spawned_control",
                 state="attached",
+                device_id=DEVICE_ID,
                 acquired_at=now,
             )
         )
@@ -91,13 +94,13 @@ def test_control_evidence_identity_binding_is_write_once(tmp_path):
             connection_id=adapter_connection_id,
             lease_generation=lease_generation,
         )
-        assert _bind_control_evidence_identities(connection, [fact]) == {
+        assert _bind_control_evidence_identities(connection, [fact], device_id=DEVICE_ID) == {
             "bound": 1,
             "matched": 0,
             "unbound": 0,
             "mismatched": 0,
         }
-        assert _bind_control_evidence_identities(connection, [fact]) == {
+        assert _bind_control_evidence_identities(connection, [fact], device_id=DEVICE_ID) == {
             "bound": 0,
             "matched": 1,
             "unbound": 0,
@@ -109,7 +112,7 @@ def test_control_evidence_identity_binding_is_write_once(tmp_path):
             connection_id=str(uuid4()),
             lease_generation=str(uuid4()),
         )
-        assert _bind_control_evidence_identities(connection, [mismatch])["mismatched"] == 1
+        assert _bind_control_evidence_identities(connection, [mismatch], device_id=DEVICE_ID)["mismatched"] == 1
         stored = connection.execute(select(LiveSessionConnection.__table__)).mappings().one()
 
     assert stored["adapter_connection_id"] == adapter_connection_id
@@ -127,6 +130,6 @@ def test_control_evidence_identity_does_not_bind_across_run_mismatch(tmp_path):
     )
 
     with engine.begin() as connection:
-        result = _bind_control_evidence_identities(connection, [fact])
+        result = _bind_control_evidence_identities(connection, [fact], device_id=DEVICE_ID)
 
     assert result == {"bound": 0, "matched": 0, "unbound": 1, "mismatched": 0}

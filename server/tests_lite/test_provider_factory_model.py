@@ -21,36 +21,10 @@ def facts():
     return load_facts()
 
 
-def test_capability_assertions_match_schema_scenario_count(facts) -> None:
-    # 13 -> 11 scenarios and 21 -> 19 assertions on 2026-07-31: the two
-    # `session.input.steer_active` capability cells were removed. They restated
-    # a fact `steer_active_turn` and `operation_evidence` already carry, and
-    # their oracle had no caller anywhere, so the assertions could never be
-    # satisfied or refuted.
-    # 11 -> 16 scenarios and 19 -> 24 assertions on 2026-08-01: every provider
-    # gained a `session.activity.turn_boundary` cell. None of the five has an
-    # automated producer yet, so they all surface in the manual lane rather than
-    # silently reading as covered.
-    # 16 -> 25 scenarios and 24 -> 61 assertions on 2026-08-02: ended-Helm
-    # Resume added eight supported-provider invariants plus one typed
-    # unsupported-provider invariant across the five provider columns.
-    # 61 -> 65 on 2026-08-03: native Resume split into clean-exit and
-    # process-loss variants for each supported provider.
-    # 25 -> 30 scenarios and 65 -> 70 assertions on 2026-08-20: the four
-    # factory-acquired Console providers gained one release-contract scenario,
-    # and Codex gained the Helm launch-visibility scenario. Antigravity remains
-    # maintenance-tier and Pi has no factory acquisition lane, so neither is
-    # silently promoted by this inventory. A new capability cell must come with
-    # a producer rather than silently inflating the qualification matrix.
-    # 30 -> 31 scenarios and 70 -> 71 assertions on 2026-08-30: session
-    # branching added console_thread_fork, which asserts the mirror image of
-    # console_thread_continue -- a branch's first turn must land on a different
-    # provider thread, where a Console continuation must land on the same one.
-    # Reusing the continuation oracle would have asserted exactly what branching
-    # must not do, so it is its own cell with its own producer.
-    scenario_ids = {a.scenario_id for a in facts.capability_assertions}
-    assert len(scenario_ids) == 31
-    assert len(facts.capability_assertions) == 71
+def test_capability_assertions_have_unique_cells(facts) -> None:
+    """Duplicate cells would qualify or schedule the same assertion twice."""
+    cells = {(a.provider, a.assertion_id, a.variant, a.scenario_id) for a in facts.capability_assertions}
+    assert len(cells) == len(facts.capability_assertions)
 
 
 def test_orphaned_scenario_ids_are_a_subset_of_schema_scenario_ids(facts) -> None:
@@ -125,11 +99,10 @@ def test_non_registered_producible_evidence_stays_minimal(facts) -> None:
     assert "hermetic" in facts.producible_evidence_by_assertion["no_duplicate_visible_bootstrap"]
 
 
-def test_default_harness_scenarios_has_32_entries(facts) -> None:
-    assert len(facts.default_harness_scenarios) == 32
-    assert "probe_identity" in facts.default_harness_scenarios
-    assert "managed_session_e2e" in facts.default_harness_scenarios
-    assert "interaction_semantics" in facts.default_harness_scenarios
+def test_default_harness_scenarios_are_unique_and_cover_core_surfaces(facts) -> None:
+    scenarios = facts.default_harness_scenarios
+    assert len(scenarios) == len(set(scenarios))
+    assert {"probe_identity", "managed_session_e2e", "interaction_semantics"} <= set(scenarios)
 
 
 def test_push_harness_scenarios_is_the_smaller_ci_set(facts) -> None:

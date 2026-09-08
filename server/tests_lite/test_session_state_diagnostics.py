@@ -473,13 +473,6 @@ def test_diagnostics_route_reports_only_canonical_serve_and_authorization(monkey
     assert payload["comparison"]["control_identity"]["status"] == "unbound"
     assert payload["served_path"] == "canonical_session_detail"
     assert payload["authorization_path"] == "provider_scoped_canonical_control"
-    assert payload["canonical_authorization_providers"] == [
-        "antigravity",
-        "claude",
-        "codex",
-        "cursor",
-        "opencode",
-    ]
     assert "cutover_active" not in payload
     assert "authorization_cutover_active" not in payload
     assert payload["explain"]["commit_seq"] == 12

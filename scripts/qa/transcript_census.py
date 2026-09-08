@@ -297,7 +297,7 @@ def pi_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
         return (
             str(entry.get("type", "?")),
             _sorted_keys(entry),
-            entry.get("version"),
+            entry.get("version") if isinstance(entry.get("version"), str) else None,
             None,
         )
     message = entry.get("message") if isinstance(entry.get("message"), dict) else {}

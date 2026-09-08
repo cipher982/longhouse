@@ -212,61 +212,6 @@ def test_managed_local_launch_response_contract_rejects_missing_claude_provider_
         )
 
 
-def test_managed_local_launch_response_contract_accepts_pi_print_without_attach_command():
-    from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
-    from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract
-    from zerg.session_execution_home import ManagedSessionTransport
-    from zerg.session_execution_home import SessionExecutionHome
-
-    response = ManagedLocalSessionLaunchResponse(
-        session_id="session-pi-1",
-        run_id="22222222-2222-4222-8222-222222222222",
-        provider="pi",
-        provider_session_id=None,
-        execution_home=SessionExecutionHome.MANAGED_LOCAL,
-        managed_transport=ManagedSessionTransport.PI_PRINT,
-        source_runner_id=1,
-        source_runner_name="cinder",
-        managed_session_name="pi-demo",
-        attach_command="",
-    )
-
-    # The one-shot pi_print transport has no attach/resume command; an empty
-    # attach_command must pass the response contract (regression: this used to
-    # raise "Unsupported managed local launch response transport: pi_print",
-    # surfacing as 500 "Managed local launch failed" on launch).
-    _validate_managed_local_launch_response_contract(
-        session_id="session-pi-1",
-        response=response,
-    )
-
-
-def test_managed_local_launch_response_contract_rejects_pi_print_attach_command():
-    from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
-    from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract
-    from zerg.session_execution_home import ManagedSessionTransport
-    from zerg.session_execution_home import SessionExecutionHome
-
-    response = ManagedLocalSessionLaunchResponse(
-        session_id="session-pi-2",
-        run_id="33333333-3333-4333-8333-333333333333",
-        provider="pi",
-        provider_session_id=None,
-        execution_home=SessionExecutionHome.MANAGED_LOCAL,
-        managed_transport=ManagedSessionTransport.PI_PRINT,
-        source_runner_id=1,
-        source_runner_name="cinder",
-        managed_session_name="pi-demo",
-        attach_command="longhouse pi --resume-session session-pi-2",
-    )
-
-    with pytest.raises(RuntimeError, match="should not include an attach command"):
-        _validate_managed_local_launch_response_contract(
-            session_id="session-pi-2",
-            response=response,
-        )
-
-
 def test_this_device_launch_discards_session_when_response_contract_fails(monkeypatch, client, device_headers, owner_id):
     """A launch that fails its own response contract registers nothing.
 
@@ -505,24 +450,10 @@ def test_this_device_launch_materializes_live_catalog_without_archive_db(
     assert facts["provider_alias"] is None
 
 
-def test_pi_launch_births_a_connection_with_no_live_control_capability(monkeypatch, live, owner_id):
-    """`longhouse pi` must not hand a client a composer it cannot serve.
-
-    Pi is a Console one-shot: the CLI registers the session and enqueues
-    `session.turn.start`, and the engine has no pi branch for
-    `session.send_text`, `session.interrupt` or `session.terminate`. It is also
-    outside canonical authorization, so every one of those commands is refused
-    with `unsupported` before a fact is read.
-
-    The contract used to declare pi.send/pi.interrupt/pi.terminate anyway, and
-    the launcher wrote all three onto the born connection -- so a user saw a
-    live composer with Interrupt and Terminate, and every press failed. This
-    pins the born row, which is the exact value the session-state projection
-    reads to decide what to offer.
-    """
+def test_pi_launch_births_a_detached_helm_connection_with_native_identity(monkeypatch, live, owner_id):
+    """Pi Helm starts detached until heartbeat evidence binds its native channel."""
 
     from zerg.routers import session_chat
-    from zerg.services.live_control_catalog import live_control_session_capability_available
 
     monkeypatch.setattr(
         write_serializer,
@@ -533,28 +464,30 @@ def test_pi_launch_births_a_connection_with_no_live_control_capability(monkeypat
     _result, response = asyncio.run(
         session_chat._launch_managed_local_session_serialized(
             None,
-            _launch_params(owner_id, provider="pi"),
+            _launch_params(
+                owner_id,
+                provider="pi",
+                provider_session_id="22222222-2222-4222-8222-222222222222",
+            ),
         )
     )
 
     assert response.provider == "pi"
-    assert response.managed_transport.value == "pi_print"
-    # A one-shot has nothing to attach to.
-    assert response.attach_command == ""
+    assert response.provider_session_id == "22222222-2222-4222-8222-222222222222"
+    assert response.managed_transport.value == "pi_helm_channel"
+    assert "longhouse pi --resume-session" in response.attach_command
+    assert response.session_id in response.attach_command
 
     facts = _launch_facts(response.session_id, owner=owner_id)
     (connection,) = facts["connections"]
-    assert connection["can_send_input"] == 0
-    assert connection["can_interrupt"] == 0
-    assert connection["can_terminate"] == 0
-    # Console output is still readable, and there is no host reattach.
+    assert connection["state"] == "detached"
+    assert connection["device_id"] == DEVICE_ID
+    assert connection["can_send_input"] == 1
+    assert connection["can_interrupt"] == 1
+    assert connection["can_terminate"] == 1
     assert connection["can_tail_output"] == 1
-    assert connection["can_resume"] == 0
-
-    session = load_live_control_session_snapshot(str(response.session_id), owner_id=owner_id)
-    assert session is not None
-    for capability in ("send", "interrupt", "terminate"):
-        assert live_control_session_capability_available(session, capability=capability) is False
+    assert connection["can_resume"] == 1
+    assert facts["provider_alias"] == response.provider_session_id
 
 
 def test_this_device_launch_surfaces_catalog_rejection_without_retry_theater(monkeypatch, live, owner_id):
