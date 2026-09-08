@@ -67,6 +67,35 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         try await assertNativePinnedToBottom("after root content grew")
     }
 
+    /// A retained append can update WebKit's native content size after the
+    /// JavaScript frame callback. Native observation must still clamp a sticky
+    /// scroll view when the DOM deliberately does not do that work.
+    func testRetainedAppendRepinsNativeContentOffset() async throws {
+        attachNativeViewportHook()
+        try await render(rowCount: 40, stick: true, mode: "retained")
+        try await assertNativePinnedToBottom("initial render")
+        let oldBottom = webView.scrollView.contentOffset.y
+
+        // Keep native stickiness true, but tell the DOM not to re-pin. The
+        // second payload reuses all 40 existing roots and appends one row.
+        try await render(rowCount: 41, stick: false, mode: "retained", sequence: 2)
+        try await waitUntil("native content size grows") {
+            self.nativeMaxScrollOffset() > oldBottom
+        }
+        try await assertNativePinnedToBottom("after native content size grew")
+    }
+
+    func testRetainedAppendKeepsDOMAndNativeScrollPositionsAligned() async throws {
+        attachNativeViewportHook()
+        try await render(rowCount: 40, stick: true, mode: "retained")
+        try await render(rowCount: 41, stick: true, mode: "retained", sequence: 2)
+        try await assertNativePinnedToBottom("after retained append")
+        let domOffset = try await number("window.scrollY")
+        let domMaximum = try await number("Math.max(0, document.documentElement.scrollHeight - window.innerHeight)")
+        XCTAssertEqual(domOffset, domMaximum, accuracy: 1)
+        XCTAssertEqual(domOffset, Double(webView.scrollView.contentOffset.y), accuracy: 1)
+    }
+
     /// Re-pinning must not fight a user who deliberately scrolled up. Native
     /// owns that intent; a viewport change must not silently re-stick.
     func testUnpinnedTranscriptIsNotRepinnedByAViewportChange() async throws {
@@ -140,6 +169,7 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
     private func attachNativeViewportHook() -> WebTranscriptView.Coordinator {
         let coordinator = WebTranscriptView.Coordinator()
         coordinator.webView = webView
+        coordinator.observeContentSize(on: webView)
         webView.onViewportHeightChange = { [weak webView] previous, height in
             guard let webView else { return }
             coordinator.viewportHeightDidChange(from: previous, to: height, on: webView)
@@ -171,7 +201,12 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
     }
 
     @discardableResult
-    private func render(rowCount: Int, stick: Bool) async throws -> [String: Any] {
+    private func render(
+        rowCount: Int,
+        stick: Bool,
+        mode: String = "snapshot",
+        sequence: Int = 1
+    ) async throws -> [String: Any] {
         let items: [TimelineItem] = (0..<rowCount).map { index in
             .assistant(makeAssistantEvent(
                 id: index + 1,
@@ -185,7 +220,7 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
             errorMessage: nil
         )
         let value = try await evaluate(
-            "window.renderTranscript('\(payload.base64)', \(stick ? "true" : "false"), 1, 'snapshot');"
+            "window.renderTranscript('\(payload.base64)', \(stick ? "true" : "false"), \(sequence), '\(mode)');"
         )
         try await settle()
         return value as? [String: Any] ?? [:]

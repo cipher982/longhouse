@@ -135,6 +135,7 @@ struct WebTranscriptView: UIViewRepresentable {
             coordinator.viewportHeightDidChange(from: previous, to: height, on: webView)
         }
         coordinator.webView = webView
+        coordinator.observeContentSize(on: webView)
         coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
         let lifecycleStage = pooled.reused ? "webview_reused" : "webview_make"
         WebTranscriptWebViewPool.logAdoption(webView, reused: pooled.reused, loaded: pooled.isLoaded)
@@ -902,6 +903,7 @@ struct WebTranscriptView: UIViewRepresentable {
         /// Invalidates deferred viewport reconciliation across height changes and
         /// across WebView reuse.
         private var viewportReconcileGeneration = 0
+        private var contentSizeObservation: NSKeyValueObservation?
         private var dragStartOffsetY: CGFloat?
         /// Identity of the transcript the most recent payload was prepared from.
         private var preparedIdentity: ContentIdentity?
@@ -1045,9 +1047,23 @@ struct WebTranscriptView: UIViewRepresentable {
             }
         }
 
-        /// Reconcile what a viewport height change breaks, from the one trigger
-        /// UIKit guarantees. Deferred off the layout pass so the scroll writes
-        /// do not re-enter `layoutSubviews`.
+        func observeContentSize(on webView: WKWebView) {
+            contentSizeObservation?.invalidate()
+            contentSizeObservation = webView.scrollView.observe(
+                \.contentSize,
+                options: [.new]
+            ) { [weak webView] _, _ in
+                guard let webView else { return }
+                DispatchQueue.main.async { [weak self, weak webView] in
+                    guard let self, let webView else { return }
+                    self.contentSizeDidChange(on: webView)
+                }
+            }
+        }
+
+        /// Reconcile what a viewport or native content-size change breaks.
+        /// Deferred off the layout/KVO callback so the scroll writes do not
+        /// re-enter UIKit or race WebKit's own bounds update.
         ///
         /// Every deferred write is generation-guarded. Without that, a height
         /// change followed within a runloop turn by a dismissal — keyboard down
@@ -1055,6 +1071,24 @@ struct WebTranscriptView: UIViewRepresentable {
         /// pooled WebView that is already showing the next session. The same
         /// guard collapses a burst of changes to the last one.
         func viewportHeightDidChange(from previous: CGFloat, to height: CGFloat, on webView: WKWebView) {
+            scheduleGeometryReconciliation(
+                on: webView,
+                viewportChange: (previous: previous, height: height)
+            )
+        }
+
+        /// A retained DOM render changes `contentSize` after WebKit has
+        /// acknowledged the JavaScript frame. UIKit does not clamp the native
+        /// offset for that change, so observe the actual native geometry rather
+        /// than assuming the JavaScript animation frame is the handoff point.
+        func contentSizeDidChange(on webView: WKWebView) {
+            scheduleGeometryReconciliation(on: webView, viewportChange: nil)
+        }
+
+        private func scheduleGeometryReconciliation(
+            on webView: WKWebView,
+            viewportChange: (previous: CGFloat, height: CGFloat)?
+        ) {
             viewportReconcileGeneration &+= 1
             let generation = viewportReconcileGeneration
             let reconcile = { [weak self, weak webView] in
@@ -1068,11 +1102,13 @@ struct WebTranscriptView: UIViewRepresentable {
                 let insets = scrollView.adjustedContentInset
                 let minOffset = -insets.top
                 let maxOffset = max(minOffset, scrollView.contentSize.height + insets.bottom - scrollView.bounds.height)
-                // Unconditional and low-volume (real height changes only): this
-                // is the evidence a screenshot of a blank band cannot give.
-                self.logger.info(
-                    "webkit transcript viewport \(Int(previous), privacy: .public)->\(Int(height), privacy: .public) content=\(Int(scrollView.contentSize.height), privacy: .public) offset=\(Int(scrollView.contentOffset.y), privacy: .public) min=\(Int(minOffset), privacy: .public) max=\(Int(maxOffset), privacy: .public) inset=\(Int(insets.top), privacy: .public)/\(Int(insets.bottom), privacy: .public) stick=\(self.shouldStickToBottom, privacy: .public)"
-                )
+                // Keep the viewport transition evidence; a screenshot of a
+                // blank band cannot show which native geometry was stale.
+                if let viewportChange {
+                    self.logger.info(
+                        "webkit transcript viewport \(Int(viewportChange.previous), privacy: .public)->\(Int(viewportChange.height), privacy: .public) content=\(Int(scrollView.contentSize.height), privacy: .public) offset=\(Int(scrollView.contentOffset.y), privacy: .public) min=\(Int(minOffset), privacy: .public) max=\(Int(maxOffset), privacy: .public) inset=\(Int(insets.top), privacy: .public)/\(Int(insets.bottom), privacy: .public) stick=\(self.shouldStickToBottom, privacy: .public)"
+                    )
+                }
                 let target = self.shouldStickToBottom && !self.userScrollInProgress
                     ? maxOffset
                     : min(max(scrollView.contentOffset.y, minOffset), maxOffset)
@@ -1151,6 +1187,8 @@ struct WebTranscriptView: UIViewRepresentable {
             preparedIdentity = nil
             // Strands any deferred viewport write before the WebView is recycled.
             viewportReconcileGeneration &+= 1
+            contentSizeObservation?.invalidate()
+            contentSizeObservation = nil
             (webView as? TranscriptWebView)?.prepareForTranscriptReuse()
             webView?.navigationDelegate = nil
             webView?.scrollView.delegate = nil
@@ -2560,10 +2598,15 @@ private extension WebTranscriptView {
     }
 
     function scrollToBottom() {
-      window.scrollTo(0, document.documentElement.scrollHeight);
-      requestAnimationFrame(() => {
-        window.scrollTo(0, document.documentElement.scrollHeight);
-      });
+      const pin = () => {
+        // WebKit can retain an out-of-range DOM scrollY even after UIKit
+        // clamps its native offset. Supply the real maximum, not document height.
+        if (stickToBottom && window.innerHeight > 0) {
+          window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight - window.innerHeight));
+        }
+      };
+      pin();
+      requestAnimationFrame(pin);
     }
 
     // Stickiness is split by what each side can actually see. Native owns the
