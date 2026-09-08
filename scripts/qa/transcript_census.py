@@ -67,19 +67,32 @@ def claude_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
     """(shape, keys, version, entrypoint) for one Claude Code JSONL line."""
     kind = str(entry.get("type", "?"))
     version = entry.get("version") if isinstance(entry.get("version"), str) else None
-    entrypoint = entry.get("entrypoint") if isinstance(entry.get("entrypoint"), str) else None
+    entrypoint = (
+        entry.get("entrypoint") if isinstance(entry.get("entrypoint"), str) else None
+    )
     if kind == "system":
-        keys = _sorted_keys(entry) + _nested_keys(entry.get("compactMetadata"), "compactMetadata")
+        keys = _sorted_keys(entry) + _nested_keys(
+            entry.get("compactMetadata"), "compactMetadata"
+        )
         return f"system/{entry.get('subtype', '?')}", keys, version, entrypoint
     if kind == "attachment":
         att = entry.get("attachment") or {}
-        return f"attachment/{att.get('type', '?')}", _sorted_keys(att), version, entrypoint
+        return (
+            f"attachment/{att.get('type', '?')}",
+            _sorted_keys(att),
+            version,
+            entrypoint,
+        )
     if kind in ("assistant", "user"):
         msg = entry.get("message") or {}
         content = msg.get("content")
         block_types: set[str] = set()
         if isinstance(content, list):
-            block_types.update(str(block.get("type", "?")) for block in content if isinstance(block, dict))
+            block_types.update(
+                str(block.get("type", "?"))
+                for block in content
+                if isinstance(block, dict)
+            )
         elif isinstance(content, str):
             block_types.add("string")
         if kind == "user" and entry.get("isCompactSummary"):
@@ -87,20 +100,33 @@ def claude_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
         if kind == "user" and entry.get("isMeta"):
             block_types.add("meta")
         origin = entry.get("origin")
-        if kind == "user" and isinstance(origin, dict) and isinstance(origin.get("kind"), str):
+        if (
+            kind == "user"
+            and isinstance(origin, dict)
+            and isinstance(origin.get("kind"), str)
+        ):
             block_types.add(f"origin_{origin['kind'].replace('-', '_')}")
         keys = _sorted_keys(entry)
         if isinstance(origin, dict):
             keys += _nested_keys(origin, "origin")
         if kind == "assistant":
             keys = keys + ["usage." + key for key in _sorted_keys(msg.get("usage"))]
-        return f"{kind}/" + "+".join(sorted(block_types) or ["?"]), keys, version, entrypoint
+        return (
+            f"{kind}/" + "+".join(sorted(block_types) or ["?"]),
+            keys,
+            version,
+            entrypoint,
+        )
     return kind, _sorted_keys(entry), version, entrypoint
 
 
 def _full_envelope(text: str, opening: str, closing: str) -> bool:
     value = text.strip()
-    return value.startswith(opening) and value.endswith(closing) and bool(value[len(opening) : -len(closing)].strip())
+    return (
+        value.startswith(opening)
+        and value.endswith(closing)
+        and bool(value[len(opening) : -len(closing)].strip())
+    )
 
 
 def codex_provider_system_text(text: str) -> bool:
@@ -109,9 +135,15 @@ def codex_provider_system_text(text: str) -> bool:
         suffix = value[len("<codex_internal_context") :]
         if suffix and suffix[0] in " \t\r\n>":
             opening_end = value.find(">")
-            if opening_end >= 0 and _full_envelope(value, value[: opening_end + 1], "</codex_internal_context>"):
+            if opening_end >= 0 and _full_envelope(
+                value, value[: opening_end + 1], "</codex_internal_context>"
+            ):
                 return True
-    if value.startswith("# AGENTS.md instructions") and "<INSTRUCTIONS>" in value and value.endswith("</INSTRUCTIONS>"):
+    if (
+        value.startswith("# AGENTS.md instructions")
+        and "<INSTRUCTIONS>" in value
+        and value.endswith("</INSTRUCTIONS>")
+    ):
         return True
     return any(
         _full_envelope(value, opening, closing)
@@ -131,8 +163,16 @@ def codex_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
     version = None
     entrypoint = None
     if kind == "session_meta" and isinstance(payload, dict):
-        version = payload.get("cli_version") if isinstance(payload.get("cli_version"), str) else None
-        entrypoint = payload.get("originator") if isinstance(payload.get("originator"), str) else None
+        version = (
+            payload.get("cli_version")
+            if isinstance(payload.get("cli_version"), str)
+            else None
+        )
+        entrypoint = (
+            payload.get("originator")
+            if isinstance(payload.get("originator"), str)
+            else None
+        )
     if kind == "event_msg" and isinstance(payload, dict):
         ptype = str(payload.get("type", "?"))
         shape = f"event_msg/{ptype}"
@@ -144,12 +184,15 @@ def codex_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
         elif ptype == "token_count":
             info = payload.get("info") or {}
             keys += _nested_keys(info, "info") + _nested_keys(
-                info.get("last_token_usage") if isinstance(info, dict) else None, "info.last_token_usage"
+                info.get("last_token_usage") if isinstance(info, dict) else None,
+                "info.last_token_usage",
             )
         return shape, keys, version, entrypoint
     if kind == "response_item" and isinstance(payload, dict):
         role = payload.get("role")
-        shape = f"response_item/{payload.get('type', '?')}" + (f"/{role}" if role else "")
+        shape = f"response_item/{payload.get('type', '?')}" + (
+            f"/{role}" if role else ""
+        )
         keys = _sorted_keys(payload)
         if role == "user" and payload.get("type") == "message":
             content = payload.get("content")
@@ -170,9 +213,17 @@ def codex_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
         return shape, keys, version, entrypoint
     if kind == "turn_context" and isinstance(payload, dict):
         settings = (
-            (payload.get("collaboration_mode") or {}).get("settings") if isinstance(payload.get("collaboration_mode"), dict) else None
+            (payload.get("collaboration_mode") or {}).get("settings")
+            if isinstance(payload.get("collaboration_mode"), dict)
+            else None
         )
-        return kind, _sorted_keys(payload) + _nested_keys(settings, "collaboration_mode.settings"), version, entrypoint
+        return (
+            kind,
+            _sorted_keys(payload)
+            + _nested_keys(settings, "collaboration_mode.settings"),
+            version,
+            entrypoint,
+        )
     return kind, _sorted_keys(payload) or _sorted_keys(entry), version, entrypoint
 
 
@@ -182,7 +233,9 @@ def cursor_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
     content = message.get("content") if isinstance(message, dict) else None
     block_types: set[str] = set()
     if isinstance(content, list):
-        block_types.update(str(block.get("type", "?")) for block in content if isinstance(block, dict))
+        block_types.update(
+            str(block.get("type", "?")) for block in content if isinstance(block, dict)
+        )
     elif isinstance(content, str):
         block_types.add("string")
     if role == "user":
@@ -190,17 +243,30 @@ def cursor_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
         if isinstance(content, str):
             text_values.append(content)
         elif isinstance(content, list):
-            text_values.extend(block.get("text", "") for block in content if isinstance(block, dict))
+            text_values.extend(
+                block.get("text", "") for block in content if isinstance(block, dict)
+            )
         combined = "\n".join(value for value in text_values if isinstance(value, str))
         if "<user_query>" in combined and "</user_query>" in combined:
             block_types.add("user_query")
-        elif any(line.lstrip().startswith(marker) for line in combined.splitlines() for marker in _CURSOR_CONTEXT_MARKERS):
+        elif any(
+            line.lstrip().startswith(marker)
+            for line in combined.splitlines()
+            for marker in _CURSOR_CONTEXT_MARKERS
+        ):
             block_types.add("provider_context")
     keys = [key for key in _sorted_keys(entry) if not key.startswith("_census_")]
     keys += _nested_keys(message, "message")
     version = entry.get("version") if isinstance(entry.get("version"), str) else None
-    entrypoint = entry.get("entrypoint") if isinstance(entry.get("entrypoint"), str) else None
-    return f"{role}/" + "+".join(sorted(block_types) or ["?"]), keys, version, entrypoint
+    entrypoint = (
+        entry.get("entrypoint") if isinstance(entry.get("entrypoint"), str) else None
+    )
+    return (
+        f"{role}/" + "+".join(sorted(block_types) or ["?"]),
+        keys,
+        version,
+        entrypoint,
+    )
 
 
 def antigravity_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
@@ -209,7 +275,9 @@ def antigravity_shape(entry: dict) -> tuple[str, list[str], str | None, str | No
     source = str(entry.get("source", "legacy" if legacy else "?"))
     keys = [key for key in _sorted_keys(entry) if not key.startswith("_census_")]
     version = entry.get("version") if isinstance(entry.get("version"), str) else None
-    entrypoint = entry.get("entrypoint") if isinstance(entry.get("entrypoint"), str) else None
+    entrypoint = (
+        entry.get("entrypoint") if isinstance(entry.get("entrypoint"), str) else None
+    )
     return f"{source}/{kind}", keys, version, entrypoint
 
 
@@ -225,18 +293,42 @@ def opencode_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]
 
 
 def pi_shape(entry: dict) -> tuple[str, list[str], str | None, str | None]:
+    if entry.get("type") != "message":
+        return (
+            str(entry.get("type", "?")),
+            _sorted_keys(entry),
+            entry.get("version"),
+            None,
+        )
     message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
     role = str(message.get("role") or "?")
     content = message.get("content")
     block_types: set[str] = set()
     if isinstance(content, list):
-        block_types.update(str(block.get("type", "?")) for block in content if isinstance(block, dict))
+        block_types.update(
+            str(block.get("type", "?")) for block in content if isinstance(block, dict)
+        )
     elif isinstance(content, str):
         block_types.add("string")
     keys = [key for key in _sorted_keys(entry) if not key.startswith("_census_")]
     keys += _nested_keys(message, "message")
+    if isinstance(content, list):
+        keys += [
+            f"message.content[].{key}"
+            for block in content
+            if isinstance(block, dict)
+            for key in _sorted_keys(block)
+        ]
+    usage = message.get("usage")
+    if isinstance(usage, dict):
+        keys += _nested_keys(usage, "message.usage")
     version = entry.get("version") if isinstance(entry.get("version"), str) else None
-    return f"message/{role}/" + "+".join(sorted(block_types) or ["?"]), keys, version, None
+    return (
+        f"message/{role}/" + "+".join(sorted(block_types) or ["?"]),
+        keys,
+        version,
+        None,
+    )
 
 
 SHAPERS = {
@@ -295,7 +387,11 @@ def _iter_records(path: Path, provider: str) -> Iterator[dict[str, Any] | None]:
         except (OSError, ValueError):
             yield None
             return
-        values = value if isinstance(value, list) else (value.get("messages") if isinstance(value, dict) else None)
+        values = (
+            value
+            if isinstance(value, list)
+            else (value.get("messages") if isinstance(value, dict) else None)
+        )
         if isinstance(values, list):
             for item in values:
                 if isinstance(item, dict):
@@ -326,7 +422,13 @@ def _iter_records(path: Path, provider: str) -> Iterator[dict[str, Any] | None]:
 def census(files: list[Path], provider: str) -> dict[str, dict[str, Any]]:
     shaper = SHAPERS[provider]
     shapes: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"count": 0, "files": set(), "versions": set(), "entrypoints": set(), "key_counts": defaultdict(int)}
+        lambda: {
+            "count": 0,
+            "files": set(),
+            "versions": set(),
+            "entrypoints": set(),
+            "key_counts": defaultdict(int),
+        }
     )
     for path in files:
         version = None
@@ -383,19 +485,27 @@ def load_catalog(provider: str) -> dict[str, Any]:
 def save_catalog(provider: str, catalog: dict[str, Any]) -> None:
     catalog["shapes"] = dict(sorted(catalog["shapes"].items()))
     catalog_path(provider).parent.mkdir(parents=True, exist_ok=True)
-    catalog_path(provider).write_text(json.dumps(catalog, indent=1, sort_keys=False) + "\n", encoding="utf-8")
+    catalog_path(provider).write_text(
+        json.dumps(catalog, indent=1, sort_keys=False) + "\n", encoding="utf-8"
+    )
 
 
-def unclassified(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> list[str]:
+def unclassified(
+    catalog: dict[str, Any], observed: dict[str, dict[str, Any]]
+) -> list[str]:
     rows = catalog.get("shapes", {})
     return sorted(
         shape
         for shape in observed
-        if shape not in rows or not str(rows[shape].get("classification") or "").strip() or rows[shape]["classification"] == "unclassified"
+        if shape not in rows
+        or not str(rows[shape].get("classification") or "").strip()
+        or rows[shape]["classification"] == "unclassified"
     )
 
 
-def drift(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def drift(
+    catalog: dict[str, Any], observed: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     """Catalogued shapes observed without a key the parser requires.
 
     A signal's parser reads specific keys (`durationMs`, `info.last_token_usage.total_tokens`).
@@ -409,17 +519,25 @@ def drift(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> dict[
         row = rows.get(shape)
         if row is None:
             continue
-        required = [key for key in (row.get("required_keys") or []) if isinstance(key, str)]
+        required = [
+            key for key in (row.get("required_keys") or []) if isinstance(key, str)
+        ]
         if not required:
             continue
         key_counts = record.get("key_counts") or {}
-        missing = {key: record["count"] - int(key_counts.get(key, 0)) for key in required if int(key_counts.get(key, 0)) < record["count"]}
+        missing = {
+            key: record["count"] - int(key_counts.get(key, 0))
+            for key in required
+            if int(key_counts.get(key, 0)) < record["count"]
+        }
         if missing:
             found[shape] = {"missing": missing, "lines": record["count"]}
     return found
 
 
-def widened(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
+def widened(
+    catalog: dict[str, Any], observed: dict[str, dict[str, Any]]
+) -> dict[str, list[str]]:
     """Catalogued shapes carrying keys the catalog has never recorded: something new to classify."""
     rows = catalog.get("shapes", {})
     found: dict[str, list[str]] = {}
@@ -433,7 +551,9 @@ def widened(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> dic
     return found
 
 
-def seed(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> tuple[int, int]:
+def seed(
+    catalog: dict[str, Any], observed: dict[str, dict[str, Any]]
+) -> tuple[int, int]:
     """Append unseen shapes as unclassified; widen key sets and version ranges. Never delete."""
     rows = catalog.setdefault("shapes", {})
     added = widened_rows = 0
@@ -452,7 +572,10 @@ def seed(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> tuple[
         changed = False
         for bound, pick in (("first_seen_version", min), ("last_seen_version", max)):
             seen = record.get(bound)
-            if seen and (not row.get(bound) or pick(row[bound], seen, key=_version_key) != row[bound]):
+            if seen and (
+                not row.get(bound)
+                or pick(row[bound], seen, key=_version_key) != row[bound]
+            ):
                 row[bound] = seen
                 changed = True
         merged = sorted(set(row.get("entrypoints") or []) | set(record["entrypoints"]))
@@ -468,11 +591,15 @@ def seed(catalog: dict[str, Any], observed: dict[str, dict[str, Any]]) -> tuple[
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("command", choices=("census", "check", "seed"))
     parser.add_argument("--provider", choices=SUPPORTED_PROVIDERS, required=True)
     parser.add_argument("paths", nargs="+")
-    parser.add_argument("--json", action="store_true", help="census: emit JSON instead of a table")
+    parser.add_argument(
+        "--json", action="store_true", help="census: emit JSON instead of a table"
+    )
     args = parser.parse_args(argv)
 
     files = iter_files(args.paths, args.provider)
@@ -483,10 +610,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "census":
         if args.json:
-            print(json.dumps({"provider": args.provider, "files": len(files), "shapes": observed}, indent=1))
+            print(
+                json.dumps(
+                    {
+                        "provider": args.provider,
+                        "files": len(files),
+                        "shapes": observed,
+                    },
+                    indent=1,
+                )
+            )
         else:
             print(f"{args.provider}: {len(files)} files, {len(observed)} shapes")
-            for shape, record in sorted(observed.items(), key=lambda item: -item[1]["count"]):
+            for shape, record in sorted(
+                observed.items(), key=lambda item: -item[1]["count"]
+            ):
                 print(
                     f"{record['count']:>8} {record['files']:>5} {record['first_seen_version'] or '-':<9} {record['last_seen_version'] or '-':<9} {','.join(record['entrypoints']) or '-':<14} {shape}"
                 )
@@ -496,31 +634,44 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "seed":
         added, widened_rows = seed(catalog, observed)
         save_catalog(args.provider, catalog)
-        print(f"{args.provider}: {added} shapes added, {widened_rows} rows widened, {len(catalog['shapes'])} total")
+        print(
+            f"{args.provider}: {added} shapes added, {widened_rows} rows widened, {len(catalog['shapes'])} total"
+        )
         return 0
 
     missing = unclassified(catalog, observed)
     drifted = drift(catalog, observed)
     new_keys = widened(catalog, observed)
     if missing:
-        print(f"{args.provider}: {len(missing)} unclassified shape(s) in {len(files)} file(s):")
+        print(
+            f"{args.provider}: {len(missing)} unclassified shape(s) in {len(files)} file(s):"
+        )
         for shape in missing:
             record = observed[shape]
             print(
                 f"  {shape}  count={record['count']} versions={record['first_seen_version']}..{record['last_seen_version']} keys={','.join(record['keys'][:12])}"
             )
     if drifted:
-        print(f"{args.provider}: {len(drifted)} shape(s) missing a key the parser requires:")
+        print(
+            f"{args.provider}: {len(drifted)} shape(s) missing a key the parser requires:"
+        )
         for shape, report in drifted.items():
-            gaps = ", ".join(f"{key} absent in {count} of {report['lines']} lines" for key, count in report["missing"].items())
+            gaps = ", ".join(
+                f"{key} absent in {count} of {report['lines']} lines"
+                for key, count in report["missing"].items()
+            )
             print(f"  {shape}  {gaps}")
     if new_keys:
-        print(f"{args.provider}: {len(new_keys)} shape(s) carry keys the catalog has never seen (seed to accept):")
+        print(
+            f"{args.provider}: {len(new_keys)} shape(s) carry keys the catalog has never seen (seed to accept):"
+        )
         for shape, keys in new_keys.items():
             print(f"  {shape}  +{','.join(keys)}")
     if missing or drifted or new_keys:
         return 1
-    print(f"{args.provider}: {len(observed)} shapes, all classified, every required key present, no new keys")
+    print(
+        f"{args.provider}: {len(observed)} shapes, all classified, every required key present, no new keys"
+    )
     return 0
 
 

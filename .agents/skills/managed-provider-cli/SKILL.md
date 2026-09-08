@@ -108,6 +108,25 @@ Hard Codex contract:
 - Machine Agent should only advertise `opencode.*` control support when the
   stock `opencode` binary is present on PATH.
 
+### Pi
+
+- `longhouse pi` launches stock upstream `pi` in the real terminal with a
+  process-scoped `-e` extension. No global Pi settings or provider binaries
+  are installed or rewritten.
+- Helm state lives under `~/.longhouse/managed-local/pi-helm/`. Channel
+  authority is bound to the launch, native session, connection, and lease
+  generation. Pi changes its process title; use recorded PID/birth identity
+  and authenticated channel evidence, not argv text, for liveness.
+- Native idle send, boundary-delivered steer, follow-up, abort, and owned
+  process-group termination are distinct operations. Quiescence comes from
+  `agent_settled`, never the earlier `agent_end`.
+- Cold resume verifies the retained exact native file/header and refuses a
+  second execution owner. Pi has no live TUI attach surface.
+- Console remains `pi -p --mode json`, with stock tools, context, auth, and
+  project trust. It uses `provider_local`, not remote permission approvals.
+- Native JSONL is durable history; live previews never create archive rows.
+  Preallocated native IDs and source bindings prevent duplicate Shadow rows.
+
 ### Antigravity And Future CLIs
 
 - Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.

@@ -31,7 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cyc
 
 logger = logging.getLogger(__name__)
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
-_CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor", "antigravity"})
+_CANONICAL_AUTH_PROVIDERS = frozenset({"codex", "claude", "opencode", "cursor", "antigravity", "pi"})
 # The live-control capabilities this module can authorize, and the reducer
 # operation each one requires. Anything else is refused as ``unsupported``.
 # Turn-scoped Console commands (session.turn.start / session.turn.interrupt) are

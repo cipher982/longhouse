@@ -192,6 +192,8 @@ PRODUCER_MODULES: tuple[str, ...] = (
     "zerg.qa.opencode_native_resume",
     "zerg.qa.opencode_server_contract_producer",
     "zerg.qa.opencode_turn_boundary_quiescent",
+    "zerg.qa.pi_console_tool_producer",
+    "zerg.qa.pi_helm_lifecycle",
     "zerg.qa.product_console_lifecycle",
     "zerg.qa.provider_console_lifecycle",
     "zerg.qa.provider_generic_resume",

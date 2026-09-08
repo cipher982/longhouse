@@ -26,12 +26,13 @@ pub struct ResumeContractObservation {
 /// Retained provider contracts are machine evidence, not provider transcript
 /// state. The daemon watches these directories so a contract created or
 /// removed after startup triggers a fresh evidence projection.
-pub fn resume_contract_dirs(longhouse_home: &Path) -> [PathBuf; 4] {
+pub fn resume_contract_dirs(longhouse_home: &Path) -> [PathBuf; 5] {
     [
         longhouse_home.join("managed-local/contracts/codex"),
         longhouse_home.join("managed-local/contracts/claude"),
         longhouse_home.join("managed-local/cursor-helm/binding-probes"),
         longhouse_home.join("managed-local/opencode/bridge/sessions"),
+        longhouse_home.join("managed-local/pi-helm"),
     ]
 }
 
@@ -40,11 +41,12 @@ pub fn scan_resume_contracts(
     now: DateTime<Utc>,
 ) -> Vec<ResumeContractObservation> {
     let mut observations = Vec::new();
-    let validators: [(&str, Validator); 4] = [
+    let validators: [(&str, Validator); 5] = [
         ("codex", validate_codex),
         ("claude", validate_claude),
         ("cursor", validate_cursor),
         ("opencode", validate_opencode),
+        ("pi", validate_pi),
     ];
     for ((provider, validate), dir) in validators
         .into_iter()
@@ -195,6 +197,25 @@ fn validate_opencode(
     valid_file(value.get("provider_binary"))?;
     let provider_session_id =
         nonempty(value.get("provider_session_id")).ok_or("provider_state_missing")?;
+    Ok((provider_session_id, cwd))
+}
+
+fn validate_pi(
+    _path: &Path,
+    session_id: &str,
+    value: &Value,
+) -> Result<(String, String), &'static str> {
+    validate_common(value, session_id, "pi", 1)?;
+    let cwd = valid_directory(value.get("cwd"))?;
+    crate::pi_helm_launcher::resolve_binary(None).map_err(|_| "provider_incompatible")?;
+    let provider_session_id =
+        nonempty(value.get("provider_session_id")).ok_or("provider_state_missing")?;
+    let session_file = nonempty(value.get("session_file")).ok_or("provider_state_missing")?;
+    let actual = crate::pi_session::read_session_header_id(Path::new(&session_file))
+        .map_err(|_| "provider_state_missing")?;
+    if actual != provider_session_id {
+        return Err("provider_state_missing");
+    }
     Ok((provider_session_id, cwd))
 }
 

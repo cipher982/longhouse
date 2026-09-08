@@ -8,6 +8,8 @@
 //! the original bytes through the media lane.
 
 use base64::{engine::general_purpose, Engine as _};
+use serde::Deserialize;
+use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
 pub const INLINE_IMAGE_DATA_URL_REDACT_THRESHOLD_CHARS: usize = 512;
@@ -41,26 +43,112 @@ pub fn redact_inline_image_data_url(value: &str) -> Option<InlineImageRedaction>
     }
     let (mime_prefix, data) = value.split_once(BASE64_MARKER)?;
     let mime_type = mime_prefix.strip_prefix("data:").unwrap_or(mime_prefix);
+    image_redaction(data, mime_type, value.len())
+}
+
+fn image_redaction(
+    data: &str,
+    mime_type: &str,
+    original_chars: usize,
+) -> Option<InlineImageRedaction> {
     let bytes = general_purpose::STANDARD.decode(data).ok()?;
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let placeholder = format!(
         "longhouse_media_ref:sha256={sha256};mime={mime_type};bytes={};original_chars={}",
         bytes.len(),
-        value.len()
+        original_chars
     );
     Some(InlineImageRedaction {
         placeholder,
         mime_type: mime_type.to_string(),
         sha256,
         byte_size: bytes.len(),
-        original_chars: value.len(),
+        original_chars,
         bytes,
     })
 }
 
+#[derive(Deserialize)]
+struct PiImageEnvelope<'a> {
+    #[serde(borrow)]
+    message: Option<PiImageContent<'a>>,
+    #[serde(borrow)]
+    content: Option<&'a RawValue>,
+}
+
+#[derive(Deserialize)]
+struct PiImageContent<'a> {
+    #[serde(borrow)]
+    content: Option<&'a RawValue>,
+}
+
+#[derive(Deserialize)]
+struct PiImageBlock<'a> {
+    #[serde(borrow)]
+    r#type: &'a str,
+    #[serde(borrow, rename = "mimeType")]
+    mime_type: &'a str,
+    #[serde(borrow)]
+    data: &'a RawValue,
+}
+
+fn pi_image_redactions(raw: &str) -> Vec<(usize, usize, String, InlineImageRedaction)> {
+    if !raw.contains("\"mimeType\"") {
+        return Vec::new();
+    }
+    let Ok(envelope) = serde_json::from_str::<PiImageEnvelope<'_>>(raw) else {
+        return Vec::new();
+    };
+    let content = envelope
+        .message
+        .and_then(|message| message.content)
+        .or(envelope.content);
+    let Some(content) = content else {
+        return Vec::new();
+    };
+    let Ok(blocks) = serde_json::from_str::<Vec<&RawValue>>(content.get()) else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    for block in blocks {
+        let Ok(image) = serde_json::from_str::<PiImageBlock<'_>>(block.get()) else {
+            continue;
+        };
+        if image.r#type != "image" || !image.mime_type.starts_with("image/") {
+            continue;
+        }
+        let encoded = image.data.get();
+        let Some(data) = encoded
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+        else {
+            continue;
+        };
+        let decoded_string;
+        let data = if data.contains('\\') {
+            let Ok(value) = serde_json::from_str::<String>(encoded) else {
+                continue;
+            };
+            decoded_string = value;
+            decoded_string.as_str()
+        } else {
+            data
+        };
+        let Some(redaction) = image_redaction(data, image.mime_type, data.len()) else {
+            continue;
+        };
+        let start = encoded.as_ptr() as usize - raw.as_ptr() as usize;
+        let replacement =
+            serde_json::to_string(&redaction.placeholder).expect("media reference is JSON");
+        result.push((start, start + encoded.len(), replacement, redaction));
+    }
+    result
+}
+
 pub fn redact_inline_image_data_urls_with_media(raw: &str) -> RedactedJsonLine {
     let original_line_sha256 = format!("{:x}", Sha256::digest(raw.as_bytes()));
-    if !raw.contains(DATA_IMAGE_PREFIX) {
+    let mut replacements = pi_image_redactions(raw);
+    if replacements.is_empty() && !raw.contains(DATA_IMAGE_PREFIX) {
         return RedactedJsonLine {
             raw_line: raw.to_string(),
             media: Vec::new(),
@@ -68,33 +156,35 @@ pub fn redact_inline_image_data_urls_with_media(raw: &str) -> RedactedJsonLine {
         };
     }
 
-    let mut out = String::with_capacity(raw.len().min(4096));
-    let mut cursor = 0usize;
-    let mut media = Vec::new();
+    let mut search_cursor = 0usize;
 
-    while let Some(rel_start) = raw[cursor..].find(DATA_IMAGE_PREFIX) {
-        let start = cursor + rel_start;
+    while let Some(rel_start) = raw[search_cursor..].find(DATA_IMAGE_PREFIX) {
+        let start = search_cursor + rel_start;
         let Some(end) = find_json_string_end(raw, start) else {
             break;
         };
         let candidate = &raw[start..end];
-        let Some(redaction) = redact_inline_image_data_url(candidate) else {
-            cursor = end;
-            continue;
-        };
-
-        out.push_str(&raw[cursor..start]);
-        out.push_str(&redaction.placeholder);
-        cursor = end;
-        media.push(redaction);
+        search_cursor = end;
+        if let Some(redaction) = redact_inline_image_data_url(candidate) {
+            replacements.push((start, end, redaction.placeholder.clone(), redaction));
+        }
     }
-
-    if media.is_empty() {
+    if replacements.is_empty() {
         return RedactedJsonLine {
             raw_line: raw.to_string(),
-            media,
+            media: Vec::new(),
             original_line_sha256,
         };
+    }
+    replacements.sort_unstable_by_key(|replacement| replacement.0);
+    let mut out = String::with_capacity(raw.len().min(4096));
+    let mut media = Vec::with_capacity(replacements.len());
+    let mut cursor = 0;
+    for (start, end, replacement, redaction) in replacements {
+        out.push_str(&raw[cursor..start]);
+        out.push_str(&replacement);
+        cursor = end;
+        media.push(redaction);
     }
     out.push_str(&raw[cursor..]);
     RedactedJsonLine {
@@ -163,6 +253,27 @@ mod tests {
         assert!(redacted.raw_line.starts_with(r#"{"b":1,"image_url":"#));
         assert!(redacted.raw_line.ends_with(r#"","a":2}"#));
         assert!(redacted.raw_line.contains("longhouse_media_ref:sha256="));
+        assert!(!redacted.raw_line.contains(&data));
+        assert_eq!(
+            redacted.original_line_sha256,
+            format!("{:x}", Sha256::digest(raw.as_bytes()))
+        );
+    }
+
+    #[test]
+    fn pi_native_images_preserve_bytes_without_copying_them_into_render_lines() {
+        let data = general_purpose::STANDARD.encode([9u8; 600]);
+        let raw = format!(
+            r#"{{"type":"message","id":"tool-a","message":{{"role":"toolResult","content":[{{"type":"text","text":"image follows"}},{{"type":"image","data":"{data}","mimeType":"image/png"}}]}}}}"#
+        );
+        let redacted = redact_inline_image_data_urls_with_media(&raw);
+        assert_eq!(redacted.media[0].bytes, vec![9u8; 600]);
+        let rendered: serde_json::Value = serde_json::from_str(&redacted.raw_line).unwrap();
+        assert_eq!(rendered["message"]["content"][0]["text"], "image follows");
+        assert_eq!(
+            rendered["message"]["content"][1]["data"],
+            redacted.media[0].placeholder
+        );
         assert!(!redacted.raw_line.contains(&data));
         assert_eq!(
             redacted.original_line_sha256,

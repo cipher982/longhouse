@@ -167,7 +167,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d4d97e867b4a91f0c19a0c62d36e2037e64ffb3bf91356466da5859de666f095"
+              "oracle_digest": "8d04928a1ed20a45172a65b91df393c34a6bbae43dd7a685f26f16d232f69383"
             }
           ]
         },
@@ -1041,7 +1041,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d4d97e867b4a91f0c19a0c62d36e2037e64ffb3bf91356466da5859de666f095"
+              "oracle_digest": "8d04928a1ed20a45172a65b91df393c34a6bbae43dd7a685f26f16d232f69383"
             },
             {
               "id": "real_print_marker_returned",
@@ -1552,7 +1552,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d4d97e867b4a91f0c19a0c62d36e2037e64ffb3bf91356466da5859de666f095"
+              "oracle_digest": "8d04928a1ed20a45172a65b91df393c34a6bbae43dd7a685f26f16d232f69383"
             }
           ]
         },
@@ -2280,7 +2280,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "d9deb6d2e49b80971ed76e78a78527adcaf2c9b53aaebafc8fd8f35086c9b318"
+      "adapter_digest": "5a9e9829face852eda8e742ade21fbe1d2691464953b69bbef6fc2c904de3ca2"
     },
     {
       "provider": "cursor",
@@ -2434,7 +2434,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d4d97e867b4a91f0c19a0c62d36e2037e64ffb3bf91356466da5859de666f095"
+              "oracle_digest": "8d04928a1ed20a45172a65b91df393c34a6bbae43dd7a685f26f16d232f69383"
             }
           ]
         },
@@ -2806,7 +2806,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "4b73651acea0881674d00d23690bf3e10415a7f877519b475dcd2ff98773ef39"
+      "adapter_digest": "cb17248e54ec62a8203f1a106fdead049db337894f1668c9110da1b4d2f29b77"
     },
     {
       "provider": "pi",
@@ -2818,12 +2818,18 @@
         "disposition": "policy_disabled",
         "reason": "pi's only auth surface prints the credential to stdout"
       },
-      "requires_longhouse_cli": false,
-      "managed_transport": "pi_print",
+      "requires_longhouse_cli": true,
+      "managed_transport": "pi_helm_channel",
       "console_adapter": "pi_print",
-      "control_plane": "pi_print",
+      "control_plane": "pi_helm_channel",
       "control_plane_aliases": [],
       "adapter_sources": [
+        "engine/src/pi_helm_launcher.rs",
+        "engine/src/pi_helm_control.rs",
+        "engine/src/managed_pi_helm_scan.rs",
+        "engine/assets/longhouse-pi-helm.ts",
+        "engine/src/pi_print.rs",
+        "engine/src/pi_session.rs",
         "server/zerg/qa/provider_adapters/pi.py"
       ],
       "wire_families": [
@@ -2886,179 +2892,346 @@
         }
       },
       "permission_prompt_surface": false,
-      "external_event_channel": null,
+      "external_event_channel": "pi_helm_channel",
       "pause_tool_name": "pi_pause_request",
       "harness_safe_no_token_prompt": false,
       "harness_safe_managed_session_scenarios": [],
       "harness_real_managed_session_e2e": false,
       "launch_local": true,
       "run_once": false,
-      "reattach": false,
-      "send_input": false,
+      "reattach": true,
+      "send_input": true,
       "interrupt": true,
-      "steer_active_turn": false,
+      "steer_active_turn": true,
       "answer_pause": false,
-      "terminate": false,
+      "terminate": true,
       "tail_output": true,
-      "runtime_phase": false,
+      "runtime_phase": true,
       "transcript_binding": true,
       "live_proof": false,
       "startup_coordination_context": false,
-      "capabilities": {},
-      "can_resume": false,
+      "capabilities": {
+        "session.launch.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.launch_local",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "pi_helm_launch_registration",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            },
+            {
+              "id": "pi_helm_native_tool_taxonomy",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            },
+            {
+              "id": "pi_helm_send_idle",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            },
+            {
+              "id": "pi_helm_steer_active",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            },
+            {
+              "id": "pi_helm_follow_up_native",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            },
+            {
+              "id": "pi_helm_abort_native",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            },
+            {
+              "id": "pi_helm_terminate_owned",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            },
+            {
+              "id": "pi_helm_reload_rebind",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            },
+            {
+              "id": "pi_helm_session_replacement_rebind",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            }
+          ]
+        },
+        "session.resume.helm": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.resume_helm",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "helm"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "pi_helm_cold_resume_exact_file",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            },
+            {
+              "id": "pi_helm_stale_owner_refused",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "082bac76cc9ae584039e4c22ec2ba6cf5a6d2c87c39c52979fbf2a87d1a8f2b8"
+            }
+          ]
+        },
+        "session.turn.start": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.turn_start",
+          "action_gate": "strict",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [
+            "session_context"
+          ],
+          "required_assertions": [
+            {
+              "id": "pi_console_tool_enabled",
+              "scenario_id": "pi_console_tool_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_console_tool_producer.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "586e0024d310d325b9c0a4f2dde26218b85e61a52ba878cc77ec152b9f00f04e"
+            }
+          ]
+        }
+      },
+      "can_resume": true,
       "turn_start": true,
       "fork_thread": false,
       "operation_evidence": {
         "fork_thread": {
           "level": "none",
-          "source": "not implemented; no fork surface observed on the Pi print adapter",
+          "source": "native forks retain history lineage; remote branching is not exposed",
           "disposition": "not_implemented",
-          "owner_action": "observe whether Pi can branch a session and record the surface"
+          "owner_action": "add a Pi native fork ownership canary before exposing remote branch"
         },
         "launch_local": {
-          "level": "live_token",
-          "source": "Real `pi -p` completed a bounded OpenRouter turn in a sandbox and wrote a session JSONL; the factory adapter launches the stock pi CLI.",
+          "level": "source_review",
+          "source": "stock Pi TUI with a process-scoped Longhouse extension; pi_helm_lifecycle",
           "disposition": "implemented"
         },
         "run_once": {
           "level": "none",
-          "source": "the legacy session.run_once command is Codex-only; pi's one-shot is turn_start",
-          "disposition": "not_implemented",
-          "reason": "run_once is a legacy command the engine routes only for Codex.",
-          "owner_action": "route pi turn_start through a pi engine adapter instead of run_once",
-          "blocker": "budget"
+          "source": "Console routes through session.turn.start, not the legacy run_once command",
+          "disposition": "policy_disabled",
+          "reason": "Pi Console has one turn-scoped path through session.turn.start.",
+          "routed_to": "turn_start"
         },
         "reattach": {
-          "level": "none",
-          "source": "pi --continue/--session resume exists upstream but the engine reattach path is not wired",
-          "disposition": "not_implemented",
-          "reason": "Pi has --continue/--session resume, but Longhouse has no engine-side reattach launcher yet.",
-          "owner_action": "wire a pi managed bridge (like cursor_helm) that resumes the session JSONL by --session-id",
-          "blocker": "budget"
+          "level": "source_review",
+          "source": "exact-file cold resume with a single execution owner; pi_helm_cold_resume_exact_file",
+          "disposition": "implemented"
         },
         "send_input": {
-          "level": "none",
-          "source": "the pi factory adapter's `pi -p` prompt is a one-shot turn, not input into a live session; the engine has no pi send_text branch",
-          "disposition": "not_implemented",
-          "reason": "Pi's only wired surface is the Console one-shot; there is no live session to send into.",
-          "owner_action": "wire a pi managed bridge over pi's rpc/server socket and prove session.send_text against a running pi session",
-          "blocker": "budget"
+          "level": "source_review",
+          "source": "authenticated native sendUserMessage while idle; pi_helm_send_idle",
+          "disposition": "implemented"
         },
         "interrupt": {
-          "level": "hermetic",
-          "source": "Turn-scoped only: an interrupt canary SIGINTs the one-shot `pi -p` child and confirms clean exit plus a parseable session file, which is what pi.turn_interrupt advertises. Live-session interrupt has no pi branch in control_channel.rs.",
+          "level": "source_review",
+          "source": "Helm native abort and Console owned-turn interruption; pi_helm_abort_native",
           "disposition": "implemented"
         },
         "steer_active_turn": {
-          "level": "none",
-          "source": "pi exposes no stdin mid-turn injection; only the rpc/server mode (unwired) would allow it",
-          "disposition": "not_implemented",
-          "reason": "Stock pi has no active-turn injection surface; rpc/server mode could back it but is not wired.",
-          "owner_action": "prove rpc/server-mode active-turn steer through a pi managed bridge",
-          "blocker": "upstream"
+          "level": "source_review",
+          "source": "native boundary-delivered steer, not token preemption; pi_helm_steer_active",
+          "disposition": "implemented"
         },
         "answer_pause": {
           "level": "none",
-          "source": "pi has no pull-based pause-request permission surface",
-          "disposition": "not_implemented",
-          "reason": "Pi exposes no pause-request permission channel.",
-          "owner_action": "confirm pi permission hooks or add a pull-based pause surface",
-          "blocker": "upstream"
+          "source": "Pi has no provider-owned remote permission reply transport",
+          "disposition": "upstream_absent",
+          "reason": "Project trust and extension UI remain provider-local.",
+          "observed_provider_version": "0.85.1"
         },
         "terminate": {
-          "level": "none",
-          "source": "killing the factory adapter's one-shot child is not remote session terminate; control_channel.rs answers pi session.terminate with unsupported_command",
-          "disposition": "not_implemented",
-          "reason": "Longhouse has no pi control plane to terminate; the Console turn owns its own child process lifetime.",
-          "owner_action": "wire a pi managed bridge with a terminate path and prove session.terminate against a running pi session",
-          "blocker": "budget"
+          "level": "source_review",
+          "source": "owned native process-group termination; pi_helm_terminate_owned",
+          "disposition": "implemented"
         },
         "tail_output": {
-          "level": "hermetic",
-          "source": "The pi factory adapter reads the append-only session JSONL and normalizes entries into raw events.",
+          "level": "source_review",
+          "source": "native JSONL history plus reconciled Console live previews",
           "disposition": "implemented"
         },
         "runtime_phase": {
-          "level": "none",
-          "source": "pi phase observation requires the engine managed bridge",
-          "disposition": "not_implemented",
-          "owner_action": "wire managed_pi_scan into the daemon observers",
-          "blocker": "budget"
+          "level": "source_review",
+          "source": "native agent/tool/UI lifecycle; agent_settled establishes quiescence",
+          "disposition": "implemented"
         },
         "transcript_binding": {
-          "level": "hermetic",
-          "source": "The pi factory adapter parses the session header id and message entries and binds them to the Longhouse session id.",
+          "level": "source_review",
+          "source": "pre-spawn native UUID claims and verified exact source bindings",
           "disposition": "implemented"
         },
         "turn_start": {
-          "level": "hermetic",
-          "source": "pi -p/--continue one-shot turn semantics exercised by the factory adapter",
+          "level": "source_review",
+          "source": "stock tool-enabled JSON print with exact continuation; pi_console_tool_lifecycle",
           "disposition": "implemented"
         }
       },
       "machine_control_supports": [
+        "pi.send",
+        "pi.interrupt",
+        "pi.steer",
+        "pi.terminate",
         "pi.turn_start",
         "pi.turn_interrupt"
       ],
       "transcript_signals": {
         "turn.duration": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "upstream_absent",
+          "raw_source": "none",
           "canary": "pi_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for pi and name the raw source"
+          "trigger": "turn_end",
+          "owner_action": "Pi JSONL has message clocks but no authored turn duration; do not invent one"
         },
         "session.recap": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "upstream_absent",
+          "raw_source": "none",
           "canary": "pi_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for pi and name the raw source"
+          "trigger": "idle_after_turn",
+          "owner_action": "branch/compaction summaries are not away recaps"
         },
         "session.title": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "session_info/name",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
           "canary": "pi_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for pi and name the raw source"
+          "trigger": "none_reliable"
         },
         "turn.usage": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "message/message.usage",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
           "canary": "pi_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for pi and name the raw source"
+          "trigger": "turn_end"
         },
         "turn.api_error": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "message/message.errorMessage + message.stopReason",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
           "canary": "pi_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for pi and name the raw source"
+          "trigger": "none_reliable"
         },
         "context.compaction": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "compaction/tokensBefore",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
           "canary": "pi_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for pi and name the raw source"
+          "trigger": "slash_compact"
         },
         "input.queue": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "upstream_absent",
+          "raw_source": "none",
           "canary": "pi_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for pi and name the raw source"
+          "trigger": "send_while_working",
+          "owner_action": "native steer/follow-up queues are live state, not durable transcript records"
         },
         "turn.thinking": {
-          "disposition": "not_implemented",
-          "raw_source": "unsurveyed",
+          "disposition": "implemented",
+          "raw_source": "message/message.content.thinking",
+          "fixture": "engine/tests/fixtures/golden/pi/native.jsonl",
           "canary": "pi_transcript_signals",
-          "trigger": "census",
-          "owner_action": "run the transcript census for pi and name the raw source"
+          "trigger": "turn_end"
         }
       },
-      "adapter_digest": "ef4e666f8065d211e001f24649222766481876fef422da2aa56c9eaf6bad8071"
+      "adapter_digest": "98c188b29f7408d21ad177cf2f7332402e7f2d87433d5bce2a33c29d3d6feaba"
     }
   ]
 }

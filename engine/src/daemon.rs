@@ -36,6 +36,7 @@ use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
 use crate::managed_cursor_helm_scan;
 use crate::managed_opencode_scan;
+use crate::managed_pi_helm_scan;
 use crate::managed_resume_scan;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
@@ -382,6 +383,7 @@ struct ManagedObservationScanResult {
     claude_observations: Vec<managed_claude_scan::ClaudeChannelObservation>,
     opencode_observations: Vec<managed_opencode_scan::OpenCodeServerObservation>,
     cursor_observations: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
+    pi_observations: Vec<managed_pi_helm_scan::PiHelmObservation>,
     /// Managed provider processes whose session is gone. Identified in the
     /// blocking scan, reaped by the async consumer.
     orphan_processes: Vec<crate::managed_process_janitor::OrphanProcess>,
@@ -391,6 +393,7 @@ struct ManagedObservationScanResult {
     claude_elapsed_ms: u64,
     opencode_elapsed_ms: u64,
     cursor_elapsed_ms: u64,
+    pi_elapsed_ms: u64,
     retained_stale_rows: usize,
     elapsed_ms: u64,
 }
@@ -402,6 +405,7 @@ struct ManagedObservationSnapshot {
     claude: Vec<managed_claude_scan::ClaudeChannelObservation>,
     opencode: Vec<managed_opencode_scan::OpenCodeServerObservation>,
     cursor: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
+    pi: Vec<managed_pi_helm_scan::PiHelmObservation>,
 }
 
 struct ProjectionBuildInput {
@@ -440,6 +444,7 @@ impl ManagedObservationSnapshot {
             claude: result.claude_observations.clone(),
             opencode: result.opencode_observations.clone(),
             cursor: result.cursor_observations.clone(),
+            pi: result.pi_observations.clone(),
         }
     }
 
@@ -449,6 +454,7 @@ impl ManagedObservationSnapshot {
             || self.claude.iter().any(|row| row.state_file == path)
             || self.opencode.iter().any(|row| row.state_file == path)
             || self.cursor.iter().any(|row| row.state_file == path)
+            || self.pi.iter().any(|row| row.state_file == path)
     }
 
     fn projection_equivalent(&self, other: &Self) -> bool {
@@ -470,6 +476,9 @@ impl ManagedObservationSnapshot {
                 row.updated_at.clear();
             }
             for row in &mut snapshot.cursor {
+                row.updated_at.clear();
+            }
+            for row in &mut snapshot.pi {
                 row.updated_at.clear();
             }
         }
@@ -510,6 +519,12 @@ impl ManagedObservationSnapshot {
                 .filter(|row| row.live || row.run_id.is_some())
                 .cloned()
                 .collect(),
+            pi: self
+                .pi
+                .iter()
+                .filter(|row| row.live || row.run_id.is_some())
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -521,6 +536,7 @@ fn managed_provider_state_dirs() -> Vec<PathBuf> {
         managed_claude_scan::default_claude_channel_state_dir(),
         managed_opencode_scan::default_opencode_server_state_dir(),
         managed_cursor_helm_scan::default_cursor_helm_state_dir(),
+        managed_pi_helm_scan::default_pi_helm_state_dir(),
     ]
     .into_iter()
     .flatten()
@@ -1719,12 +1735,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 claude_count = result.claude_observations.len(),
                                 opencode_count = result.opencode_observations.len(),
                                 cursor_count = result.cursor_observations.len(),
+                                pi_count = result.pi_observations.len(),
                                 process_inventory_ms = result.process_inventory_ms,
                                 codex_elapsed_ms = result.codex_elapsed_ms,
                                 antigravity_elapsed_ms = result.antigravity_elapsed_ms,
                                 claude_elapsed_ms = result.claude_elapsed_ms,
                                 opencode_elapsed_ms = result.opencode_elapsed_ms,
                                 cursor_elapsed_ms = result.cursor_elapsed_ms,
+                                pi_elapsed_ms = result.pi_elapsed_ms,
                                 retained_stale_rows = result.retained_stale_rows,
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan was slow"
@@ -1739,12 +1757,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 claude_count = result.claude_observations.len(),
                                 opencode_count = result.opencode_observations.len(),
                                 cursor_count = result.cursor_observations.len(),
+                                pi_count = result.pi_observations.len(),
                                 process_inventory_ms = result.process_inventory_ms,
                                 codex_elapsed_ms = result.codex_elapsed_ms,
                                 antigravity_elapsed_ms = result.antigravity_elapsed_ms,
                                 claude_elapsed_ms = result.claude_elapsed_ms,
                                 opencode_elapsed_ms = result.opencode_elapsed_ms,
                                 cursor_elapsed_ms = result.cursor_elapsed_ms,
+                                pi_elapsed_ms = result.pi_elapsed_ms,
                                 retained_stale_rows = result.retained_stale_rows,
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan completed"
@@ -1809,6 +1829,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &result.claude_observations,
                             &result.opencode_observations,
                             &result.cursor_observations,
+                            &result.pi_observations,
                         );
                         let should_refresh_unmanaged =
                             result.full_reconciliation || managed_observations_changed;
@@ -2585,6 +2606,7 @@ fn maybe_start_projection_build(
                     &managed.claude,
                     &managed.opencode,
                     &managed.cursor,
+                    &managed.pi,
                     &unmanaged,
                     managed_snapshot_complete,
                     unmanaged_snapshot_complete,
@@ -2620,6 +2642,7 @@ fn build_local_status_projection(
     claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
+    pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
     unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
     managed_snapshot_complete: bool,
     unmanaged_snapshot_complete: bool,
@@ -2689,6 +2712,13 @@ fn build_local_status_projection(
             antigravity_observations,
             now,
         ));
+    payload
+        .managed_sessions
+        .extend(heartbeat::leases_from_pi_helm_observations(
+            machine_id,
+            pi_observations,
+            now,
+        ));
     payload.managed_sessions.sort_by(|a, b| {
         a.provider
             .cmp(&b.provider)
@@ -2701,6 +2731,7 @@ fn build_local_status_projection(
             claude_observations,
             opencode_observations,
             cursor_observations,
+            pi_observations,
         );
     // Compute the fresh activity ledger once and feed the raw rows into the
     // typed evidence envelope. Activity facts remain independent of control
@@ -2730,6 +2761,7 @@ fn build_local_status_projection(
         claude_observations,
         opencode_observations,
         cursor_observations,
+        pi_observations,
         now,
     );
     payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations(
@@ -2739,6 +2771,7 @@ fn build_local_status_projection(
         claude_observations,
         opencode_observations,
         cursor_observations,
+        pi_observations,
         unmanaged_session_bindings,
         &phase_ledger,
         &run_windows,
@@ -2755,6 +2788,7 @@ fn build_local_status_projection(
         claude_observations,
         opencode_observations,
         cursor_observations,
+        pi_observations,
     );
     heartbeat::apply_machine_boot_identity(&mut payload.sessions);
     heartbeat::apply_local_titles(conn, &mut payload.sessions);
@@ -2774,6 +2808,7 @@ fn record_and_read_run_bindings(
     claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
+    pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
     now: chrono::DateTime<chrono::Utc>,
 ) -> crate::state::session_run_binding::RunWindowIndex {
     use crate::state::session_run_binding::{
@@ -2816,6 +2851,14 @@ fn record_and_read_run_bindings(
         .chain(cursor_observations.iter().map(|obs| {
             (
                 "cursor",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                Some(obs.started_at.as_str()),
+            )
+        }))
+        .chain(pi_observations.iter().map(|obs| {
+            (
+                "pi",
                 obs.session_id.as_str(),
                 obs.run_id.as_deref(),
                 Some(obs.started_at.as_str()),
@@ -3379,6 +3422,7 @@ fn managed_process_pids_from_observations(
     claude: &[managed_claude_scan::ClaudeChannelObservation],
     opencode: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor: &[managed_cursor_helm_scan::CursorHelmObservation],
+    pi: &[managed_pi_helm_scan::PiHelmObservation],
 ) -> HashSet<u32> {
     let mut pids = HashSet::new();
     for observation in codex {
@@ -3406,6 +3450,12 @@ fn managed_process_pids_from_observations(
         if observation.live {
             pids.extend(observation.launcher_pid);
             pids.extend(observation.cursor_pid);
+        }
+    }
+    for observation in pi {
+        if observation.live {
+            pids.extend(observation.launcher_pid);
+            pids.extend(observation.provider_pid);
         }
     }
     pids
@@ -3626,6 +3676,29 @@ fn maybe_start_managed_observation_scan(
             |observation| &observation.state_file,
         );
         let cursor_elapsed_ms = cursor_started.elapsed().as_millis() as u64;
+        let pi_started = Instant::now();
+        let mut pi_observations = if full_reconciliation {
+            managed_pi_helm_scan::default_pi_helm_state_dir()
+                .map(|state_dir| {
+                    managed_pi_helm_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            let paths = previous
+                .pi
+                .iter()
+                .map(|row| row.state_file.clone())
+                .collect::<Vec<_>>();
+            managed_pi_helm_scan::collect_observations_from_paths(&paths, &process_facts)
+        };
+        let pi_elapsed_ms = pi_started.elapsed().as_millis() as u64;
+        let retained_pi =
+            retain_existing_observations(&mut pi_observations, &previous.pi, |observation| {
+                &observation.state_file
+            });
         // Sweep contracts left behind by teardown paths that exited early or
         // by abrupt process death. Provider-neutral: Codex and Claude leak
         // these for different reasons.
@@ -3690,6 +3763,7 @@ fn maybe_start_managed_observation_scan(
                 observed_sessions
                     .extend(opencode_observations.iter().map(|o| o.session_id.clone()));
                 observed_sessions.extend(cursor_observations.iter().map(|o| o.session_id.clone()));
+                observed_sessions.extend(pi_observations.iter().map(|o| o.session_id.clone()));
                 observed_sessions.extend(
                     antigravity_observations
                         .iter()
@@ -3733,17 +3807,20 @@ fn maybe_start_managed_observation_scan(
             orphan_processes,
             opencode_observations,
             cursor_observations,
+            pi_observations,
             process_inventory_ms,
             codex_elapsed_ms,
             antigravity_elapsed_ms,
             claude_elapsed_ms,
             opencode_elapsed_ms,
             cursor_elapsed_ms,
+            pi_elapsed_ms,
             retained_stale_rows: retained_codex.len()
                 + retained_antigravity.len()
                 + retained_claude.len()
                 + retained_opencode.len()
-                + retained_cursor.len(),
+                + retained_cursor.len()
+                + retained_pi.len(),
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
@@ -5422,6 +5499,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &cached,
             true,
             false,
@@ -5468,6 +5546,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &cached,
             false,
             false,
@@ -5484,6 +5563,7 @@ mod tests {
             false,
             &None,
             "cinder",
+            &[],
             &[],
             &[],
             &[],
@@ -5506,6 +5586,7 @@ mod tests {
             false,
             &None,
             "cinder",
+            &[],
             &[],
             &[],
             &[],

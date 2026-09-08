@@ -3751,6 +3751,15 @@ class CatalogStore:
                 if thread is None or not thread.device_id or not thread.cwd:
                     orm.rollback()
                     return {"found": True, "unavailable": "execution_target_missing"}
+                if str(session.provider or "").strip().lower() == "pi":
+                    from zerg.services.live_catalog_launch import normalize_console_provider_config
+
+                    thread.provider_config_json = json.dumps(
+                        normalize_console_provider_config("pi", _decode_json_object(thread.provider_config_json)),
+                        sort_keys=True,
+                    )
+                    session.permission_mode = "provider_local"
+                    session.permission_mode_source = "console_default"
                 existing_receipt = (
                     orm.query(LiveSessionInputReceipt)
                     .filter(

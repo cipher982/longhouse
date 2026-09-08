@@ -150,6 +150,26 @@ def test_managed_launch_plan_preserves_provider_local_without_remote_authority()
     assert plan.permission_mode == "provider_local"
 
 
+def test_pi_managed_launch_plan_forces_provider_local_console_policy():
+    from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
+    from zerg.services.managed_local_launcher import build_managed_local_launch_plan
+
+    plan = build_managed_local_launch_plan(
+        ManagedLocalLaunchParams(
+            owner_id=42,
+            runner_target="cinder",
+            cwd="/tmp/pi-console",
+            provider="pi",
+            machine_name="cinder",
+            permission_mode="bypass",
+            provider_config={"permission_mode": "bypass"},
+        )
+    )
+
+    assert plan.permission_mode == "provider_local"
+    assert plan.provider_config == {"permission_mode": "provider_local"}
+
+
 def test_cursor_remote_approval_token_does_not_require_coordination_tools():
     from uuid import uuid4
 

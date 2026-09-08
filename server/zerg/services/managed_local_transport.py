@@ -45,7 +45,7 @@ def _build_engine_bridge_shell_command(
 def _build_longhouse_cli_shell_command(
     *,
     command_group: str = "claude-channel",
-    subcommand: str,
+    subcommand: str | None,
     args: tuple[str, ...] = (),
     required_commands: tuple[str, ...] = ("longhouse",),
     namespace: str | None = None,
@@ -120,6 +120,18 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
             subcommand=None,
             args=tuple(cursor_args),
             required_commands=("longhouse", "cursor-agent"),
+        )
+
+    if transport == ManagedSessionTransport.PI_HELM_CHANNEL.value:
+        pi_args = ["--resume-session", shlex.quote(session_id)]
+        cwd = str(getattr(session, "cwd", "") or "").strip()
+        if cwd:
+            pi_args.extend(["--cwd", shlex.quote(cwd)])
+        return _build_longhouse_cli_shell_command(
+            command_group="pi",
+            subcommand=None,
+            args=tuple(pi_args),
+            required_commands=("longhouse", "pi"),
         )
 
     if transport in (

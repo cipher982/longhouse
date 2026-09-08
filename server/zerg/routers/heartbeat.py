@@ -195,11 +195,8 @@ class ActivityEvidenceIn(UTCBaseModel):
 
 class ControlEvidenceIn(UTCBaseModel):
     authority_class: Literal["provider_control"] | None = None
-    # Antigravity joined on 2026-08-20: its Helm launcher seeds a control
-    # identity into the hook state file, so the hook scanner can now make a
-    # claim it previously could not. Shadow sessions have no launcher, so they
-    # carry no identity and produce no control fact.
-    provider: Literal["codex", "claude", "opencode", "cursor", "antigravity"]
+    # Managed launch identities, not process names, authorize these claims.
+    provider: Literal["codex", "claude", "opencode", "cursor", "antigravity", "pi"]
     session_id: str = Field(..., max_length=255)
     connection_id: str | None = Field(None, min_length=1, max_length=255)
     lease_generation: str | None = Field(None, min_length=1, max_length=255)
@@ -271,7 +268,7 @@ class ReadinessEvidenceIn(UTCBaseModel):
 
 class ContinuationEvidenceIn(UTCBaseModel):
     authority_class: Literal["retained_launch_contract"] | None = None
-    provider: Literal["codex", "claude", "cursor", "opencode"]
+    provider: Literal["codex", "claude", "cursor", "opencode", "pi"]
     session_id: str = Field(..., min_length=1, max_length=255)
     provider_session_id: str | None = Field(None, min_length=1, max_length=255)
     cwd: str | None = Field(None, min_length=1, max_length=1024)

@@ -43,7 +43,23 @@ pub fn configured_provider_roots() -> Vec<ProviderConfig> {
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".config"));
 
-    provider_candidates(&home, &claude_root, &xdg_config_root)
+    let mut providers = provider_candidates(&home, &claude_root, &xdg_config_root);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Ok(pi_roots) = crate::pi_session::configured_native_session_roots(&cwd) {
+        for root in pi_roots {
+            if !providers
+                .iter()
+                .any(|provider| provider.name == "pi" && provider.root == root)
+            {
+                providers.push(ProviderConfig {
+                    name: "pi",
+                    root,
+                    extension: "jsonl",
+                });
+            }
+        }
+    }
+    providers
 }
 
 fn existing_provider_roots(candidates: Vec<ProviderConfig>) -> Vec<ProviderConfig> {
@@ -396,6 +412,12 @@ fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
                 .any(|component| component.as_os_str() == "agent-transcripts");
     }
     if provider.name == "cursor_acp" {
+        return path.extension().and_then(|value| value.to_str()) == Some("jsonl");
+    }
+    if provider.name == "pi" {
+        // Both the upstream cwd-encoded session tree and the historical
+        // pi-console store are append-only JSONL sources. Keep this predicate
+        // deliberately filename-agnostic: Pi permits explicit session paths.
         return path.extension().and_then(|value| value.to_str()) == Some("jsonl");
     }
     let extension_matches = path

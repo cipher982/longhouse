@@ -86,7 +86,7 @@ enum Commands {
         #[command(flatten)]
         launch: CodexLaunchArgs,
     },
-    /// Launch a native Longhouse Pi one-shot turn.
+    /// Launch a native Longhouse Pi Helm session.
     #[command(args_conflicts_with_subcommands = true)]
     Pi {
         #[command(subcommand)]
@@ -307,16 +307,21 @@ struct PiLaunchArgs {
     #[arg(long, default_value = ".")]
     cwd: PathBuf,
     #[arg(long)]
-    prompt: String,
+    prompt: Option<String>,
     #[arg(long)]
     model: Option<String>,
     #[arg(long)]
     session_dir: Option<PathBuf>,
     /// Pi's upstream provider id (e.g. `openrouter`), passed through `--provider`.
-    #[arg(long, default_value = "openrouter")]
-    provider: String,
+    #[arg(long)]
+    provider: Option<String>,
     #[arg(long)]
     pi_bin: Option<String>,
+    #[arg(long)]
+    url: Option<String>,
+    /// Resume an ended managed Pi session using its exact native JSONL file.
+    #[arg(long)]
+    resume_session: Option<String>,
 }
 
 #[derive(Args)]
@@ -2525,133 +2530,41 @@ fn ensure_claude_channel_prerequisite(binary: &str) -> anyhow::Result<()> {
 }
 
 fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
-    let cwd = std::fs::canonicalize(&args.cwd)
-        .with_context(|| format!("resolve {}", args.cwd.display()))?;
-    let (url, token, machine_name) = resolve_codex_config(None, None)?;
-    let pi_bin = resolve_provider_binary(
-        args.pi_bin
-            .clone()
-            .or_else(|| std::env::var("LONGHOUSE_PI_BIN").ok()),
-        "pi",
-        "Pi",
-        "--pi-bin",
-    )?;
-    let mut provider_config = json!({
-        // The shared `provider` key must stay `pi` for the Runtime Host to
-        // route the launch; Pi's upstream provider id rides under `pi_provider`.
-        // These flow onto the catalog thread so the Console turn dispatches the
-        // same provider/model/session-dir that started the session.
-        "pi_provider": args.provider.clone(),
-    });
-    if let Some(model) = args
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        provider_config["model"] = json!(model);
+    if !interactive_stdio() {
+        anyhow::bail!(
+            "longhouse pi Helm needs an interactive terminal. For headless launches use the Longhouse web/iOS Console."
+        );
     }
-    if let Some(dir) = &args.session_dir {
-        provider_config["session_dir"] = json!(dir);
+    let (url, token, _) = resolve_codex_config(args.url.clone(), None)?;
+    let mut command = Command::new(paired_engine_path()?);
+    command
+        .args(["pi-helm", "launch", "--cwd"])
+        .arg(args.cwd)
+        .env("LONGHOUSE_PI_HELM_URL", &url)
+        .env("LONGHOUSE_PI_HELM_TOKEN", &token);
+    if let Some(prompt) = args.prompt {
+        command.arg("--prompt").arg(prompt);
     }
-    let mut payload = ManagedLaunchRegistration {
-        provider: "pi",
-        cwd: &cwd,
-        project: None,
-        display_name: None,
-        machine_name: &machine_name,
-        // Pi has no remote-approval surface: control_channel rejects any
-        // non-bypass permission mode for it outright.
-        permission_mode: PermissionMode::Bypass,
-        provenance: ManagedLaunchProvenance::interactive_helm(),
-        extra: vec![("provider_config", provider_config)],
+    if let Some(provider) = args.provider {
+        command.arg("--provider").arg(provider);
     }
-    .to_json();
-    // Mint the session identity locally so a degraded launch owns a stable
-    // session the background retry can register later under the same id.
-    payload["session_id"] = json!(Uuid::new_v4().to_string());
-    let runtime = tokio::runtime::Runtime::new()?;
-    let expected_session_id = payload
-        .get("session_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
-    let response = match register_managed_launch_with_timeout(
-        &runtime,
-        &url,
-        &token,
-        "Pi",
-        &payload,
-        expected_session_id.as_deref(),
-        managed_launch_lifecycle::FOREGROUND_REGISTRATION_TIMEOUT,
-    ) {
-        Ok(response) => Some(response),
-        Err(error) => {
-            eprintln!(
-                "Longhouse warning: starting Pi without Longhouse control because registration failed ({error:#})"
-            );
-            None
-        }
-    };
-    let session_id = response
-        .as_ref()
-        .map(|response| response.session_id.clone())
-        .or(expected_session_id)
-        .context("degraded Pi launch has no session identity")?;
-    // Drive the turn: the this-device registration only persists the session;
-    // the machine agent dispatches pi_print after a console turn enqueues
-    // `session.turn.start` with the prompt.
-    if response.is_some() {
-        if let Err(error) =
-            enqueue_pi_console_turn(&runtime, &url, &token, &session_id, &args.prompt)
-        {
-            eprintln!("Longhouse warning: Pi turn enqueue failed ({error:#})");
-        }
+    if let Some(model) = args.model {
+        command.arg("--model").arg(model);
     }
-    println!(
-        "Managed Pi one-shot launched\n→ {}/s/{}",
-        url.trim_end_matches('/'),
-        session_id.split('-').next().unwrap_or(&session_id)
-    );
-    println!("Provider binary: {pi_bin}");
+    if let Some(session_dir) = args.session_dir {
+        command.arg("--session-dir").arg(session_dir);
+    }
+    if let Some(resume_session) = args.resume_session {
+        command.arg("--resume-session").arg(resume_session);
+    }
+    if let Some(pi_bin) = args.pi_bin {
+        command.arg("--pi-bin").arg(pi_bin);
+    }
+    let status = command.status().context("run native Pi Helm launcher")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
     Ok(())
-}
-
-fn enqueue_pi_console_turn(
-    runtime: &tokio::runtime::Runtime,
-    url: &str,
-    device_token: &str,
-    session_id: &str,
-    prompt: &str,
-) -> anyhow::Result<()> {
-    let endpoint = format!(
-        "{}/api/agents/sessions/{}/turns",
-        url.trim_end_matches('/'),
-        session_id
-    );
-    let payload = serde_json::json!({
-        "message": prompt,
-        "client_request_id": Uuid::new_v4().to_string(),
-    });
-    runtime.block_on(async {
-        let response = reqwest::Client::new()
-            .post(endpoint)
-            .header("X-Agents-Token", device_token)
-            .json(&payload)
-            .timeout(Duration::from_secs(15))
-            .send()
-            .await
-            .with_context(|| "enqueue Pi console turn")?;
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .with_context(|| "read Pi console turn response")?;
-        if !status.is_success() {
-            let short: String = body.trim().chars().take(300).collect();
-            anyhow::bail!("pi console turn failed ({status}): {short}");
-        }
-        Ok(())
-    })
 }
 
 fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
@@ -4579,12 +4492,14 @@ fn main() -> anyhow::Result<()> {
             }
             None => launch_managed_codex(launch)?,
         },
-        Commands::Pi { command, launch } => match command {
-            Some(PiCommand::Noop) => {
-                anyhow::bail!("Pi is a one-shot adapter; launch with `longhouse pi --prompt ...`")
+        Commands::Pi { command, launch } => {
+            match command {
+                Some(PiCommand::Noop) => {
+                    anyhow::bail!("Pi Helm is launched directly; use `longhouse pi` with an interactive terminal")
+                }
+                None => launch_managed_pi(launch)?,
             }
-            None => launch_managed_pi(launch)?,
-        },
+        }
         Commands::Opencode { command, launch } => match command {
             Some(OpencodeCommand::Attach(args)) => attach_managed_opencode(args)?,
             Some(OpencodeCommand::Stop(args)) => stop_opencode_bridge(&args.session_id, None)?,

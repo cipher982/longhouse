@@ -32,4 +32,12 @@ def add_factory_provider_arguments(
         type=Path,
     )
     parser.add_argument("--provider-version")
+    # The factory includes the authored cell axes in every executable command.
+    # Producers may not need to use them, but must parse the same envelope so a
+    # staged cell cannot silently run a different subject or evidence class.
+    parser.add_argument("--provider")
+    parser.add_argument("--platform")
+    parser.add_argument("--architecture")
+    parser.add_argument("--evidence-class")
+    parser.add_argument("--credential-binding", action="append", default=[])
     parser.add_argument("--registration", action="store_true")

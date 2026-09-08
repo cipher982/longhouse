@@ -579,7 +579,18 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "opencode_run_stream"
     )
-    return codex_live or cursor_live or opencode_live
+    pi_live = _is_pi_print_stream_event(event)
+    return codex_live or cursor_live or opencode_live or pi_live
+
+
+def _is_pi_print_stream_event(event: RuntimeEventIngest) -> bool:
+    payload = event.payload or {}
+    return (
+        (event.provider or "").strip().lower() == "pi"
+        and (event.source or "").strip().lower() == "pi_print"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") == "pi_print_stream"
+    )
 
 
 def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:
@@ -643,18 +654,26 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
 
     updated_runtime_keys: list[str] = []
     for event in events:
+        pi_print_stream = _is_pi_print_stream_event(event)
         preview_candidate = live_preview_candidate_from_runtime_event(
             event,
             observation_id=f"live:{event.source}:{event.dedupe_key}",
         )
         if preview_candidate is not None:
             upsert_live_session_live_preview(db, preview_candidate)
-        outcome = _apply_runtime_event(
-            db,
-            event,
-            state_model=LiveRuntimeState,
-            archive_side_effects=False,
-        )
+        if pi_print_stream:
+            # Pi's print stream is a transcript overlay. Its activity and
+            # terminal lifecycle arrive as separate runtime signals; reducing
+            # this envelope as progress would manufacture phase state from UI
+            # text and make the overlay look like durable runtime evidence.
+            outcome = "stored_live_overlay"
+        else:
+            outcome = _apply_runtime_event(
+                db,
+                event,
+                state_model=LiveRuntimeState,
+                archive_side_effects=False,
+            )
         if event.kind == "terminal_signal" and expire_live_interactions_for_terminal(db, event):
             outcome = "applied"
         elif outcome == "applied" and event.kind in {"phase_signal", "progress_signal"}:
@@ -667,7 +686,7 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
                 if reason is not None:
                     expire_live_interaction(db, interaction, occurred_at=normalize_utc(event.occurred_at), reason=reason)
         _record_managed_codex_runtime_observation(event, f"live_{outcome}")
-        if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
+        if outcome in {"applied", "stored_live_overlay"} and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
 
     # Runtime signals are liveness evidence for the active-session candidate

@@ -43,6 +43,7 @@ _RUN_EXIT_AUTHORITY = {
     # Antigravity has no bridge process; the hook state file its scanner
     # reads is the execution-owner record.
     "antigravity": ("provider", "antigravity_hook_scan"),
+    "pi": ("provider", "pi_helm_scan"),
 }
 
 

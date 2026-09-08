@@ -69,9 +69,9 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     id: "pi",
     launchAndSend: true,
     interrupt: true,
-    steerMidTurn: false,
-    resume: false,
-    cloudSessionStart: "none",
+    steerMidTurn: true,
+    resume: true,
+    cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse pi",
   },
 };

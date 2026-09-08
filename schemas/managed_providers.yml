@@ -1812,17 +1812,19 @@ providers:
   auth_probe:
     disposition: policy_disabled
     reason: "pi's only auth surface prints the credential to stdout"
-  requires_longhouse_cli: false
-  # Pi (earendil-works/pi, npm @earendil-works/pi-coding-agent) is a standalone
-  # TypeScript/Bun CLI. One-shot `pi -p` runs and their transcript JSONL are
-  # real today through the factory adapter. The engine managed bridge (helm
-  # launch/steer over pi's rpc/server socket) is not wired yet, so the
-  # long-running control surface below stays conservative until that lands.
-  managed_transport: pi_print
+  requires_longhouse_cli: true
+  # Helm keeps the stock terminal; Console owns one print invocation per turn.
+  managed_transport: pi_helm_channel
   console_adapter: pi_print
-  control_plane: pi_print
+  control_plane: pi_helm_channel
   control_plane_aliases: []
   adapter_sources:
+  - engine/src/pi_helm_launcher.rs
+  - engine/src/pi_helm_control.rs
+  - engine/src/managed_pi_helm_scan.rs
+  - engine/assets/longhouse-pi-helm.ts
+  - engine/src/pi_print.rs
+  - engine/src/pi_session.rs
   - server/zerg/qa/provider_adapters/pi.py
   wire_families: [pi_jsonl]
   observation_sources: [native_archive, managed_bridge]
@@ -1848,9 +1850,6 @@ providers:
     source_surface: console
     state_mutation_scope: session_model
     evidence_class: live_token
-    # The producer now exists (provider_interaction_probe.py pi branch +
-    # _PROVIDER_VERSION_PATTERNS bare-semver grammar), so the live canary can
-    # run; confirmed by the pi_print_v1 release-lane qualification.
     disposition: implemented
     canary: server/zerg/qa/provider_interaction_probe.py
   release_channel:
@@ -1867,166 +1866,201 @@ providers:
       windows-x86_64: "@earendil-works/pi-coding-agent"
       windows-aarch64: "@earendil-works/pi-coding-agent"
   permission_prompt_surface: false
-  external_event_channel: null
-  # pause_tool_name is required by the manifest schema as a non-empty string;
-  # with permission_prompt_surface false it is inert until pi exposes a real
-  # permission/pause hook.
+  external_event_channel: pi_helm_channel
+  # Pi owns project trust locally; there is no remote permission reply channel.
   pause_tool_name: "pi_pause_request"
   harness_safe_no_token_prompt: false
   harness_safe_managed_session_scenarios: []
   harness_real_managed_session_e2e: false
   launch_local: true
-  # pi -p/--continue is the run-once surface; the engine exec/turn adapter is
-  # not wired yet, so turn_start stays truthful to the factory adapter only.
-  # run_once is a legacy command Codex alone carries; pi's one-shot is turn_start.
   run_once: false
-  reattach: false
-  # Live-session control (send_input/terminate) needs the unwired engine bridge.
-  # `longhouse pi` registers a Console one-shot and enqueues session.turn.start;
-  # there is no long-running pi session for a composer to talk to, and
-  # control_channel.rs has no pi branch for session.send_text or
-  # session.terminate. `interrupt` stays true because it backs the turn-scoped
-  # pi.turn_interrupt that `pi_print::interrupt_pi_print_turn` really serves.
-  send_input: false
+  # Reattach means a new local TUI after the old owner ended, never live attach.
+  reattach: true
+  send_input: true
   interrupt: true
-  steer_active_turn: false
+  steer_active_turn: true
   answer_pause: false
-  terminate: false
+  terminate: true
   tail_output: true
-  runtime_phase: false
+  runtime_phase: true
   transcript_binding: true
   live_proof: false
   startup_coordination_context: false
-  # Empty capability set: no factory release-acquisition lane exists for Pi.
-  capabilities: {}
-  can_resume: false
+  capabilities:
+    session.launch.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.pi.launch_local
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: []
+      required_assertions:
+      - &pi_helm_lifecycle_assertion
+        id: pi_helm_launch_registration
+        scenario_id: pi_helm_lifecycle
+        oracle_source: server/zerg/qa/pi_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_native_tool_taxonomy
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_send_idle
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_steer_active
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_follow_up_native
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_abort_native
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_terminate_owned
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_reload_rebind
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_session_replacement_rebind
+    session.resume.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.pi.resume_helm
+      action_gate: strict
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_cold_resume_exact_file
+      - <<: *pi_helm_lifecycle_assertion
+        id: pi_helm_stale_owner_refused
+    session.turn.start:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.pi.turn_start
+      action_gate: strict
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: pi_console_tool_enabled
+        scenario_id: pi_console_tool_lifecycle
+        oracle_source: server/zerg/qa/pi_console_tool_producer.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+  can_resume: true
   turn_start: true
   fork_thread: false
   operation_evidence:
     fork_thread:
       level: none
-      source: not implemented; no fork surface observed on the Pi print adapter
-      disposition: "not_implemented"
-      owner_action: "observe whether Pi can branch a session and record the surface"
+      source: native forks retain history lineage; remote branching is not exposed
+      disposition: not_implemented
+      owner_action: "add a Pi native fork ownership canary before exposing remote branch"
     launch_local:
-      level: live_token
-      source: "Real `pi -p` completed a bounded OpenRouter turn in a sandbox and wrote a session JSONL; the factory adapter launches the stock pi CLI."
-      disposition: "implemented"
+      level: source_review
+      source: "stock Pi TUI with a process-scoped Longhouse extension; pi_helm_lifecycle"
+      disposition: implemented
     run_once:
       level: none
-      source: the legacy session.run_once command is Codex-only; pi's one-shot is turn_start
-      disposition: "not_implemented"
-      reason: "run_once is a legacy command the engine routes only for Codex."
-      owner_action: "route pi turn_start through a pi engine adapter instead of run_once"
-      blocker: "budget"
+      source: "Console routes through session.turn.start, not the legacy run_once command"
+      disposition: policy_disabled
+      reason: "Pi Console has one turn-scoped path through session.turn.start."
+      routed_to: turn_start
     reattach:
-      level: none
-      source: pi --continue/--session resume exists upstream but the engine reattach path is not wired
-      disposition: "not_implemented"
-      reason: "Pi has --continue/--session resume, but Longhouse has no engine-side reattach launcher yet."
-      owner_action: "wire a pi managed bridge (like cursor_helm) that resumes the session JSONL by --session-id"
-      blocker: "budget"
+      level: source_review
+      source: "exact-file cold resume with a single execution owner; pi_helm_cold_resume_exact_file"
+      disposition: implemented
     send_input:
-      level: none
-      source: the pi factory adapter's `pi -p` prompt is a one-shot turn, not input into a live session; the engine has no pi send_text branch
-      disposition: "not_implemented"
-      reason: "Pi's only wired surface is the Console one-shot; there is no live session to send into."
-      owner_action: "wire a pi managed bridge over pi's rpc/server socket and prove session.send_text against a running pi session"
-      blocker: "budget"
+      level: source_review
+      source: "authenticated native sendUserMessage while idle; pi_helm_send_idle"
+      disposition: implemented
     interrupt:
-      level: hermetic
-      source: "Turn-scoped only: an interrupt canary SIGINTs the one-shot `pi -p` child and confirms clean exit plus a parseable session file, which is what pi.turn_interrupt advertises. Live-session interrupt has no pi branch in control_channel.rs."
-      disposition: "implemented"
+      level: source_review
+      source: "Helm native abort and Console owned-turn interruption; pi_helm_abort_native"
+      disposition: implemented
     steer_active_turn:
-      level: none
-      source: pi exposes no stdin mid-turn injection; only the rpc/server mode (unwired) would allow it
-      disposition: "not_implemented"
-      reason: "Stock pi has no active-turn injection surface; rpc/server mode could back it but is not wired."
-      owner_action: "prove rpc/server-mode active-turn steer through a pi managed bridge"
-      blocker: "upstream"
+      level: source_review
+      source: "native boundary-delivered steer, not token preemption; pi_helm_steer_active"
+      disposition: implemented
     answer_pause:
       level: none
-      source: pi has no pull-based pause-request permission surface
-      disposition: "not_implemented"
-      reason: "Pi exposes no pause-request permission channel."
-      owner_action: "confirm pi permission hooks or add a pull-based pause surface"
-      blocker: "upstream"
+      source: "Pi has no provider-owned remote permission reply transport"
+      disposition: upstream_absent
+      reason: "Project trust and extension UI remain provider-local."
+      observed_provider_version: "0.85.1"
     terminate:
-      level: none
-      source: killing the factory adapter's one-shot child is not remote session terminate; control_channel.rs answers pi session.terminate with unsupported_command
-      disposition: "not_implemented"
-      reason: "Longhouse has no pi control plane to terminate; the Console turn owns its own child process lifetime."
-      owner_action: "wire a pi managed bridge with a terminate path and prove session.terminate against a running pi session"
-      blocker: "budget"
+      level: source_review
+      source: "owned native process-group termination; pi_helm_terminate_owned"
+      disposition: implemented
     tail_output:
-      level: hermetic
-      source: "The pi factory adapter reads the append-only session JSONL and normalizes entries into raw events."
-      disposition: "implemented"
+      level: source_review
+      source: "native JSONL history plus reconciled Console live previews"
+      disposition: implemented
     runtime_phase:
-      level: none
-      source: pi phase observation requires the engine managed bridge
-      disposition: "not_implemented"
-      owner_action: "wire managed_pi_scan into the daemon observers"
-      blocker: "budget"
+      level: source_review
+      source: "native agent/tool/UI lifecycle; agent_settled establishes quiescence"
+      disposition: implemented
     transcript_binding:
-      level: hermetic
-      source: "The pi factory adapter parses the session header id and message entries and binds them to the Longhouse session id."
-      disposition: "implemented"
+      level: source_review
+      source: "pre-spawn native UUID claims and verified exact source bindings"
+      disposition: implemented
     turn_start:
-      level: hermetic
-      source: "pi -p/--continue one-shot turn semantics exercised by the factory adapter"
-      disposition: "implemented"
+      level: source_review
+      source: "stock tool-enabled JSON print with exact continuation; pi_console_tool_lifecycle"
+      disposition: implemented
   machine_control_supports:
+  - pi.send
+  - pi.interrupt
+  - pi.steer
+  - pi.terminate
   - pi.turn_start
   - pi.turn_interrupt
-  # Unsurveyed provider: every signal starts as work, and the census lane is
-  # the canary that characterises which lines this provider writes at all.
   transcript_signals:
     turn.duration:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: upstream_absent
+      raw_source: none
       canary: pi_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for pi and name the raw source"
+      trigger: turn_end
+      owner_action: "Pi JSONL has message clocks but no authored turn duration; do not invent one"
     session.recap:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: upstream_absent
+      raw_source: none
       canary: pi_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for pi and name the raw source"
+      trigger: idle_after_turn
+      owner_action: "branch/compaction summaries are not away recaps"
     session.title:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: implemented
+      raw_source: session_info/name
+      fixture: engine/tests/fixtures/golden/pi/native.jsonl
       canary: pi_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for pi and name the raw source"
+      trigger: none_reliable
     turn.usage:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: implemented
+      raw_source: message/message.usage
+      fixture: engine/tests/fixtures/golden/pi/native.jsonl
       canary: pi_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for pi and name the raw source"
+      trigger: turn_end
     turn.api_error:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: implemented
+      raw_source: message/message.errorMessage + message.stopReason
+      fixture: engine/tests/fixtures/golden/pi/native.jsonl
       canary: pi_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for pi and name the raw source"
+      trigger: none_reliable
     context.compaction:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: implemented
+      raw_source: compaction/tokensBefore
+      fixture: engine/tests/fixtures/golden/pi/native.jsonl
       canary: pi_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for pi and name the raw source"
+      trigger: slash_compact
     input.queue:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: upstream_absent
+      raw_source: none
       canary: pi_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for pi and name the raw source"
+      trigger: send_while_working
+      owner_action: "native steer/follow-up queues are live state, not durable transcript records"
     turn.thinking:
-      disposition: not_implemented
-      raw_source: unsurveyed
+      disposition: implemented
+      raw_source: message/message.content.thinking
+      fixture: engine/tests/fixtures/golden/pi/native.jsonl
       canary: pi_transcript_signals
-      trigger: census
-      owner_action: "run the transcript census for pi and name the raw source"
+      trigger: turn_end

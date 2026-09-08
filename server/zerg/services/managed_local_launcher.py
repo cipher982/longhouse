@@ -23,6 +23,7 @@ from zerg.services.agents.kernel_writes import record_connection
 from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.internal_sessions import classify_provider_proof_environment
+from zerg.services.live_catalog_launch import normalize_console_provider_config
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.managed_provider_contracts import managed_provider_names
@@ -40,7 +41,8 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # Engine truth (engine/src/daemon.rs, payload.managed_sessions):
 # leases_from_observations (codex) + leases_from_claude_channel_observations
 # (claude) + leases_from_opencode_server_observations (opencode) +
-# leases_from_cursor_helm_observations (cursor). For these, the launcher births
+# leases_from_cursor_helm_observations (cursor) + Pi channel observations.
+# For these, the launcher births
 # the connection ``detached`` so liveness reflects an observed ready channel,
 # not a birth-time assertion — important for OpenCode, where the server bridge
 # can fail to start AFTER the API session is created, and a birth-time
@@ -51,11 +53,8 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # readiness predicate below, which additionally withholds send. Listing it
 # would say the same thing twice and hide which rule is load-bearing.
 #
-# Pi is absent because it has no control lease and needs none: it is a Console
-# one-shot with no live-control capabilities to promote (its contract advertises
-# only pi.turn_start / pi.turn_interrupt), so the born connection carries zeros
-# for send/interrupt/terminate whatever its state.
-_HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor"})
+# Pi likewise requires its observed launch-scoped channel before control is ready.
+_HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor", "pi"})
 
 
 def managed_provider_has_lease_observer(provider: str | None) -> bool:
@@ -283,6 +282,13 @@ def build_managed_local_launch_plan(
     managed_session_name = _build_managed_session_name(display_name, fallback=f"{provider}-{plan_session_id.hex[:8]}")
     requested_permission_mode = str(params.permission_mode).strip()
     permission_mode = requested_permission_mode if requested_permission_mode in {"bypass", "provider_local", "remote_approve"} else "bypass"
+    provider_config = params.provider_config
+    if provider == "pi":
+        try:
+            provider_config = normalize_console_provider_config(provider, provider_config)
+        except ValueError as exc:
+            raise ManagedLocalLaunchError(str(exc), status_code=400) from exc
+        permission_mode = str(provider_config["permission_mode"])
     origin_kind = "test_or_canary" if classify_provider_proof_environment(cwd=cwd, machine_id=params.machine_name) == "test" else None
     launch_actor, launch_surface = sanitize_launch_provenance(
         origin_kind=origin_kind,
@@ -305,7 +311,7 @@ def build_managed_local_launch_plan(
         launch_surface=launch_surface,
         managed_transport=contract.managed_transport.value,
         attach_command="",
-        provider_config=params.provider_config,
+        provider_config=provider_config,
         environment=environment,
         origin_kind=origin_kind,
         hidden_from_default_timeline=int(origin_kind is not None or launch_actor == "automation"),

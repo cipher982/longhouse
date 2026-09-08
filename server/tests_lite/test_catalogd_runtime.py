@@ -169,3 +169,85 @@ async def test_runtime_apply_rejects_invalid_batch_without_catalog_commit(daemon
         assert connection.execute(LiveRuntimeState.__table__.select()).first() is None
         assert connection.execute(LiveArchiveOutbox.__table__.select()).first() is None
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pi_print_stream_stays_live_overlay_and_replays_without_rows(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id,
+                provider="pi",
+                environment="dev",
+                started_at=now,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    event = {
+        "runtime_key": f"pi:{session_id}",
+        "session_id": session_id,
+        "thread_id": None,
+        "run_id": None,
+        "provider": "pi",
+        "device_id": "cinder",
+        "source": "pi_print",
+        "kind": "progress_signal",
+        "phase": None,
+        "tool_name": None,
+        "occurred_at": now.isoformat(),
+        "dedupe_key": f"pi-stream:{session_id}:2",
+        "payload": {
+            "progress_kind": "pi_print_stream",
+            "thread_id": "pi-thread-1",
+            "turn_id": "pi-turn-1",
+            "item_id": "assistant-1",
+            "seq": 2,
+            "live_text": "newer Pi text",
+            "event": {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "newer"}},
+        },
+    }
+    older = {
+        **event,
+        "dedupe_key": f"pi-stream:{session_id}:1",
+        "payload": {**event["payload"], "seq": 1, "live_text": "older Pi text"},
+    }
+    try:
+        result = await client.call("session.runtime.apply.v2", {"events": [event, older]})
+        replay = await client.call("session.runtime.apply.v2", {"events": [event]})
+        assert result["updated_runtime_keys"] == [f"pi:{session_id}"]
+        assert replay["updated_runtime_keys"] == [f"pi:{session_id}"]
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        preview = (
+            connection.execute(LiveSessionLivePreview.__table__.select().where(LiveSessionLivePreview.session_id == session_id))
+            .mappings()
+            .one()
+        )
+        assert preview["preview_text"] == "newer Pi text"
+        assert (
+            connection.execute(LiveRuntimeState.__table__.select().where(LiveRuntimeState.runtime_key == f"pi:{session_id}")).first()
+            is None
+        )
+        assert connection.execute(LiveArchiveOutbox.__table__.select()).first() is None
+        assert (
+            len(
+                connection.execute(
+                    LiveSessionLivePreview.__table__.select().where(LiveSessionLivePreview.session_id == session_id)
+                ).fetchall()
+            )
+            == 1
+        )
+    engine.dispose()

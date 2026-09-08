@@ -18,13 +18,13 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveConsoleTurn
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
-from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveUser
 from zerg.services.agents.session_graph_writes import primary_thread_id_for_session
 from zerg.services.console_turns import CatalogConsoleTurn
@@ -67,6 +67,47 @@ def test_catalog_console_session_is_idle_identity_not_launch(tmp_path):
     replay = CatalogStore(engine).create_console_session(data=data)
     assert replay["created"] is False
     assert replay["exact_replay"] is True
+
+
+def test_pi_console_persists_provider_local_policy_through_turn_dispatch(tmp_path):
+    engine = create_catalog_engine(tmp_path / "catalog-pi-console.db")
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        db.add(LiveUser(id=1, email="owner@example.com", is_active=True))
+        db.commit()
+    store = CatalogStore(engine)
+    session_id = uuid4()
+    thread_id = uuid4()
+    store.create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 1,
+            "provider": "pi",
+            "device_id": "cinder",
+            "cwd": "/tmp/pi-console",
+            "project": "pi-console",
+            "provider_config": {"permission_mode": "bypass", "pi_provider": "openrouter"},
+            "started_at": datetime.now(UTC),
+        }
+    )
+
+    with Session(engine) as db:
+        session = db.get(LiveSessionCatalog, str(session_id))
+        thread = db.get(LiveSessionThread, str(thread_id))
+        assert session.permission_mode == "provider_local"
+        assert json.loads(thread.provider_config_json)["permission_mode"] == "provider_local"
+
+    turn = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "read the project file",
+            "client_request_id": "pi-console-request-1",
+            "created_at": datetime.now(UTC),
+        }
+    )
+    assert turn["turn"]["provider_config"]["permission_mode"] == "provider_local"
 
 
 def test_catalog_test_console_session_retains_automation_provenance(tmp_path):

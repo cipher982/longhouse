@@ -94,6 +94,39 @@ def _phase_event(*, session_id, occurred_at: datetime, run_id: str, phase: str =
     )
 
 
+def _pi_event(
+    *,
+    session_id,
+    occurred_at: datetime,
+    seq: int,
+    item_id: str,
+    raw_event: dict,
+    live_text: str | None = None,
+    dedupe_key: str | None = None,
+) -> RuntimeEventIngest:
+    payload = {
+        "progress_kind": "pi_print_stream",
+        "thread_id": "pi-thread-1",
+        "turn_id": "pi-turn-1",
+        "item_id": item_id,
+        "seq": seq,
+        "event": raw_event,
+    }
+    if live_text is not None:
+        payload["live_text"] = live_text
+    return RuntimeEventIngest(
+        runtime_key=f"pi:{session_id}",
+        session_id=session_id,
+        provider="pi",
+        device_id="cinder",
+        source="pi_print",
+        kind="progress_signal",
+        occurred_at=occurred_at,
+        dedupe_key=dedupe_key or f"pi:stream:{session_id}:{seq}:{item_id}",
+        payload=payload,
+    )
+
+
 def test_runtime_ingest_materializes_latest_live_preview_projection(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "latest_live_preview.db")
     now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
@@ -135,6 +168,147 @@ def test_runtime_ingest_materializes_latest_live_preview_projection(tmp_path):
     assert row.last_observation_id.endswith(f"bridge:live:{session.id}:thread-1:turn-1:legacy:2:hello")
     assert preview.text == "hello"
     assert preview.provisional_complete is False
+
+
+def test_pi_print_stream_projects_partial_native_tools_and_final_message(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "pi_print_stream.db")
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="pi")
+        partial = _pi_event(
+            session_id=session.id,
+            occurred_at=now,
+            seq=1,
+            item_id="assistant-1",
+            live_text="partial answer",
+            raw_event={"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "partial"}},
+        )
+        assert ingest_runtime_events(db, [partial]).accepted == 1
+        assert db.get(SessionLivePreview, session.id).preview_text == "partial answer"
+        first_final = _pi_event(
+            session_id=session.id,
+            occurred_at=now + timedelta(milliseconds=10),
+            seq=2,
+            item_id="assistant-1",
+            live_text="first complete answer",
+            raw_event={
+                "type": "message_end",
+                "message": {"id": "assistant-1", "role": "assistant", "content": [{"type": "text", "text": "first complete answer"}]},
+            },
+        )
+        assert ingest_runtime_events(db, [first_final]).accepted == 1
+        assert db.get(SessionLivePreview, session.id).preview_text == "first complete answer"
+
+        failed_tool = _pi_event(
+            session_id=session.id,
+            occurred_at=now + timedelta(milliseconds=20),
+            seq=3,
+            item_id="tool-1",
+            raw_event={
+                "type": "tool_execution_start",
+                "toolCallId": "tool-1",
+                "toolName": "read",
+                "args": {"path": "missing.txt"},
+            },
+        )
+        failed_result = _pi_event(
+            session_id=session.id,
+            occurred_at=now + timedelta(milliseconds=40),
+            seq=4,
+            item_id="tool-1",
+            raw_event={
+                "type": "tool_execution_end",
+                "toolCallId": "tool-1",
+                "toolName": "read",
+                "result": "No such file",
+                "isError": True,
+            },
+        )
+        ingest_runtime_events(db, [failed_tool, failed_result])
+        tool_preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+        assert tool_preview.tool_call_id == "tool-1"
+        assert tool_preview.tool_name == "read"
+        assert tool_preview.tool_input_json == {"path": "missing.txt"}
+        assert tool_preview.tool_output_text == "No such file"
+        assert tool_preview.tool_call_state == "failed"
+        assert tool_preview.provisional_complete is True
+
+        final = _pi_event(
+            session_id=session.id,
+            occurred_at=now + timedelta(milliseconds=60),
+            seq=5,
+            item_id="assistant-2",
+            live_text="final answer",
+            raw_event={
+                "type": "message_end",
+                "message": {"id": "assistant-2", "role": "assistant", "content": [{"type": "text", "text": "final answer"}]},
+            },
+        )
+        replay = final.model_copy(update={"dedupe_key": final.dedupe_key})
+        result = ingest_runtime_events(db, [final, replay])
+        assert db.query(SessionRuntimeState).count() == 0
+        db.commit()
+        row = db.get(SessionLivePreview, session.id)
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert result.accepted == 1
+    assert result.duplicates == 1
+    assert row is not None
+    assert row.turn_key == f"pi_print:{session.id}:pi-thread-1:pi-turn-1#assistant-2"
+    assert preview.text == "final answer"
+    assert preview.provisional_complete is True
+
+
+def test_pi_print_preview_is_not_resurrected_after_archive_replacement(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "pi_print_archive_replacement.db")
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="pi")
+        ingest_runtime_events(
+            db,
+            [
+                _pi_event(
+                    session_id=session.id,
+                    occurred_at=now,
+                    seq=1,
+                    item_id="assistant-1",
+                    live_text="streamed before archive",
+                    raw_event={"type": "message_update", "message": {"id": "assistant-1"}},
+                )
+            ],
+        )
+        assert supersede_session_live_preview(
+            db,
+            session_id=session.id,
+            durable_at=now + timedelta(seconds=1),
+            durable_event_id=99,
+        )
+        ingest_runtime_events(
+            db,
+            [
+                _pi_event(
+                    session_id=session.id,
+                    occurred_at=now + timedelta(seconds=2),
+                    seq=2,
+                    item_id="assistant-1",
+                    live_text="late replay of archived turn",
+                    raw_event={
+                        "type": "message_end",
+                        "message": {"id": "assistant-1", "content": [{"type": "text", "text": "late replay"}]},
+                    },
+                )
+            ],
+        )
+        db.commit()
+        row = db.get(SessionLivePreview, session.id)
+        preview_map = load_session_live_preview_map(db, [session.id])
+
+    assert row is not None
+    assert row.superseded_at is not None
+    assert row.preview_text == "streamed before archive"
+    assert preview_map == {}
 
 
 def test_console_tool_event_materializes_truthful_live_tool_preview(tmp_path):

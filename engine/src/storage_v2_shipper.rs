@@ -178,6 +178,55 @@ fn prepare_next_envelope_with_limit(
     let canonical_path = stable_source_path(path);
     let path_text = canonical_path.to_string_lossy();
     let opaque_source_id = opaque_source_id(&path_text);
+    let mut durable_session_id = session_id_override.map(str::to_string);
+    if provider.eq_ignore_ascii_case("pi") {
+        let claims = crate::turn_claims::default_registry()?.list_all()?;
+        match crate::pi_session::bind_discovered_source(conn, &canonical_path, &claims)? {
+            crate::pi_session::SourceOwnership::Managed(session_id) => {
+                if durable_session_id
+                    .as_deref()
+                    .is_some_and(|override_id| override_id != session_id)
+                {
+                    anyhow::bail!(
+                        "Pi source ownership conflicts with the managed session override"
+                    );
+                }
+                durable_session_id = Some(session_id);
+            }
+            crate::pi_session::SourceOwnership::Pending => {
+                if let Some(session_id) = durable_session_id.as_deref() {
+                    let Ok(provider_thread_id) =
+                        crate::pi_session::read_session_header_id(&canonical_path)
+                    else {
+                        return Ok(None);
+                    };
+                    crate::pi_session::bind_source_for_thread(
+                        conn,
+                        &canonical_path,
+                        session_id,
+                        &provider_thread_id,
+                    )?;
+                } else {
+                    return Ok(None);
+                }
+            }
+            crate::pi_session::SourceOwnership::Unclaimed => {
+                if let Some(session_id) = durable_session_id.as_deref() {
+                    let Ok(provider_thread_id) =
+                        crate::pi_session::read_session_header_id(&canonical_path)
+                    else {
+                        return Ok(None);
+                    };
+                    crate::pi_session::bind_source_for_thread(
+                        conn,
+                        &canonical_path,
+                        session_id,
+                        &provider_thread_id,
+                    )?;
+                }
+            }
+        }
+    }
     // Read the binding together with the thread it was made for. A binding that
     // names this transcript's own thread was written deliberately for it; one
     // that names something else was inherited, and cannot be trusted to say who
@@ -185,10 +234,9 @@ fn prepare_next_envelope_with_limit(
     let binding = crate::state::session_binding::SessionBinding::new(conn)
         .get_with_thread_for_provider(&path_text, provider)?;
     let binding_thread = binding.as_ref().and_then(|(_, thread)| thread.clone());
-    let mut durable_session_id = match session_id_override {
-        Some(value) => Some(value.to_string()),
-        None => binding.map(|(session_id, _)| session_id),
-    };
+    if durable_session_id.is_none() {
+        durable_session_id = binding.map(|(session_id, _)| session_id);
+    }
     if let Some(pending) =
         pending_source_envelope::load_for_source(conn, provider, &opaque_source_id)?
     {
@@ -3899,12 +3947,27 @@ pub(crate) fn stable_source_path(path: &Path) -> PathBuf {
             .map(|cwd| cwd.join(path))
             .unwrap_or_else(|_| path.to_path_buf())
     };
+    let absolute = lexical_normalize_absolute(absolute);
     match (absolute.parent(), absolute.file_name()) {
         (Some(parent), Some(file_name)) => std::fs::canonicalize(parent)
             .map(|canonical_parent| canonical_parent.join(file_name))
             .unwrap_or(absolute),
         _ => absolute,
     }
+}
+
+fn lexical_normalize_absolute(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn pending_to_prepared(pending: PendingSourceEnvelope) -> Result<PreparedStorageV2Envelope> {

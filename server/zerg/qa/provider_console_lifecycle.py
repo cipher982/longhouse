@@ -41,7 +41,7 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
-INTERRUPT_SUPPORTED = frozenset({"claude", "opencode", "cursor"})
+INTERRUPT_SUPPORTED = frozenset({"claude", "opencode", "cursor", "pi"})
 INTERRUPT_UNSUPPORTED = frozenset({"codex"})
 ASSERTION_ID = "console_adapter_release_contract_preserved"
 SUPPORTED_VARIANT = "interrupt_supported"
@@ -62,19 +62,22 @@ PROVIDER_BIN_ENV = {
     "claude": "LONGHOUSE_CLAUDE_BIN",
     "opencode": "LONGHOUSE_OPENCODE_BIN",
     "cursor": "LONGHOUSE_CURSOR_BIN",
+    "pi": "LONGHOUSE_PI_BIN",
 }
 ADAPTERS = {
     "codex": "codex_exec",
     "claude": "claude_print",
     "opencode": "opencode_run",
     "cursor": "cursor_print",
+    "pi": "pi_print",
 }
-CAN_RESUME = frozenset({"codex", "claude", "opencode", "cursor"})
+CAN_RESUME = frozenset({"codex", "claude", "opencode", "cursor", "pi"})
 _VERSION_PATTERNS = {
     "codex": re.compile(r"^codex-cli (?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
     "claude": re.compile(r"^(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?) \(Claude Code\)$"),
     "opencode": re.compile(r"^(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
     "cursor": re.compile(r"^(?P<version>\d{4}\.\d{2}\.\d{2}(?:-[0-9A-Za-z.-]+)?)$"),
+    "pi": re.compile(r"^(?P<version>\d+\.\d+\.\d+)$"),
 }
 
 REGISTRATION = ProducerRegistration(
@@ -166,6 +169,9 @@ def _provider_environment(provider: str, args: argparse.Namespace, home: Path) -
         environment["XDG_CONFIG_HOME"] = str(home / ".config")
         environment["XDG_DATA_HOME"] = str(home / ".local" / "share")
         environment["XDG_CACHE_HOME"] = str(home / ".cache")
+    if provider == "pi":
+        environment["PI_CODING_AGENT_DIR"] = str(home / ".pi")
+        environment["LONGHOUSE_PI_QUALIFICATION_MODEL"] = args.model
     environment.setdefault("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     environment.setdefault("CURSOR_HOME", str(home / ".cursor"))
     return environment
@@ -445,6 +451,17 @@ def _assistant_output_texts(provider: str, content: str) -> list[str]:
                 )
             elif isinstance(payload.get("text"), str):
                 texts.append(str(payload["text"]))
+        elif provider == "pi" and event.get("type") == "message_end":
+            message = event.get("message")
+            blocks = message.get("content") if isinstance(message, Mapping) else None
+            if isinstance(blocks, list):
+                texts.extend(
+                    str(block["text"])
+                    for block in blocks
+                    if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
+                )
+            elif isinstance(blocks, str):
+                texts.append(blocks)
     return texts
 
 
@@ -469,6 +486,77 @@ def _claim_output_evidence(provider: str, claim: Mapping[str, object], marker: s
             }
         )
     return max(candidates, key=lambda item: int(item["provider_response_marker_count"])) if candidates else None
+
+
+def _pi_tool_evidence(claim: Mapping[str, object], marker: str) -> dict[str, object] | None:
+    """Read Pi's native JSON-mode stream from the real Console child claim."""
+    paths: list[Path] = []
+    for key in ("stdout_path", "source_path"):
+        value = claim.get(key)
+        if isinstance(value, str) and value:
+            paths.append(Path(value))
+    candidates: list[dict[str, object]] = []
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        events: list[Mapping[str, object]] = []
+        for line in lines:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, Mapping):
+                events.append(value)
+        tool_call_ids: set[str] = set()
+        tool_result_ids: set[str] = set()
+        output_marker_observed = False
+        native_shapes: dict[str, int] = {}
+        for event in events:
+            event_type = str(event.get("type") or "")
+            native_shapes[event_type] = native_shapes.get(event_type, 0) + 1
+            if event_type == "tool_execution_start":
+                call_id = str(event.get("toolCallId") or "")
+                if call_id:
+                    tool_call_ids.add(call_id)
+            elif event_type == "tool_execution_end":
+                call_id = str(event.get("toolCallId") or "")
+                if call_id:
+                    tool_result_ids.add(call_id)
+                output_marker_observed = output_marker_observed or marker in json.dumps(event, sort_keys=True)
+            elif event_type == "message_end":
+                message = event.get("message")
+                if not isinstance(message, Mapping):
+                    continue
+                content = message.get("content")
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not isinstance(block, Mapping):
+                        continue
+                    if block.get("type") == "toolCall" and block.get("id"):
+                        tool_call_ids.add(str(block["id"]))
+        candidates.append(
+            {
+                "source_path": str(path),
+                "native_shapes": native_shapes,
+                "tool_call_ids": sorted(tool_call_ids),
+                "tool_result_ids": sorted(tool_result_ids),
+                "linked_tool_call_ids": sorted(tool_call_ids & tool_result_ids),
+                "output_marker_observed": output_marker_observed,
+            }
+        )
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda item: (
+            len(item.get("linked_tool_call_ids") or []),
+            bool(item.get("output_marker_observed")),
+            len(item.get("native_shapes") or {}),
+        ),
+    )
 
 
 def _retain_flush_diagnostics(receipt: Mapping[str, object]) -> dict[str, object]:
@@ -582,7 +670,7 @@ def _claim_uses_provider_binary(claim: Mapping[str, object], provider_binary: Pa
 
 
 def _native_model(provider: str, model: str) -> str:
-    return f"openrouter/{model}" if provider == "opencode" and not model.startswith("openrouter/") else model
+    return f"openrouter/{model}" if provider in {"opencode", "pi"} and not model.startswith("openrouter/") else model
 
 
 def _claim_uses_selected_model(claim: Mapping[str, object], *, provider: str, model: str) -> bool:
@@ -642,6 +730,52 @@ def _retain_failure_claim_diagnostics(
             }
         )
     write_json(root / "provider-failure-diagnostics.json", {"claims": retained})
+
+
+def _retain_claim_sources(
+    root: Path,
+    claims: list[dict[str, Any]],
+    environment: Mapping[str, str],
+) -> list[dict[str, object]]:
+    """Keep bounded provider-native sources before the isolated HOME disappears."""
+
+    secrets = [value for name, value in environment.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
+    target_root = root / "provider-sources"
+    retained: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for index, claim in enumerate(claims):
+        run_id = str(claim.get("run_id") or index)
+        for field in ("source_path", "stdout_path"):
+            raw_path = claim.get(field)
+            if not isinstance(raw_path, str) or not raw_path or raw_path in seen:
+                continue
+            seen.add(raw_path)
+            source = Path(raw_path)
+            try:
+                content = source.read_bytes()
+            except OSError as exc:
+                retained.append({"source": raw_path, "retained": False, "error": f"{type(exc).__name__}: {exc}"})
+                continue
+            for secret in secrets:
+                content = content.replace(secret.encode(), b"[REDACTED]")
+            max_bytes = 16 * 1024 * 1024
+            truncated = len(content) > max_bytes
+            if truncated:
+                content = content[:max_bytes] + b"\n[truncated by QA evidence bound]\n"
+            target = target_root / f"{index}-{run_id}-{field}.raw"
+            target_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            target.write_bytes(content)
+            retained.append(
+                {
+                    "source": raw_path,
+                    "path": str(target),
+                    "retained": True,
+                    "truncated": truncated,
+                    "bytes": len(content),
+                }
+            )
+    write_json(root / "provider-source-retention.json", {"sources": retained})
+    return retained
 
 
 def console_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
@@ -747,6 +881,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     engine_evidence = root / "shipper"
     engine_evidence.mkdir(mode=0o700, parents=True)
     workspace.mkdir(mode=0o700, parents=True)
+    pi_tool_marker = f"PI_CONSOLE_TOOL_{uuid4().hex}"
+    if provider == "pi":
+        (workspace / "pi-console-proof.txt").write_text(pi_tool_marker + "\n", encoding="utf-8")
     if provider == "cursor":
         completed = subprocess.run(
             ["git", "init", "--quiet"],
@@ -788,6 +925,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         thread_id = str(created["thread_id"])
         marker = f"LH_{provider.upper()}_CONSOLE_{uuid4().hex}"
         message = f"Reply with exactly {marker} and nothing else."
+        if provider == "pi":
+            message = f"Use the read tool to read {workspace / 'pi-console-proof.txt'}, then reply with exactly {marker} and nothing else."
         request_id = f"console-release-{uuid4()}"
         first = _start_turn(
             api_url=api_url,
@@ -835,6 +974,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             run_id=run_id,
         )
         provider_response_evidence = _claim_output_evidence(provider, first_claim, marker)
+        pi_tool_evidence = _pi_tool_evidence(first_claim, pi_tool_marker) if provider == "pi" else None
         dispatch = {
             "status": "pass",
             "provider": provider,
@@ -905,6 +1045,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "assistant_event_count": len(first_events),
             "transcript_converged_exactly_once": len(first_events) == 1,
         }
+        if pi_tool_evidence is not None:
+            binding["native_tool_evidence"] = pi_tool_evidence
         write_json(root / "provider-response-binding-receipt.json", binding)
 
         if provider in CAN_RESUME:
@@ -1084,6 +1226,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             ),
         }
         write_json(root / "cleanup-receipt.json", cleanup)
+        retained_sources = _retain_claim_sources(root, claims, environment)
         cleanup_written = True
         observation = _observation_from_receipts(
             dispatch=dispatch,
@@ -1091,7 +1234,30 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             interrupt=interrupt_receipt,
             cleanup=cleanup,
         )
+        if provider == "pi":
+            observation.update(
+                {
+                    "native_tool_call_observed": bool(pi_tool_evidence and pi_tool_evidence.get("tool_call_ids")),
+                    "native_tool_result_observed": bool(pi_tool_evidence and pi_tool_evidence.get("tool_result_ids")),
+                    "native_tool_result_linked": bool(pi_tool_evidence and pi_tool_evidence.get("linked_tool_call_ids")),
+                    "native_tool_output_exact": bool(pi_tool_evidence and pi_tool_evidence.get("output_marker_observed")),
+                    "native_shadow_taxonomy_observed": bool(pi_tool_evidence and pi_tool_evidence.get("native_shapes")),
+                }
+            )
+            observation["pi_tool_enabled"] = all(
+                observation[key]
+                for key in (
+                    "native_tool_call_observed",
+                    "native_tool_result_observed",
+                    "native_tool_result_linked",
+                    "native_tool_output_exact",
+                    "native_shadow_taxonomy_observed",
+                )
+            )
+        observation["provider_source_artifacts"] = retained_sources
         assertion = console_lifecycle_assertions(observation)[ASSERTION_ID]
+        if provider == "pi":
+            assertion = assertion and observation.get("pi_tool_enabled") is True
         return {
             "schema_version": 1,
             "artifact_kind": "provider_console_lifecycle_result",
@@ -1114,6 +1280,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         _force_cleanup(claims)
         if shipper is not None:
             shipper.stop()
+        if not cleanup_written:
+            _retain_claim_sources(root, claims, environment)
         if not cleanup_written:
             cleanup = {
                 "status": "fail",

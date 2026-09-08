@@ -21,7 +21,6 @@ instead of thirteen.
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from pathlib import Path
 
@@ -52,6 +51,11 @@ NEVER_INHERITED = [
     "LONGHOUSE_HOOK_URL",
     "LONGHOUSE_HOOK_TOKEN",
     "LONGHOUSE_CODEX_BRIDGE_TOKEN",
+    "LONGHOUSE_PI_HELM_TOKEN",
+    "LONGHOUSE_PI_HELM_URL",
+    "LONGHOUSE_PI_HELM_CHANNEL_PATH",
+    "LONGHOUSE_PI_HELM_CHANNEL_TOKEN",
+    "LONGHOUSE_PI_HELM_INITIAL_PROMPT",
     "LONGHOUSE_PERMISSION_HOOK_ENABLED",
     "LONGHOUSE_LAUNCH_ACTOR",
     "LONGHOUSE_LAUNCH_SURFACE",
@@ -139,13 +143,18 @@ def render() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="fail if the generated file is stale")
+    parser.add_argument(
+        "--check", action="store_true", help="fail if the generated file is stale"
+    )
     args = parser.parse_args()
     rendered = render()
     if args.check:
         current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
         if current != rendered:
-            print(f"{OUTPUT} is stale. Run `make generate-managed-identity`.", file=sys.stderr)
+            print(
+                f"{OUTPUT} is stale. Run `make generate-managed-identity`.",
+                file=sys.stderr,
+            )
             return 1
         return 0
     OUTPUT.write_text(rendered, encoding="utf-8")

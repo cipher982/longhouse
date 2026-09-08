@@ -49,6 +49,7 @@ use std::path::{Path, PathBuf};
 const COMMAND_SEND_TEXT: &str = "session.send_text";
 const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
+const COMMAND_FOLLOW_UP_TEXT: &str = "session.follow_up_text";
 const COMMAND_ANSWER_PAUSE: &str = "session.answer_pause";
 const COMMAND_TERMINATE: &str = "session.terminate";
 const COMMAND_RUN_ONCE: &str = "session.run_once";
@@ -1216,6 +1217,33 @@ async fn execute_command(
                     "transport": crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
                 }));
             }
+            if provider == "pi" {
+                let summary = crate::pi_helm_control::dispatch(
+                    &session_id,
+                    crate::pi_helm_control::CommandKind::Send,
+                    Some(&text),
+                    None,
+                    Some(
+                        payload
+                            .get("longhouse_control_grant")
+                            .unwrap_or(&Value::Null),
+                    ),
+                )
+                .await
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                })?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "pi",
+                    "transport": crate::pi_helm_control::PI_HELM_TRANSPORT,
+                    "provider_session_id": summary.provider_session_id,
+                    "status": summary.status,
+                }));
+            }
             let attachments = crate::codex_attachments::parse_attachments(&payload)
                 .map_err(CommandError::command_failed)?;
             validate_codex_bridge_attached(&session_id, None)
@@ -1288,6 +1316,32 @@ async fn execute_command(
                     "transport": crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
                 }));
             }
+            if provider == "pi" {
+                let summary = crate::pi_helm_control::dispatch(
+                    &session_id,
+                    crate::pi_helm_control::CommandKind::Abort,
+                    None,
+                    None,
+                    Some(
+                        payload
+                            .get("longhouse_control_grant")
+                            .unwrap_or(&Value::Null),
+                    ),
+                )
+                .await
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                })?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "pi",
+                    "transport": crate::pi_helm_control::PI_HELM_TRANSPORT,
+                    "provider_session_id": summary.provider_session_id,
+                }));
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             cmd_codex_bridge_interrupt(BridgeInterruptConfig {
@@ -1336,6 +1390,32 @@ async fn execute_command(
                     "transport": crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
                 }));
             }
+            if provider == "pi" {
+                let summary = crate::pi_helm_control::dispatch(
+                    &session_id,
+                    crate::pi_helm_control::CommandKind::Terminate,
+                    None,
+                    None,
+                    Some(
+                        payload
+                            .get("longhouse_control_grant")
+                            .unwrap_or(&Value::Null),
+                    ),
+                )
+                .await
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                })?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "pi",
+                    "transport": crate::pi_helm_control::PI_HELM_TRANSPORT,
+                    "provider_session_id": summary.provider_session_id,
+                }));
+            }
             Err(CommandError {
                 code: "unsupported_command".to_string(),
                 message: format!("{provider} terminate is not supported by this Machine Agent"),
@@ -1363,6 +1443,32 @@ async fn execute_command(
                     message: "OpenCode server bridge does not support active-turn steer"
                         .to_string(),
                 });
+            }
+            if provider == "pi" {
+                let summary = crate::pi_helm_control::dispatch(
+                    &session_id,
+                    crate::pi_helm_control::CommandKind::Steer,
+                    Some(&text),
+                    None,
+                    Some(
+                        payload
+                            .get("longhouse_control_grant")
+                            .unwrap_or(&Value::Null),
+                    ),
+                )
+                .await
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                })?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "pi",
+                    "transport": crate::pi_helm_control::PI_HELM_TRANSPORT,
+                    "provider_session_id": summary.provider_session_id,
+                }));
             }
             if provider == "antigravity" {
                 return Err(CommandError {
@@ -1396,6 +1502,41 @@ async fn execute_command(
                 Err(BridgeSteerError::TurnEnded(message)) => Err(CommandError::turn_ended(message)),
                 Err(err) => Err(CommandError::command_failed(err)),
             }
+        }
+        COMMAND_FOLLOW_UP_TEXT => {
+            let text = payload_required_string(&payload, "text")?;
+            let provider = payload_optional_string(&payload, "provider")
+                .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
+            if provider != "pi" {
+                return Err(CommandError {
+                    code: "unsupported_command".to_string(),
+                    message: format!("{provider} does not support native follow-up delivery here"),
+                });
+            }
+            let summary = crate::pi_helm_control::dispatch(
+                &session_id,
+                crate::pi_helm_control::CommandKind::FollowUp,
+                Some(&text),
+                None,
+                Some(
+                    payload
+                        .get("longhouse_control_grant")
+                        .unwrap_or(&Value::Null),
+                ),
+            )
+            .await
+            .map_err(|error| CommandError {
+                code: error.code().to_string(),
+                message: error.message().to_string(),
+            })?;
+            Ok(json!({
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "",
+                "provider": "pi",
+                "transport": crate::pi_helm_control::PI_HELM_TRANSPORT,
+                "provider_session_id": summary.provider_session_id,
+            }))
         }
         COMMAND_ANSWER_PAUSE => {
             let provider = payload_optional_string(&payload, "provider")
@@ -1580,14 +1721,17 @@ async fn execute_turn_start(
     // first: once the child owns a thread of its own, later turns resume it
     // like any other Console session, and re-sending this would fork again.
     let fork_provider_thread_id = payload_optional_string(payload, "fork_from_provider_thread_id");
-    // One default for every Console provider. The per-provider branch this
-    // replaced defaulted Antigravity to `remote_approve`, which
-    // `antigravity_print` then rejects outright -- a turn that omitted the
-    // field could never run. Nothing surfaced it because every served caller
-    // sends "bypass" explicitly, so the broken default was reachable only from
-    // the machine API.
-    let permission_mode = payload_optional_string(payload, "permission_mode")
-        .unwrap_or_else(|| CONSOLE_DEFAULT_PERMISSION_MODE.to_string());
+    // Pi retains its native project trust and tool policy; other Console
+    // adapters retain their existing headless permission contract.
+    let permission_mode =
+        payload_optional_string(payload, "permission_mode").unwrap_or_else(|| {
+            if provider == "pi" {
+                "provider_local"
+            } else {
+                CONSOLE_DEFAULT_PERMISSION_MODE
+            }
+            .to_string()
+        });
     if provider == "opencode" && permission_mode != "bypass" {
         return Err(CommandError {
             code: "permission_mode_unsupported".to_string(),
@@ -1607,10 +1751,10 @@ async fn execute_turn_start(
                 .to_string(),
         });
     }
-    if provider == "pi" && permission_mode != "bypass" {
+    if provider == "pi" && permission_mode != "provider_local" {
         return Err(CommandError {
             code: "permission_mode_unsupported".to_string(),
-            message: "Pi Console currently supports bypass permission mode only".to_string(),
+            message: "Pi Console supports provider_local permission mode only".to_string(),
         });
     }
     if provider == "claude" {
@@ -1802,6 +1946,9 @@ async fn execute_turn_start(
             provider: payload_optional_string(payload, "pi_provider"),
             model: payload_optional_string(payload, "model"),
             session_dir: payload_optional_string(payload, "session_dir").map(PathBuf::from),
+            resume_thread_id: resume_provider_thread_id.clone(),
+            resume_session_file: payload_optional_string(payload, "resume_session_file")
+                .map(PathBuf::from),
             permission_mode,
             machine_name: config.machine_name.clone(),
             local_db_path,
@@ -1821,6 +1968,7 @@ async fn execute_turn_start(
                 "stdout_path": summary.stdout_path,
                 "stderr_path": summary.stderr_path,
                 "session_dir": summary.session_dir,
+                "session_file": summary.session_file,
                 "argv": summary.argv,
             })
         })
@@ -2807,6 +2955,11 @@ mod tests {
         ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("pi", "turn_start", COMMAND_TURN_START),
         ("pi", "turn_interrupt", COMMAND_TURN_INTERRUPT),
+        ("pi", "send", COMMAND_SEND_TEXT),
+        ("pi", "steer", COMMAND_STEER_TEXT),
+        ("pi", "follow_up", COMMAND_FOLLOW_UP_TEXT),
+        ("pi", "interrupt", COMMAND_INTERRUPT),
+        ("pi", "terminate", COMMAND_TERMINATE),
     ];
 
     fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {

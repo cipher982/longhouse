@@ -30,12 +30,32 @@ LIVE_CATALOG_CARD_REVISION = "live-catalog-v1"
 logger = logging.getLogger(__name__)
 
 
+def normalize_console_permission_mode(provider: str, value: object) -> str:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized = str(value or "").strip().lower()
+    if normalized_provider == "pi":
+        if normalized in {"remote_approve", "remote_human"}:
+            raise ValueError("Pi Console does not support remote approval; use provider_local")
+        return "provider_local"
+    return normalized or "bypass"
+
+
+def normalize_console_provider_config(provider: str, provider_config: dict[str, object] | None) -> dict[str, object]:
+    config = dict(provider_config or {})
+    if str(provider or "").strip().lower() != "pi":
+        return config
+    config["permission_mode"] = normalize_console_permission_mode(provider, config.get("permission_mode"))
+    return config
+
+
 def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> LiveSessionCatalog:
     """Create an idle Console thread without a run or launch attempt."""
 
     session_id = str(data["session_id"])
     thread_id = str(data["thread_id"])
     provider = str(data["provider"])
+    provider_config = normalize_console_provider_config(provider, data.get("provider_config"))
+    permission_mode = normalize_console_permission_mode(provider, provider_config.get("permission_mode"))
     device_id = str(data["device_id"])
     cwd = str(data["cwd"])
     started_at = data["started_at"]
@@ -77,10 +97,7 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
             tool_calls=0,
             summary_title=display_name,
             primary_thread_id=thread_id,
-            # Console genuinely hard-codes bypass and passes the provider's
-            # skip-permissions flag, so this is an observed posture, not a
-            # default standing in for one.
-            permission_mode="bypass",
+            permission_mode=permission_mode,
             permission_mode_source="console_default",
             hidden_from_default_timeline=system_hidden,
             launch_actor=launch_actor,
@@ -114,7 +131,7 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
                 provider=provider,
                 device_id=device_id,
                 cwd=cwd,
-                provider_config_json=json.dumps(data.get("provider_config") or {}, sort_keys=True),
+                provider_config_json=json.dumps(provider_config, sort_keys=True),
                 # A branch records where it came from at create time. The
                 # storage-v2 lineage columns do not exist until first ingest, so
                 # without this edge a branch would be invisible as a child for
@@ -363,6 +380,8 @@ def create_live_launch_catalog_shell(
 ) -> LiveSessionLaunchAttempt:
     """Create the synchronous launch identity in the live writer transaction."""
 
+    provider_config = normalize_console_provider_config(provider, provider_config)
+    permission_mode = normalize_console_permission_mode(provider, permission_mode)
     session_key = str(session_id)
     thread_key = str(thread_id)
     run_key = str(run_id) if run_id is not None else None
@@ -471,7 +490,7 @@ def create_live_launch_catalog_shell(
                 provider=provider,
                 device_id=device_id,
                 cwd=cwd,
-                provider_config_json=json.dumps(provider_config or {}, sort_keys=True),
+                provider_config_json=json.dumps(provider_config, sort_keys=True),
                 branch_kind="root",
                 is_primary=1,
                 created_at=started_at,
@@ -485,7 +504,7 @@ def create_live_launch_catalog_shell(
         thread.device_id = thread.device_id or device_id
         thread.cwd = thread.cwd or cwd
         if not thread.provider_config_json:
-            thread.provider_config_json = json.dumps(provider_config or {}, sort_keys=True)
+            thread.provider_config_json = json.dumps(provider_config, sort_keys=True)
         thread.updated_at = started_at
 
     if run_key is not None and db.get(LiveSessionRun, run_key) is None:

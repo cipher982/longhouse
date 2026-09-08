@@ -14,7 +14,7 @@
 //! so they are always parsed from offset 0. The backend deduplicates events by hash.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -200,6 +200,21 @@ struct RawOrigin {
     kind: Option<String>,
 }
 
+fn deserialize_release_version<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Pi's numeric header version describes its file schema, not its CLI release.
+    Ok(
+        Option::<Value>::deserialize(deserializer)?.and_then(|value| match value {
+            Value::String(version) => Some(version),
+            _ => None,
+        }),
+    )
+}
+
 #[derive(Deserialize)]
 struct RawLine {
     r#type: Option<String>,
@@ -212,8 +227,11 @@ struct RawLine {
     created_at: Option<String>,
     timestamp: Option<String>,
     uuid: Option<String>,
+    id: Option<String>,
     #[serde(rename = "parentUuid")]
     parent_uuid: Option<String>,
+    #[serde(rename = "parentId")]
+    parent_id: Option<String>,
     /// Claude task notifications identify themselves outside the message body.
     // Keep this raw so an unrelated provider shape under `origin` cannot make
     // the whole line unparsable. The notification helper decodes only the
@@ -228,7 +246,28 @@ struct RawLine {
     cwd: Option<String>,
     #[serde(rename = "gitBranch")]
     git_branch: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_release_version")]
     version: Option<String>,
+    #[serde(rename = "parentSession")]
+    parent_session: Option<String>,
+    provider: Option<String>,
+    #[serde(rename = "modelId")]
+    model_id: Option<String>,
+    #[serde(rename = "thinkingLevel")]
+    thinking_level: Option<String>,
+    #[serde(rename = "customType")]
+    custom_type: Option<String>,
+    data: Option<Box<RawValue>>,
+    #[serde(rename = "targetId")]
+    target_id: Option<String>,
+    label: Option<String>,
+    name: Option<String>,
+    #[serde(rename = "tokensBefore")]
+    tokens_before: Option<u64>,
+    #[serde(rename = "fromId")]
+    from_id: Option<String>,
+    #[serde(rename = "firstKeptEntryId")]
+    first_kept_entry_id: Option<String>,
     #[serde(rename = "isSidechain")]
     is_sidechain: Option<bool>,
     /// Claude user rows carry these flags for provider-authored metadata such
@@ -249,7 +288,7 @@ struct RawLine {
     /// Claude system-message subtype (e.g. compact_boundary).
     subtype: Option<String>,
     /// System-message content field.
-    content: Option<String>,
+    content: Option<Value>,
     /// File-history snapshot payload.
     snapshot: Option<FileHistorySnapshot>,
     /// Optional compaction metadata payloads on system boundary lines.
@@ -269,15 +308,41 @@ struct RawLine {
 struct RawMessage {
     /// Kept as raw JSON — avoids building a full serde_json::Value DOM tree.
     /// Parsed on-demand in extraction functions via ContentItem.
+    #[serde(default)]
     content: Box<RawValue>,
     /// pi carries the role inside the envelope: `{type:"message",
     /// message:{role, content}}`. Claude encodes it as the line type and Cursor
     /// puts it at the top level, so this is the third of three placements.
     role: Option<String>,
+    api: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    #[serde(rename = "stopReason")]
+    stop_reason: Option<String>,
+    #[serde(rename = "errorMessage")]
+    error_message: Option<String>,
+    timestamp: Option<Value>,
+    summary: Option<String>,
+    #[serde(rename = "fromId")]
+    from_id: Option<String>,
+    #[serde(rename = "tokensBefore")]
+    tokens_before: Option<u64>,
+    command: Option<String>,
+    output: Option<String>,
+    #[serde(rename = "exitCode")]
+    exit_code: Option<i64>,
+    cancelled: Option<bool>,
+    #[serde(rename = "customType")]
+    custom_type: Option<String>,
+    display: Option<bool>,
+    #[serde(rename = "toolCallId")]
+    tool_call_id: Option<String>,
+    #[serde(rename = "toolName")]
+    tool_name: Option<String>,
+    #[serde(rename = "isError")]
+    is_error: Option<bool>,
     /// Claude assistant lines: the provider's own model/usage accounting.
     /// Kept raw; only turn-ending lines are turned into a usage fact.
-    model: Option<String>,
-    stop_reason: Option<String>,
     usage: Option<Box<RawValue>>,
 }
 
@@ -347,6 +412,13 @@ struct ScannedCodexSessionMeta {
     session_id: String,
     forked_from_session_id: Option<String>,
     is_sidechain: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ScannedPiSessionHeader {
+    session_id: String,
+    cwd: Option<String>,
+    timestamp: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -657,7 +729,12 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     } else {
         None
     };
-    if let Some(scanned) = scanned_session_meta.as_ref() {
+    let scanned_pi_header = scan_pi_session_header(path);
+    if let Some(scanned) = scanned_pi_header.as_ref() {
+        if Uuid::parse_str(&scanned.session_id).is_ok() {
+            session_id = scanned.session_id.clone();
+        }
+    } else if let Some(scanned) = scanned_session_meta.as_ref() {
         session_id = scanned.session_id.clone();
     }
 
@@ -719,6 +796,21 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
         }
         if scanned.is_sidechain {
             result.metadata.is_sidechain = true;
+        }
+    }
+
+    if let Some(scanned) = scanned_pi_header.as_ref() {
+        if result.metadata.provider_session_id.is_none() {
+            result.metadata.provider_session_id = Some(scanned.session_id.clone());
+        }
+        if result.metadata.cwd.is_none() {
+            result.metadata.cwd = scanned.cwd.clone();
+        }
+        if result.metadata.started_at.is_none() {
+            result.metadata.started_at = scanned.timestamp.as_deref().and_then(parse_timestamp);
+        }
+        if Uuid::parse_str(&scanned.session_id).is_ok() {
+            result.metadata.session_id = scanned.session_id.clone();
         }
     }
 
@@ -925,6 +1017,47 @@ fn scan_codex_session_meta(path: &Path) -> Option<ScannedCodexSessionMeta> {
         }
     }
 
+    None
+}
+
+/// Recover Pi's canonical session identity and header metadata when an
+/// incremental batch starts after the header. The header is authoritative;
+/// filenames are only a fallback for malformed or non-Pi JSONL.
+fn scan_pi_session_header(path: &Path) -> Option<ScannedPiSessionHeader> {
+    const PI_HEADER_SCAN_LIMIT_BYTES: usize = 256 * 1024;
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = BufReader::with_capacity(1024, file.take(PI_HEADER_SCAN_LIMIT_BYTES as u64));
+    let mut line = String::new();
+    let mut bytes_scanned = 0usize;
+
+    while bytes_scanned < PI_HEADER_SCAN_LIMIT_BYTES {
+        line.clear();
+        let n = reader.read_line(&mut line).ok()?;
+        if n == 0 {
+            return None;
+        }
+        bytes_scanned = bytes_scanned.saturating_add(n);
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(trimmed).ok()?;
+        if value.get("type").and_then(Value::as_str) != Some("session") {
+            return None;
+        }
+        let session_id = value.get("id").and_then(Value::as_str)?.trim();
+        if session_id.is_empty() {
+            return None;
+        }
+        return Some(ScannedPiSessionHeader {
+            session_id: session_id.to_string(),
+            cwd: value.get("cwd").and_then(Value::as_str).map(str::to_string),
+            timestamp: value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        });
+    }
     None
 }
 
@@ -1747,6 +1880,23 @@ fn collect_metadata(
     min_ts: &mut Option<DateTime<Utc>>,
     max_ts: &mut Option<DateTime<Utc>>,
 ) {
+    // Pi's first line is the only durable provider-thread identity. Keep it
+    // separate from Longhouse's session UUID while still using it to replace
+    // filename-derived identity during full and incremental parses.
+    if obj.r#type.as_deref() == Some("session") {
+        if let Some(id) = obj.id.as_deref().filter(|id| !id.trim().is_empty()) {
+            if meta.provider_session_id.is_none() {
+                meta.provider_session_id = Some(id.to_string());
+            }
+            if meta.session_id.is_empty() && Uuid::parse_str(id).is_ok() {
+                meta.session_id = id.to_string();
+            }
+        }
+        if meta.cwd.is_none() {
+            meta.cwd = obj.cwd.clone();
+        }
+    }
+
     // Claude metadata fields
     if meta.cwd.is_none() {
         if let Some(ref cwd) = obj.cwd {
@@ -2047,6 +2197,11 @@ fn extract_provider_facts(
     facts: &mut Vec<ParsedProviderFact>,
     codex: &mut CodexFactState,
 ) {
+    if is_pi_line(obj) {
+        extract_pi_provider_facts(obj, line_offset, facts);
+        return;
+    }
+
     // Codex rollout lines carry their discriminator under `payload.type`;
     // these three top-level types are Codex's alone.
     if matches!(
@@ -2254,6 +2409,617 @@ fn extract_provider_facts(
     });
 }
 
+fn is_pi_line(obj: &RawLine) -> bool {
+    match obj.r#type.as_deref() {
+        Some(
+            "session"
+            | "message"
+            | "model_change"
+            | "thinking_level_change"
+            | "compaction"
+            | "branch_summary"
+            | "custom"
+            | "custom_message"
+            | "label"
+            | "session_info",
+        ) => true,
+        _ => false,
+    }
+}
+
+fn pi_timestamp(obj: &RawLine) -> DateTime<Utc> {
+    obj.timestamp
+        .as_deref()
+        .and_then(parse_timestamp)
+        .or_else(|| {
+            obj.message
+                .as_ref()
+                .and_then(|message| message.timestamp.as_ref().and_then(Value::as_i64))
+                .and_then(DateTime::<Utc>::from_timestamp_millis)
+        })
+        .unwrap_or_else(Utc::now)
+}
+
+fn pi_blocks(raw: &RawValue) -> Vec<Value> {
+    match serde_json::from_str::<Value>(raw.get()).ok() {
+        Some(Value::Array(items)) => items,
+        Some(Value::String(text)) => vec![json!({"type": "text", "text": text})],
+        Some(value) => vec![value],
+        None => Vec::new(),
+    }
+}
+
+fn pi_value_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => (!text.trim().is_empty()).then(|| text.to_string()),
+        Value::Array(items) => {
+            let parts = items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>();
+            (!parts.is_empty()).then(|| parts.join("\n"))
+        }
+        _ => None,
+    }
+}
+
+fn pi_image_placeholder(value: &Value, result: bool) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("image") {
+        return None;
+    }
+    let mime = value
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .filter(|mime| !mime.trim().is_empty())
+        .unwrap_or("image");
+    Some(if result {
+        format!("[image result: {mime}]")
+    } else {
+        format!("[image attached: {mime}]")
+    })
+}
+
+fn pi_raw_value(value: &Value) -> Option<Box<RawValue>> {
+    RawValue::from_string(value.to_string()).ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_pi_event(
+    obj: &RawLine,
+    session_id: &str,
+    timestamp: DateTime<Utc>,
+    line_offset: u64,
+    raw_line: &str,
+    first_raw_line: &mut bool,
+    suffix: &str,
+    role: Role,
+    content_text: Option<String>,
+    tool_name: Option<String>,
+    tool_input_json: Option<Box<RawValue>>,
+    tool_output_text: Option<String>,
+    tool_call_id: Option<String>,
+    raw_type: &str,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let base_id = obj
+        .id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("pi-offset-{line_offset}"));
+    let uuid = if suffix.is_empty() || *first_raw_line {
+        base_id
+    } else {
+        format!("{base_id}-{suffix}")
+    };
+    events.push(ParsedEvent {
+        uuid,
+        parent_uuid: obj.parent_id.clone(),
+        session_id: session_id.to_string(),
+        timestamp,
+        role,
+        content_text,
+        tool_name,
+        tool_input_json,
+        tool_output_text,
+        tool_call_id,
+        source_offset: line_offset,
+        raw_type: raw_type.to_string(),
+        raw_line: if *first_raw_line {
+            *first_raw_line = false;
+            Some(raw_line.to_string())
+        } else {
+            None
+        },
+    });
+}
+
+fn extract_pi_message_events(
+    obj: &RawLine,
+    message: &RawMessage,
+    session_id: &str,
+    line_offset: u64,
+    raw_line: &str,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let timestamp = pi_timestamp(obj);
+    let mut first_raw_line = true;
+    let role = message.role.as_deref().unwrap_or("");
+    match role {
+        "user" | "assistant" => {
+            let blocks = pi_blocks(&message.content);
+            for (index, block) in blocks.into_iter().enumerate() {
+                let kind = block.get("type").and_then(Value::as_str).unwrap_or("");
+                match kind {
+                    "text" => {
+                        let Some(text) = block.get("text").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        let suffix = if index == 0 {
+                            String::new()
+                        } else {
+                            format!("text-{index}")
+                        };
+                        push_pi_event(
+                            obj,
+                            session_id,
+                            timestamp,
+                            line_offset,
+                            raw_line,
+                            &mut first_raw_line,
+                            &suffix,
+                            if role == "user" {
+                                Role::User
+                            } else {
+                                Role::Assistant
+                            },
+                            Some(text.to_string()),
+                            None,
+                            None,
+                            None,
+                            None,
+                            if role == "user" {
+                                "pi_user"
+                            } else {
+                                "pi_assistant"
+                            },
+                            events,
+                        );
+                    }
+                    "thinking" => {
+                        let Some(text) = block
+                            .get("thinking")
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.trim().is_empty())
+                        else {
+                            continue;
+                        };
+                        push_pi_event(
+                            obj,
+                            session_id,
+                            timestamp,
+                            line_offset,
+                            raw_line,
+                            &mut first_raw_line,
+                            &format!("thinking-{index}"),
+                            Role::System,
+                            Some(format!("Thinking:\n{text}")),
+                            None,
+                            None,
+                            None,
+                            None,
+                            "pi_thinking",
+                            events,
+                        );
+                    }
+                    "image" => {
+                        let Some(text) = pi_image_placeholder(&block, false) else {
+                            continue;
+                        };
+                        push_pi_event(
+                            obj,
+                            session_id,
+                            timestamp,
+                            line_offset,
+                            raw_line,
+                            &mut first_raw_line,
+                            &format!("image-{index}"),
+                            if role == "user" {
+                                Role::User
+                            } else {
+                                Role::Assistant
+                            },
+                            Some(text),
+                            None,
+                            None,
+                            None,
+                            None,
+                            "pi_image",
+                            events,
+                        );
+                    }
+                    "toolCall" => {
+                        let Some(name) = block.get("name").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        let call_id = block
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.trim().is_empty())
+                            .map(str::to_string);
+                        let call_suffix = call_id.clone().unwrap_or_else(|| index.to_string());
+                        push_pi_event(
+                            obj,
+                            session_id,
+                            timestamp,
+                            line_offset,
+                            raw_line,
+                            &mut first_raw_line,
+                            &format!("tool-{call_suffix}"),
+                            Role::Assistant,
+                            None,
+                            Some(name.to_string()),
+                            block.get("arguments").and_then(pi_raw_value),
+                            None,
+                            call_id,
+                            "pi_tool_call",
+                            events,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "toolResult" => {
+            let blocks = pi_blocks(&message.content);
+            let mut parts = Vec::new();
+            for block in blocks {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    if !text.trim().is_empty() {
+                        parts.push(text.to_string());
+                    }
+                } else if let Some(placeholder) = pi_image_placeholder(&block, true) {
+                    parts.push(placeholder);
+                }
+            }
+            let output = if parts.is_empty() {
+                if message.is_error == Some(true) {
+                    "[tool error]".to_string()
+                } else {
+                    EMPTY_TOOL_RESULT_PLACEHOLDER.to_string()
+                }
+            } else {
+                parts.join("\n")
+            };
+            push_pi_event(
+                obj,
+                session_id,
+                timestamp,
+                line_offset,
+                raw_line,
+                &mut first_raw_line,
+                "",
+                Role::Tool,
+                None,
+                message.tool_name.clone(),
+                None,
+                Some(output),
+                message.tool_call_id.clone(),
+                "pi_tool_result",
+                events,
+            );
+        }
+        "custom" | "custom_message" => {
+            let content = serde_json::from_str::<Value>(message.content.get())
+                .ok()
+                .and_then(|value| pi_value_text(&value));
+            push_pi_event(
+                obj,
+                session_id,
+                timestamp,
+                line_offset,
+                raw_line,
+                &mut first_raw_line,
+                "",
+                Role::System,
+                content,
+                None,
+                None,
+                None,
+                None,
+                if role == "custom" {
+                    "pi_custom"
+                } else {
+                    "pi_custom_message"
+                },
+                events,
+            );
+        }
+        "bashExecution" => {
+            let text = message
+                .command
+                .as_deref()
+                .map(|command| match message.output.as_deref() {
+                    Some(output) if !output.is_empty() => format!("Ran `{command}`\n{output}"),
+                    _ => format!("Ran `{command}`"),
+                });
+            push_pi_event(
+                obj,
+                session_id,
+                timestamp,
+                line_offset,
+                raw_line,
+                &mut first_raw_line,
+                "",
+                Role::System,
+                text,
+                None,
+                None,
+                None,
+                None,
+                "pi_bash_execution",
+                events,
+            );
+        }
+        "branchSummary" | "compactionSummary" => {
+            let text = message.summary.clone().or_else(|| {
+                serde_json::from_str::<Value>(message.content.get())
+                    .ok()
+                    .and_then(|value| pi_value_text(&value))
+            });
+            push_pi_event(
+                obj,
+                session_id,
+                timestamp,
+                line_offset,
+                raw_line,
+                &mut first_raw_line,
+                "",
+                Role::System,
+                text,
+                None,
+                None,
+                None,
+                None,
+                if role == "branchSummary" {
+                    "pi_branch_summary"
+                } else {
+                    "pi_compaction_summary"
+                },
+                events,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn extract_pi_events(
+    obj: &RawLine,
+    session_id: &str,
+    line_offset: u64,
+    raw_line: &str,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let timestamp = pi_timestamp(obj);
+    let mut first_raw_line = true;
+    match obj.r#type.as_deref() {
+        Some("message") => {
+            if let Some(message) = obj.message.as_ref() {
+                extract_pi_message_events(obj, message, session_id, line_offset, raw_line, events);
+            }
+        }
+        Some("session") => {}
+        Some("model_change") => push_pi_event(
+            obj,
+            session_id,
+            timestamp,
+            line_offset,
+            raw_line,
+            &mut first_raw_line,
+            "",
+            Role::System,
+            Some(format!(
+                "Model changed to {}/{}",
+                obj.provider.as_deref().unwrap_or("unknown"),
+                obj.model_id.as_deref().unwrap_or("unknown")
+            )),
+            None,
+            None,
+            None,
+            None,
+            "pi_model_change",
+            events,
+        ),
+        Some("thinking_level_change") => push_pi_event(
+            obj,
+            session_id,
+            timestamp,
+            line_offset,
+            raw_line,
+            &mut first_raw_line,
+            "",
+            Role::System,
+            obj.thinking_level
+                .as_ref()
+                .map(|level| format!("Thinking level: {level}")),
+            None,
+            None,
+            None,
+            None,
+            "pi_thinking_level_change",
+            events,
+        ),
+        Some("compaction") => push_pi_event(
+            obj,
+            session_id,
+            timestamp,
+            line_offset,
+            raw_line,
+            &mut first_raw_line,
+            "",
+            Role::System,
+            obj.summary
+                .clone()
+                .or_else(|| Some("Conversation compacted".to_string())),
+            None,
+            None,
+            None,
+            None,
+            "pi_compaction",
+            events,
+        ),
+        Some("branch_summary") => push_pi_event(
+            obj,
+            session_id,
+            timestamp,
+            line_offset,
+            raw_line,
+            &mut first_raw_line,
+            "",
+            Role::System,
+            obj.summary.clone(),
+            None,
+            None,
+            None,
+            None,
+            "pi_branch_summary",
+            events,
+        ),
+        Some("custom") | Some("custom_message") => push_pi_event(
+            obj,
+            session_id,
+            timestamp,
+            line_offset,
+            raw_line,
+            &mut first_raw_line,
+            "",
+            Role::System,
+            obj.content.as_ref().and_then(pi_value_text),
+            None,
+            None,
+            None,
+            None,
+            if obj.r#type.as_deref() == Some("custom") {
+                "pi_custom"
+            } else {
+                "pi_custom_message"
+            },
+            events,
+        ),
+        Some("label") => push_pi_event(
+            obj,
+            session_id,
+            timestamp,
+            line_offset,
+            raw_line,
+            &mut first_raw_line,
+            "",
+            Role::System,
+            obj.label.clone().map(|label| format!("Label: {label}")),
+            None,
+            None,
+            None,
+            None,
+            "pi_label",
+            events,
+        ),
+        Some("session_info") => push_pi_event(
+            obj,
+            session_id,
+            timestamp,
+            line_offset,
+            raw_line,
+            &mut first_raw_line,
+            "",
+            Role::System,
+            obj.name.clone().map(|name| format!("Session: {name}")),
+            None,
+            None,
+            None,
+            None,
+            "pi_session_info",
+            events,
+        ),
+        _ => {}
+    }
+}
+
+fn extract_pi_provider_facts(obj: &RawLine, line_offset: u64, facts: &mut Vec<ParsedProviderFact>) {
+    let at = pi_timestamp(obj);
+    let mut push = |kind: &str, payload: Value| {
+        facts.push(ParsedProviderFact {
+            kind: kind.to_string(),
+            at,
+            source_offset: line_offset,
+            payload,
+        });
+    };
+    match obj.r#type.as_deref() {
+        Some("message") => {
+            let Some(message) = obj.message.as_ref() else {
+                return;
+            };
+            if let Some(usage) = message
+                .usage
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
+                .filter(|usage| usage.get("output").and_then(Value::as_u64).is_some())
+            {
+                let mut payload = serde_json::Map::new();
+                for (native, canonical) in [
+                    ("input", "input_tokens"),
+                    ("output", "output_tokens"),
+                    ("cacheRead", "cache_read_input_tokens"),
+                    ("cacheWrite", "cache_creation_input_tokens"),
+                    ("reasoning", "thinking_tokens"),
+                ] {
+                    if let Some(count) = usage.get(native).and_then(Value::as_u64) {
+                        payload.insert(canonical.to_string(), json!(count));
+                    }
+                }
+                let context_tokens: u64 = ["input", "cacheRead", "cacheWrite"]
+                    .iter()
+                    .filter_map(|key| usage.get(*key).and_then(Value::as_u64))
+                    .sum();
+                payload.insert("context_tokens".to_string(), json!(context_tokens));
+                if let Some(model) = message.model.as_deref() {
+                    payload.insert("model".to_string(), json!(model));
+                }
+                push("turn.usage", Value::Object(payload));
+            }
+            if message.stop_reason.as_deref() == Some("error")
+                || message
+                    .error_message
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+            {
+                push(
+                    "turn.api_error",
+                    json!({
+                        "error": bounded_text(message.error_message.as_deref().unwrap_or("Provider request failed"), 500),
+                        "stop_reason": message.stop_reason,
+                    }),
+                );
+            }
+        }
+        Some("compaction") => {
+            if let Some(tokens) = obj.tokens_before {
+                push("context.compaction", json!({"pre_tokens": tokens}));
+            }
+        }
+        Some("session_info") => {
+            if let Some(name) = obj.name.as_deref().filter(|name| !name.trim().is_empty()) {
+                push("session.title", json!({"title": bounded_text(name, 255)}));
+            }
+        }
+        _ => {}
+    }
+}
+
 fn extract_events(
     obj: &RawLine,
     session_id: &str,
@@ -2275,6 +3041,11 @@ fn extract_events(
             events,
             antigravity_pending,
         );
+        return;
+    }
+
+    if is_pi_line(obj) {
+        extract_pi_events(obj, session_id, line_offset, raw_line, events);
         return;
     }
 
@@ -2859,7 +3630,7 @@ fn extract_antigravity_events(
     if event_type == "USER_INPUT" {
         // Interleaving non-result record: a pending call had no adjacent result.
         *pending = AntigravityPending::default();
-        if let Some(content) = obj.content.as_deref() {
+        if let Some(content) = obj.content.as_ref().and_then(Value::as_str) {
             let text = antigravity_user_text(content);
             if !text.is_empty() {
                 events.push(ParsedEvent {
@@ -2959,7 +3730,7 @@ fn extract_antigravity_events(
         None
     };
 
-    if let Some(content) = obj.content.as_deref() {
+    if let Some(content) = obj.content.as_ref().and_then(Value::as_str) {
         let text = content.trim();
         if text.is_empty() {
             return;
@@ -3028,7 +3799,12 @@ fn extract_compaction_metadata_event(
             let mut content = obj
                 .summary
                 .clone()
-                .or_else(|| obj.content.clone())
+                .or_else(|| {
+                    obj.content
+                        .as_ref()
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
                 .unwrap_or_else(|| "Conversation compacted".to_string());
             if content.trim().is_empty() {
                 content = "Conversation compacted".to_string();
@@ -3084,13 +3860,18 @@ fn extract_compaction_metadata_event(
                 return None;
             }
 
-            let mut content = obj.content.clone().unwrap_or_else(|| {
-                if subtype == "microcompact_boundary" {
-                    "Context microcompacted".to_string()
-                } else {
-                    "Conversation compacted".to_string()
-                }
-            });
+            let mut content = obj
+                .content
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    if subtype == "microcompact_boundary" {
+                        "Context microcompacted".to_string()
+                    } else {
+                        "Conversation compacted".to_string()
+                    }
+                });
 
             if let Some(hint) = compact_metadata_hint(if subtype == "microcompact_boundary" {
                 obj.microcompact_metadata.as_deref()
@@ -4388,6 +5169,135 @@ mod tests {
             result.events[1].content_text.as_deref(),
             Some("LH_SERVED_pi")
         );
+    }
+
+    #[test]
+    fn pi_native_records_keep_ids_lineage_tool_pairs_and_sideband_taxonomy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "2026-09-07T00-00-00-000Z_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl",
+            &[
+                r#"{"type":"session","version":3,"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","timestamp":"2026-09-07T00:00:00.000Z","cwd":"/tmp/pi"}"#,
+                r#"{"type":"message","id":"user-0001","parentId":null,"timestamp":"2026-09-07T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"inspect the image"},{"type":"image","data":"AQI=","mimeType":"image/png"}]}}"#,
+                r#"{"type":"message","id":"assistant-0001","parentId":"user-0001","timestamp":"2026-09-07T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"I should inspect it"},{"type":"text","text":"I will inspect it"},{"type":"toolCall","id":"call-0001","name":"read_file","arguments":{"path":"/tmp/a.png"}}],"provider":"openrouter","model":"model-a","usage":{"input":10,"output":4,"cacheRead":1,"cacheWrite":0,"totalTokens":15},"stopReason":"toolUse"}}"#,
+                r#"{"type":"message","id":"tool-0001","parentId":"assistant-0001","timestamp":"2026-09-07T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"call-0001","toolName":"read_file","content":[{"type":"image","data":"AwQ=","mimeType":"image/png"}],"isError":true}}"#,
+                r#"{"type":"model_change","id":"model-0001","parentId":"tool-0001","timestamp":"2026-09-07T00:00:04.000Z","provider":"openrouter","modelId":"model-b"}"#,
+                r#"{"type":"compaction","id":"compact-0001","parentId":"model-0001","timestamp":"2026-09-07T00:00:05.000Z","summary":"Earlier context","tokensBefore":1200,"firstKeptEntryId":"user-0001"}"#,
+                r#"{"type":"branch_summary","id":"branch-0001","parentId":"compact-0001","timestamp":"2026-09-07T00:00:06.000Z","fromId":"assistant-0001","summary":"Alternative path"}"#,
+                r#"{"type":"custom","id":"custom-0001","parentId":"branch-0001","timestamp":"2026-09-07T00:00:07.000Z","customType":"fixture","data":{"state":"saved"}}"#,
+                r#"{"type":"custom_message","id":"custom-message-0001","parentId":"custom-0001","timestamp":"2026-09-07T00:00:08.000Z","customType":"fixture","content":[{"type":"text","text":"extension context"}],"display":true}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(
+            result.metadata.session_id,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        );
+        assert_eq!(
+            result.metadata.provider_session_id.as_deref(),
+            Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        );
+        assert_eq!(result.metadata.cwd.as_deref(), Some("/tmp/pi"));
+
+        let call = result
+            .events
+            .iter()
+            .find(|event| event.raw_type == "pi_tool_call")
+            .expect("Pi tool call is retained");
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.uuid == "assistant-0001"));
+        assert_eq!(call.parent_uuid.as_deref(), Some("user-0001"));
+        assert_eq!(call.tool_call_id.as_deref(), Some("call-0001"));
+        assert_eq!(
+            call.tool_input_json.as_ref().map(|value| value.get()),
+            Some(r#"{"path":"/tmp/a.png"}"#)
+        );
+
+        let result_event = result
+            .events
+            .iter()
+            .find(|event| event.raw_type == "pi_tool_result")
+            .expect("Pi tool result is retained");
+        assert_eq!(result_event.uuid, "tool-0001");
+        assert_eq!(result_event.parent_uuid.as_deref(), Some("assistant-0001"));
+        assert_eq!(result_event.tool_call_id.as_deref(), Some("call-0001"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "pi_thinking"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "pi_compaction"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "pi_branch_summary"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "pi_custom"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "pi_custom_message"));
+        assert!(result.source_lines.len() == 9);
+        let usage = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "turn.usage")
+            .unwrap();
+        assert_eq!(usage.payload["output_tokens"], 4);
+        assert_eq!(usage.payload["context_tokens"], 11);
+        let compaction = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "context.compaction")
+            .unwrap();
+        assert_eq!(compaction.payload["pre_tokens"], 1200);
+        assert!(result
+            .events
+            .iter()
+            .all(|event| event.source_offset < path.metadata().unwrap().len()));
+    }
+
+    #[test]
+    fn pi_contentless_bash_and_summary_messages_preserve_native_lineage() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "native-contentless.jsonl",
+            &[
+                r#"{"type":"session","version":3,"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","timestamp":"2026-09-07T00:00:00Z"}"#,
+                r#"{"type":"message","id":"assistant-a","parentId":null,"timestamp":"2026-09-07T00:00:01Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-a","name":"read","arguments":{"path":"a.txt"}}]}}"#,
+                r#"{"type":"message","id":"tool-a","parentId":"assistant-a","timestamp":"2026-09-07T00:00:02Z","message":{"role":"toolResult","toolCallId":"call-a","toolName":"read","content":[],"isError":false}}"#,
+                r#"{"type":"message","id":"bash-a","parentId":"tool-a","timestamp":"2026-09-07T00:00:03Z","message":{"role":"bashExecution","command":"pwd","output":"/workspace","exitCode":0,"cancelled":false}}"#,
+                r#"{"type":"message","id":"summary-a","parentId":"bash-a","timestamp":"2026-09-07T00:00:04Z","message":{"role":"compactionSummary","summary":"Retained context","tokensBefore":100}}"#,
+            ],
+        );
+        let result = parse_session_file(&path, 0).unwrap();
+        for event in &result.events {
+            if let Some(parent) = event.parent_uuid.as_deref() {
+                assert!(result
+                    .events
+                    .iter()
+                    .any(|candidate| candidate.uuid == parent));
+            }
+        }
+        assert!(result.events.iter().any(|event| {
+            event.uuid == "bash-a"
+                && event
+                    .content_text
+                    .as_deref()
+                    .is_some_and(|text| text.contains("/workspace"))
+        }));
+        assert!(result.events.iter().any(|event| {
+            event.uuid == "summary-a" && event.content_text.as_deref() == Some("Retained context")
+        }));
     }
 
     #[test]

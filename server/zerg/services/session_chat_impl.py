@@ -253,9 +253,11 @@ def _validate_managed_local_launch_response_contract(
             raise RuntimeError("Cursor Helm managed local launch response is missing native resume command")
         return
 
-    if transport == ManagedSessionTransport.PI_PRINT:
-        if attach_command:
-            raise RuntimeError("Pi managed local launch response should not include an attach command")
+    if transport == ManagedSessionTransport.PI_HELM_CHANNEL:
+        if not response.provider_session_id:
+            raise RuntimeError("Pi Helm launch response is missing native session identity")
+        if "longhouse pi --resume-session" not in attach_command or sid not in attach_command:
+            raise RuntimeError("Pi Helm launch response is missing native cold-resume command")
         return
 
     raise RuntimeError(f"Unsupported managed local launch response transport: {transport}")

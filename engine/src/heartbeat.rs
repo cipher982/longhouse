@@ -30,6 +30,7 @@ use crate::managed_bridge_scan::CodexBridgeObservation;
 use crate::managed_claude_scan::ClaudeChannelObservation;
 use crate::managed_cursor_helm_scan::CursorHelmObservation;
 use crate::managed_opencode_scan::OpenCodeServerObservation;
+use crate::managed_pi_helm_scan::PiHelmObservation;
 
 /// Captured once per daemon process at the first write_status_file call.
 /// Compared against the on-disk binary mtime to detect "restart pending".
@@ -1086,6 +1087,39 @@ pub(crate) fn leases_from_cursor_helm_observations(
     leases
 }
 
+/// Pi Helm leases are live only while the exact launcher, provider process, and
+/// authenticated extension channel are all present. A retained stopped state
+/// remains evidence for resume but never projects a live control lease.
+pub(crate) fn leases_from_pi_helm_observations(
+    machine_id: &str,
+    observations: &[PiHelmObservation],
+    now: DateTime<Utc>,
+) -> Vec<ManagedSessionLease> {
+    let sequence = now.timestamp_millis().max(0) as u64;
+    let observed_at = now.to_rfc3339();
+    let mut leases = Vec::new();
+    for obs in observations {
+        if !obs.live {
+            continue;
+        }
+        leases.push(ManagedSessionLease {
+            session_id: obs.session_id.clone(),
+            provider: "pi".to_string(),
+            machine_id: machine_id.trim().to_string(),
+            sequence,
+            state: "attached".to_string(),
+            phase: None,
+            tool_name: None,
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: None,
+            observed_at: obs.updated_at.clone().if_empty(observed_at.clone()),
+            lease_ttl_ms: 15 * 60 * 1000,
+        });
+    }
+    leases.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    leases
+}
+
 /// Antigravity leases, derived from launcher ownership plus fresh hook evidence.
 ///
 /// Without these the provider never appears in `managed_sessions`, and every
@@ -1146,6 +1180,7 @@ pub fn filter_unmanaged_bindings_owned_by_managed_observations(
     claude_observations: &[ClaudeChannelObservation],
     opencode_observations: &[OpenCodeServerObservation],
     cursor_observations: &[CursorHelmObservation],
+    pi_observations: &[PiHelmObservation],
 ) -> Vec<UnmanagedSessionBinding> {
     let managed_codex = ManagedCodexKeys::from_observations(codex_observations);
     let managed_claude = ManagedClaudeKeys::from_observations(claude_observations);
@@ -1177,6 +1212,12 @@ pub fn filter_unmanaged_bindings_owned_by_managed_observations(
             managed_pids.extend(observation.cursor_pid);
         }
     }
+    for observation in pi_observations {
+        if observation.live {
+            managed_pids.extend(observation.launcher_pid);
+            managed_pids.extend(observation.provider_pid);
+        }
+    }
 
     bindings
         .into_iter()
@@ -1198,6 +1239,7 @@ pub(crate) fn machine_evidence_from_observations(
     claude_observations: &[ClaudeChannelObservation],
     opencode_observations: &[OpenCodeServerObservation],
     cursor_observations: &[CursorHelmObservation],
+    pi_observations: &[PiHelmObservation],
     unmanaged_bindings: &[UnmanagedSessionBinding],
     phase_rows: &[PhaseLedgerRow],
     run_windows: &crate::state::session_run_binding::RunWindowIndex,
@@ -1671,6 +1713,99 @@ pub(crate) fn machine_evidence_from_observations(
         }
     }
 
+    for obs in pi_observations {
+        let at = observed_at(&obs.updated_at);
+        if let Some(terminal) = exact_process_exit_evidence(
+            "pi",
+            &obs.session_id,
+            obs.run_id.as_deref(),
+            "provider",
+            obs.provider_pid,
+            obs.provider_process_start_time.as_deref(),
+            boot_id.as_deref(),
+            managed_snapshot_complete,
+            obs.provider_alive,
+            "pi_helm_scan",
+            &envelope_observed_at,
+        ) {
+            run.push(terminal);
+        }
+        for (role, pid, start_time, alive) in [
+            (
+                "launcher",
+                obs.launcher_pid,
+                obs.launcher_process_start_time.clone(),
+                obs.launcher_alive,
+            ),
+            (
+                "provider",
+                obs.provider_pid,
+                obs.provider_process_start_time.clone(),
+                obs.provider_alive,
+            ),
+        ] {
+            if let Some(pid) = pid {
+                process.push(ProcessEvidence {
+                    authority_class: "exact_process_identity".to_string(),
+                    provider: "pi".to_string(),
+                    session_id: Some(obs.session_id.clone()),
+                    provider_session_id: obs.provider_session_id.clone(),
+                    role: role.to_string(),
+                    pid: Some(pid),
+                    process_start_time: start_time,
+                    boot_id: boot_id.clone(),
+                    cwd: obs.cwd.clone(),
+                    alive,
+                    source: "pi_helm_scan".to_string(),
+                    observed_at: at.clone(),
+                });
+            }
+        }
+        let state = if obs.live { "attached" } else { "detached" };
+        if obs.run_id.is_some() {
+            control.push(ControlEvidence {
+                authority_class: "provider_control".to_string(),
+                provider: "pi".to_string(),
+                terminal_attached: Some(obs.launcher_alive),
+                session_id: obs.session_id.clone(),
+                provider_session_id: obs.provider_session_id.clone(),
+                connection_id: obs.connection_id.clone(),
+                lease_generation: obs.lease_generation.clone(),
+                run_id: obs.run_id.clone(),
+                granted_operations: granted_control_operations("pi", obs.live),
+                ownership: "managed".to_string(),
+                state: state.to_string(),
+                bridge_status: Some(if obs.live { "ready" } else { "unavailable" }.to_string()),
+                thread_subscription_status: None,
+                lease_ttl_ms: 15 * 60 * 1000,
+                source: "pi_helm_scan".to_string(),
+                observed_at: envelope_observed_at.clone(),
+            });
+        }
+        if let Some(provider_session_id) = obs
+            .provider_session_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            transcript.push(TranscriptEvidence {
+                authority_class: "source_cursor".to_string(),
+                provider: "pi".to_string(),
+                session_id: Some(obs.session_id.clone()),
+                provider_session_id: provider_session_id.to_string(),
+                source_path: obs
+                    .session_file
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                source_inode: None,
+                source_device: None,
+                source_offset: None,
+                source_mtime: None,
+                source: "pi_helm_scan".to_string(),
+                observed_at: at,
+            });
+        }
+    }
+
     for binding in unmanaged_bindings {
         if binding.pid.is_some() {
             process.push(ProcessEvidence {
@@ -1771,6 +1906,12 @@ pub(crate) fn machine_evidence_from_observations(
                 .map(|run_id| (observation.session_id.as_str(), run_id))
         }))
         .chain(cursor_observations.iter().filter_map(|observation| {
+            observation
+                .run_id
+                .as_deref()
+                .map(|run_id| (observation.session_id.as_str(), run_id))
+        }))
+        .chain(pi_observations.iter().filter_map(|observation| {
             observation
                 .run_id
                 .as_deref()
@@ -2386,6 +2527,7 @@ pub fn resolved_sessions_from_observations(
     claude_observations: &[ClaudeChannelObservation],
     opencode_observations: &[OpenCodeServerObservation],
     cursor_observations: &[CursorHelmObservation],
+    pi_observations: &[PiHelmObservation],
 ) -> Vec<ResolvedLocalSession> {
     let codex_by_session: HashMap<&str, &CodexBridgeObservation> = codex_observations
         .iter()
@@ -2400,6 +2542,10 @@ pub fn resolved_sessions_from_observations(
         .map(|obs| (obs.session_id.as_str(), obs))
         .collect();
     let cursor_by_session: HashMap<&str, &CursorHelmObservation> = cursor_observations
+        .iter()
+        .map(|obs| (obs.session_id.as_str(), obs))
+        .collect();
+    let pi_by_session: HashMap<&str, &PiHelmObservation> = pi_observations
         .iter()
         .map(|obs| (obs.session_id.as_str(), obs))
         .collect();
@@ -2422,6 +2568,10 @@ pub fn resolved_sessions_from_observations(
             "cursor" => sessions.push(resolved_managed_cursor_session(
                 lease,
                 cursor_by_session.get(lease.session_id.as_str()).copied(),
+            )),
+            "pi" => sessions.push(resolved_managed_pi_session(
+                lease,
+                pi_by_session.get(lease.session_id.as_str()).copied(),
             )),
             _ => sessions.push(resolved_managed_generic_session(lease)),
         }
@@ -2759,6 +2909,67 @@ fn cursor_ui_presence(
         Some("foreground_tui")
     } else {
         None
+    }
+}
+
+fn resolved_managed_pi_session(
+    lease: &ManagedSessionLease,
+    obs: Option<&PiHelmObservation>,
+) -> ResolvedLocalSession {
+    let provider_session_id = obs.and_then(|obs| obs.provider_session_id.clone());
+    let transcript_observed = provider_session_id.is_some();
+    let process_pid = obs.and_then(|obs| obs.provider_pid);
+    let mut join_keys = vec![format!("session_id={}", lease.session_id)];
+    if let Some(provider_session_id) = provider_session_id.as_deref() {
+        join_keys.push(format!("provider_session_id={provider_session_id}"));
+    }
+    if let Some(state_file) = obs.map(|obs| obs.state_file.display().to_string()) {
+        join_keys.push(format!("state_file={state_file}"));
+    }
+    ResolvedLocalSession {
+        session_id: Some(lease.session_id.clone()),
+        provider: lease.provider.clone(),
+        provider_session_id,
+        control_path: "managed".to_string(),
+        state: lease.state.clone(),
+        phase: obs.and_then(|obs| obs.phase.clone()),
+        tool_name: obs.and_then(|obs| obs.tool_name.clone()),
+        phase_observed_at: obs.map(|obs| obs.updated_at.clone()),
+        last_activity_at: obs.map(|obs| obs.updated_at.clone()),
+        timeline_title: None,
+        first_user_message: None,
+        title_state: None,
+        title_source: None,
+        workspace: workspace_from_cwd(obs.and_then(|obs| obs.cwd.clone())),
+        process: ResolvedProcess {
+            pid: process_pid,
+            process_start_time: obs.and_then(|obs| obs.provider_process_start_time.clone()),
+            boot_id: None,
+            started_at: obs.map(|obs| obs.started_at.clone()),
+        },
+        bridge: ResolvedBridge {
+            bridge_pid: obs.and_then(|obs| obs.launcher_pid),
+            app_server_pid: process_pid,
+            ws_url: None,
+            heartbeat_at: obs.map(|obs| obs.updated_at.clone()),
+            status: lease.bridge_status.clone(),
+            thread_subscription_status: None,
+            launch_mode: Some("tui".to_string()),
+            ui_attached: obs.map(|obs| obs.live),
+            ui_presence: if lease.state == "attached" {
+                Some("foreground_tui".into())
+            } else {
+                Some(lease.state.clone())
+            },
+        },
+        evidence: ResolvedEvidence {
+            process_observed: obs.is_some_and(|obs| obs.provider_alive),
+            transcript_observed,
+            bridge_state: lease.bridge_status.clone(),
+            hook_seen_at: None,
+            join_keys,
+        },
+        reason_codes: Vec::new(),
     }
 }
 
@@ -3653,7 +3864,7 @@ mod tests {
         let observations = vec![foreground, background, recovered];
         let leases = leases_from_observations("cinder", &observations, now);
         let sessions =
-            resolved_sessions_from_observations(&leases, &[], &observations, &[], &[], &[]);
+            resolved_sessions_from_observations(&leases, &[], &observations, &[], &[], &[], &[]);
 
         let foreground_session = sessions
             .iter()
@@ -3761,7 +3972,7 @@ mod tests {
         };
         let observation = test_observation("managed-codex", "ws://127.0.0.1:45681/session");
         let mut sessions =
-            resolved_sessions_from_observations(&[lease], &[], &[observation], &[], &[], &[]);
+            resolved_sessions_from_observations(&[lease], &[], &[observation], &[], &[], &[], &[]);
 
         apply_boot_identity(&mut sessions, Some("macos:1777970400:0"));
 
@@ -3888,6 +4099,7 @@ mod tests {
             &[],
             std::slice::from_ref(&obs),
             &[],
+            &[],
         );
         let session = &sessions[0];
         assert_eq!(session.state, "attached");
@@ -3899,7 +4111,8 @@ mod tests {
         assert_eq!(session.bridge.ui_presence.as_deref(), Some("background"));
 
         obs.has_tui_attachment = true;
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
+        let sessions =
+            resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[], &[]);
         let session = &sessions[0];
         assert_eq!(session.state, "attached");
         assert_eq!(session.bridge.ui_attached, Some(true));
@@ -3916,7 +4129,7 @@ mod tests {
             let lease = opencode_lease("managed-opencode");
             let obs = test_opencode_observation("managed-opencode", launch_mode);
             let sessions =
-                resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
+                resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[], &[]);
             let session = &sessions[0];
             assert_eq!(session.state, "attached", "launch_mode={launch_mode}");
             assert_eq!(session.bridge.ui_attached, Some(false));
@@ -3939,7 +4152,8 @@ mod tests {
         // unknown rather than mislabeled, and lease state is untouched.
         let lease = opencode_lease("legacy-opencode");
         let obs = test_opencode_observation("legacy-opencode", "");
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
+        let sessions =
+            resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[], &[]);
         let session = &sessions[0];
         assert_eq!(session.state, "attached");
         assert_eq!(session.bridge.ui_presence, None);
@@ -4120,6 +4334,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
 
         assert_eq!(filtered.len(), 1);
@@ -4140,6 +4355,7 @@ mod tests {
         let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
             bindings.clone(),
             &[obs],
+            &[],
             &[],
             &[],
             &[],
@@ -4175,6 +4391,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         );
 
         assert_eq!(filtered.len(), 1);
@@ -4202,6 +4419,7 @@ mod tests {
         let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
             bindings.clone(),
             &[obs],
+            &[],
             &[],
             &[],
             &[],
@@ -4243,6 +4461,7 @@ mod tests {
             &[obs],
             &[],
             &[],
+            &[],
         );
 
         assert_eq!(filtered.len(), 1);
@@ -4262,6 +4481,7 @@ mod tests {
             &[],
             &[],
             &[observation],
+            &[],
             &[],
         );
 
@@ -4295,7 +4515,7 @@ mod tests {
         let unmanaged = test_binding("claude", "claude-unmanaged", 333);
 
         let sessions =
-            resolved_sessions_from_observations(&[lease], &[unmanaged], &[obs], &[], &[], &[]);
+            resolved_sessions_from_observations(&[lease], &[unmanaged], &[obs], &[], &[], &[], &[]);
 
         assert_eq!(sessions.len(), 2);
         let managed = sessions
@@ -4387,7 +4607,8 @@ mod tests {
             lease_ttl_ms: 900_000,
         };
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[obs], &[], &[]);
+        let sessions =
+            resolved_sessions_from_observations(&[lease], &[], &[], &[obs], &[], &[], &[]);
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
@@ -4448,6 +4669,7 @@ mod tests {
             &[],
             &[],
             std::slice::from_ref(&obs),
+            &[],
         );
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
@@ -4509,7 +4731,7 @@ mod tests {
     #[test]
     fn resolved_sessions_keep_sparse_managed_cursor_without_observation() {
         let lease = cursor_lease("managed-cursor");
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[], &[]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[], &[], &[]);
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
         assert_eq!(session.provider, "cursor");
@@ -4536,7 +4758,7 @@ mod tests {
             lease_ttl_ms: 900_000,
         };
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[], &[]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[], &[], &[]);
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
@@ -4591,7 +4813,8 @@ mod tests {
             process_start_time: "Mon May  5 11:59:00 2026".to_string(),
         };
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
+        let sessions =
+            resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[], &[]);
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
@@ -5127,6 +5350,7 @@ mod tests {
             &claude_observations,
             &opencode_observations,
             &cursor_observations,
+            &[],
         );
         assert!(legacy_filtered.is_empty());
         let evidence = machine_evidence_from_observations(
@@ -5136,6 +5360,7 @@ mod tests {
             &claude_observations,
             &opencode_observations,
             &cursor_observations,
+            &[],
             &unmanaged_bindings,
             std::slice::from_ref(&phase),
             &RunWindowIndex::default(),
@@ -5320,6 +5545,7 @@ mod tests {
             &claude_observations,
             &opencode_observations,
             &cursor_observations,
+            &[],
             &unmanaged_bindings,
             &[],
             &RunWindowIndex::default(),
@@ -5494,6 +5720,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &RunWindowIndex::default(),
             true,
             true,
@@ -5642,7 +5869,11 @@ mod tests {
             Vec::new(),
             contracts.iter().map(|_| 0u8).collect(),
         ]);
-        let heartbeats = contracts.len().div_ceil(shares[6]).max(readiness.len().div_ceil(shares[4])) + 1;
+        let heartbeats = contracts
+            .len()
+            .div_ceil(shares[6])
+            .max(readiness.len().div_ceil(shares[4]))
+            + 1;
 
         for rotation in 0..heartbeats {
             let identities = reducer_evidence_identities(
@@ -5794,6 +6025,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &[binding.clone()],
             &[],
             &RunWindowIndex::default(),
@@ -5805,6 +6037,7 @@ mod tests {
         );
         let second = machine_evidence_from_observations(
             "cinder",
+            &[],
             &[],
             &[],
             &[],
@@ -5840,6 +6073,7 @@ mod tests {
         missing_mtime.source_mtime = None;
         let without_stable_position = machine_evidence_from_observations(
             "cinder",
+            &[],
             &[],
             &[],
             &[],
@@ -5882,6 +6116,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &[phase],
             &RunWindowIndex::default(),
             true,
@@ -5917,6 +6152,7 @@ mod tests {
         };
         let evidence = machine_evidence_from_observations(
             "cinder",
+            &[],
             &[],
             &[],
             &[],
@@ -6008,6 +6244,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             std::slice::from_ref(&phase),
             &windows,
             true,
@@ -6053,6 +6290,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             std::slice::from_ref(&phase),
             &RunWindowIndex::default(),
             true,
@@ -6068,6 +6306,7 @@ mod tests {
 
         let evidence = machine_evidence_from_observations(
             "cinder",
+            &[],
             &[],
             &[],
             &[],
@@ -6172,6 +6411,7 @@ mod tests {
         let with_activity = |activity: Vec<ActivityEvidence>| {
             let mut evidence = machine_evidence_from_observations(
                 "cinder",
+                &[],
                 &[],
                 &[],
                 &[],

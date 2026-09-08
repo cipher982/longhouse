@@ -48,6 +48,7 @@ mod managed_launch_lifecycle;
 mod managed_launch_payload;
 mod managed_opencode_scan;
 mod managed_phase_contract;
+mod managed_pi_helm_scan;
 mod managed_process_janitor;
 mod managed_resume_scan;
 mod managed_scan;
@@ -61,7 +62,10 @@ mod opencode_db;
 mod opencode_run;
 mod outbox;
 mod permission_gate;
+mod pi_helm_control;
+mod pi_helm_launcher;
 mod pi_print;
+mod pi_session;
 mod pipeline;
 mod process_group;
 mod process_identity;
@@ -645,6 +649,11 @@ enum Commands {
         #[command(subcommand)]
         command: CursorHelmCommands,
     },
+    /// Launch and control a stock interactive Pi session through a private local channel.
+    PiHelm {
+        #[command(subcommand)]
+        command: PiHelmCommands,
+    },
     /// Native Cursor transcript/binding evidence hook.
     CursorLifecycleHook {
         #[arg(default_value = "unknown")]
@@ -969,6 +978,70 @@ enum CursorHelmCommands {
     },
     /// Serve the Cursor MCP coordination tools for the inherited session.
     CoordinationMcp,
+}
+
+#[derive(Subcommand)]
+enum PiHelmCommands {
+    /// Launch the stock Pi TUI in the invoking terminal.
+    Launch {
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        #[arg(long)]
+        prompt: Option<String>,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        session_dir: Option<PathBuf>,
+        #[arg(long)]
+        resume_session: Option<String>,
+        #[arg(long)]
+        pi_bin: Option<String>,
+        #[arg(long)]
+        url: Option<String>,
+    },
+    /// Send input only when the native Pi session is idle.
+    Send {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+    /// Queue native Pi steering input for the next model call.
+    Steer {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+    /// Queue native Pi follow-up input after the active run settles.
+    FollowUp {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+    /// Abort the current native Pi operation.
+    Abort {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+    /// Terminate the owned Pi execution and its process group.
+    Terminate {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1357,6 +1430,14 @@ fn command_name(command: &Commands) -> &'static str {
             CursorHelmCommands::Send { .. } => "cursor-helm-send",
             CursorHelmCommands::Interrupt { .. } => "cursor-helm-interrupt",
             CursorHelmCommands::CoordinationMcp => "cursor-helm-coordination-mcp",
+        },
+        Commands::PiHelm { command } => match command {
+            PiHelmCommands::Launch { .. } => "pi-helm-launch",
+            PiHelmCommands::Send { .. } => "pi-helm-send",
+            PiHelmCommands::Steer { .. } => "pi-helm-steer",
+            PiHelmCommands::FollowUp { .. } => "pi-helm-follow-up",
+            PiHelmCommands::Abort { .. } => "pi-helm-abort",
+            PiHelmCommands::Terminate { .. } => "pi-helm-terminate",
         },
     }
 }
@@ -2106,6 +2187,133 @@ fn main() -> anyhow::Result<()> {
                 }
                 CursorHelmCommands::CoordinationMcp => {
                     cursor_helm_launcher::serve_coordination_mcp()?;
+                }
+            }
+        }
+        Commands::PiHelm { command } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            match command {
+                PiHelmCommands::Launch {
+                    cwd,
+                    prompt,
+                    provider,
+                    model,
+                    session_dir,
+                    resume_session,
+                    pi_bin,
+                    url,
+                } => {
+                    let exit = pi_helm_launcher::launch(pi_helm_launcher::LaunchConfig {
+                        cwd,
+                        prompt,
+                        provider,
+                        model,
+                        session_dir,
+                        resume_session,
+                        pi_bin,
+                        url,
+                        token: None,
+                    })?;
+                    if exit != 0 {
+                        std::process::exit(exit);
+                    }
+                }
+                PiHelmCommands::Send {
+                    session_id,
+                    text,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(pi_helm_control::dispatch(
+                            &session_id,
+                            pi_helm_control::CommandKind::Send,
+                            Some(&text),
+                            state_root.as_deref(),
+                            None,
+                        ))
+                        .map_err(|error| anyhow::anyhow!(error))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "ok": true,
+                            "provider_session_id": summary.provider_session_id,
+                            "status": summary.status,
+                        }))?
+                    );
+                }
+                PiHelmCommands::Steer {
+                    session_id,
+                    text,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(pi_helm_control::dispatch(
+                            &session_id,
+                            pi_helm_control::CommandKind::Steer,
+                            Some(&text),
+                            state_root.as_deref(),
+                            None,
+                        ))
+                        .map_err(|error| anyhow::anyhow!(error))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "ok": true,
+                            "provider_session_id": summary.provider_session_id,
+                            "status": summary.status,
+                        }))?
+                    );
+                }
+                PiHelmCommands::FollowUp {
+                    session_id,
+                    text,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(pi_helm_control::dispatch(
+                            &session_id,
+                            pi_helm_control::CommandKind::FollowUp,
+                            Some(&text),
+                            state_root.as_deref(),
+                            None,
+                        ))
+                        .map_err(|error| anyhow::anyhow!(error))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "ok": true,
+                            "provider_session_id": summary.provider_session_id,
+                            "status": summary.status,
+                        }))?
+                    );
+                }
+                PiHelmCommands::Abort {
+                    session_id,
+                    state_root,
+                } => {
+                    rt.block_on(pi_helm_control::dispatch(
+                        &session_id,
+                        pi_helm_control::CommandKind::Abort,
+                        None,
+                        state_root.as_deref(),
+                        None,
+                    ))
+                    .map_err(|error| anyhow::anyhow!(error))?;
+                    println!("{{\"ok\":true}}");
+                }
+                PiHelmCommands::Terminate {
+                    session_id,
+                    state_root,
+                } => {
+                    rt.block_on(pi_helm_control::dispatch(
+                        &session_id,
+                        pi_helm_control::CommandKind::Terminate,
+                        None,
+                        state_root.as_deref(),
+                        None,
+                    ))
+                    .map_err(|error| anyhow::anyhow!(error))?;
+                    println!("{{\"ok\":true}}");
                 }
             }
         }

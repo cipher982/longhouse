@@ -24,6 +24,7 @@ from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.session_live_previews import preview_payload_from_runtime_event
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import _is_bridge_transcript_event
@@ -74,10 +75,9 @@ async def ingest_runtime_observation_batch(
                 managed="true",
             ).observe(age_s)
 
-        live_transcript_only = bool(events) and all(_is_bridge_live_transcript_event(ev) for ev in events)
-
-        if live_transcript_only:
-            _publish_live_transcript_previews(events, now=now_utc)
+        live_transcript_events = [event for event in events if _is_bridge_live_transcript_event(event)]
+        if live_transcript_events:
+            _publish_live_transcript_previews(live_transcript_events, now=now_utc)
 
         def _publish_runtime_updates(
             result: RuntimeEventBatchResult,
@@ -259,6 +259,16 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
 
 
 def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
+    if (
+        (event.provider or "").strip().lower() == "pi"
+        and (event.source or "").strip().lower() == "pi_print"
+        and (event.payload or {}).get("progress_kind") == "pi_print_stream"
+    ):
+        return preview_payload_from_runtime_event(
+            event,
+            observation_id=f"runtime:{event.source}:{event.dedupe_key}",
+        )
+
     payload = event.payload or {}
     is_tool = payload.get("progress_kind") == "console_live_tool_item"
     command = str(payload.get("command") or "").strip()

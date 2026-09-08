@@ -8,7 +8,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 259,
+  "file_count": 260,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -124,7 +124,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -153,7 +154,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -163,8 +165,7 @@
         "claude",
         "codex",
         "cursor",
-        "opencode",
-        "pi"
+        "opencode"
       ]
     },
     {
@@ -208,7 +209,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -342,7 +344,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -836,6 +839,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_catalogd_runtime.py",
+      "providers": [
+        "codex",
+        "pi"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_catalogd_session_reads.py",
       "providers": [
         "codex",
@@ -1116,7 +1126,8 @@
       "providers": [
         "claude",
         "codex",
-        "cursor"
+        "cursor",
+        "pi"
       ]
     },
     {
@@ -1403,7 +1414,8 @@
       "providers": [
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1648,7 +1660,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1669,7 +1682,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1728,7 +1742,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1904,7 +1919,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1947,7 +1963,8 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1955,7 +1972,8 @@
       "providers": [
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1991,7 +2009,8 @@
       "providers": [
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -2016,7 +2035,8 @@
       "providers": [
         "codex",
         "cursor",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {

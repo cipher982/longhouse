@@ -43,13 +43,20 @@ longhouse claude       # managed channel session: send, interrupt, steer, resume
 longhouse codex        # managed app-server session: send, interrupt, steer, resume
 longhouse opencode     # managed server session: send, interrupt, reattach (not active-turn steer)
 longhouse cursor       # managed PTY session: send, interrupt, reattach (not active-turn steer)
-longhouse pi --prompt "..."   # managed one-shot turn: send, interrupt (no reattach)
+longhouse pi           # stock Pi TUI: send, interrupt, boundary steer, cold resume
 longhouse antigravity  # managed hook-inbox session: send only
 ```
 
 Use `longhouse opencode --model <provider/model>` when the OpenCode session
 must stay on a specific model. Longhouse carries that explicit choice through
 both the initial Helm launch and a later cold reattach.
+
+Pi Helm keeps the stock terminal UI through a launch-scoped extension.
+Steering is delivered at the next model boundary, not mid-token. After the
+previous owner exits, `longhouse pi --resume-session <session-id>` opens a
+new TUI on the exact native session file; it is not live terminal attachment.
+Pi Console uses the configured tools, context, model, and local credentials
+and resumes that native history in a new process for each turn.
 
 OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer. Cursor Helm supports send, interrupt, terminate, and reattach but not active-turn steer or pause-answer. Antigravity is the narrowest of the six: it launches under Longhouse's hook inbox and accepts send, but not interrupt, terminate, or reattach — and it refuses to start at all if its hook is not installed, rather than opening an unmanaged session wearing a managed session id.
 
@@ -127,7 +134,7 @@ Actively developed pre-release. Every provider Longhouse supports syncs into one
 | Cursor Agent | ✓ | ✓ | ✓ | — | ✓ |
 | OpenCode | ✓ | ✓ | ✓ | — | ✓ |
 | Antigravity | ✓ | ✓ | — | — | — |
-| Pi Agent | ✓ | ✓ | ✓ | — | — |
+| Pi Agent | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 The iOS client lives in `ios/` and handles APNs push on `needs_user`, but there is no
 TestFlight or App Store build and no `.ipa` in any release. Getting it on a phone today

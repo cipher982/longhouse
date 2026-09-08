@@ -55,6 +55,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
     from zerg.qa.provider_adapters.pi import PI_LIVE_ENV  # noqa: PLC0415
     from zerg.qa.provider_adapters.pi import PiHarnessAdapter  # noqa: PLC0415
     from zerg.qa.universal_agent_harness import STATUS_BLOCKED  # noqa: PLC0415
+    from zerg.qa.universal_agent_harness import STATUS_FAIL  # noqa: PLC0415
     from zerg.qa.universal_agent_harness import STATUS_PASS  # noqa: PLC0415
     from zerg.qa.universal_agent_harness import AdapterConfig  # noqa: PLC0415
     from zerg.qa.universal_agent_harness import EvidencePackage  # noqa: PLC0415
@@ -73,15 +74,34 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         git_sha_fn=identity.git_sha,
         git_dirty_fn=identity.git_dirty,
     )
-    config = AdapterConfig(provider="pi", binary_name="pi", binary_env="LONGHOUSE_PI_BIN")
+    config = AdapterConfig(
+        provider="pi",
+        binary_name="pi",
+        binary_env="LONGHOUSE_PI_BIN",
+        safe_run_prompt_once=True,
+        safe_managed_session_scenarios=("launch_managed_session", "send_receive"),
+    )
     adapter = PiHarnessAdapter(config, provider_bin=binary)
     package = EvidencePackage(root=output_root, provider="pi", scenario=SCENARIO_ID)
     adapter.prepare(package)
     launch = adapter.launch_managed_session(package)
     send = adapter.send_receive(package, "Reply with the single word OK.")
+    tool_call = adapter.tool_call_result(package)
     live_enabled = _live_enabled()
+    tool_taxonomy = tool_call.get("native_shadow_taxonomy") if isinstance(tool_call, dict) else None
+    native_taxonomy_complete = bool(
+        isinstance(tool_taxonomy, dict)
+        and tool_taxonomy.get("header_present") is True
+        and tool_taxonomy.get("tool_pairs")
+        and not tool_taxonomy.get("tool_calls_without_results")
+        and not tool_taxonomy.get("tool_results_without_calls")
+    )
     if live_enabled:
-        status = STATUS_PASS if launch.get("status") == STATUS_PASS and send.get("status") == STATUS_PASS else STATUS_BLOCKED
+        status = (
+            STATUS_PASS
+            if all(item.get("status") == STATUS_PASS for item in (launch, send, tool_call)) and native_taxonomy_complete
+            else STATUS_FAIL
+        )
     else:
         status = STATUS_BLOCKED
     observation: dict[str, Any] = {
@@ -98,6 +118,14 @@ def run(request_path: Path, output_root: Path) -> dict[str, Any]:
         "accepted_credential_env": list(CREDENTIAL_REQUIREMENT),
         "launch_managed_session": launch,
         "send_receive": send,
+        "tool_call_result": tool_call,
+        "native_shadow_taxonomy": tool_taxonomy,
+        "native_taxonomy_complete": native_taxonomy_complete,
+        "exact_native_resume": {
+            "session_file": send.get("session_file"),
+            "same_provider_session_id": launch.get("provider_session_id") == send.get("provider_session_id"),
+            "resume_argv_used": bool(send.get("exact_resume_file")),
+        },
     }
     identity.atomic_json(output_root / "request.json", request)
     identity.atomic_json(output_root / "raw-observation.json", observation)
