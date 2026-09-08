@@ -25,6 +25,28 @@ shown to you. Use it.
 Look at more than one when the change spans surfaces. The simulator shot
 proves the data path; the fixture shot proves the layout at a known state.
 
+## Own the QA lifecycle
+
+Before launching, record simulator UDIDs and prior boot/window state, owned
+processes/ports, browser tabs, and scratch roots. Put teardown in `finally` or
+an exit trap, including failure and cancellation. Run it as soon as the visual
+check finishes; a later build, review, or release is not a reason to keep QA open.
+
+- A simulator created for this check is disposable: `xcrun simctl shutdown
+  <owned-udid>`, then `xcrun simctl delete <owned-udid>`. Verify the UDID is gone
+  and its visible window is closed; device/process state alone is not UI cleanup.
+- Never delete a pre-existing simulator. Restore its original boot state and
+  close only windows/apps you opened. Do not quit Simulator or kill browsers
+  globally when other windows or sessions may belong to David or another agent.
+- Close owned browser tabs and stop owned Runtime Hosts, engines, relays,
+  log followers, and web servers. Do not use `make stop` against a shared stack.
+- Remove disposable profiles, credentials, caches, and scratch build trees once
+  no longer needed. Keep the selected screenshots and proof receipts, not the
+  environment that produced them.
+
+Before handoff, verify no owned QA window, device, listener, or process remains.
+Retaining a running environment requires an explicit request from David.
+
 ## iOS
 
 ### Autonomous recovery dogfood (simlab)
