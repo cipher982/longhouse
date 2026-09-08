@@ -161,7 +161,7 @@ export default function SessionsPage() {
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
   const lastTimelineScrollAtRef = useRef(0);
   // Fetch dynamic filter options
-  const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack, popoverOpen);
+  const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack, popoverOpen, includeHidden);
   const projectOptions = filtersData?.projects || [];
   const providerOptions = filtersData?.providers || [];
   const machineOptions = filtersData?.machines || [];
@@ -667,7 +667,6 @@ export default function SessionsPage() {
             provider={provider} setProvider={handleProviderChange} providerOptions={providerOptions}
             deviceId={deviceId} setDeviceId={handleDeviceIdChange} machineOptions={machineOptions}
             daysBack={daysBack} setDaysBack={handleDaysBackChange}
-            hideAutonomous={hideAutonomous} setHideAutonomous={handleHideAutonomousChange}
             filtersLoading={filtersLoading}
             includeHidden={includeHidden} setIncludeHidden={handleIncludeHiddenChange}
           />

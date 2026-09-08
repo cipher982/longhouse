@@ -410,11 +410,11 @@ describe("SessionsPage", () => {
     const user = userEvent.setup();
     renderSessionsPage("/timeline");
 
-    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, false);
+    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, false, false);
 
     await user.click(screen.getByRole("button", { name: "Filters" }));
 
-    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, true);
+    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, true, false);
   });
 
   it("does not render a redundant timeline page heading above the toolbar", async () => {
@@ -1183,9 +1183,9 @@ describe("SessionsPage", () => {
     await user.click(filterButton);
 
     // Toggle view all
-    const viewAllCheckbox = screen.getByRole("checkbox", { name: /view all/i });
-    expect(viewAllCheckbox).not.toBeChecked();
-    await user.click(viewAllCheckbox);
+    const viewAllSwitch = screen.getByRole("switch", { name: /view all/i });
+    expect(viewAllSwitch).toHaveAttribute("aria-checked", "false");
+    await user.click(viewAllSwitch);
 
     // Should pass include_hidden: true to useAgentSessions
     await waitFor(() => {
