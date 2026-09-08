@@ -622,6 +622,7 @@ def list_live_catalog_timeline(
         "include_test": params.include_test,
         "hide_autonomous": params.hide_autonomous,
         "include_automation": params.include_automation,
+        "include_hidden": params.include_hidden,
         "device_id": params.device_id,
         "days_back": params.days_back,
         "limit": params.limit,

@@ -112,6 +112,7 @@ export default function SessionsPage() {
     provider,
     deviceId,
     hideAutonomous,
+    includeHidden,
     daysBack,
     searchQuery,
     aiSearch,
@@ -184,6 +185,10 @@ export default function SessionsPage() {
     (value: boolean) => updateFilterState({ hideAutonomous: value }),
     [updateFilterState]
   );
+  const handleIncludeHiddenChange = useCallback(
+    (value: boolean) => updateFilterState({ includeHidden: value }),
+    [updateFilterState]
+  );
   const handleSearchQueryChange = useCallback(
     (value: string) => {
       updateFilterState((previous) => ({
@@ -221,8 +226,9 @@ export default function SessionsPage() {
       mode: aiSearch ? "hybrid" : undefined,
       sort: debouncedQuery ? (sortOrder === "recent" ? "recency" : "relevance") : undefined,
       hide_autonomous: hideAutonomous ? undefined : false,
+      include_hidden: includeHidden ? true : undefined,
     }),
-    [project, provider, deviceId, daysBack, debouncedQuery, limit, aiSearch, sortOrder, hideAutonomous]
+    [project, provider, deviceId, daysBack, debouncedQuery, limit, aiSearch, sortOrder, hideAutonomous, includeHidden]
   );
 
   const timelineStreamEligible = !debouncedQuery && !aiSearch && typeof EventSource !== "undefined";
@@ -360,6 +366,7 @@ export default function SessionsPage() {
       provider: "",
       deviceId: "",
       hideAutonomous: true,
+      includeHidden: false,
       daysBack: DEFAULT_DAYS_BACK,
       searchQuery: "",
       aiSearch: false,
@@ -369,7 +376,7 @@ export default function SessionsPage() {
     setPopoverOpen(false);
   }, [updateUrlState]);
 
-  const hasFilters = !!(project || provider || deviceId || daysBack !== DEFAULT_DAYS_BACK || searchQuery);
+  const hasFilters = !!(project || provider || deviceId || daysBack !== DEFAULT_DAYS_BACK || searchQuery || includeHidden);
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
 
   // Count active non-default filters (for badge)
@@ -379,6 +386,7 @@ export default function SessionsPage() {
     deviceId,
     daysBack !== DEFAULT_DAYS_BACK ? "active" : "",
     !hideAutonomous ? "active" : "",
+    includeHidden ? "active" : "",
   ].filter(Boolean).length;
 
   // Ready signal for E2E
@@ -596,13 +604,14 @@ export default function SessionsPage() {
           </div>
 
           {/* Active filter chips */}
-          {(provider || deviceId || project || daysBack !== DEFAULT_DAYS_BACK || !hideAutonomous) && (
+          {(provider || deviceId || project || daysBack !== DEFAULT_DAYS_BACK || !hideAutonomous || includeHidden) && (
             <div className="sessions-filter-chips">
               {provider && <FilterChip label={provider} onDismiss={() => handleProviderChange("")} />}
               {deviceId && <FilterChip label={deviceId} onDismiss={() => handleDeviceIdChange("")} />}
               {project && <FilterChip label={project} onDismiss={() => handleProjectChange("")} />}
               {daysBack !== DEFAULT_DAYS_BACK && <FilterChip label={`${daysBack}d`} onDismiss={() => handleDaysBackChange(DEFAULT_DAYS_BACK)} />}
               {!hideAutonomous && <FilterChip label="show auto" onDismiss={() => handleHideAutonomousChange(true)} />}
+              {includeHidden && <FilterChip label="view all" onDismiss={() => handleIncludeHiddenChange(false)} />}
             </div>
           )}
 
@@ -660,6 +669,7 @@ export default function SessionsPage() {
             daysBack={daysBack} setDaysBack={handleDaysBackChange}
             hideAutonomous={hideAutonomous} setHideAutonomous={handleHideAutonomousChange}
             filtersLoading={filtersLoading}
+            includeHidden={includeHidden} setIncludeHidden={handleIncludeHiddenChange}
           />
         )}
 

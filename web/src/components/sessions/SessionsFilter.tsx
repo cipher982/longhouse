@@ -118,6 +118,7 @@ export interface FilterPopoverProps {
   deviceId: string; setDeviceId: (v: string) => void; machineOptions: string[];
   daysBack: number; setDaysBack: (v: number) => void;
   hideAutonomous: boolean; setHideAutonomous: (v: boolean) => void;
+  includeHidden: boolean; setIncludeHidden: (v: boolean) => void;
   filtersLoading: boolean;
 }
 
@@ -128,6 +129,7 @@ export function FilterPopover({
   deviceId, setDeviceId, machineOptions,
   daysBack, setDaysBack,
   hideAutonomous, setHideAutonomous,
+  includeHidden, setIncludeHidden,
   filtersLoading,
 }: FilterPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -169,6 +171,14 @@ export function FilterPopover({
           onChange={(e) => setHideAutonomous(!e.target.checked)}
         />
         show autonomous
+      </label>
+      <label className="sessions-filter-toggle-label" style={{ marginTop: 6 }}>
+        <input
+          type="checkbox"
+          checked={includeHidden}
+          onChange={(e) => setIncludeHidden(e.target.checked)}
+        />
+        view all (include hidden & automation)
       </label>
     </div>
   );

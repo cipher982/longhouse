@@ -1442,6 +1442,27 @@ async def test_hatch_execution_contract_classifies_storage_ingest_as_hidden_auto
             },
         )
         assert timeline["sessions"] == []
+
+        all_timeline = await client.call(
+            "session.timeline.list.v2",
+            {
+                "owner_id": 42,
+                "include_state_heads": True,
+                "project": None,
+                "provider": None,
+                "environment": None,
+                "device_id": None,
+                "days_back": 14,
+                "include_test": False,
+                "hide_autonomous": True,
+                "include_automation": False,
+                "include_hidden": True,
+                "limit": 10,
+                "offset": 0,
+            },
+        )
+        assert len(all_timeline["rows"]) == 1
+        assert all_timeline["rows"][0]["facts"]["catalog"]["session_id"] == str(session_id)
     finally:
         await client.close()
         await daemon.close()

@@ -2239,6 +2239,7 @@ class CatalogDaemon:
             "include_test",
             "hide_autonomous",
             "include_automation",
+            "include_hidden",
             "device_id",
             "days_back",
             "limit",
@@ -2252,8 +2253,8 @@ class CatalogDaemon:
             value = params[field]
             if value is not None and (not isinstance(value, str) or not value or len(value) > maximum):
                 return self._error(request, "invalid_request", f"{field} must be null or contain 1 to {maximum} characters")
-        for field in ("include_test", "hide_autonomous", "include_automation"):
-            if type(params[field]) is not bool:
+        for field in ("include_test", "hide_autonomous", "include_automation", "include_hidden"):
+            if type(params.get(field, False)) is not bool:
                 return self._error(request, "invalid_request", f"{field} must be a boolean")
         if type(params["days_back"]) is not int or not 1 <= params["days_back"] <= 3_650:
             return self._error(request, "invalid_request", "days_back must be an integer from 1 through 3650")

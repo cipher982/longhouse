@@ -95,6 +95,7 @@ export interface AgentSession {
   capabilities?: SessionCapabilities | null;
   user_state?: string;
   user_hidden_from_timeline?: boolean;
+  hidden_from_default_timeline?: boolean;
   execution_lifetime?: "one_shot" | "live_control" | null;
   /**
    * Attribution for the user whose signed share link or legacy
@@ -583,6 +584,7 @@ export interface AgentSessionFilters {
   mode?: "lexical" | "semantic" | "hybrid";
   sort?: "relevance" | "recency";
   hide_autonomous?: boolean;
+  include_hidden?: boolean;
 }
 
 export interface AgentSessionSummaryFilters {
@@ -680,6 +682,7 @@ export async function fetchAgentSessions(
     params.set("mode", filters.mode);
   if (filters.sort) params.set("sort", filters.sort);
   if (filters.hide_autonomous === false) params.set("hide_autonomous", "false");
+  if (filters.include_hidden) params.set("include_hidden", "true");
 
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}${queryString ? `?${queryString}` : ""}`;
@@ -719,6 +722,7 @@ function buildTimelineSessionsParams(
     params.set("mode", filters.mode);
   if (filters.sort) params.set("sort", filters.sort);
   if (filters.hide_autonomous === false) params.set("hide_autonomous", "false");
+  if (filters.include_hidden) params.set("include_hidden", "true");
 
   return params;
 }

@@ -6,7 +6,10 @@
  * transitions (idle → thinking → idle) crossfade in place.
  */
 
-import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "react-hot-toast";
+import { setSessionTimelineVisibility } from "../../services/api/agents";
 import type { DraggableAttributes } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { getTimelineSessionAnchor, type SessionStateFacts, type TimelineSessionCard } from "../../services/api/agents";
@@ -44,7 +47,7 @@ export interface SessionRowProps {
   /** True when this row is currently being dragged (visual hint). */
   dragging?: boolean;
   /** dnd-kit `setNodeRef`. */
-  forwardedRef?: Ref<HTMLButtonElement>;
+  forwardedRef?: Ref<HTMLDivElement | HTMLButtonElement>;
   /** dnd-kit transform/transition style. */
   style?: CSSProperties;
   /** dnd-kit attributes (role, aria-roledescription, etc). */
@@ -127,11 +130,60 @@ export function SessionRow({
       onPrefetch();
     }, HOVER_PREFETCH_DELAY_MS);
   }, [allowHoverPrefetch, clearHover, onPrefetch]);
+  const queryClient = useQueryClient();
+  const [hiding, setHiding] = useState(false);
+
+  const isUserHidden = session.user_hidden_from_timeline === true;
+  const isSystemHidden = session.hidden_from_default_timeline === true;
+  const isHidden = isUserHidden || isSystemHidden;
+
+  const handleToggleVisibility = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (hiding) return;
+      setHiding(true);
+      const nextHidden = !isHidden;
+      try {
+        await setSessionTimelineVisibility(session.id, nextHidden);
+        queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+        if (nextHidden) {
+          toast(
+            (t) => (
+              <span className="session-hide-toast">
+                <span>Session hidden from timeline</span>
+                <button
+                  type="button"
+                  className="session-hide-undo-btn"
+                  onClick={async (event) => {
+                    event.stopPropagation();
+                    toast.dismiss(t.id);
+                    await setSessionTimelineVisibility(session.id, false);
+                    queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+                    toast.success("Restored session to timeline");
+                  }}
+                >
+                  Undo
+                </button>
+              </span>
+            ),
+            { duration: 5000 },
+          );
+        } else {
+          toast.success("Session restored to timeline");
+        }
+      } catch {
+        toast.error("Failed to update session visibility");
+      } finally {
+        setHiding(false);
+      }
+    },
+    [hiding, isHidden, queryClient, session.id],
+  );
 
   return (
-    <button
-      ref={forwardedRef}
-      type="button"
+    <div
+      ref={forwardedRef as Ref<HTMLDivElement>}
       className="inbox-row"
       data-testid="session-row"
       data-session-id={session.id}
@@ -141,12 +193,19 @@ export function SessionRow({
       data-activity-observed-at={session.session_state.activity.observed_at ?? undefined}
       data-state-commit-seq={session.session_state.commit_seq ?? undefined}
       data-closed={isClosed ? "true" : "false"}
+      data-user-hidden={isHidden ? "true" : undefined}
       data-unread={unread ? "true" : undefined}
       data-dragging={dragging ? "true" : undefined}
       style={style}
-      {...(sortableAttributes ?? {})}
+      {...(sortableAttributes ?? { role: "button", tabIndex: 0 })}
       {...(sortableListeners ?? {})}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       onMouseEnter={scheduleHover}
       onMouseLeave={clearHover}
       onFocus={() => {
@@ -160,6 +219,7 @@ export function SessionRow({
           className="inbox-row-title"
           {...{ elementtiming: "longhouse-session-row" }}
         >
+          {isHidden && <span className="inbox-row-hidden-badge">{isUserHidden ? "hidden" : "auto"}</span>}
           {text.title}
         </div>
         {summary ? (
@@ -211,9 +271,29 @@ export function SessionRow({
         {branch ? <span className="inbox-row-branch">{branch}</span> : null}
       </span>
       <span className="inbox-row-time">
-        {timeLabel}
+        <span className="inbox-row-time-text">{timeLabel}</span>
+        <button
+          type="button"
+          className="inbox-row-hide-btn"
+          title={isHidden ? "Restore to timeline" : "Hide from timeline"}
+          aria-label={isHidden ? "Restore to timeline" : "Hide from timeline"}
+          data-testid="session-row-hide-button"
+          onClick={handleToggleVisibility}
+        >
+          {isHidden ? (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          ) : (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+              <line x1="1" y1="1" x2="23" y2="23" />
+            </svg>
+          )}
+        </button>
       </span>
-    </button>
+    </div>
   );
 }
 
