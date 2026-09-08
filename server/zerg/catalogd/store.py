@@ -7778,8 +7778,13 @@ class CatalogStore:
                 cwd=session_facts["cwd"],
                 machine_id=machine_id,
             )
+            first_preview = str(render_manifest.get("first_user_message_preview") or "").strip() if render_manifest is not None else ""
+            hatch_contract_present = first_preview.startswith("Hatch execution contract:")
+            canary_probe_present = (
+                first_preview.startswith("Reply with exactly LONGHOUSE_CURSOR_GATE0_") or "LONGHOUSE_CURSOR_GATE0_" in first_preview
+            )
             provider_automation = (
-                proof_environment == "test"
+                (proof_environment == "test" or canary_probe_present)
                 and not is_factory_title_assurance_session(
                     provider=provider,
                     environment=session_facts["environment"],
@@ -7797,7 +7802,8 @@ class CatalogStore:
             )
             hatch_automation = (
                 (
-                    (existing_session is not None and existing_session["origin_kind"] == "hatch_automation")
+                    hatch_contract_present
+                    or (existing_session is not None and existing_session["origin_kind"] == "hatch_automation")
                     or (live_catalog_session is not None and live_catalog_session["origin_kind"] == "hatch_automation")
                 )
                 and live_console_session is None
