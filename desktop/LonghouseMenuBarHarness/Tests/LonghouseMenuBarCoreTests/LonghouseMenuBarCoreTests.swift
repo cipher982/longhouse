@@ -285,7 +285,7 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     func nativePayloadShipFailuresPromoteRetryingTransport() {
-        let snapshot = presentationSnapshot(sessions: [], shipFailures: 5)
+        let snapshot = presentationSnapshot(sessions: [], shipFailures: 5, shipAttempts10m: 5)
 
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
         let transport = presentation.facts.first(where: { $0.id == "transport" })
@@ -309,6 +309,40 @@ struct LonghouseMenuBarCoreTests {
         #expect(presentation.headline == "Current local status unavailable")
         #expect(transport?.value == "Unknown")
         #expect(transport?.promotion == .unavailable)
+    }
+
+    @Test
+    func inactiveNativeShipFailuresDoNotClaimActiveRetrying() {
+        let snapshot = presentationSnapshot(
+            sessions: [], shipFailures: 8, shipAttempts10m: 0
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+        let transport = presentation.facts.first(where: { $0.id == "transport" })
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.headline == "No sessions running")
+        #expect(transport?.value == "Connected")
+        #expect(transport?.promotion == .normal)
+    }
+
+    @Test
+    func decodesActiveShipWindowFromNativePayload() throws {
+        let data = Data(
+            """
+            {
+              "consecutive_ship_failures": 8,
+              "ship_attempts_10m": 0
+            }
+            """.utf8
+        )
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        let payload = try decoder.decode(EngineStatusPayload.self, from: data)
+
+        #expect(payload.consecutiveShipFailures == 8)
+        #expect(payload.shipAttempts10m == 0)
     }
 
     @Test
@@ -2466,6 +2500,39 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func quietPresentationKeysMapToIdleAttention() throws {
+        let json = """
+        {
+          "health_state": "healthy",
+          "severity": "green",
+          "headline": "Longhouse shipping healthy",
+          "reasons": [],
+          "suggested_actions": [],
+          "managed_sessions": [
+            {
+              "session_id": "sess-quiet",
+              "provider": "cursor",
+              "state": "attached",
+              "presentation": {
+                "primary": {
+                  "key": "no_recent_activity",
+                  "label": "No recent activity (last: 2h ago)",
+                  "tone": "quiet"
+                }
+              }
+            }
+          ]
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let snapshot = try decoder.decode(HealthSnapshot.self, from: Data(json.utf8))
+        let session = try #require(snapshot.currentManagedSessions.first)
+        #expect(session.menuBarAttentionKind == .idle)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
+    }
+
+    @Test
     func orphanBridgesPromoteMenuBarAttention() throws {
         let data = Data("""
         {
@@ -3341,6 +3408,7 @@ private func presentationSnapshot(
     storageUnresolved: Int? = nil,
     storagePending: Int = 0,
     shipFailures: Int = 0,
+    shipAttempts10m: Int? = nil,
     isOffline: Bool = false,
     engineFresh: Bool = true,
     serviceStatus: String? = "running"
@@ -3371,7 +3439,8 @@ private func presentationSnapshot(
                     byteLimit: 1_073_741_824, error: nil
                 ),
                 parseErrorCount1H: 0, consecutiveShipFailures: shipFailures, diskFreeBytes: nil,
-                isOffline: isOffline, recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z"
+                isOffline: isOffline, recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z",
+                shipAttempts10m: shipAttempts10m
             ),
             error: nil
         ),

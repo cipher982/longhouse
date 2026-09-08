@@ -4635,14 +4635,12 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 .downcast_ref::<crate::storage_v2_shipper::StorageV2PreparationError>()
                 .is_some()
             {
-                if task_context.tracker.record_error() {
-                    tracing::warn!(
-                        path = %result.job.path.display(),
-                        provider = result.job.provider,
-                        error = %error,
-                        "Storage-v2 source preparation failed; retrying locally"
-                    );
-                }
+                tracing::warn!(
+                    path = %result.job.path.display(),
+                    provider = result.job.provider,
+                    error = %error,
+                    "Storage-v2 source preparation failed; retrying locally"
+                );
                 result.local_retry_after = Some(local_retry_delay(result.job.priority));
                 return finish_path_task(result, task_started);
             }

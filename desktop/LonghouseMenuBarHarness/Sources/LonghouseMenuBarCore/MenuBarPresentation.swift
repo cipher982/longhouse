@@ -103,9 +103,7 @@ extension HealthSnapshot {
         // native red state remains machine-wide repair unless a concrete
         // repair reason already says so.
         let rowLevelRedReasons: Set<String> = ["managed_unknown_phase"]
-        let shippingFailures = engineStatus?.fresh == false
-            ? 0
-            : engineStatus?.payload?.consecutiveShipFailures ?? 0
+        let shippingFailures = currentShippingFailureCount
         let storageBlockRequiresRepair = self.storageBlockRequiresRepair
         let storageBlockIsRecovering = self.storageBlockIsRecovering
         let nativeRedRequiresRepair = parsedSeverity == .red
@@ -244,9 +242,7 @@ extension HealthSnapshot {
         let transportValue: String
         let transportDetail: String?
         let transportPromotion: MenuBarPromotion
-        let shippingFailures = engineStatus?.fresh == false
-            ? 0
-            : engineStatus?.payload?.consecutiveShipFailures ?? 0
+        let shippingFailures = currentShippingFailureCount
         if !hasEngineEvidence {
             transportValue = "Unknown"
             transportDetail = "no engine evidence"

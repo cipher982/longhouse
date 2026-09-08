@@ -180,6 +180,22 @@ def test_transport_health_degrades_for_repeated_current_connect_errors():
     assert assessment.reasons == ("consecutive_failures", "connect_errors")
 
 
+def test_transport_health_ignores_stale_consecutive_failures_without_active_attempts():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_10m": 0,
+            "ship_attempts_1h": 0,
+            "consecutive_ship_failures": 8,
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "healthy"
+    assert assessment.reasons == ()
+
 def test_transport_health_keeps_recovered_transient_connect_errors_healthy():
     sample = transport_health_sample_from_engine_status_payload(
         {

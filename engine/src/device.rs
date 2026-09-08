@@ -3888,7 +3888,9 @@ fn native_transport_status(
             "parse_errors",
             &format!("{parse_errors} parse error(s) in the last hour."),
         )
-    } else if consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT {
+    } else if consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT
+        && attempts_active > 0
+    {
         transport_status(
             "degraded",
             "consecutive_failures",
