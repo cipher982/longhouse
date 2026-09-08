@@ -1,7 +1,7 @@
 //! Native device command surface.
-
 use crate::config;
 use anyhow::Context;
+use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -446,8 +446,12 @@ pub fn cmd_shipping_inspect(source_epoch: Option<&str>, json: bool) -> anyhow::R
     if !db_path.exists() {
         anyhow::bail!("no local shipper database at {}", db_path.display());
     }
-    let conn = crate::state::db::open_db(Some(&db_path))?;
-
+    let conn = Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening SQLite DB: {}", db_path.display()))?;
+    conn.busy_timeout(Duration::from_secs(5))?;
     let mut statement = conn.prepare(
         "SELECT pending.source_epoch, pending.source_path, pending.range_start,
                 pending.range_end, pending.event_count, pending.raw_bytes,
@@ -576,15 +580,15 @@ pub fn cmd_shipping_inspect(source_epoch: Option<&str>, json: bool) -> anyhow::R
 /// be an action that only looks like one.
 pub fn cmd_shipping_discard(source_epoch: &str, confirm: bool) -> anyhow::Result<()> {
     let db_path = config::get_agent_db_path()?;
-    let conn = crate::state::db::open_db(Some(&db_path))?;
-    let existing: Option<(String, Option<String>)> = conn
+    let mut conn = crate::state::db::open_db(Some(&db_path))?;
+    let existing: Option<(String, Option<String>, u64)> = conn
         .query_row(
-            "SELECT source_path, blocked_at FROM pending_source_envelope WHERE source_epoch = ?1",
+            "SELECT source_path, blocked_at, range_end FROM pending_source_envelope WHERE source_epoch = ?1",
             [source_epoch],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .ok();
-    let Some((source_path, blocked_at)) = existing else {
+    let Some((source_path, blocked_at, range_end)) = existing else {
         anyhow::bail!("no retained envelope for source epoch {source_epoch}");
     };
     if blocked_at.is_none() {
@@ -608,13 +612,21 @@ pub fn cmd_shipping_discard(source_epoch: &str, confirm: bool) -> anyhow::Result
         println!("Re-run with --confirm to proceed.");
         return Ok(());
     }
-    let removed = conn.execute(
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute(
+        "UPDATE source_epoch_lane_state
+         SET last_position = max(last_position, ?1), updated_at = ?2
+         WHERE source_epoch = ?3 AND lane = 'durable'",
+        params![range_end, chrono::Utc::now().to_rfc3339(), source_epoch],
+    )?;
+    let removed = tx.execute(
         "DELETE FROM pending_source_envelope WHERE source_epoch = ?1 AND blocked_at IS NOT NULL",
         [source_epoch],
     )?;
     if removed == 0 {
         anyhow::bail!("source epoch {source_epoch} was not discarded; it may have unblocked");
     }
+    tx.commit()?;
     println!("Discarded the retained envelope for {source_epoch}.");
     Ok(())
 }
@@ -4325,6 +4337,80 @@ mod tests {
                 "Inspect retained source evidence with longhouse shipping inspect --source-epoch f43d0939-160b-4725-82c9-02daaacf5516 --json before retrying or discarding it."
             ]
         );
+    }
+
+    #[test]
+    fn shipping_discard_advances_durable_lane_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let db_path = agent_dir.join("longhouse-shipper.db");
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let epoch = uuid::Uuid::new_v4();
+        let source_file = dir.path().join("transcript.jsonl");
+        std::fs::write(&source_file, b"data").unwrap();
+
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                source_epoch, provider, opaque_source_id, file_incarnation,
+                predecessor_epoch, start_reason, max_observed_len,
+                source_revision, bound_session_id, created_at, updated_at
+             ) VALUES (?1, 'claude', 'opaque-1', 'file-1', NULL, 'initial', 100, NULL, NULL, 'now', 'now')",
+            [epoch.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (
+                source_epoch, lane, last_position, updated_at
+             ) VALUES (?1, 'durable', 0, 'now')",
+            [epoch.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pending_source_envelope (
+                source_epoch, source_path, range_start, range_end, envelope_id,
+                request_body_zstd, media_objects_zstd, raw_bytes, event_count,
+                has_reply_evidence, has_more, created_at, attempt_count,
+                blocked_at, block_kind, block_detail
+             ) VALUES (?1, ?2, 0, 100, 'env-1', X'', X'', 100, 1, 0, 0, 'now', 1, 'now', 'blocked', 'detail')",
+            params![epoch.to_string(), source_file.to_str().unwrap()],
+        )
+        .unwrap();
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(dir.path()), || {
+            // Dry run
+            cmd_shipping_discard(&epoch.to_string(), false).unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pending_source_envelope WHERE source_epoch = ?1",
+                    [epoch.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1);
+
+            // Confirm
+            cmd_shipping_discard(&epoch.to_string(), true).unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pending_source_envelope WHERE source_epoch = ?1",
+                    [epoch.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0);
+            let pos: u64 = conn
+                .query_row(
+                    "SELECT last_position FROM source_epoch_lane_state WHERE source_epoch = ?1 AND lane = 'durable'",
+                    [epoch.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(pos, 100, "discard must advance lane position so daemon does not re-read from 0");
+
+            // Inspect should succeed read-only without errors
+            cmd_shipping_inspect(Some(&epoch.to_string()), true).unwrap();
+        });
     }
 
     #[test]
