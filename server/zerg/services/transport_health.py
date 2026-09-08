@@ -286,7 +286,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         reasons.append("payload_too_large")
     if sample.parse_errors_1h > 0:
         reasons.append("parse_errors")
-    if sample.consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT:
+    if sample.consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT and sample.ship_attempts_active > 0:
         reasons.append("consecutive_failures")
     if ship_stalled:
         reasons.append("ship_stalled")
@@ -318,7 +318,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         status = "degraded"
         status_reason = "parse_errors"
         status_summary = f"{sample.parse_errors_1h} parse error(s) in the last hour."
-    elif sample.consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT:
+    elif sample.consecutive_failures >= CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT and sample.ship_attempts_active > 0:
         status = "degraded"
         status_reason = "consecutive_failures"
         status_summary = f"{sample.consecutive_failures} consecutive ship failure(s)."

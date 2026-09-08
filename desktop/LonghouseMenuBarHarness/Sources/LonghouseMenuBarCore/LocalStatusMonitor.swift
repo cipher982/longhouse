@@ -73,7 +73,8 @@ final class LocalStatusMonitor: @unchecked Sendable {
               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         let keys = [
-            "archive_backlog", "consecutive_ship_failures", "control_channel",
+            "archive_backlog", "consecutive_ship_failures", "ship_attempts_10m",
+            "control_channel",
             "is_offline", "last_ship_at", "last_ship_error_kind", "last_ship_result",
             "managed_sessions", "phase_ledger", "sessions_digest", "sessions_sequence",
             "spool_dead_count", "spool_pending_count", "storage_v2_outbox", "unmanaged_session_bindings",

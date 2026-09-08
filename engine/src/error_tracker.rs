@@ -14,12 +14,16 @@ pub struct ConsecutiveErrorTracker {
     inner: Arc<ErrorTrackerInner>,
 }
 
+const CONSECUTIVE_ERROR_EXPIRY: Duration = Duration::from_secs(10 * 60);
+
 struct ErrorTrackerInner {
     consecutive: AtomicU32,
     /// Total errors since last reset (for recovery message).
     total_since_reset: AtomicU32,
     /// Timestamp of first error in current run (for recovery message).
     first_error_at: Mutex<Option<Instant>>,
+    /// Timestamp of most recent error in current run (for staleness check).
+    last_error_at: Mutex<Option<Instant>>,
 }
 
 impl ConsecutiveErrorTracker {
@@ -29,10 +33,10 @@ impl ConsecutiveErrorTracker {
                 consecutive: AtomicU32::new(0),
                 total_since_reset: AtomicU32::new(0),
                 first_error_at: Mutex::new(None),
+                last_error_at: Mutex::new(None),
             }),
         }
     }
-
     /// Call on each error. Returns true if this error should be logged (warn).
     ///
     /// Logs the 1st failure and every 100th after that.
@@ -40,13 +44,15 @@ impl ConsecutiveErrorTracker {
         let n = self.inner.consecutive.fetch_add(1, Ordering::Relaxed);
         self.inner.total_since_reset.fetch_add(1, Ordering::Relaxed);
 
-        // Record first error time
+        let now = Instant::now();
+        if let Ok(mut guard) = self.inner.last_error_at.lock() {
+            *guard = Some(now);
+        }
         if n == 0 {
             if let Ok(mut guard) = self.inner.first_error_at.lock() {
-                *guard = Some(Instant::now());
+                *guard = Some(now);
             }
         }
-
         // Log 1st error and every 100th
         n == 0 || (n + 1) % 100 == 0
     }
@@ -59,6 +65,9 @@ impl ConsecutiveErrorTracker {
             if let Ok(mut guard) = self.inner.first_error_at.lock() {
                 *guard = None;
             }
+            if let Ok(mut guard) = self.inner.last_error_at.lock() {
+                *guard = None;
+            }
             Some(total)
         } else {
             None
@@ -67,10 +76,21 @@ impl ConsecutiveErrorTracker {
 
     /// Current consecutive error count.
     pub fn consecutive_count(&self) -> u32 {
+        if let Ok(guard) = self.inner.last_error_at.lock() {
+            if let Some(last) = *guard {
+                if last.elapsed() > CONSECUTIVE_ERROR_EXPIRY {
+                    self.inner.consecutive.store(0, Ordering::Relaxed);
+                    self.inner.total_since_reset.store(0, Ordering::Relaxed);
+                    if let Ok(mut first_guard) = self.inner.first_error_at.lock() {
+                        *first_guard = None;
+                    }
+                    return 0;
+                }
+            }
+        }
         self.inner.consecutive.load(Ordering::Relaxed)
     }
 }
-
 impl Default for ConsecutiveErrorTracker {
     fn default() -> Self {
         Self::new()
@@ -192,6 +212,19 @@ mod tests {
 
         // Success with no prior errors → None
         assert_eq!(tracker.record_success(), None);
+    }
+
+    #[test]
+    fn test_consecutive_error_tracker_expires_stale_streak() {
+        let tracker = ConsecutiveErrorTracker::new();
+        tracker.record_error();
+        tracker.record_error();
+        assert_eq!(tracker.consecutive_count(), 2);
+
+        if let Ok(mut guard) = tracker.inner.last_error_at.lock() {
+            *guard = Some(Instant::now() - Duration::from_secs(11 * 60));
+        }
+        assert_eq!(tracker.consecutive_count(), 0);
     }
 
     #[test]

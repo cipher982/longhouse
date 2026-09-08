@@ -46,6 +46,7 @@ const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
 // without authorizing it as a committed head reply. Replay historical sources.
 const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v7-abandoned-prose";
 const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
+const BACKLOG_TARGET_BATCH_BYTES: usize = 2 * 1024 * 1024;
 
 pub(crate) struct PreparedStorageV2Envelope {
     pub envelope: StorageV2Envelope,
@@ -241,10 +242,24 @@ fn prepare_next_envelope_with_limit(
         pending_source_envelope::load_for_source(conn, provider, &opaque_source_id)?
     {
         if !retire_empty_blocked_source_if_safe(conn, provider, &pending)? {
+            let oversized_render_rejected = pending.raw_bytes > maximum_batch_bytes as u64
+                && pending.block_kind.as_deref() == Some("envelope_rejected")
+                && pending
+                    .block_detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("render object exceeds"));
             let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes as u64
                 && pending.attempt_count == 0
                 && maximum_batch_bytes < MAX_RAW_BATCH_BYTES;
-            if !oversized_unattempted
+            if oversized_render_rejected {
+                if !pending_source_envelope::discard_after_cursor_resync(
+                    conn,
+                    pending.source_epoch,
+                    &pending.envelope_id,
+                )? {
+                    return pending_to_prepared(pending).map(Some);
+                }
+            } else if !oversized_unattempted
                 || !pending_source_envelope::discard_unattempted(
                     conn,
                     pending.source_epoch,
@@ -352,7 +367,12 @@ fn prepare_next_envelope_with_limit(
     if position >= source_len {
         return Ok(None);
     }
-    let framing = if provider.eq_ignore_ascii_case("antigravity") {
+    let framing = if provider.eq_ignore_ascii_case("antigravity")
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map_or(false, |ext| ext.eq_ignore_ascii_case("json"))
+    {
         RawSourceFraming::WholeDocument
     } else {
         RawSourceFraming::LfDelimited
@@ -541,11 +561,13 @@ fn prepare_next_envelope_with_limit(
                 && event.source_offset < raw_batch.range_end
         })
         .count();
-    let wire_predecessor = if is_cursor_agent_transcript_path(provider, path) {
+    let wire_predecessor = if is_cursor_agent_transcript_path(provider, path)
+        || provider.eq_ignore_ascii_case("antigravity")
+    {
         // Cursor rewrites this JSONL projection repeatedly while a turn is in
-        // flight. Revisions with no complete line produce real local epochs
-        // but no durable bytes, so the host must see the nearest admitted
-        // ancestor rather than the immediately previous empty revision.
+        // flight, and Antigravity can rotate revisions before an earlier epoch
+        // is admitted to the host. Revisions with no durable bytes on the host
+        // must see the nearest admitted ancestor rather than an empty un-admitted revision.
         source_epoch::wire_predecessor_for_epoch(conn, resolution.source_epoch)?
     } else {
         resolution.predecessor_epoch
@@ -716,7 +738,7 @@ pub(crate) fn prepare_next_envelope_body_for_lane(
     let maximum_batch_bytes = if lane == "live" {
         LIVE_TARGET_BATCH_BYTES
     } else {
-        MAX_RAW_BATCH_BYTES
+        BACKLOG_TARGET_BATCH_BYTES
     };
     let Some(prepared) = preparation_result(prepare_next_envelope_with_limit(
         conn,
@@ -749,7 +771,7 @@ pub(crate) async fn ship_next_envelope(
     let maximum_batch_bytes = if lane == "live" {
         LIVE_TARGET_BATCH_BYTES
     } else {
-        MAX_RAW_BATCH_BYTES
+        BACKLOG_TARGET_BATCH_BYTES
     };
     let Some(prepared) = preparation_result(prepare_next_envelope_with_limit(
         conn,
@@ -1196,9 +1218,9 @@ async fn reexamine_blocked_source(
             return Ok(true);
         }
     }
-    if prepared.envelope.provider == "cursor"
-        && (reconcile_blocked_cursor_replacement(conn, client, prepared, request_timeout).await?
-            || reconcile_blocked_cursor_lineage(conn, client, prepared, request_timeout).await?)
+    if (prepared.envelope.provider == "cursor"
+        && reconcile_blocked_cursor_replacement(conn, client, prepared, request_timeout).await?)
+        || reconcile_blocked_lineage(conn, client, prepared, request_timeout).await?
     {
         return Ok(true);
     }
@@ -2025,7 +2047,7 @@ fn resync_behind_host(
     }))
 }
 
-async fn reconcile_blocked_cursor_lineage(
+async fn reconcile_blocked_lineage(
     conn: &mut Connection,
     client: &ShipperClient,
     prepared: &PreparedStorageV2Envelope,
@@ -2111,7 +2133,7 @@ async fn reconcile_blocked_cursor_lineage(
                 || admitted.source_epoch.source_epoch != wire_predecessor.to_string()
                 || admitted.source_epoch.tenant_id != prepared.envelope.tenant_id
                 || admitted.source_epoch.machine_id != prepared.envelope.machine_id
-                || admitted.source_epoch.provider != "cursor"
+                || admitted.source_epoch.provider != prepared.envelope.provider
                 || admitted.source_epoch.opaque_source_id != prepared.envelope.opaque_source_id
                 || admitted.source_epoch.range_kind != prepared.envelope.range_kind
                 || admitted.source_epoch.state != "open"
@@ -2168,7 +2190,7 @@ async fn reconcile_blocked_cursor_lineage(
         old_predecessor = %requested_predecessor,
         new_predecessor = ?lineage_proof.wire_predecessor,
         ?host_accepted_through,
-        "Repaired blocked Cursor lineage from Runtime Host manifest proof"
+        "Repaired blocked lineage from Runtime Host manifest proof"
     );
     Ok(true)
 }
@@ -6165,7 +6187,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!reconcile_blocked_cursor_lineage(
+        assert!(!reconcile_blocked_lineage(
             &mut conn,
             &client,
             &poisoned_prepared,
@@ -6181,7 +6203,7 @@ mod tests {
                 .is_some(),
             "a hosted manifest for the requested epoch must keep the body quarantined"
         );
-        assert!(reconcile_blocked_cursor_lineage(
+        assert!(reconcile_blocked_lineage(
             &mut conn,
             &client,
             &poisoned_prepared,
@@ -7071,11 +7093,20 @@ mod tests {
         );
         assert_eq!(
             decode_envelope_record_bytes(&first.envelope.records).unwrap(),
-            vec![native.into_bytes()]
+            vec![
+                format!("{tool}\n").into_bytes(),
+                format!("{result}\n").into_bytes(),
+                format!("{reply}\n").into_bytes(),
+            ]
         );
         assert_eq!(
             decode_envelope_record_bytes(&next.envelope.records).unwrap(),
-            vec![updated.into_bytes()]
+            vec![
+                format!("{tool}\n").into_bytes(),
+                format!("{result}\n").into_bytes(),
+                format!("{reply}\n").into_bytes(),
+                format!("{repeated}\n").into_bytes(),
+            ]
         );
         assert_eq!(fs::read(&mirror).unwrap(), summary.into_bytes());
     }
