@@ -1375,10 +1375,10 @@ async def test_hatch_execution_contract_classifies_storage_ingest_as_hidden_auto
         )
         raw["session_facts"].update(
             cwd=None,
-            origin_kind="cursor_store",
-            launch_actor=None,
-            launch_surface=None,
-            hidden_from_default_timeline=False,
+            origin_kind="hatch_automation",
+            launch_actor="automation",
+            launch_surface="hatch",
+            hidden_from_default_timeline=True,
         )
         manifest = _render_manifest(generation_id, source_epoch=epoch, provider="cursor")
         manifest.update(first_user_message_preview=contract, last_visible_text_preview=contract, user_messages=1)
