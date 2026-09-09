@@ -256,6 +256,7 @@ export function useSessionWorkspace(
     let disposed = false;
     let freshnessTimer: number | null = null;
     const armFreshnessDeadline = () => {
+      setStreamConnected(true);
       if (freshnessTimer !== null) window.clearTimeout(freshnessTimer);
       freshnessTimer = window.setTimeout(() => {
         freshnessTimer = null;
@@ -293,7 +294,6 @@ export function useSessionWorkspace(
       {
         onConnected: (data) => {
           recordServerClockSkew(data?.server_now_ms);
-          setStreamConnected(true);
           armFreshnessDeadline();
         },
         onHeartbeat: () => {
