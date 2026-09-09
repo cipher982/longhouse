@@ -142,7 +142,7 @@ private func approvalPreviewJSON() -> String {
       "id": "pause-preview",
       "sessionId": "preview-1",
       "runtimeKey": "claude:preview-1",
-      "kind": "approval",
+      "kind": "permission_prompt",
       "status": "pending",
       "provider": "claude",
       "canRespond": false,

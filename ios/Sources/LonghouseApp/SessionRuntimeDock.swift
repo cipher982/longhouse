@@ -314,12 +314,8 @@ struct SessionRuntimeDock: View {
                     .foregroundStyle(.secondary)
             }
             if let pauseRequest = detail.activePauseRequest {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(pauseRequestTitle(pauseRequest))
-                        .font(.caption.weight(.semibold))
-                    Text(pauseRequest.canRespond ? "Answer in the session card below." : "Answer in the provider terminal.")
-                }
-                .foregroundStyle(.secondary)
+                Text(pauseRequest.canRespond ? "Answer in the session card below." : "Answer in the provider terminal.")
+                    .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: state == .uncertain ? "questionmark.circle" : "antenna.radiowaves.left.and.right")
@@ -373,13 +369,6 @@ struct SessionRuntimeDock: View {
             return "Updates disconnected"
         }
     }
-    private func pauseRequestTitle(_ request: SessionPauseRequest) -> String {
-        if let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
-            return title
-        }
-        return request.kind == "permission_prompt" ? "Tool permission" : "Provider question"
-    }
-
     private var launchSetupLine: some View {
         HStack(spacing: 8) {
             ActivityStrip(store: activity, tone: RuntimeSignal.live.color, evidenceLive: false)

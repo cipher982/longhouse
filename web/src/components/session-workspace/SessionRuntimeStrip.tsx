@@ -314,7 +314,7 @@ export function SessionRuntimeStrip({
   }, [notice]);
   return (
     <div
-      className={`session-runtime-strip session-runtime-strip--tone-${state.tone}`}
+      className="session-runtime-strip"
       data-testid={testId}
       data-strip-tone={
         state.tone === "working"
