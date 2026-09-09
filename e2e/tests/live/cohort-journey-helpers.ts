@@ -57,7 +57,7 @@ function estimatedEntries(session: JourneySession): number {
 }
 
 function isEligible(session: JourneySession): boolean {
-  if (!session.id || timestampMs(session) <= 0) return false;
+  if (!session.id || timestampMs(session) <= 0 || estimatedEntries(session) <= 0) return false;
   const environment = String(session.environment ?? "").toLowerCase();
   const provider = String(session.provider ?? "").toLowerCase();
   return !["test", "e2e", "automation"].includes(environment) && provider !== "canary";
@@ -98,9 +98,7 @@ export function selectJourneyCohorts(
     .sort((left, right) => estimatedEntries(right) - estimatedEntries(left))[0] ?? null;
 
   const used = new Set([activeRecent?.id, recentClosed?.id, cold?.id, pagination?.id].filter(Boolean));
-  const randomPool = sessions.filter(
-    (session) => !used.has(session.id) && estimatedEntries(session) > 0,
-  );
+  const randomPool = sessions.filter((session) => !used.has(session.id));
   const random = randomPool.length > 0 ? randomPool[seededIndex(randomSeed, randomPool.length)] : null;
 
   return {

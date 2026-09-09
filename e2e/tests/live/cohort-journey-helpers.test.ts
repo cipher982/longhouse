@@ -16,6 +16,7 @@ const session = (id: string, daysAgo: number, extra: Partial<JourneySession> = {
   environment: "production",
   started_at: day(daysAgo),
   last_activity_at: day(daysAgo),
+  user_messages: 1,
   ...extra,
 });
 
@@ -47,16 +48,25 @@ describe("cohort journey helpers", () => {
     );
   });
 
-  test("random readable cohort excludes inventory rows with no entries", () => {
+  test("transcript-reading cohorts exclude empty inventory rows", () => {
     const cohorts = selectJourneyCohorts([
-      session("recent", 1),
-      session("closed", 2, { ended_at: day(2) }),
+      session("empty-active", 0, { user_messages: 0 }),
+      session("empty-closed", 1, { ended_at: day(1), user_messages: 0 }),
+      session("empty-cold", 31, { user_messages: 0 }),
+      session("recent", 2),
+      session("closed", 3, { ended_at: day(3) }),
       session("cold", 45),
-      session("empty-random", 12),
-      session("readable-random", 15, { tool_calls: 1 }),
+      session("empty-random", 12, { user_messages: 0 }),
+      session("readable-random", 15, { user_messages: 0, tool_calls: 1 }),
     ], NOW, "seed");
 
+    expect(cohorts.active_recent?.id).toBe("recent");
+    expect(cohorts.recent_closed?.id).toBe("closed");
+    expect(cohorts.cold_gt_30d?.id).toBe("cold");
     expect(cohorts.random_readable?.id).toBe("readable-random");
+    expect(selectJourneyCohorts([
+      session("only-empty", 1, { user_messages: 0 }),
+    ], NOW, "seed").active_recent).toBeNull();
   });
 
   test("does not misclassify sessions outside the controlled 90-day cold window", () => {
