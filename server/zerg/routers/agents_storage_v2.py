@@ -790,7 +790,15 @@ def _raise_catalog_error(exc: CatalogRemoteError) -> None:
         "media_unavailable": status.HTTP_409_CONFLICT,
         "session_deleted": status.HTTP_410_GONE,
     }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
-    raise _http_error(status_code, exc.code, str(exc), details=exc.details) from exc
+    headers: dict[str, str] | None = None
+    if exc.code == "resource_exhausted" and exc.retryable:
+        headers = {
+            "X-Longhouse-Storage-Backpressure": "storage_lane_busy",
+            "X-Longhouse-Storage-Lane": "catalog",
+        }
+        if exc.retry_after_ms is not None and exc.retry_after_ms > 0:
+            headers["Retry-After"] = str((exc.retry_after_ms + 999) // 1000)
+    raise _http_error(status_code, exc.code, str(exc), details=exc.details, headers=headers) from exc
 
 
 def _media_content_type(request: Request) -> str:

@@ -572,14 +572,18 @@ fn parse_storage_v2_backpressure(
     let typed_busy = parse_header_string(headers, STORAGE_BACKPRESSURE_HEADER)
         .is_some_and(|kind| kind == "storage_lane_busy");
     // A catalogd deadline expiry reaches the shipper as `catalog_unavailable`.
-    // That is the same transient condition as a full lane and deserves the same
-    // retry: storage-v2 manifests are keyed by envelope and content hash, so an
-    // exact replay returns the durable receipt instead of writing twice. It was
-    // not recognised here, so a moment of catalog contention under load failed
-    // the whole ship rather than backing off and trying again.
-    let catalog_unavailable = body.contains("catalog_unavailable");
+    // A busy catalog read/write lane reaches the storage route as a 503
+    // `resource_exhausted` response. Both are transient: storage-v2 manifests
+    // are keyed by envelope and content hash, so an exact replay returns the
+    // durable receipt instead of writing twice.
+    let catalog_error = serde_json::from_str::<StorageV2ErrorResponse>(body).ok();
+    let catalog_backpressure = catalog_error.as_ref().is_some_and(|response| {
+        response.detail.code == "catalog_unavailable"
+            || (response.detail.code == "resource_exhausted"
+                && response.detail.message.contains("catalog"))
+    });
     if status_code != 503
-        || (!typed_busy && !body.contains("storage_lane_busy") && !catalog_unavailable)
+        || (!typed_busy && !body.contains("storage_lane_busy") && !catalog_backpressure)
     {
         return None;
     }
@@ -709,6 +713,25 @@ mod tests {
         assert!(
             parse_storage_v2_backpressure(503, &headers, r#"{"detail":"nope"}"#, "live").is_none()
         );
+    }
+
+    #[test]
+    fn storage_v2_catalog_read_lane_saturation_is_retryable_backpressure() {
+        let headers = HeaderMap::new();
+        let body = r#"{"detail":{"code":"resource_exhausted","message":"catalog read lane is full","details":{}}}"#;
+
+        let detail = parse_storage_v2_backpressure(503, &headers, body, "live")
+            .expect("catalog lane saturation should be retried");
+        assert_eq!(detail.lane, "live");
+        assert_eq!(detail.retry_after, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn storage_v2_non_catalog_resource_exhaustion_is_not_retried() {
+        let headers = HeaderMap::new();
+        let body = r#"{"detail":{"code":"resource_exhausted","message":"device token limit reached","details":{}}}"#;
+
+        assert!(parse_storage_v2_backpressure(503, &headers, body, "live").is_none());
     }
 
     #[test]

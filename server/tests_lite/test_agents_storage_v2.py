@@ -23,6 +23,7 @@ os.environ.setdefault("TESTING", "1")
 
 import zerg.routers.agents_storage_v2 as storage_router
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.server import CatalogDaemon
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
@@ -90,6 +91,33 @@ class _InlineRenderPool:
 class _BusyRenderReadPool:
     async def read(self, *_args, **_kwargs):
         raise storage_router.RenderObjectWorkerBusy("user read queue is full")
+
+
+def test_storage_v2_catalog_lane_saturation_preserves_retry_headers():
+    remote_error = CatalogRemoteError(
+        SimpleNamespace(
+            code="resource_exhausted",
+            message="catalog read lane is full",
+            retryable=True,
+            retry_after_ms=25,
+            details={},
+        )
+    )
+
+    with pytest.raises(storage_router.HTTPException) as raised:
+        storage_router._raise_catalog_error(remote_error)
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail == {
+        "code": "resource_exhausted",
+        "message": "catalog read lane is full",
+        "details": {},
+    }
+    assert raised.value.headers == {
+        "X-Longhouse-Storage-Backpressure": "storage_lane_busy",
+        "X-Longhouse-Storage-Lane": "catalog",
+        "Retry-After": "1",
+    }
 
 
 def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"hello\n") -> dict:
