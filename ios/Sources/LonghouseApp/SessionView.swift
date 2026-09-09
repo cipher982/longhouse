@@ -82,13 +82,13 @@ struct SessionView: View {
                 )
             }
             ToolbarItem(placement: .topBarTrailing) {
-                if viewModel.detail != nil {
+                if isSessionInteractionReady {
                     overflowMenu
-                } else if viewModel.isInitialLoading {
+                } else if viewModel.isInitialLoading || viewModel.detail != nil {
                     Image(systemName: "ellipsis")
                         .frame(width: 32, height: 32)
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel("Session actions unavailable while loading")
+                        .accessibilityLabel("Session actions unavailable until transcript is ready")
                         .accessibilityIdentifier("session-navigation-loading")
                 }
             }
@@ -190,7 +190,7 @@ struct SessionView: View {
     private var bottomChrome: some View {
         VStack(spacing: 8) {
             liveActivityMessage
-            if viewModel.detail != nil, !viewModel.isInitialLoading, viewModel.hasLoadedTranscript {
+            if isSessionInteractionReady {
                 VStack(alignment: .leading, spacing: 8) {
                     runtimeDock
                     composer
@@ -208,7 +208,7 @@ struct SessionView: View {
                 .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("session-chat-bottom-chrome-card")
-            } else if viewModel.isInitialLoading {
+            } else if viewModel.isInitialLoading || viewModel.detail != nil {
                 SessionLoadingDock()
             }
         }
@@ -291,6 +291,22 @@ struct SessionView: View {
                 Capsule(style: .continuous).fill(.ultraThinMaterial)
             )
         }
+    }
+
+    private var isSessionInteractionReady: Bool {
+        guard viewModel.detail != nil,
+              !viewModel.isInitialLoading,
+              viewModel.hasLoadedTranscript
+        else { return false }
+
+        let hasTranscript = !viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty
+        guard hasTranscript else {
+            // A valid empty session uses the native empty state and does not
+            // mount WebKit, so it has no frame-render beacon to await.
+            return true
+        }
+        return viewModel.isTranscriptFrameReady
+            && viewModel.transcriptRendererErrorMessage == nil
     }
 
     private var transcriptState: TranscriptDisplayState {

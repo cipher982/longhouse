@@ -152,6 +152,37 @@ struct SessionViewModelTests {
         await replacementStart.value
         await thirdStart.value
     }
+    @Test
+    func cancelledColdTailDoesNotPublishLoadingFailureOrReattachRealtime() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Load the workspace")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        await api.pauseNextTailResponse(offset: 0)
+
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, _, _ in Self.neverConnectingStreamSource() },
+            enableRealtime: true,
+            snapshotStore: Self.isolatedSnapshotStore()
+        )
+        let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
+
+        await waitForDetailRequestCount(api, atLeast: 1)
+        await waitForTailRequestCount(api, atLeast: 1)
+        model.pauseRealtime()
+
+        await api.resumePausedTailResponses()
+        await startTask.value
+
+        #expect(model.errorMessage == nil)
+        #expect(model.refreshErrorMessage == nil)
+        #expect(model.hasLoadedTranscript == false)
+        #expect(model.isInitialLoading)
+        #expect(!model.hasRealtimeStreamTaskForTesting)
+        model.stop()
+    }
+
 
     @Test
     func startRendersFreshTranscriptPreviewAfterDurableTail() async throws {

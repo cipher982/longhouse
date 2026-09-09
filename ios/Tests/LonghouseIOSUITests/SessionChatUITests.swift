@@ -70,13 +70,15 @@ final class SessionChatUITests: XCTestCase {
             name: "basic",
             eventCount: 9,
             appearance: .dark,
-            tailDelayMs: 8000
+            tailDelayMs: 30000
         )
 
         let loadingDock = app.descendants(matching: .any)["session-loading-dock"]
         XCTAssertTrue(loadingDock.waitForExistence(timeout: 8))
         XCTAssertTrue(app.descendants(matching: .any)["session-navigation-title"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.descendants(matching: .any)["session-transcript-loading"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.descendants(matching: .any)["session-navigation-loading"].exists)
+        XCTAssertFalse(app.buttons["Session actions"].exists)
 
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "session-loading-shell"
@@ -89,20 +91,23 @@ final class SessionChatUITests: XCTestCase {
             name: "loading-long-title",
             eventCount: 9,
             appearance: .dark,
-            tailDelayMs: 8000
+            tailDelayMs: 30000
         )
 
         let title = app.descendants(matching: .any)["session-navigation-title"]
+        let loadingActions = app.descendants(matching: .any)["session-navigation-loading"].firstMatch
         let actions = app.buttons["Session actions"]
         XCTAssertTrue(title.waitForExistence(timeout: 8))
-        XCTAssertTrue(actions.waitForExistence(timeout: 8))
-        XCTAssertLessThan(title.frame.maxX, actions.frame.minX)
+        XCTAssertTrue(loadingActions.waitForExistence(timeout: 8))
+        XCTAssertFalse(actions.exists)
+        XCTAssertLessThan(title.frame.maxX, loadingActions.frame.minX)
 
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "session-loading-long-title"
         screenshot.lifetime = .keepAlways
         add(screenshot)
     }
+
 
     func testCaptureToolsTranscriptLightScreenshot() throws {
         try captureSessionScreenshot(
@@ -148,7 +153,7 @@ final class SessionChatUITests: XCTestCase {
         let sendButton = app.buttons["session-chat-send"]
         let message = "ui harness immediate reveal"
 
-        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         composer.tap()
         composer.typeText(message)
         sendButton.tap()
@@ -164,7 +169,7 @@ final class SessionChatUITests: XCTestCase {
         let sendButton = app.buttons["session-chat-send"]
         let message = "console reconciliation probe"
 
-        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         composer.tap()
         composer.typeText(message)
         sendButton.tap()
@@ -200,7 +205,7 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(currentLastMessage.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: 5))
-        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         composer.tap()
         composer.typeText("typing keeps transcript pinned")
 
@@ -240,7 +245,7 @@ final class SessionChatUITests: XCTestCase {
         let composer = app.textFields["session-chat-composer"]
         let liveUpdate = app.staticTexts["Assistant fixture keyboard update at bottom."]
 
-        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         composer.tap()
         XCTAssertTrue(
             app.keyboards.firstMatch.waitForExistence(timeout: 3),
@@ -258,7 +263,7 @@ final class SessionChatUITests: XCTestCase {
         let composer = app.textFields["session-chat-composer"]
         let finalChunk = app.staticTexts["Assistant fixture streaming update at bottom."]
 
-        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(composer.waitForExistence(timeout: Self.webTranscriptTimeout))
         composer.tap()
         XCTAssertTrue(
             app.keyboards.firstMatch.waitForExistence(timeout: 3),

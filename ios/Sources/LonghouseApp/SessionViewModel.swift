@@ -82,6 +82,8 @@ final class SessionViewModel: ObservableObject {
     private var realtimeRefreshRetryTask: Task<Void, Never>?
     private var primaryDetailTask: Task<Void, Never>?
     private var primaryDetailRequestToken = 0
+    private var routeLoadGeneration = 0
+    private var realtimePaused = false
     private var tailRefreshTask: Task<Void, Error>?
     private var activeTailRefreshToken: Int?
     private var nextTailRefreshToken = 0
@@ -165,6 +167,11 @@ final class SessionViewModel: ObservableObject {
 
     func start(sessionId: String, appState: AppState) async {
         let sessionChanged = activeSessionId != sessionId
+        if sessionChanged {
+            routeLoadGeneration &+= 1
+        }
+        realtimePaused = false
+        let startGeneration = routeLoadGeneration
         var restoredFromCache = false
         var shouldRefreshCachedTail = false
         if sessionChanged {
@@ -260,10 +267,13 @@ final class SessionViewModel: ObservableObject {
             // failed refresh degrades to a banner instead of erasing the
             // transcript. This is the path that fixes the lock/unlock blank.
             if let api = apiFactory(appState.serverURL) {
-                scheduleOlderPrefetch(api: api, sessionId: sessionId)
                 if shouldRefreshCachedTail || !sessionChanged {
                     Task { [weak self] in
-                        await self?.refreshInBackground(api: api, sessionId: sessionId)
+                        await self?.refreshInBackground(
+                            api: api,
+                            sessionId: sessionId,
+                            generation: startGeneration
+                        )
                     }
                 }
             }
@@ -273,6 +283,11 @@ final class SessionViewModel: ObservableObject {
             // a full-screen error if it fails — there is nothing to preserve.
             await reload(sessionId: sessionId, appState: appState)
         }
+        guard activeSessionId == sessionId,
+              routeLoadGeneration == startGeneration,
+              !Task.isCancelled,
+              !realtimePaused
+        else { return }
         guard enableRealtime else { return }
         // Re-attach only when the session changed or the stream was torn down
         // (e.g. scenePhase != .active called pauseRealtime()). Otherwise a scenePhase
@@ -293,6 +308,8 @@ final class SessionViewModel: ObservableObject {
     /// session open (which is what erased the transcript before).
     func pauseRealtime() {
         openWaterfall?.mark("pause")
+        routeLoadGeneration &+= 1
+        realtimePaused = true
         // A metadata request has no value after the route leaves the
         // foreground. Cancel it with the rest of the route work; the next
         // active start will issue it again if the title is still unresolved.
@@ -355,6 +372,7 @@ final class SessionViewModel: ObservableObject {
     }
 
     func reload(sessionId: String, appState: AppState) async {
+        let requestGeneration = routeLoadGeneration
         // If we already have content on screen, a failed reload must degrade to
         // the non-destructive banner. Only a truly empty view earns the
         // full-screen blocking error.
@@ -382,21 +400,27 @@ final class SessionViewModel: ObservableObject {
         loadSubagents(api: api, sessionId: sessionId)
         do {
             try await refreshTail(api: api, sessionId: sessionId)
+            guard isCurrentRoute(sessionId: sessionId, generation: requestGeneration) else { return }
             errorMessage = nil
             refreshErrorMessage = nil
+        } catch is CancellationError {
+            return
         } catch LonghouseAPIError.notAuthenticated {
+            guard isCurrentRoute(sessionId: sessionId, generation: requestGeneration) else { return }
             if hasContent {
                 refreshErrorMessage = "Session expired. Pull to refresh."
             } else {
                 errorMessage = "Session expired."
             }
         } catch {
+            guard isCurrentRoute(sessionId: sessionId, generation: requestGeneration) else { return }
             if hasContent {
                 refreshErrorMessage = "Live update temporarily unavailable. Showing saved messages."
             } else {
                 errorMessage = "Couldn't load session. Pull to refresh."
             }
         }
+        guard isCurrentRoute(sessionId: sessionId, generation: requestGeneration) else { return }
         isInitialLoading = false
     }
 
@@ -404,6 +428,12 @@ final class SessionViewModel: ObservableObject {
     /// projection. The detail route is the primary tier for navigation chrome;
     /// a tail response that wins the race remains authoritative and prevents a
     /// late detail response from replacing newer state.
+    private func isCurrentRoute(sessionId: String, generation: Int) -> Bool {
+        activeSessionId == sessionId
+            && routeLoadGeneration == generation
+            && !Task.isCancelled
+    }
+
     private func loadPrimaryDetail(api: SessionWorkspaceClient, sessionId: String) {
         primaryDetailRequestToken &+= 1
         let requestToken = primaryDetailRequestToken
@@ -1160,10 +1190,15 @@ final class SessionViewModel: ObservableObject {
 
         nextTailRefreshToken += 1
         let token = nextTailRefreshToken
+        let generation = routeLoadGeneration
         activeTailRefreshToken = token
         let task = Task { [weak self] in
             guard let self else { return }
-            try await self.performRefreshTail(api: api, sessionId: sessionId)
+            try await self.performRefreshTail(
+                api: api,
+                sessionId: sessionId,
+                generation: generation
+            )
         }
         tailRefreshTask = task
         defer {
@@ -1180,8 +1215,14 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    private func performRefreshTail(api: SessionWorkspaceClient, sessionId: String) async throws {
-        guard activeSessionId == sessionId else { return }
+    private func performRefreshTail(
+        api: SessionWorkspaceClient,
+        sessionId: String,
+        generation: Int
+    ) async throws {
+        guard isCurrentRoute(sessionId: sessionId, generation: generation) else {
+            throw CancellationError()
+        }
 
         do {
             let requestStartedAt = Date()
@@ -1195,7 +1236,9 @@ final class SessionViewModel: ObservableObject {
                 cursor: nil
             )
             let requestMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
-            guard activeSessionId == sessionId else { return }
+            guard isCurrentRoute(sessionId: sessionId, generation: generation) else {
+                throw CancellationError()
+            }
             openWaterfall?.mark(
                 "request_finished",
                 "elapsed_ms=\(requestMs) events=\(tail.events.count) total=\(tail.projection.total)"
@@ -1253,7 +1296,9 @@ final class SessionViewModel: ObservableObject {
             saveCurrentCache()
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
         } catch {
-            openWaterfall?.mark("request_failed", "error=\(error)")
+            if isCurrentRoute(sessionId: sessionId, generation: generation) {
+                openWaterfall?.mark("request_failed", "error=\(error)")
+            }
             throw error
         }
     }
@@ -1483,19 +1528,26 @@ final class SessionViewModel: ObservableObject {
 
     /// Background reconcile that never erases on-screen content. A failure
     /// surfaces as a thin banner (`refreshErrorMessage`); success clears it.
-    private func refreshInBackground(api: SessionWorkspaceClient, sessionId: String) async {
+    private func refreshInBackground(
+        api: SessionWorkspaceClient,
+        sessionId: String,
+        generation: Int
+    ) async {
         do {
             try await refreshTail(api: api, sessionId: sessionId)
-            guard activeSessionId == sessionId else { return }
+            guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return }
             refreshErrorMessage = nil
+        } catch is CancellationError {
+            return
         } catch LonghouseAPIError.notAuthenticated {
-            guard activeSessionId == sessionId else { return }
+            guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return }
             refreshErrorMessage = "Session expired. Pull to refresh."
         } catch {
-            guard activeSessionId == sessionId else { return }
+            guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return }
             refreshErrorMessage = "Live update temporarily unavailable. Showing saved messages."
         }
-        if activeSessionId == sessionId, let api = apiFactory(activeServerURL ?? "") {
+        guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return }
+        if let api = apiFactory(activeServerURL ?? "") {
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
         }
     }
