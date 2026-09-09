@@ -79,9 +79,17 @@ function explicitAutomationClassification(
   return null;
 }
 
-function isAutomationSession(session: TimelineSessionCard["head"]): boolean {
+function isAutomationSession(
+  session: TimelineSessionCard["head"],
+  resolvedRepo: string,
+): boolean {
   const explicit = explicitAutomationClassification(session);
   if (explicit !== null) return explicit;
+
+  // Legacy sessions may have no launch provenance. Their project can still
+  // resolve from cwd or git_repo, so preserve the resolved-group fallback.
+  const normalizedRepo = resolvedRepo.trim().toLowerCase();
+  if (normalizedRepo === "agent-sessions") return true;
 
   const project = session.project?.trim().toLowerCase();
   const cwd = session.cwd?.replace(/\/+$/, "").split("/").pop()?.toLowerCase();
@@ -92,7 +100,7 @@ export function getInboxGroupPresentation(
   repo: string,
   sessions: readonly TimelineSessionCard[],
 ): Pick<InboxRepoGroup, "label" | "description" | "kind"> {
-  const automation = sessions.length > 0 && sessions.every((session) => isAutomationSession(session.head));
+  const automation = sessions.length > 0 && sessions.every((session) => isAutomationSession(session.head, repo));
   if (automation) {
     return {
       label: "Automation runs",

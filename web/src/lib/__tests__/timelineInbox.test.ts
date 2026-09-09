@@ -80,7 +80,9 @@ function makeCard(args: {
   endedAt?: string;
   lastActivityAt?: string;
   capabilities?: SessionCapabilities;
+  project?: string | null;
   cwd?: string | null;
+  gitRepo?: string | null;
   launchActor?: string | null;
   originKind?: string | null;
   state?: SessionStateFacts;
@@ -90,8 +92,9 @@ function makeCard(args: {
     started_at: args.startedAt,
     ended_at: args.endedAt ?? null,
     last_activity_at: args.lastActivityAt ?? null,
-    project: args.repo,
+    project: args.project === undefined ? args.repo : args.project,
     cwd: args.cwd ?? null,
+    git_repo: args.gitRepo ?? null,
     launch_actor: args.launchActor ?? null,
     origin_kind: args.originKind ?? null,
     capabilities: args.capabilities,
@@ -260,6 +263,23 @@ describe("buildInboxLayout", () => {
 
     expect(layout.history[0].label).toBe("Automation runs");
     expect(layout.history[0].kind).toBe("automation");
+  });
+  it("preserves the git-derived automation fallback without provenance", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "legacy-git-agent-sessions",
+        repo: "agent-sessions",
+        project: null,
+        gitRepo: "https://github.com/example/agent-sessions.git",
+        startedAt: "2026-05-18T12:00:00Z",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history[0]).toMatchObject({
+      label: "Automation runs",
+      kind: "automation",
+      description: "Background work",
+    });
   });
   it("lets explicit human provenance override the automation workspace heuristic", () => {
     const layout = buildInboxLayout([
