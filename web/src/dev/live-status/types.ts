@@ -1,4 +1,7 @@
-import type { AgentSessionProjectionItem, AgentSessionWorkspaceResponse } from "../../services/api/agents";
+import type {
+  AgentSessionProjectionItem,
+  AgentSessionWorkspaceResponse,
+} from "../../services/api/agents";
 
 export interface SessionCapture {
   schema: "longhouse.live-status-capture.v1";
@@ -10,12 +13,27 @@ export interface SessionCapture {
   note?: string;
 }
 
-export type Scene = "recorded" | "working" | "quiet" | "expiry" | "reconnect" | "machine" | "return" | "attention" | "finished";
-export interface ReceiptMark { id: string; ageMs: number; replay: boolean }
+export type Scene =
+  | "recorded"
+  | "working"
+  | "quiet"
+  | "expiry"
+  | "reconnect"
+  | "machine"
+  | "return"
+  | "attention"
+  | "finished";
+export interface ReceiptMark {
+  id: string;
+  ageMs: number;
+  sequence: number;
+  replay: boolean;
+}
 export interface RibbonState {
   tone: "working" | "quiet" | "unknown" | "attention";
   headline: string;
   detail: string | null;
+  detailKind: "literal" | "explanation";
   observation: string;
   connection: "connected" | "reconnecting" | "checking" | "recorded";
   animateWork: boolean;

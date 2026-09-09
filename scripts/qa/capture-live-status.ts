@@ -11,21 +11,37 @@ const args = process.argv.slice(2);
 const sessionId = args[0];
 function option(name: string, fallback: string): string {
   const index = args.indexOf(name);
-  return index < 0 ? fallback : args[index + 1] ?? fallback;
+  return index < 0 ? fallback : (args[index + 1] ?? fallback);
 }
 if (!sessionId || sessionId.startsWith("--")) {
-  throw new Error("Usage: bun scripts/qa/capture-live-status.ts SESSION_ID [--output PATH] [--seconds 20]");
+  throw new Error(
+    "Usage: bun scripts/qa/capture-live-status.ts SESSION_ID [--output PATH] [--seconds 20]",
+  );
 }
 const seconds = Number(option("--seconds", "20"));
-if (!Number.isFinite(seconds) || seconds < 0 || seconds > 120) throw new Error("--seconds must be between 0 and 120");
-const output = resolve(option("--output", `artifacts/live-status-lab/${sessionId}.json`));
-const host = (await readFile(`${homedir()}/.longhouse/machine/target-url`, "utf8")).trim().replace(/\/$/, "");
-const token = (await readFile(`${homedir()}/.longhouse/machine/device-token`, "utf8")).trim();
-if (!host || !token) throw new Error("Link this machine with longhouse auth before capturing.");
+if (!Number.isFinite(seconds) || seconds < 0 || seconds > 120)
+  throw new Error("--seconds must be between 0 and 120");
+const output = resolve(
+  option("--output", `artifacts/live-status-lab/${sessionId}.json`),
+);
+const host = (
+  await readFile(`${homedir()}/.longhouse/machine/target-url`, "utf8")
+)
+  .trim()
+  .replace(/\/$/, "");
+const token = (
+  await readFile(`${homedir()}/.longhouse/machine/device-token`, "utf8")
+).trim();
+if (!host || !token)
+  throw new Error("Link this machine with longhouse auth before capturing.");
 const headers = { Authorization: `Bearer ${token}` };
 const path = `/api/timeline/sessions/${encodeURIComponent(sessionId)}/workspace`;
-const response = await fetch(`${host}${path}?limit=100&branch_mode=head`, { headers, signal: AbortSignal.timeout(30_000) });
-if (!response.ok) throw new Error(`Workspace capture failed: HTTP ${response.status}`);
+const response = await fetch(`${host}${path}?limit=100&branch_mode=head`, {
+  headers,
+  signal: AbortSignal.timeout(30_000),
+});
+if (!response.ok)
+  throw new Error(`Workspace capture failed: HTTP ${response.status}`);
 const workspace = await response.json();
 const capturedAt = new Date().toISOString();
 const stream: Array<{ atMs: number; event: string; data: unknown }> = [];
@@ -37,7 +53,10 @@ if (seconds > 0) {
   const decoder = new TextDecoder();
   let buffer = "";
   try {
-    const live = await fetch(`${host}${path}/stream`, { headers, signal: abort.signal });
+    const live = await fetch(`${host}${path}/stream`, {
+      headers,
+      signal: abort.signal,
+    });
     if (!live.ok || !live.body) throw new Error(`HTTP ${live.status}`);
     for await (const bytes of live.body) {
       buffer += decoder.decode(bytes, { stream: true });
@@ -47,12 +66,22 @@ if (seconds > 0) {
         const frame = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
         const event = /^event:\s*(.+)$/m.exec(frame)?.[1];
-        const data = frame.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
-        if (event && data) stream.push({ atMs: Math.round(performance.now() - start), event, data: JSON.parse(data) });
+        const data = frame
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (event && data)
+          stream.push({
+            atMs: Math.round(performance.now() - start),
+            event,
+            data: JSON.parse(data),
+          });
       }
     }
   } catch (error) {
-    if (!abort.signal.aborted) streamError = error instanceof Error ? error.message : String(error);
+    if (!abort.signal.aborted)
+      streamError = error instanceof Error ? error.message : String(error);
   } finally {
     clearTimeout(timeout);
     abort.abort();
@@ -69,4 +98,16 @@ const capture = {
 };
 await mkdir(dirname(output), { recursive: true });
 await writeFile(output, JSON.stringify(capture, null, 2), { mode: 0o600 });
-console.log(JSON.stringify({ output, sessionId, items: workspace.projection?.items?.length, streamFrames: stream.length, streamError }, null, 2));
+console.log(
+  JSON.stringify(
+    {
+      output,
+      sessionId,
+      items: workspace.projection?.items?.length,
+      streamFrames: stream.length,
+      streamError,
+    },
+    null,
+    2,
+  ),
+);
