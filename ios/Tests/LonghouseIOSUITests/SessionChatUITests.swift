@@ -65,6 +65,45 @@ final class SessionChatUITests: XCTestCase {
         add(screenshot)
     }
 
+    func testSessionLoadingShellKeepsNavigationTitleAndDockStable() {
+        let app = launchChatFixture(
+            name: "basic",
+            eventCount: 9,
+            appearance: .dark,
+            tailDelayMs: 8000
+        )
+
+        let loadingDock = app.descendants(matching: .any)["session-loading-dock"]
+        XCTAssertTrue(loadingDock.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.descendants(matching: .any)["session-navigation-title"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.descendants(matching: .any)["session-transcript-loading"].waitForExistence(timeout: 8))
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "session-loading-shell"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    func testLongLoadingTitleStaysClearOfOverflowControl() {
+        let app = launchChatFixture(
+            name: "loading-long-title",
+            eventCount: 9,
+            appearance: .dark,
+            tailDelayMs: 8000
+        )
+
+        let title = app.descendants(matching: .any)["session-navigation-title"]
+        let actions = app.buttons["Session actions"]
+        XCTAssertTrue(title.waitForExistence(timeout: 8))
+        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        XCTAssertLessThan(title.frame.maxX, actions.frame.minX)
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "session-loading-long-title"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testCaptureToolsTranscriptLightScreenshot() throws {
         try captureSessionScreenshot(
             fixtureName: "marketing",
@@ -251,11 +290,15 @@ final class SessionChatUITests: XCTestCase {
     private func launchChatFixture(
         name: String = "basic",
         eventCount: Int,
-        appearance: Appearance = .light
+        appearance: Appearance = .light,
+        tailDelayMs: Int? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.chatFixture] = name
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
+        if let tailDelayMs {
+            app.launchEnvironment["LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"] = String(tailDelayMs)
+        }
         app.launchArguments += [LaunchArgument.appearanceOverride, appearance.rawValue]
         app.launch()
         addTeardownBlock { [weak self] in

@@ -664,10 +664,61 @@ private struct PreviewSubtitle: ViewModifier {
     .preferredColorScheme(.dark)
 }
 
+#Preview("Transcript · empty refresh error · Dark") {
+    ZStack {
+        Color(.systemBackground).ignoresSafeArea()
+        TranscriptStateOverlay(
+            state: .emptyWithRefreshError("Live update temporarily unavailable. Retry to check again."),
+            onRetry: {}
+        )
+    }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Transcript · syncing refresh error · Dark") {
+    ZStack {
+        Color(.systemBackground).ignoresSafeArea()
+        TranscriptStateOverlay(
+            state: .syncingWithRefreshError("Archive sync is delayed. Retry to check again."),
+            onRetry: {}
+        )
+    }
+    .preferredColorScheme(.dark)
+}
+
 #Preview("Transcript · loading · Dark") {
     ZStack {
         Color(.systemBackground).ignoresSafeArea()
         TranscriptStateOverlay(state: .loading, onRetry: {})
+    }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Session · first paint loading shell · Dark") {
+    NavigationStack {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            TranscriptStateOverlay(state: .loading, onRetry: {})
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            SessionLoadingDock()
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+        }
+        .navigationTitle("Meeting prep research")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                SessionNavigationHeader(
+                    title: "Meeting prep research",
+                    subtitle: "Cursor · zeta · cinder"
+                )
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Image(systemName: "ellipsis")
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
     .preferredColorScheme(.dark)
 }

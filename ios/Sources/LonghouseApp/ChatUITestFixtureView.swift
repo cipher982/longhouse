@@ -105,7 +105,7 @@ struct ChatUITestFixtureView: View {
                     probe.recordBenchmark(phase: "renderer_unavailable", updateCount: 0)
                     return
                 }
-                await waitForInitialWorkspaceLoad()
+                await waitForInitialWorkspaceLoad(waitForFrame: true)
                 probe.recordBenchmark(phase: "ready", updateCount: 0)
                 if !UITestHooks.shouldAutoStartTranscriptBenchmark {
                     while !Task.isCancelled && !benchmarkStartRequested {
@@ -188,8 +188,17 @@ struct ChatUITestFixtureView: View {
         }
     }
 
-    private func waitForInitialWorkspaceLoad() async {
-        while !Task.isCancelled && viewModel.detail == nil {
+    private func waitForInitialWorkspaceLoad(waitForFrame: Bool = false) async {
+        // Detail now arrives in a separate primary lane. Fixture updates must
+        // wait for the initial tail, not merely the title, or they can mutate
+        // the workload while a cold transcript is still loading.
+        while !Task.isCancelled && !viewModel.hasLoadedTranscript {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard waitForFrame else { return }
+        // Benchmarks measure the rendered transcript, so do not start the
+        // trace while WebKit is still mounting the first document.
+        while !Task.isCancelled && !viewModel.isTranscriptFrameReady {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
     }
@@ -749,6 +758,15 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         nextEventID = (seedEvents.compactMap(\.legacyNumericId).max() ?? 0) + 1
     }
 
+    func sessionDetail(id: String) async throws -> SessionDetail {
+        Self.makeDetail(
+            sessionID: sessionID,
+            events: events,
+            title: Self.titleForFixture(fixtureName)
+        )
+    }
+
+
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
         Self.makeWorkspace(sessionID: sessionID, events: events, title: Self.titleForFixture(fixtureName))
     }
@@ -1105,7 +1123,14 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     /// Session header title for a given fixture. Marketing captures want a
     /// realistic session title, not the test-harness label.
     static func titleForFixture(_ fixtureName: String) -> String {
-        fixtureName == "marketing" ? "Wire up OAuth refresh flow" : "Chat UI Fixture"
+        switch fixtureName {
+        case "marketing":
+            return "Wire up OAuth refresh flow"
+        case "loading-long-title":
+            return "A very long session title that must stay inside the navigation bar"
+        default:
+            return "Chat UI Fixture"
+        }
     }
 
     private static func makeDetail(

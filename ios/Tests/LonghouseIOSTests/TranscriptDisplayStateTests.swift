@@ -95,6 +95,19 @@ struct TranscriptDisplayStateTests {
     }
 
     @Test
+    func emptyRefreshFailureRemainsNativeAndActionable() {
+        let state = TranscriptDisplayState.derive(
+            isInitialLoading: false,
+            hasContent: false,
+            errorMessage: nil,
+            refreshErrorMessage: "Couldn't refresh",
+            isSyncing: false
+        )
+        #expect(state == .emptyWithRefreshError("Couldn't refresh"))
+        #expect(state.showsTranscript == false)
+    }
+
+    @Test
     func syncingWinsOverEmptyWhenArchiveIsCatchingUp() {
         let state = TranscriptDisplayState.derive(
             isInitialLoading: false,
@@ -108,6 +121,19 @@ struct TranscriptDisplayStateTests {
     }
 
     @Test
+    func syncingRefreshFailureKeepsSyncingSurfaceAndRetry() {
+        let state = TranscriptDisplayState.derive(
+            isInitialLoading: false,
+            hasContent: false,
+            errorMessage: nil,
+            refreshErrorMessage: "Couldn't refresh",
+            isSyncing: true
+        )
+        #expect(state == .syncingWithRefreshError("Couldn't refresh"))
+        #expect(state.showsTranscript == false)
+    }
+
+    @Test
     func hardErrorOnlyWhenNothingCached() {
         let state = TranscriptDisplayState.derive(
             isInitialLoading: false,
@@ -116,6 +142,18 @@ struct TranscriptDisplayStateTests {
             refreshErrorMessage: nil
         )
         #expect(state == .hardError("Couldn't load session"))
+        #expect(state.showsTranscript == false)
+    }
+
+    @Test
+    func coldLoadErrorWinsOverLaterRealtimeRefreshError() {
+        let state = TranscriptDisplayState.derive(
+            isInitialLoading: false,
+            hasContent: false,
+            errorMessage: "Couldn't load session. Pull to refresh.",
+            refreshErrorMessage: "Live update delayed. Retrying..."
+        )
+        #expect(state == .hardError("Couldn't load session. Pull to refresh."))
         #expect(state.showsTranscript == false)
     }
 }

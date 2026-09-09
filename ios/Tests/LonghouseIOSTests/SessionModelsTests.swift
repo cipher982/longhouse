@@ -95,6 +95,23 @@ struct SessionModelsTests {
         )
     }
 
+
+    @Test
+    func timelineSummaryBuildsImmediateIdentitySubtitle() {
+        let summary = SessionSummary(
+            id: "session-identity",
+            title: "Meeting prep",
+            presenceState: "idle",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: nil,
+            deviceId: "clifford",
+            homeLabel: "On this Mac",
+            runtimeDisplay: runtimeDisplay(activityRecency: "stale")
+        )
+
+        #expect(summary.identitySubtitle == "Codex · zerg · clifford")
+    }
     @Test
     func timelineStaleAnnotationFollowsServerStatusTone() {
         let ready = timelineSummary(

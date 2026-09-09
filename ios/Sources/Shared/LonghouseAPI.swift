@@ -156,6 +156,10 @@ struct ClientDiagnosticsPayload: Encodable, Sendable {
 }
 
 protocol SessionWorkspaceClient: Sendable {
+    /// Lightweight session chrome/state. This is intentionally separate from
+    /// the transcript projection so the route can paint its title and controls
+    /// while the larger tail is still arriving.
+    func sessionDetail(id: String) async throws -> SessionDetail
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse
     /// Workers this session spawned. Hidden from the timeline by design — a
     /// subagent is a turn artifact, not a session — so this is the route that
@@ -188,6 +192,13 @@ protocol SessionWorkspaceClient: Sendable {
 }
 
 extension SessionWorkspaceClient {
+    /// Existing fixtures and narrow test doubles can derive the chrome from
+    /// their workspace response. The live API overrides this with the
+    /// lightweight timeline detail route.
+    func sessionDetail(id: String) async throws -> SessionDetail {
+        try await sessionWorkspace(id: id, limit: 1, branchMode: "head").session
+    }
+
     // Mocks/fixtures that never exercise acknowledgement inherit a no-op.
     func markSessionRead(id: String, readThrough: String) async throws {}
 
@@ -325,6 +336,13 @@ struct LonghouseAPI: Sendable {
         ]
         return components.url!
     }
+    /// The route chrome can be served without building a transcript
+    /// projection. Keep this request separate from `mobile-tail` so a large
+    /// session never holds the navigation transition hostage.
+    static func sessionDetailURL(baseURL: URL, id: String) -> URL {
+        baseURL.appendingPathComponent("/api/timeline/sessions/\(id)")
+    }
+
 
     static func sessionSubagentsURL(baseURL: URL, id: String) -> URL {
         baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/subagents")
@@ -372,6 +390,33 @@ struct LonghouseAPI: Sendable {
         try JSONDecoder.snakeCase
             .decode(APISessionMobileTailResponse.self, from: data)
             .sessionMobileTailResponse
+    }
+    static func decodeSessionDetail(_ data: Data) throws -> SessionDetail {
+        try JSONDecoder.snakeCase
+            .decode(APISessionResponse.self, from: data)
+            .sessionDetail
+    }
+
+
+    func sessionDetail(id: String) async throws -> SessionDetail {
+        var request = URLRequest(
+            url: Self.sessionDetailURL(baseURL: baseURL, id: id),
+            cachePolicy: .reloadIgnoringLocalCacheData
+        )
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
+
+        let requestStartedAt = Date()
+        Self.logger.debug("session-detail request started session=\(id, privacy: .public)")
+        let (data, httpResponse) = try await data(for: request)
+        let responseMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
+        Self.logger.debug(
+            "session-detail response session=\(id, privacy: .public) status=\(httpResponse.statusCode) ms=\(responseMs) bytes=\(data.count)"
+        )
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try Self.decodeSessionDetail(data)
     }
 
     func sessionWorkspace(id: String, limit: Int = 200, branchMode: String = "head") async throws -> SessionWorkspaceResponse {

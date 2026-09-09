@@ -156,6 +156,7 @@ struct TimelineView: View {
                 SessionView(
                     sessionId: route.sessionId,
                     fallbackTitle: route.fallbackTitle,
+                    fallbackSubtitle: route.fallbackSubtitle,
                     onTranscriptDiagnostics: nil,
                     onOpenSubagent: { childSessionId in
                         // A worker pushes onto the same stack: it is part of this
@@ -377,7 +378,11 @@ struct TimelineSessionList: View {
             .padding(.top, role == .needsYou ? 0 : 6)
 
             ForEach(sessions) { session in
-                NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
+                NavigationLink(value: SessionRoute(
+                    sessionId: session.id,
+                    fallbackTitle: session.title,
+                    fallbackSubtitle: session.identitySubtitle
+                )) {
                     TimelineSessionCardRow(
                         session: session,
                         role: role,
@@ -406,7 +411,11 @@ struct TimelineSearchResultsList: View {
                     .padding(.horizontal, 2)
 
                 ForEach(sessions) { session in
-                    NavigationLink(value: SessionRoute(sessionId: session.id, fallbackTitle: session.title)) {
+                    NavigationLink(value: SessionRoute(
+                        sessionId: session.id,
+                        fallbackTitle: session.title,
+                        fallbackSubtitle: session.identitySubtitle
+                    )) {
                         TimelineSearchResultRow(session: session, query: query)
                     }
                     .buttonStyle(.plain)
@@ -418,10 +427,16 @@ struct TimelineSearchResultsList: View {
         }
     }
 }
-
 private struct SessionRoute: Hashable {
     let sessionId: String
     let fallbackTitle: String
+    let fallbackSubtitle: String?
+
+    init(sessionId: String, fallbackTitle: String, fallbackSubtitle: String? = nil) {
+        self.sessionId = sessionId
+        self.fallbackTitle = fallbackTitle
+        self.fallbackSubtitle = fallbackSubtitle
+    }
 }
 
 struct TimelineSessionCardRow: View {

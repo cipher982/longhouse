@@ -43,6 +43,117 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func coldStartPublishesPrimaryDetailBeforeTailCompletes() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Load the workspace")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [workspace],
+        )
+        await api.pauseNextTailResponse(offset: 0)
+
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
+
+        await waitForDetailRequestCount(api, atLeast: 1)
+        await waitForTailRequestCount(api, atLeast: 1)
+        await waitForCondition("primary detail", sourceLocation: #_sourceLocation) {
+            model.detail != nil
+        }
+
+        #expect(model.detail?.id == "session-1")
+        #expect(model.items.isEmpty)
+        #expect(await api.detailRequestCount() == 1)
+
+        await api.resumePausedTailResponses()
+        await startTask.value
+
+        #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.isInitialLoading == false)
+    }
+
+    @Test
+    func tailDetailRemainsAuthoritativeWhenPrimaryDetailFinishesLate() async throws {
+        let tailWorkspace = try makeWorkspace(eventId: 10, content: "Tail transcript")
+        let primaryWorkspace = try makeWorkspace(
+            eventId: 99,
+            content: "Primary metadata",
+            summaryTitle: "Primary metadata"
+        )
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [tailWorkspace],
+            primaryDetail: primaryWorkspace.session
+        )
+        await api.pauseNextDetailResponse()
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
+
+        await waitForTailResponseCount(api, atLeast: 1)
+        await waitForCondition("tail detail", sourceLocation: #_sourceLocation) {
+            model.hasLoadedTranscript
+                && model.detail?.displayTitle == tailWorkspace.session.displayTitle
+        }
+
+        await api.resumePausedDetailResponses()
+        await waitForDetailResponseCount(api, atLeast: 1)
+        await startTask.value
+
+        #expect(model.detail?.displayTitle == tailWorkspace.session.displayTitle)
+        #expect(model.items.map(\.id) == ["user:10"])
+    }
+
+    @Test
+    func cancelledDetailCannotClearReplacementRequestHandle() async throws {
+        let tailWorkspace = try makeWorkspace(eventId: 10, content: "Tail transcript")
+        let oldPrimary = try makeWorkspace(eventId: 99, content: "Old metadata")
+        let newPrimary = try makeWorkspace(eventId: 100, content: "New metadata")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [tailWorkspace],
+            primaryDetails: [oldPrimary.session, newPrimary.session]
+        )
+        await api.pauseNextDetailResponse()
+        await api.pauseNextTailResponse(offset: 0)
+
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let firstStart = Task { await model.start(sessionId: "session-1", appState: appState) }
+
+        await waitForDetailRequestCount(api, atLeast: 1)
+        await waitForTailRequestCount(api, atLeast: 1)
+        model.pauseRealtime()
+
+        await api.pauseNextDetailResponse()
+        await api.pauseNextTailResponse(offset: 0)
+        let replacementStart = Task { await model.start(sessionId: "session-1", appState: appState) }
+        await waitForDetailRequestCount(api, atLeast: 2)
+        await waitForTailRequestCount(api, atLeast: 2)
+
+        await api.resumeFirstPausedDetailResponse(with: URLError(.cancelled))
+        await waitForCount("detail failure count", atLeast: 1) {
+            await api.detailFailureCount()
+        }
+
+        // If the cancelled request cleared the replacement's task handle,
+        // start() would issue a third metadata request while request B is
+        // still in flight. The generation guard keeps B authoritative.
+        let thirdStart = Task { await model.start(sessionId: "session-1", appState: appState) }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await api.detailRequestCount() == 2)
+
+        await api.resumePausedDetailResponses()
+        await waitForDetailResponseCount(api, atLeast: 1)
+
+        model.stop()
+        await api.resumePausedTailResponses()
+        await firstStart.value
+        await replacementStart.value
+        await thirdStart.value
+    }
+
+    @Test
     func startRendersFreshTranscriptPreviewAfterDurableTail() async throws {
         let previewJSON = """
         {
@@ -408,6 +519,45 @@ struct SessionViewModelTests {
         await waitForWorkspaceRequestCount(secondAPI, atLeast: 1)
         #expect(secondModel.items.map(\.id) == ["user:1", "user:51", "user:52"])
         #expect(await secondAPI.workspaceRequestCount() == 1)
+    }
+
+    @Test
+    func coldTailFailureKeepsComposerGateClosedUntilRetrySucceeds() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Cold-load transcript")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        await api.failFutureWorkspaceLoads()
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForCondition("primary detail after tail failure", sourceLocation: #_sourceLocation) {
+            model.detail != nil
+        }
+
+        #expect(model.detail != nil)
+        #expect(!model.isInitialLoading)
+        #expect(!model.hasLoadedTranscript)
+        #expect(model.errorMessage != nil)
+
+        await api.allowFutureWorkspaceLoads()
+        await api.pauseNextTailResponse(offset: 0)
+        let failedTailCount = await api.tailRequestCount()
+        let retry = Task {
+            await model.reload(sessionId: "session-1", appState: appState)
+        }
+        await waitForTailRequestCount(api, atLeast: failedTailCount + 1)
+
+        #expect(model.isInitialLoading)
+        #expect(!model.hasLoadedTranscript)
+
+        await api.resumePausedTailResponses()
+        await retry.value
+
+        #expect(!model.isInitialLoading)
+        #expect(model.hasLoadedTranscript)
+        #expect(model.errorMessage == nil)
+        #expect(model.items.map(\.id) == ["user:10"])
     }
 
     @Test
@@ -1380,6 +1530,7 @@ struct SessionViewModelTests {
     nonisolated private func makeWorkspace(
         eventId: Int,
         content: String,
+        summaryTitle: String = "Workspace Session",
         timestamp: String = "2026-05-02T20:00:00Z",
         isHeadBranch: Bool = true,
         inputOriginJSON: String? = nil,
@@ -1390,6 +1541,7 @@ struct SessionViewModelTests {
         inputReceiptsJSON: String? = nil,
         recapJSON: String? = nil
     ) throws -> SessionWorkspaceResponse {
+        let encodedSummaryTitle = try jsonString(summaryTitle)
         let encodedContent = try jsonString(content)
         let inputReceiptsField = inputReceiptsJSON.map { "\n            \"input_receipts\": \($0)," } ?? ""
         let recapField = recapJSON.map { "\n            \"recap\": \($0)," } ?? ""
@@ -1408,8 +1560,7 @@ struct SessionViewModelTests {
           "session": {
             "id": "session-1",
             "provider": "codex",
-            "project": "zerg",
-            "summary_title": "Workspace Session",
+            "summary_title": \(encodedSummaryTitle),
             "user_state": "active",\(inputReceiptsField)\(recapField)
             "capabilities": {
               "live_control_available": true,
@@ -1530,6 +1681,38 @@ struct SessionViewModelTests {
         await waitForCount("workspace request count", atLeast: count, sourceLocation: sourceLocation) {
             await api.workspaceRequestCount()
         }
+    }
+
+    private func waitForDetailRequestCount(
+        _ api: FakeSessionWorkspaceClient,
+        atLeast count: Int,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async {
+        await waitForCount("detail request count", atLeast: count, sourceLocation: sourceLocation) {
+            await api.detailRequestCount()
+        }
+    }
+
+    private func waitForDetailResponseCount(
+        _ api: FakeSessionWorkspaceClient,
+        atLeast count: Int,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async {
+        await waitForCount("detail response count", atLeast: count, sourceLocation: sourceLocation) {
+            await api.detailResponseCount()
+        }
+    }
+
+    private func waitForCondition(
+        _ label: String,
+        sourceLocation: SourceLocation = #_sourceLocation,
+        condition: () -> Bool
+    ) async {
+        for _ in 0..<250 {
+            if condition() { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        Issue.record("Timed out waiting for \(label)", sourceLocation: sourceLocation)
     }
 
     private func waitForTailRequestCount(
@@ -1671,6 +1854,14 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var sendSteps: [FakeSendStep] = []
     private var pauseResponseError: Error?
     private var pauseResponse: PauseRequestResponse?
+    private let primaryDetail: SessionDetail?
+    private var primaryDetails: [SessionDetail]
+    private var detailResponses = 0
+    private var detailFailures = 0
+    private var pausedDetailResponseCount = 0
+    private var pausedDetailContinuations: [CheckedContinuation<Void, Never>] = []
+    private var pausedDetailResponseErrors: [Error?] = []
+    private var detailRequests: [String] = []
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
     private var tailRequests: [(id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: String?, cursor: String?)] = []
     private var tailResponses = 0
@@ -1685,12 +1876,41 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         workspaces: [SessionWorkspaceResponse],
         sendResponse: SessionInputResponse = SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: nil, intent: .auto, queued: []),
         afterSendWorkspace: (@Sendable (String?) throws -> SessionWorkspaceResponse)? = nil,
-        pauseResponse: PauseRequestResponse? = nil
+        pauseResponse: PauseRequestResponse? = nil,
+        primaryDetail: SessionDetail? = nil,
+        primaryDetails: [SessionDetail] = []
     ) {
         self.workspaces = workspaces
         self.sendResponse = sendResponse
         self.afterSendWorkspace = afterSendWorkspace
         self.pauseResponse = pauseResponse
+        self.primaryDetail = primaryDetail
+        self.primaryDetails = primaryDetails
+    }
+
+    func sessionDetail(id: String) async throws -> SessionDetail {
+        detailRequests.append(id)
+        if pausedDetailResponseCount > 0 {
+            pausedDetailResponseCount -= 1
+            await withCheckedContinuation { continuation in
+                pausedDetailContinuations.append(continuation)
+            }
+            let responseError = pausedDetailResponseErrors.isEmpty
+                ? nil
+                : pausedDetailResponseErrors.removeFirst()
+            if let responseError {
+                detailFailures += 1
+                throw responseError
+            }
+        }
+        guard let workspace = workspaces.first else {
+            throw URLError(.badServerResponse)
+        }
+        detailResponses += 1
+        if !primaryDetails.isEmpty {
+            return primaryDetails.removeFirst()
+        }
+        return primaryDetail ?? workspace.session
     }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
@@ -1816,6 +2036,30 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         shouldFailWorkspaceLoads = true
     }
 
+    func allowFutureWorkspaceLoads() {
+        shouldFailWorkspaceLoads = false
+    }
+
+    func pauseNextDetailResponse() {
+        pausedDetailResponseCount += 1
+    }
+
+    func resumeFirstPausedDetailResponse(with error: Error? = nil) {
+        guard !pausedDetailContinuations.isEmpty else { return }
+        let continuation = pausedDetailContinuations.removeFirst()
+        pausedDetailResponseErrors.append(error)
+        continuation.resume()
+    }
+
+    func resumePausedDetailResponses() {
+        let continuations = pausedDetailContinuations
+        pausedDetailContinuations.removeAll()
+        for continuation in continuations {
+            pausedDetailResponseErrors.append(nil)
+            continuation.resume()
+        }
+    }
+
     func failFutureSends(_ error: Error) {
         sendError = error
     }
@@ -1826,6 +2070,13 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func failFuturePauseResponses(_ error: Error) {
         pauseResponseError = error
+    }
+    func detailResponseCount() -> Int {
+        detailResponses
+    }
+
+    func detailFailureCount() -> Int {
+        detailFailures
     }
 
     func pauseNextTailResponse(offset: Int) {
@@ -1839,6 +2090,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
             continuation.resume()
         }
     }
+    func detailRequestCount() -> Int {
+        detailRequests.count
+    }
+
 
     func workspaceRequestCount() -> Int {
         workspaceRequests.count

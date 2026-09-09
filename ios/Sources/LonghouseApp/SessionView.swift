@@ -6,6 +6,7 @@ import UIKit
 struct SessionView: View {
     let sessionId: String
     let fallbackTitle: String
+    let fallbackSubtitle: String?
     let onTranscriptDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
     /// Pushes a worker transcript. Owned by the navigation stack, not this view.
     var onOpenSubagent: ((String) -> Void)? = nil
@@ -24,12 +25,14 @@ struct SessionView: View {
     init(
         sessionId: String,
         fallbackTitle: String,
+        fallbackSubtitle: String? = nil,
         viewModel: SessionViewModel = SessionViewModel(),
         onTranscriptDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
         onOpenSubagent: ((String) -> Void)? = nil
     ) {
         self.sessionId = sessionId
         self.fallbackTitle = fallbackTitle
+        self.fallbackSubtitle = fallbackSubtitle
         self.onTranscriptDiagnostics = onTranscriptDiagnostics
         self.onOpenSubagent = onOpenSubagent
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -71,10 +74,23 @@ struct SessionView: View {
         }
         .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .modifier(SessionNavigationSubtitle(subtitle: viewModel.detail?.identitySubtitle))
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                SessionNavigationHeader(
+                    title: viewModel.detail?.displayTitle ?? fallbackTitle,
+                    subtitle: viewModel.detail?.identitySubtitle ?? fallbackSubtitle
+                )
+            }
             ToolbarItem(placement: .topBarTrailing) {
-                overflowMenu
+                if viewModel.detail != nil {
+                    overflowMenu
+                } else if viewModel.isInitialLoading {
+                    Image(systemName: "ellipsis")
+                        .frame(width: 32, height: 32)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Session actions unavailable while loading")
+                        .accessibilityIdentifier("session-navigation-loading")
+                }
             }
         }
         .task(id: sessionId) {
@@ -125,6 +141,16 @@ struct SessionView: View {
                 )
             }
         }
+        .onChange(of: viewModel.isTranscriptFrameReady) { _, ready in
+            guard ready, scenePhase == .active else { return }
+            Task {
+                await viewModel.acknowledgeUnreadIfNeeded(
+                    sessionId: sessionId,
+                    appState: appState,
+                    sceneIsActive: true
+                )
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
             viewModel.handleMemoryWarning()
         }
@@ -164,7 +190,7 @@ struct SessionView: View {
     private var bottomChrome: some View {
         VStack(spacing: 8) {
             liveActivityMessage
-            if viewModel.detail != nil {
+            if viewModel.detail != nil, !viewModel.isInitialLoading, viewModel.hasLoadedTranscript {
                 VStack(alignment: .leading, spacing: 8) {
                     runtimeDock
                     composer
@@ -182,6 +208,8 @@ struct SessionView: View {
                 .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("session-chat-bottom-chrome-card")
+            } else if viewModel.isInitialLoading {
+                SessionLoadingDock()
             }
         }
         .padding(.horizontal, 12)
@@ -601,18 +629,70 @@ struct SessionView: View {
 
 }
 
-/// Identity under the title: provider · project · machine. The subtitle API
-/// is iOS 26; older systems keep the plain title rather than a hand-rolled
-/// principal item that fights the system bar.
-private struct SessionNavigationSubtitle: ViewModifier {
+/// Constrained principal title for the session route. The system navigation
+/// title can participate in the push transition with an unconstrained width;
+/// keeping the title and subtitle in one bounded view prevents long titles from
+/// sliding under the trailing control while the transcript is still loading.
+struct SessionNavigationHeader: View {
+    let title: String
     let subtitle: String?
 
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), let subtitle, !subtitle.isEmpty {
-            content.navigationSubtitle(subtitle)
-        } else {
-            content
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(title)
+                .font(.headline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .truncationMode(.tail)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                    .truncationMode(.tail)
+            }
         }
+        .frame(maxWidth: 240)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            subtitle.map { "\(title), \($0)" } ?? title
+        )
+        .accessibilityIdentifier("session-navigation-title")
+    }
+}
+
+/// Stable native chrome shown until the primary session detail or a cache is
+/// available. It keeps the route visibly finished while the transcript tail
+/// continues in its own lane.
+struct SessionLoadingDock: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "text.bubble")
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Loading session")
+                    .font(.subheadline.weight(.semibold))
+                Text("Getting the latest messages")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(.white.opacity(0.10), lineWidth: 0.75)
+                )
+        )
+        .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("session-loading-dock")
     }
 }
 

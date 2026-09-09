@@ -39,6 +39,10 @@ final class SessionViewModel: ObservableObject {
     /// transcript instead of erasing it.
     @Published var refreshErrorMessage: String?
     @Published var isInitialLoading = true
+    /// True after a cached or network transcript snapshot has been accepted.
+    /// It stays true for a valid empty session, and gates the composer during
+    /// cold-load errors so metadata cannot make sends appear prematurely.
+    @Published private(set) var hasLoadedTranscript = false
     /// True only after the mounted transcript document has presented a frame.
     /// Having cached rows is not the same thing as having pixels on screen.
     @Published private(set) var isTranscriptFrameReady = false
@@ -76,6 +80,8 @@ final class SessionViewModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
     private var realtimeRefreshRetryTask: Task<Void, Never>?
+    private var primaryDetailTask: Task<Void, Never>?
+    private var primaryDetailRequestToken = 0
     private var tailRefreshTask: Task<Void, Error>?
     private var activeTailRefreshToken: Int?
     private var nextTailRefreshToken = 0
@@ -83,6 +89,7 @@ final class SessionViewModel: ObservableObject {
     private var stream: SessionWorkspaceStreamSource?
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
+
     /// Guards against an auth-refresh→reconnect→401 loop: we attempt at most
     /// one refresh per stream session, reset once a connection succeeds.
     private var streamAuthRefreshAttempted = false
@@ -118,6 +125,7 @@ final class SessionViewModel: ObservableObject {
     private var realtimeRefreshTask: Task<Void, Never>?
     private var realtimeRefreshPending = false
     private var openWaterfall: SessionOpenWaterfall?
+    private var detailWasLoadedFromTail = false
     private let apiFactory: (String) -> SessionWorkspaceClient?
     private let streamFactory: (URL, String, Int?, String?) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
@@ -164,12 +172,15 @@ final class SessionViewModel: ObservableObject {
             if let api = apiFactory(appState.serverURL) {
                 ClientDiagnosticsReporter.shared.sink = { payload in await api.postClientDiagnostics(payload) }
             }
+            hasLoadedTranscript = false
             activeSessionId = sessionId
             activeServerURL = appState.serverURL
             isInitialLoading = true
             isTranscriptFrameReady = false
             transcriptRendererErrorMessage = nil
             detail = nil
+            detailWasLoadedFromTail = false
+
             items = []
             subagents = []
             submittedInputs = []
@@ -199,6 +210,9 @@ final class SessionViewModel: ObservableObject {
             tailRefreshTask?.cancel()
             tailRefreshTask = nil
             activeTailRefreshToken = nil
+            primaryDetailTask?.cancel()
+            primaryDetailTask = nil
+
             realtimeRefreshFailureCount = 0
             errorMessage = nil
             refreshErrorMessage = nil
@@ -231,7 +245,15 @@ final class SessionViewModel: ObservableObject {
         } else {
             activeServerURL = appState.serverURL
         }
-        let hasContentOnScreen = restoredFromCache || !items.isEmpty
+        if let api = apiFactory(appState.serverURL),
+           detail == nil,
+           primaryDetailTask == nil {
+            // Paint the route chrome from the compact catalog detail while the
+            // transcript tail takes its own, slower lane.
+            loadPrimaryDetail(api: api, sessionId: sessionId)
+        }
+
+        let hasContentOnScreen = restoredFromCache || hasLoadedTranscript || !items.isEmpty
         if hasContentOnScreen {
             // We already have something to show (hydrated from cache/disk, or
             // preserved across a pause). Reconcile in the background so a
@@ -271,6 +293,15 @@ final class SessionViewModel: ObservableObject {
     /// session open (which is what erased the transcript before).
     func pauseRealtime() {
         openWaterfall?.mark("pause")
+        // A metadata request has no value after the route leaves the
+        // foreground. Cancel it with the rest of the route work; the next
+        // active start will issue it again if the title is still unresolved.
+        primaryDetailRequestToken &+= 1
+        primaryDetailTask?.cancel()
+        primaryDetailTask = nil
+        tailRefreshTask?.cancel()
+        tailRefreshTask = nil
+        activeTailRefreshToken = nil
         pollTask?.cancel()
         pollTask = nil
         prefetchTask?.cancel()
@@ -311,11 +342,12 @@ final class SessionViewModel: ObservableObject {
     }
 
     /// Full teardown for genuine nav-away or session switch: stops realtime AND
-    /// forgets which session was active so the next `start()` does a clean
-    /// reset. Background/inactive should use `pauseRealtime()` instead.
     func stop() {
         openWaterfall?.mark("stop")
         openWaterfall = nil
+        primaryDetailTask?.cancel()
+        primaryDetailTask = nil
+        detailWasLoadedFromTail = false
         ClientDiagnosticsReporter.shared.flush()
         pauseRealtime()
         activeSessionId = nil
@@ -326,7 +358,10 @@ final class SessionViewModel: ObservableObject {
         // If we already have content on screen, a failed reload must degrade to
         // the non-destructive banner. Only a truly empty view earns the
         // full-screen blocking error.
-        let hasContent = !items.isEmpty || !submittedInputs.isEmpty
+        let hasContent = hasLoadedTranscript || !items.isEmpty || !submittedInputs.isEmpty
+        if !hasLoadedTranscript {
+            isInitialLoading = true
+        }
         guard let api = apiFactory(appState.serverURL) else {
             if hasContent {
                 refreshErrorMessage = "Invalid server URL"
@@ -336,6 +371,10 @@ final class SessionViewModel: ObservableObject {
             isInitialLoading = false
             return
         }
+        if detail == nil, primaryDetailTask == nil {
+            loadPrimaryDetail(api: api, sessionId: sessionId)
+        }
+
         openWaterfall?.mark("reload_start")
         // Worker transcripts load beside the tail, never gating it: a session
         // that spawned none is the common case, and a failure here must not
@@ -359,6 +398,52 @@ final class SessionViewModel: ObservableObject {
             }
         }
         isInitialLoading = false
+    }
+
+    /// Fetch the compact session detail independently from the transcript
+    /// projection. The detail route is the primary tier for navigation chrome;
+    /// a tail response that wins the race remains authoritative and prevents a
+    /// late detail response from replacing newer state.
+    private func loadPrimaryDetail(api: SessionWorkspaceClient, sessionId: String) {
+        primaryDetailRequestToken &+= 1
+        let requestToken = primaryDetailRequestToken
+        primaryDetailTask?.cancel()
+        openWaterfall?.mark("detail_request_start")
+        primaryDetailTask = Task { [weak self] in
+            do {
+                let loaded = try await api.sessionDetail(id: sessionId)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self,
+                          self.activeSessionId == sessionId,
+                          self.primaryDetailRequestToken == requestToken,
+                          !self.detailWasLoadedFromTail
+                    else { return }
+                    self.detail = loaded
+                    self.openWaterfall?.mark(
+                        "detail_loaded",
+                        "title_chars=\(loaded.displayTitle.count)"
+                    )
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.activeSessionId == sessionId,
+                          self.primaryDetailRequestToken == requestToken
+                    else { return }
+                    self.openWaterfall?.mark("detail_failed", "error=\(error)")
+                }
+            }
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.activeSessionId == sessionId,
+                      self.primaryDetailRequestToken == requestToken
+                else { return }
+                self.primaryDetailTask = nil
+            }
+        }
     }
 
     /// Fetch this session's worker transcripts in the background.
@@ -551,8 +636,12 @@ final class SessionViewModel: ObservableObject {
     /// (console-unread-acknowledgement spec): acknowledge exactly the result
     /// this client rendered. Fire-and-forget; the server is a max-write no-op
     /// when already read.
-    static func unreadReadThrough(facts: SessionStateFacts?, sceneIsActive: Bool) -> String? {
-        guard sceneIsActive, let facts, facts.unread else { return nil }
+    static func unreadReadThrough(
+        facts: SessionStateFacts?,
+        sceneIsActive: Bool,
+        transcriptFrameReady: Bool = true
+    ) -> String? {
+        guard transcriptFrameReady, sceneIsActive, let facts, facts.unread else { return nil }
         return facts.lastResultAt
     }
 
@@ -563,7 +652,8 @@ final class SessionViewModel: ObservableObject {
     ) async {
         guard let readThrough = Self.unreadReadThrough(
             facts: detail?.stateFacts,
-            sceneIsActive: sceneIsActive
+            sceneIsActive: sceneIsActive,
+            transcriptFrameReady: isTranscriptFrameReady
         ) else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
         try? await api.markSessionRead(id: sessionId, readThrough: readThrough)
@@ -1110,6 +1200,7 @@ final class SessionViewModel: ObservableObject {
                 "request_finished",
                 "elapsed_ms=\(requestMs) events=\(tail.events.count) total=\(tail.projection.total)"
             )
+            detailWasLoadedFromTail = true
             self.detail = tail.session
             let events = tail.events
             let buildStartedAt = Date()
@@ -1152,6 +1243,7 @@ final class SessionViewModel: ObservableObject {
             withAnimation(nil) {
                 reconcileSubmittedInputs(with: mergedEvents)
                 self.items = builtItems
+                self.hasLoadedTranscript = true
             }
             let buildMs = Int(Date().timeIntervalSince(buildStartedAt) * 1000)
             openWaterfall?.mark(
@@ -1379,6 +1471,7 @@ final class SessionViewModel: ObservableObject {
         prefetchInFlightSnapshotEventId = nil
         prefetchInFlightToken = nil
         items = TimelineBuilder.build(items: projectionItems)
+        hasLoadedTranscript = true
         isInitialLoading = false
         errorMessage = nil
         refreshErrorMessage = nil

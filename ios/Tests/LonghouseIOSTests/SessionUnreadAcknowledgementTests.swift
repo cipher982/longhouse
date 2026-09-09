@@ -13,6 +13,14 @@ struct SessionUnreadAcknowledgementTests {
         )
 
         #expect(SessionViewModel.unreadReadThrough(facts: unread, sceneIsActive: true) == "2026-08-01T12:00:00Z")
+
+        #expect(
+            SessionViewModel.unreadReadThrough(
+                facts: unread,
+                sceneIsActive: true,
+                transcriptFrameReady: false
+            ) == nil
+        )
         #expect(SessionViewModel.unreadReadThrough(facts: unread, sceneIsActive: false) == nil)
 
         let alreadyRead = makeSessionStateFacts(

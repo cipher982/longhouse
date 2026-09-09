@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The four mutually-exclusive states the session transcript surface can be in.
+/// The mutually-exclusive states the session transcript surface can be in.
 ///
 /// M3 consolidation: previously these were implied by stacked `if` conditionals
 /// inside `SessionView.transcript` (isInitialLoading / errorMessage+empty /
@@ -15,6 +15,13 @@ enum TranscriptDisplayState: Equatable {
     case loading
     /// Loaded successfully but the session genuinely has no events.
     case empty
+    /// Loaded successfully but the session is empty and its refresh failed.
+    /// Keep the native empty surface and expose a retry instead of hiding the
+    /// failure behind "No messages yet".
+    case emptyWithRefreshError(String)
+    /// The archive is still converging and its refresh failed. Keep the native
+    /// syncing surface while exposing the retry.
+    case syncingWithRefreshError(String)
     /// The session is live/catalog-visible but its durable transcript is still
     /// converging. Keep the transcript mounted, but do not claim "No messages
     /// yet" while the archive catches up.
@@ -57,9 +64,17 @@ enum TranscriptDisplayState: Equatable {
             }
             return .content
         }
-        // Nothing on screen.
+        // A cold-load failure remains authoritative until a valid transcript
+        // arrives. Realtime retries can populate refreshErrorMessage after the
+        // first tail failed; that must not turn a hard failure into "No
+        // messages yet".
         if let errorMessage {
             return .hardError(errorMessage)
+        }
+        if let refreshErrorMessage {
+            return isSyncing
+                ? .syncingWithRefreshError(refreshErrorMessage)
+                : .emptyWithRefreshError(refreshErrorMessage)
         }
         if isSyncing {
             return .syncing
@@ -72,7 +87,7 @@ enum TranscriptDisplayState: Equatable {
     /// before its composer can accept input.
     var showsTranscript: Bool {
         switch self {
-        case .loading, .empty, .syncing, .hardError:
+        case .loading, .empty, .emptyWithRefreshError, .syncing, .syncingWithRefreshError, .hardError:
             return false
         case .content, .contentWithRefreshError, .restoring:
             return true
@@ -91,15 +106,23 @@ struct TranscriptStateOverlay: View {
     var body: some View {
         switch state {
         case .loading:
-            ProgressView()
-                .controlSize(.large)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemBackground))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Loading transcript")
+            .accessibilityIdentifier("session-transcript-loading")
         case .restoring:
             restoring
         case .hardError(let message):
             hardError(message)
         case .syncing:
             syncing
+        case .syncingWithRefreshError(let message):
+            syncingWithRefreshError(message)
         case .contentWithRefreshError(let message):
             VStack {
                 refreshBanner(message)
@@ -111,9 +134,35 @@ struct TranscriptStateOverlay: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityIdentifier("session-transcript-empty")
+        case .emptyWithRefreshError(let message):
+            emptyWithRefreshError(message)
         case .content:
             EmptyView()
         }
+    }
+
+    private func emptyWithRefreshError(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Text("No messages yet")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            refreshBanner(message)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("session-transcript-empty-refresh-error")
+    }
+
+    private func syncingWithRefreshError(_ message: String) -> some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.regular)
+            Text("Syncing transcript…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            refreshBanner(message)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("session-transcript-syncing-refresh-error")
     }
 
     private var restoring: some View {

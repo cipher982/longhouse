@@ -86,6 +86,17 @@ struct LonghouseAPITests {
         ])
     }
 
+
+    @Test
+    func sessionDetailURLUsesLightweightTimelineRoute() throws {
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
+
+        let url = LonghouseAPI.sessionDetailURL(baseURL: baseURL, id: "session-1")
+
+        #expect(url.path == "/api/timeline/sessions/session-1")
+        #expect(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.isEmpty ?? true)
+    }
+
     @Test
     func sessionMobileTailURLIncludesTailPagingFields() throws {
         let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
