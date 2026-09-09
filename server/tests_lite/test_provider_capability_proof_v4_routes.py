@@ -306,6 +306,24 @@ def test_v4_cannot_reencode_a_published_v3_artifact(monkeypatch, tmp_path):
         assert record.artifact_id in report.admissible_artifact_ids
 
 
+def test_reference_representation_type_does_not_change_blob_identity(monkeypatch, tmp_path):
+    bundle, contents = _v4_bundle(_record())
+
+    class PreviouslyStoredAsText(_MemoryResolver):
+        def _get(self, **kwargs):
+            response = super()._get(**kwargs)
+            response["ContentType"] = "text/plain"
+            return response
+
+    with _client(monkeypatch, tmp_path, PreviouslyStoredAsText(contents)) as client:
+        response = _publish(client, bundle)
+        assert response.status_code == 201, response.text
+        evidence = client.get(_evidence_url(_digest("raw")))
+        assert evidence.status_code == 200
+        assert evidence.content == contents[_digest("raw")]
+        assert evidence.headers["content-type"].startswith("application/json")
+
+
 def test_resolver_rejects_digest_corruption_even_with_correct_headers():
     content = b"expected evidence"
     digest = _digest("expected evidence")

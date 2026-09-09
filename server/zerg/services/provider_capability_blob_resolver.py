@@ -222,8 +222,8 @@ def _verify_headers(response: object, reference: FactoryBlobReference) -> dict[s
     content_length = response.get("ContentLength")
     if content_length != reference.byte_length or isinstance(content_length, bool) or not isinstance(content_length, int):
         raise ProviderCapabilityBlobTampered("length_mismatch", "factory blob ContentLength does not match its ref")
-    if response.get("ContentType") != reference.media_type:
-        raise ProviderCapabilityBlobTampered("media_type_mismatch", "factory blob ContentType does not match its ref")
+    # Blob keys identify bytes only. Media type belongs to the authenticated
+    # reference; a previous writer's S3 type label need not match.
     metadata = response.get("Metadata")
     raw_digest = metadata.get("sha256") if isinstance(metadata, Mapping) else None
     expected_raw = reference.digest.removeprefix("sha256:")
@@ -240,6 +240,7 @@ def _verify_headers(response: object, reference: FactoryBlobReference) -> dict[s
         "digest": reference.digest,
         "key": reference.key,
         "content_length": content_length,
+        # Effective representation type, not an integrity claim about S3 metadata.
         "content_type": reference.media_type,
         "metadata_sha256": raw_digest,
         "checksum_sha256": checksum,
