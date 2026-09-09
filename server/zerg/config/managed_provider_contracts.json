@@ -2935,7 +2935,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             },
             {
               "id": "pi_helm_native_tool_taxonomy",
@@ -2946,7 +2946,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             },
             {
               "id": "pi_helm_send_idle",
@@ -2957,7 +2957,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             },
             {
               "id": "pi_helm_steer_active",
@@ -2968,7 +2968,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             },
             {
               "id": "pi_helm_follow_up_native",
@@ -2979,7 +2979,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             },
             {
               "id": "pi_helm_abort_native",
@@ -2990,7 +2990,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             },
             {
               "id": "pi_helm_terminate_owned",
@@ -3001,7 +3001,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             },
             {
               "id": "pi_helm_reload_rebind",
@@ -3012,7 +3012,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             },
             {
               "id": "pi_helm_session_replacement_rebind",
@@ -3023,7 +3023,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             }
           ]
         },
@@ -3050,7 +3050,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             },
             {
               "id": "pi_helm_stale_owner_refused",
@@ -3061,7 +3061,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "514ee7c7b352cb48e4d39af2dd32cec96ddc771847092034eede367de1fefe17"
+              "oracle_digest": "cd14c761848adccc6470c57936125d5c96e32e1085bc5e1365397e1c74f454b4"
             }
           ]
         },

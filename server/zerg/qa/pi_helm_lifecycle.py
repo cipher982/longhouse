@@ -932,6 +932,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "LONGHOUSE_HOME": str(home),
             "PI_CODING_AGENT_DIR": str(provider_home / ".pi"),
             "LONGHOUSE_ENGINE_BIN": str(args.engine),
+            "LONGHOUSE_PI_BIN": str(args.provider_bin),
             "LONGHOUSE_PI_HELM_URL": str(args.api_url or os.environ.get("LONGHOUSE_RUNTIME_API_URL") or ""),
             "LONGHOUSE_PI_HELM_TOKEN": str(args.agents_token or os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN") or ""),
             "LONGHOUSE_ORIGIN_KIND": "test_or_canary",
