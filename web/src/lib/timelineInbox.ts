@@ -56,29 +56,47 @@ function historySortKey(card: TimelineSessionCard): number {
   return isCardClosed(card) ? closedAtMs(card) : startedAtMs(card);
 }
 
-function isAutomationSession(session: TimelineSessionCard["head"]): boolean {
+function explicitAutomationClassification(
+  session: TimelineSessionCard["head"],
+): boolean | null {
   const actor = session.launch_actor?.trim().toLowerCase();
   const origin = session.origin_kind?.trim().toLowerCase();
+  const surface = session.launch_surface?.trim().toLowerCase();
+
+  // Canonical launch provenance overrides the legacy workspace heuristic.
+  // The server's normalizer emits human_shell/human_ui for direct human
+  // launches; user is retained for older Console rows.
+  if (actor === "human_shell" || actor === "human_ui" || actor === "user" || actor === "human") {
+    return false;
+  }
+  if (actor === "automation") return true;
+  if (origin === "hatch_automation" || origin === "test_or_canary" || origin?.includes("automation")) {
+    return true;
+  }
+  if (surface === "hatch" || surface === "test" || surface === "ci" || surface === "provider_subprocess") {
+    return true;
+  }
+  return null;
+}
+
+function isAutomationSession(session: TimelineSessionCard["head"]): boolean {
+  const explicit = explicitAutomationClassification(session);
+  if (explicit !== null) return explicit;
+
+  const project = session.project?.trim().toLowerCase();
   const cwd = session.cwd?.replace(/\/+$/, "").split("/").pop()?.toLowerCase();
-  return (
-    session.project === "agent-sessions" ||
-    cwd === "agent-sessions" ||
-    actor === "automation" ||
-    origin?.includes("automation") === true
-  );
+  return project === "agent-sessions" || cwd === "agent-sessions";
 }
 
 export function getInboxGroupPresentation(
   repo: string,
   sessions: readonly TimelineSessionCard[],
 ): Pick<InboxRepoGroup, "label" | "description" | "kind"> {
-  const automation = repo === "agent-sessions" || (
-    sessions.length > 0 && sessions.every((session) => isAutomationSession(session.head))
-  );
+  const automation = sessions.length > 0 && sessions.every((session) => isAutomationSession(session.head));
   if (automation) {
     return {
       label: "Automation runs",
-      description: "Background OpenCode sessions · search only",
+      description: "Background work",
       kind: "automation",
     };
   }

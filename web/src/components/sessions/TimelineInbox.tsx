@@ -6,11 +6,12 @@
  * tier keeps open and closed sessions together, ordered by lifecycle activity.
  * See lib/timelineInbox.ts for the pure layout function.
  *
- * Drag-to-reorder: hold and drag any row or repo header. Threshold-based (5px),
- * so a normal click still navigates. Order persists per-browser via localStorage.
+ * Drag-to-reorder: hold and drag any row or project repo header. Threshold-based
+ * (5px), so a normal click still navigates. Automation groups stay pinned and
+ * are not draggable. Order persists per-browser via localStorage.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -57,6 +58,10 @@ export function TimelineInbox({
   relativeNowMs,
   highlightQuery,
 }: TimelineInboxProps) {
+  const inboxId = useId();
+  const liveHeadingId = `${inboxId}-live-heading`;
+  const attentionHeadingId = `${inboxId}-attention-heading`;
+  const historyHeadingId = `${inboxId}-history-heading`;
   const [order, setOrder] = useState<InboxOrderState>(() => readInboxOrder());
 
   useEffect(() => {
@@ -87,6 +92,13 @@ export function TimelineInbox({
   const moveRepo = useCallback(
     (from: number, to: number) => {
       if (from === to) return;
+      const fromGroup = layout.history[from];
+      const toGroup = layout.history[to];
+      // Automation groups are pinned below project history and are not
+      // reorderable. A project can still move among the other project groups.
+      if (!fromGroup || !toGroup || fromGroup.kind === "automation" || toGroup.kind === "automation") {
+        return;
+      }
       const visibleRepos = layout.history.map((g) => g.repo);
       const reorderedVisible = arrayMove(visibleRepos, from, to);
       setOrder((prev) => ({
@@ -126,9 +138,9 @@ export function TimelineInbox({
   return (
     <div className="inbox" data-testid="timeline-inbox">
       {layout.shelf.length > 0 ? (
-        <>
-          <div className="inbox-live-divider" role="separator">
-            <span className="inbox-live-divider-label">Live now</span>
+        <section className="inbox-tier inbox-tier--shelf" aria-labelledby={liveHeadingId}>
+          <div className="inbox-live-divider">
+            <h2 id={liveHeadingId} className="inbox-live-divider-label">Live now</h2>
             <span className="inbox-live-divider-count">{layout.shelf.length}</span>
           </div>
           <ShelfSection
@@ -140,13 +152,17 @@ export function TimelineInbox({
             highlightQuery={highlightQuery}
             onMoveSession={moveShelf}
           />
-        </>
+        </section>
       ) : null}
 
       {layout.unread.length > 0 ? (
-        <div className="inbox-section inbox-section--unread" data-testid="timeline-unread">
-          <div className="inbox-unread-divider" role="separator">
-            <span className="inbox-unread-divider-label">Needs attention</span>
+        <section
+          className="inbox-section inbox-section--unread"
+          data-testid="timeline-unread"
+          aria-labelledby={attentionHeadingId}
+        >
+          <div className="inbox-unread-divider">
+            <h2 id={attentionHeadingId} className="inbox-unread-divider-label">Needs attention</h2>
             <span className="inbox-unread-divider-count">{layout.unread.length}</span>
           </div>
           <div className="inbox-repo-rows">
@@ -163,13 +179,13 @@ export function TimelineInbox({
               />
             ))}
           </div>
-        </div>
+        </section>
       ) : null}
 
       {layout.history.length > 0 ? (
-        <>
-          <div className="inbox-history-divider" role="separator">
-            <span className="inbox-history-divider-label">History</span>
+        <section className="inbox-tier inbox-tier--history" aria-labelledby={historyHeadingId}>
+          <div className="inbox-history-divider">
+            <h2 id={historyHeadingId} className="inbox-history-divider-label">History</h2>
             <span className="inbox-history-divider-count">{layout.historyCount}</span>
           </div>
           <RepoTier
@@ -183,7 +199,7 @@ export function TimelineInbox({
             onMoveRepo={moveRepo}
             onMoveSession={moveSession}
           />
-        </>
+        </section>
       ) : null}
     </div>
   );
@@ -323,7 +339,11 @@ function SortableRepoBlock({
   highlightQuery,
   onMoveSession,
 }: SortableRepoBlockProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const reorderable = group.kind !== "automation";
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled: !reorderable,
+  });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -337,13 +357,18 @@ function SortableRepoBlock({
       data-tier={tier}
       data-repo={group.repo}
       data-kind={group.kind}
+      data-reorderable={reorderable ? "true" : "false"}
       data-dragging={isDragging ? "true" : undefined}
       aria-label={`${group.label} sessions`}
       style={style}
     >
-      <header className="inbox-repo-header" {...attributes} {...listeners}>
+      <header
+        className="inbox-repo-header"
+        {...(reorderable ? attributes : {})}
+        {...(reorderable ? listeners : {})}
+      >
         <div className="inbox-repo-heading">
-          <h2 className="inbox-repo-name">{group.label}</h2>
+          <h3 className="inbox-repo-name">{group.label}</h3>
           {group.description ? (
             <span className="inbox-repo-description">{group.description}</span>
           ) : null}

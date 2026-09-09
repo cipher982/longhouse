@@ -245,7 +245,7 @@ describe("buildInboxLayout", () => {
       "project-closed",
       "project-open",
     ]);
-    expect(layout.history[1].description).toBe("Background OpenCode sessions · search only");
+    expect(layout.history[1].description).toBe("Background work");
     expect(layout.historyCount).toBe(3);
   });
   it("uses source metadata and workspace path to identify automation runs", () => {
@@ -260,6 +260,63 @@ describe("buildInboxLayout", () => {
 
     expect(layout.history[0].label).toBe("Automation runs");
     expect(layout.history[0].kind).toBe("automation");
+  });
+  it("lets explicit human provenance override the automation workspace heuristic", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "human-agent-sessions",
+        repo: "agent-sessions",
+        startedAt: "2026-05-18T12:00:00Z",
+        cwd: "/data/agent-sessions",
+        launchActor: "human_shell",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history[0]).toMatchObject({
+      label: "agent-sessions",
+      kind: "project",
+      description: null,
+    });
+  });
+
+  it("classifies actor-only and origin-only automation without workspace heuristics", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "actor-automation",
+        repo: "scheduled-job",
+        startedAt: "2026-05-18T12:00:00Z",
+        launchActor: "automation",
+      }),
+      makeCard({
+        id: "origin-automation",
+        repo: "hatch-run",
+        startedAt: "2026-05-18T11:00:00Z",
+        originKind: "hatch_automation",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history.map((group) => group.kind)).toEqual(["automation", "automation"]);
+    expect(layout.history.map((group) => group.description)).toEqual(["Background work", "Background work"]);
+  });
+
+  it("keeps mixed human and legacy automation sessions in project history", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "legacy-background",
+        repo: "zerg",
+        startedAt: "2026-05-18T12:00:00Z",
+        cwd: "/data/agent-sessions",
+      }),
+      makeCard({
+        id: "human-project",
+        repo: "zerg",
+        startedAt: "2026-05-18T11:00:00Z",
+        cwd: "/Users/davidrose/git/zerg",
+        launchActor: "human_shell",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history[0]).toMatchObject({ label: "zerg", kind: "project" });
   });
   it("keeps automation runs last despite a stale saved repo order", () => {
     const layout = buildInboxLayout([

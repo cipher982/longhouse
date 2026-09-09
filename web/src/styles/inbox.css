@@ -35,6 +35,10 @@
     flex-direction: column;
     gap: 0;
   }
+  .inbox-tier {
+    display: flex;
+    flex-direction: column;
+  }
 
   .inbox-live-divider,
   .inbox-history-divider {
@@ -68,6 +72,7 @@
   }
 
   .inbox-history-divider-label {
+    margin: 0;
     font-size: 24px;
     font-weight: 700;
     letter-spacing: 0;
@@ -125,6 +130,12 @@
   .inbox-unread-divider-label {
     color: var(--color-brand-primary, var(--color-text-secondary));
     font-weight: 700;
+  }
+  .inbox-live-divider-label,
+  .inbox-unread-divider-label {
+    margin: 0;
+    font-size: inherit;
+    line-height: inherit;
   }
 
   .inbox-unread-divider-count {
@@ -279,6 +290,13 @@
 
   .inbox-repo-header:hover {
     cursor: grab;
+  }
+  .inbox-repo[data-reorderable="false"] .inbox-repo-header {
+    touch-action: auto;
+  }
+
+  .inbox-repo[data-reorderable="false"] .inbox-repo-header:hover {
+    cursor: default;
   }
 
   /* ---------- Row main (left side) ---------- */
