@@ -47,6 +47,7 @@ export interface ReplayFrame {
   items: AgentSessionProjectionItem[];
   explanation: string;
   sourceLabel: string;
+  notice: string | null;
 }
 export type LiveSurface = "dock" | "ledger" | "island";
 export interface LiveWorkRibbonProps {

@@ -1,4 +1,10 @@
-import { useMemo, type CSSProperties } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import type { LiveWorkRibbonProps, RibbonState } from "./types";
 import "./LiveWorkRibbon.css";
 
@@ -106,6 +112,22 @@ export function LiveWorkRibbon({
     : notice && surface !== "dock"
       ? "notice"
       : "rest";
+  const contextRef = useRef<HTMLDivElement>(null);
+  const [contextHeight, setContextHeight] = useState(0);
+  const contextKey = useMemo(
+    () => JSON.stringify([state.observation, notice, displayDetail]),
+    [state.observation, notice, displayDetail],
+  );
+  useLayoutEffect(() => {
+    const content = contextRef.current;
+    if (!content) return;
+    const measure = () =>
+      setContextHeight(content.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <div
@@ -136,6 +158,7 @@ export function LiveWorkRibbon({
           </span>
           <span
             className="lwr-headline"
+            title={state.headline}
             role="status"
             aria-live="polite"
             aria-atomic="true"
@@ -231,29 +254,36 @@ export function LiveWorkRibbon({
       </details>
       <div
         className="lwr-context"
+        style={
+          surface === "dock"
+            ? undefined
+            : { height: prominence === "rest" ? 0 : contextHeight }
+        }
         aria-hidden={
           surface !== "dock" && prominence === "rest" ? true : undefined
         }
       >
-        <div className="lwr-context__inner">
-          {showContext && state.observation !== connectionLabel && (
-            <p className="lwr-note">{state.observation}</p>
-          )}
-          {notice && surface !== "dock" ? (
-            <p className="lwr-note">{notice}</p>
-          ) : state.detail &&
-            (showContext || state.detailKind === "explanation") ? (
-            <p
-              className={
-                state.detailKind === "literal" ? "lwr-command" : "lwr-note"
-              }
-              title={state.detail}
-            >
-              {displayDetail}
-            </p>
-          ) : surface !== "dock" ? (
-            <p className="lwr-note">{state.observation}</p>
-          ) : null}
+        <div className="lwr-context__inner" ref={contextRef}>
+          <div className="lwr-context-copy" key={contextKey}>
+            {showContext && state.observation !== connectionLabel && (
+              <p className="lwr-note">{state.observation}</p>
+            )}
+            {notice && surface !== "dock" ? (
+              <p className="lwr-note">{notice}</p>
+            ) : state.detail &&
+              (showContext || state.detailKind === "explanation") ? (
+              <p
+                className={
+                  state.detailKind === "literal" ? "lwr-command" : "lwr-note"
+                }
+                title={state.detail}
+              >
+                {displayDetail}
+              </p>
+            ) : surface !== "dock" ? (
+              <p className="lwr-note">{state.observation}</p>
+            ) : null}
+          </div>
           {state.tone === "attention" && surface !== "dock" && (
             <div className="lwr-approval">
               <div className="lwr-approval__actions">
@@ -274,7 +304,7 @@ export function LiveWorkRibbon({
               </div>
               <p className="lwr-approval__note" role="status">
                 {previewDecision
-                  ? `Mock choice: ${previewDecision === "allow" ? "Allow once" : "Deny"}. No command sent; request remains unconfirmed.`
+                  ? `Mock choice: ${previewDecision === "allow" ? "Allow once" : "Deny"}. No command sent; request remains pending.`
                   : "Preview choices only · no command is sent"}
               </p>
             </div>

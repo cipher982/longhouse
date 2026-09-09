@@ -60,7 +60,7 @@ export default function App() {
   const [timeMs, setTimeMs] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [surface, setSurface] = useState<LiveSurface>("ledger");
+  const [surface, setSurface] = useState<LiveSurface>("island");
   const [previewDecision, setPreviewDecision] = useState<
     "allow" | "deny" | null
   >(null);
@@ -107,12 +107,6 @@ export default function App() {
     scene === "recorded"
       ? "Recorded snapshot · no live connection"
       : "Design replay · real recorded content · simulated states";
-  const notice =
-    scene === "finished" && timeMs >= 10000 && timeMs < 14000
-      ? "Output remains available in the transcript."
-      : scene === "reconnect" && timeMs >= 18000 && timeMs < 22000
-        ? "Fresh work evidence restored."
-        : null;
 
   function seek(nextTimeMs: number) {
     const next = Math.max(0, Math.min(REPLAY_DURATION_MS, nextTimeMs));
@@ -443,7 +437,7 @@ export default function App() {
                       motionTimeMs={timeMs}
                       reduceMotion={reduceMotion}
                       surface={surface}
-                      notice={notice}
+                      notice={frame.notice}
                       previewDecision={previewDecision}
                       onPreviewDecision={setPreviewDecision}
                     />

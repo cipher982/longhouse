@@ -206,6 +206,7 @@ export function buildReplayFrame(
       items: data.items,
       explanation: description,
       sourceLabel: "Recorded snapshot · no live connection",
+      notice: null,
       ribbon: {
         tone: "quiet",
         headline:
@@ -398,6 +399,12 @@ export function buildReplayFrame(
     items: projectedItems,
     explanation: description,
     sourceLabel: "Design replay · recorded content · simulated states",
+    notice:
+      scene === "finished" && time >= 10000 && time < 14000
+        ? "Output remains available in the transcript."
+        : scene === "reconnect" && time >= 18000 && time < 22000
+          ? "Fresh work evidence restored."
+          : null,
     ribbon: {
       tone,
       headline,

@@ -20,7 +20,7 @@ if (!option("--capture"))
     "--capture is required (private JSON from make capture-live-status)",
   );
 const url = option("--url", "http://127.0.0.1:47213/live-status-lab.html");
-const surface = option("--surface", "dock");
+const surface = option("--surface", "island");
 const output = resolve(
   option(
     "--output",
@@ -31,6 +31,7 @@ await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const errors: string[] = [];
 const evidence: Array<Record<string, unknown>> = [];
+const attemptedApiRequests: string[] = [];
 
 async function settle(page: Page) {
   await page.waitForFunction(
@@ -120,6 +121,117 @@ async function snapshot(page: Page, name: string, scene: string, time: number) {
   });
   return { work, observation, ...layout };
 }
+
+async function recordMorph(
+  page: Page,
+  scene: string,
+  start: number,
+  end: number,
+  name: string,
+) {
+  const draft = page.getByRole("textbox", { name: "Draft message" });
+  const draftText = "Keep this draft through every shape change.";
+  await draft.fill(draftText);
+  await seek(page, scene, start);
+  await settle(page);
+  await controls(page, true);
+  await page.getByRole("button", { name: "Play replay", exact: true }).click();
+  await controls(page, false);
+  await draft.focus();
+  const geometry = await page.evaluate(
+    async ({ end, start }) => {
+      const samples = [];
+      const deadline = performance.now() + end - start + 5000;
+      while (performance.now() < deadline) {
+        const app = document.querySelector(".lab-app")!;
+        const ribbon = document.querySelector(".lwr-ribbon")!;
+        const box = ribbon.getBoundingClientRect();
+        const input = document
+          .querySelector("#lab-draft")!
+          .getBoundingClientRect();
+        const pseudo = getComputedStyle(ribbon, "::before");
+        const insetTop = Number.parseFloat(pseudo.top) || 0;
+        const insetBottom = Number.parseFloat(pseudo.bottom) || 0;
+        const time = Number(app.getAttribute("data-time-ms"));
+        samples.push({
+          time,
+          width: box.width,
+          height: box.height,
+          visualTop: box.top + insetTop,
+          visualHeight: box.height - insetTop - insetBottom,
+          copyOpacity: getComputedStyle(
+            document.querySelector(".lwr-context-copy")!,
+          ).opacity,
+          draftX: input.x,
+          draftY: input.y,
+          draftWidth: input.width,
+          draftHeight: input.height,
+          motion: ribbon.getAttribute("data-work-motion"),
+          animations: document
+            .getAnimations()
+            .filter(
+              (animation) =>
+                animation.playState === "running" &&
+                animation.effect instanceof KeyframeEffect &&
+                animation.effect.target instanceof Element &&
+                animation.effect.target.closest(".lab-composer"),
+            ).length,
+        });
+        if (time >= end) return samples;
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 50);
+        await promise;
+      }
+      throw new Error("Replay did not reach the requested transition");
+    },
+    { end, start },
+  );
+  await controls(page, true);
+  await page.getByRole("button", { name: "Pause replay", exact: true }).click();
+  await controls(page, false);
+  await settle(page);
+  const uncertain = geometry.filter((sample) =>
+    scene === "reconnect"
+      ? sample.time >= 5000 && sample.time < 18000
+      : sample.time >=
+        (scene === "attention" ? 6000 : scene === "finished" ? 10000 : 12000),
+  );
+  assert.ok(
+    uncertain.length && uncertain.every((sample) => sample.motion === "off"),
+    "Truth loss, approval, and completion must stop work motion immediately",
+  );
+  assert.ok(
+    geometry.every(
+      (sample) =>
+        Math.abs(sample.draftY - geometry[0].draftY) < 1 &&
+        sample.draftX === geometry[0].draftX &&
+        sample.draftWidth === geometry[0].draftWidth &&
+        sample.draftHeight === geometry[0].draftHeight,
+    ),
+    "Automatic shapes must preserve the active draft rectangle",
+  );
+  assert.equal(
+    await draft.inputValue(),
+    draftText,
+    "Morphing must retain the draft",
+  );
+  if (name.includes("reduced"))
+    assert.ok(
+      geometry.every((sample) => sample.animations === 0),
+      "System reduced motion must disable shape and text animation",
+    );
+  await writeFile(
+    `${output}/${name}-geometry.json`,
+    JSON.stringify(geometry, null, 2),
+  );
+  await page.screenshot({ path: `${output}/${name}.png` });
+  evidence.push({
+    name,
+    samples: geometry.length,
+    draftRetained: true,
+    fixedDraft: true,
+  });
+}
 try {
   for (const size of [
     { name: "desktop", width: 1440, height: 1000 },
@@ -151,7 +263,10 @@ try {
           parsed.origin !== new URL(url).origin
         )
           return route.abort();
-        if (request.url().includes("/api/")) return route.abort();
+        if (request.url().includes("/api/")) {
+          attemptedApiRequests.push(`${request.method()} ${parsed.pathname}`);
+          return route.abort();
+        }
         return route.continue();
       });
       await page.goto(url);
@@ -288,9 +403,12 @@ try {
         await page
           .getByRole("button", { name: "Allow once", exact: true })
           .click();
-        assert.match(
-          await page.locator(".lwr-approval__note").innerText(),
-          /No command sent/,
+        assert.equal(
+          await page
+            .getByRole("button", { name: "Allow once", exact: true })
+            .isDisabled(),
+          true,
+          "A local pending choice must not dispatch repeatedly",
         );
         assert.equal(
           await page
@@ -402,88 +520,48 @@ try {
         "Observation details must not push the composer offscreen",
       );
       await page.getByTestId("live-work-ribbon").locator("summary").click();
-      if (size.name === "desktop") {
-        await controls(page, true);
-        await page.getByLabel("Theme", { exact: true }).selectOption("dark");
-        await page.getByLabel("Reduce live motion", { exact: true }).uncheck();
-        // Actual playback, not just seeking: retain a draft through loss/recovery.
-        await page
-          .getByRole("textbox", { name: "Draft message" })
-          .fill("Keep this local draft through reconnect.");
-        await seek(page, "reconnect", 3000);
-        await page
-          .getByRole("button", { name: "Play replay", exact: true })
-          .click();
-        const geometry = await page.evaluate(async () => {
-          const samples = [];
-          const deadline = performance.now() + 25000;
-          while (performance.now() < deadline) {
-            const app = document.querySelector(".lab-app")!;
-            const ribbon = document.querySelector(".lwr-ribbon")!;
-            const draft = document.querySelector("#lab-draft")!;
-            const box = ribbon.getBoundingClientRect();
-            const input = draft.getBoundingClientRect();
-            const time = Number(app.getAttribute("data-time-ms"));
-            samples.push({
-              time,
-              width: box.width,
-              height: box.height,
-              draftX: input.x,
-              draftY: input.y,
-              draftWidth: input.width,
-              draftHeight: input.height,
-              motion: ribbon.getAttribute("data-work-motion"),
-            });
-            if (time >= 19000) return samples;
-            const { promise, resolve } = Promise.withResolvers<void>();
-            setTimeout(resolve, 50);
-            await promise;
-          }
-          throw new Error("Replay did not reach recovery within 25 seconds");
-        });
-        assert.ok(
-          geometry.some(
-            (sample) =>
-              sample.time >= 5000 &&
-              sample.time < 18000 &&
-              sample.motion === "off",
-          ),
-          "Truth loss must stop work motion during playback",
+      await controls(page, true);
+      await page.getByLabel("Theme", { exact: true }).selectOption("dark");
+      await page.getByLabel("Reduce live motion", { exact: true }).uncheck();
+      for (const journey of [
+        { scene: "expiry", start: 10500, end: 13000 },
+        { scene: "attention", start: 4500, end: 7000 },
+        { scene: "finished", start: 9500, end: 14500 },
+      ]) {
+        await recordMorph(
+          page,
+          journey.scene,
+          journey.start,
+          journey.end,
+          `${size.name}-${journey.scene}-morph`,
         );
-        assert.ok(
-          geometry.every(
-            (sample) =>
-              Math.abs(sample.draftY - geometry[0].draftY) < 1 &&
-              sample.draftX === geometry[0].draftX &&
-              sample.draftWidth === geometry[0].draftWidth &&
-              sample.draftHeight === geometry[0].draftHeight,
-          ),
-          "Automatic shape changes must not move or resize the draft",
-        );
-        await writeFile(
-          `${output}/${size.name}-morph-geometry.json`,
-          JSON.stringify(geometry, null, 2),
-        );
-        await page
-          .getByRole("button", { name: "Pause replay", exact: true })
-          .click();
-        assert.equal(
-          await page
-            .getByRole("textbox", { name: "Draft message" })
-            .inputValue(),
-          "Keep this local draft through reconnect.",
-        );
-        evidence.push({
-          name: "real-time-disconnect-replay",
-          passed: true,
-          draftRetained: true,
-        });
       }
+      if (size.name === "desktop")
+        await recordMorph(
+          page,
+          "reconnect",
+          3000,
+          22500,
+          `${size.name}-reconnect-morph`,
+        );
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await recordMorph(
+        page,
+        "expiry",
+        10500,
+        13000,
+        `${size.name}-reduced-expiry-morph`,
+      );
     } finally {
       await context.close();
     }
   }
   assert.deepEqual(errors, [], "Browser runtime errors");
+  assert.deepEqual(
+    attemptedApiRequests,
+    [],
+    "The local design lab must not attempt session API requests",
+  );
 } finally {
   await browser.close();
   await writeFile(
@@ -496,6 +574,7 @@ try {
         createdAt: new Date().toISOString(),
         evidence,
         errors,
+        attemptedApiRequests,
       },
       null,
       2,
