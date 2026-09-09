@@ -64,6 +64,10 @@ capture-live-status-frames: ## Capture replay states and motion (CAPTURE=<privat
 	@test -n "$(CAPTURE)" || (echo "CAPTURE is required" >&2; exit 2)
 	@bun scripts/qa/capture-live-status-frames.ts --capture "$(CAPTURE)" --url "http://127.0.0.1:$(LAB_PORT)/live-status-lab.html" $(if $(OUTPUT),--output "$(OUTPUT)",) $(if $(SURFACE),--surface "$(SURFACE)",)
 
+.PHONY: capture-ledger-journeys
+capture-ledger-journeys: ## Exercise production Ledger with isolated HTTP/SSE facts and private frames
+	@bun scripts/qa/capture-ledger-journeys.ts --url "http://127.0.0.1:$(LAB_PORT)" $(if $(CAPTURE),--capture "$(CAPTURE)",) $(if $(OUTPUT),--output "$(OUTPUT)",)
+
 demo-db: ## Build demo SQLite database
 	@uv run --project server python server/scripts/build_demo_db.py --force
 
@@ -123,7 +127,7 @@ test-ios: ## iOS unit + smoke tests (simulator) — the merge gate
 	@python3 scripts/build/generate_build_identity.py
 	@bash scripts/build/stage_ios_build_identity.sh
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
-	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
+	@DESTINATION="$${IOS_DESTINATION:-$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)}"; \
 	IOS_TEST_SCHEMES="$(IOS_MERGE_TEST_SCHEMES)" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 ios-ui-shot: ## Run one iOS UI test and export its screenshots (TEST=SessionChatUITests/testName)

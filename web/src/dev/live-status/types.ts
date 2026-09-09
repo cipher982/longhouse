@@ -2,6 +2,12 @@ import type {
   AgentSessionProjectionItem,
   AgentSessionWorkspaceResponse,
 } from "../../services/api/agents";
+import type {
+  LedgerConnection,
+  LedgerReceiptMark,
+  LedgerTone,
+  SessionLedgerState,
+} from "../../components/session-workspace/SessionLedger";
 
 export interface SessionCapture {
   schema: "longhouse.live-status-capture.v1";
@@ -23,25 +29,11 @@ export type Scene =
   | "return"
   | "attention"
   | "finished";
-export interface ReceiptMark {
-  id: string;
-  ageMs: number;
-  sequence: number;
-  replay: boolean;
-}
-export interface RibbonState {
-  tone: "working" | "quiet" | "unknown" | "attention";
-  headline: string;
-  detail: string | null;
-  detailKind: "literal" | "explanation";
-  observation: string;
-  connection: "connected" | "reconnecting" | "checking" | "recorded";
-  animateWork: boolean;
-  outputAgeSeconds: number | null;
-  heartbeatAgeMs: number | null;
-  receiptMarks: ReceiptMark[];
-  facts: Array<{ label: string; value: string }>;
-}
+export type ReceiptMark = LedgerReceiptMark;
+export type RibbonState = SessionLedgerState;
+export type RibbonTone = LedgerTone;
+export type RibbonConnection = LedgerConnection;
+
 export interface ReplayFrame {
   ribbon: RibbonState;
   items: AgentSessionProjectionItem[];

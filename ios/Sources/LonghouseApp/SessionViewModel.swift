@@ -13,6 +13,8 @@ final class SessionViewModel: ObservableObject {
     }
 
     @Published var detail: SessionDetail?
+    /// Viewer transport only. A connected stream is not provider liveness.
+    @Published private(set) var realtimeConnection: SessionRealtimeConnection = .disconnected
     // Benchmark-only attribution. These deliberately are not @Published: the
     // subsequent transcript mutation owns the SwiftUI invalidation, preventing
     // an extra render of the previous snapshot under the next revision number.
@@ -284,7 +286,7 @@ final class SessionViewModel: ObservableObject {
         prefetchInFlightToken = nil
         streamTask?.cancel()
         streamTask = nil
-        Task { [stream] in await stream?.stop() }
+        realtimeConnection = .disconnected
         stream = nil
         streamConnected = false
     }
@@ -771,6 +773,7 @@ final class SessionViewModel: ObservableObject {
             Task { await prior.stop() }
         }
         streamConnected = false
+        realtimeConnection = .connecting
         guard let base = URL(string: appState.serverURL) else { return }
         // Seed the reconnect cursor from the persisted pubsub_seq so a fresh
         // stream (e.g. after a background pause) replays buffered events from
@@ -796,10 +799,12 @@ final class SessionViewModel: ObservableObject {
         switch event {
         case .connected:
             streamConnected = true
+            realtimeConnection = .connected
             streamAuthRefreshAttempted = false
             openWaterfall?.mark("stream_connected")
         case .disconnected(let error):
             streamConnected = false
+            realtimeConnection = .disconnected
             openWaterfall?.mark("stream_disconnected", "error=\(error?.localizedDescription ?? "none")")
         case .decodeFailed(let detail):
             // The cursor is already past the frame; only durable state can
@@ -811,10 +816,12 @@ final class SessionViewModel: ObservableObject {
             openWaterfall?.mark(stage, detail)
         case .unauthorized:
             streamConnected = false
+            realtimeConnection = .disconnected
             openWaterfall?.mark("stream_unauthorized")
             await handleStreamUnauthorized(sessionId: sessionId, appState: appState)
         case .replayGap(let gap):
             streamConnected = true
+            realtimeConnection = .connected
             openWaterfall?.mark("stream_replay_gap", "requested=\(gap.requested_seq) latest=\(gap.latest_seq)")
             if gap.session_id == sessionId {
                 lastPubsubSeq = gap.latest_seq > 0 ? gap.latest_seq : nil

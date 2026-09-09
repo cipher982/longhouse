@@ -1,38 +1,98 @@
 import SwiftUI
 
-/// The status row of the control card: activity strip, headline, counting
-/// elapsed time, and a mono tail line with the newest live text. Colour is
-/// signal — the strip and headline take the session tone, everything else is
-/// monochrome. The capability chip appears only when control is *not* live:
-/// an enabled composer is the proof of the healthy case, so naming it there
-/// was noise.
+/// The integrated Ledger status row of the control card: an evidence-gated
+/// activity strip, provider headline, elapsed observation and scoped stream
+/// state. Literal tool/context details stay behind deliberate disclosure.
 struct SessionRuntimeDock: View {
     let detail: SessionDetail
     @ObservedObject var activity: ActivityPulseStore
+    var realtimeConnection: SessionRealtimeConnection = .disconnected
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     // A streaming provider refreshes the primary label's observed_at with
     // every provisional delta. Anchor the counter on the earliest observation
     // for the current label + tool so it counts up instead of resetting.
     @State private var elapsedAnchor: ElapsedAnchor?
+    @State private var evidenceNow = Date()
+    @State private var evidenceDisclosure = false
 
     private struct ElapsedAnchor: Equatable {
         let key: String
         let start: Date
     }
+    private enum LedgerNotice: Equatable {
+        case finished
+        case restored
+    }
+
+    @State private var previousLedgerState: SessionLedgerEvidence?
+    @State private var observedLastResultAt: String?
+    @State private var notice: LedgerNotice?
+    @State private var noticeUntil: Date?
+    @State private var noticeNow = Date()
 
     var body: some View {
         Group {
             if detail.canDraftBeforeSendReady {
                 launchSetupLine
             } else {
-                standardLines
+                statusLines(asOf: evidenceNow)
             }
         }
         .padding(.horizontal, 4)
-        .onAppear { reanchorElapsed() }
+        .onAppear {
+            evidenceNow = Date()
+            noticeNow = Date()
+            previousLedgerState = ledger(asOf: evidenceNow)
+            observedLastResultAt = detail.stateFacts.lastResultAt
+            reanchorElapsed()
+        }
         .onChange(of: detail.activityStartedAt) { _, _ in reanchorElapsed() }
+        .onChange(of: detail.id) { _, _ in
+            evidenceDisclosure = false
+            previousLedgerState = ledger(asOf: evidenceNow)
+            observedLastResultAt = detail.stateFacts.lastResultAt
+            notice = nil
+            noticeUntil = nil
+        }
         .onChange(of: elapsedAnchorKey) { _, _ in reanchorElapsed() }
+        .onChange(of: statusSignature) { _, _ in
+            let current = ledger(asOf: evidenceNow)
+            if let resultAt = detail.stateFacts.lastResultAt,
+               resultAt != observedLastResultAt {
+                startNotice(.finished)
+            } else if previousLedgerState == .uncertain, current == .working {
+                startNotice(.restored)
+            }
+            observedLastResultAt = detail.stateFacts.lastResultAt
+            previousLedgerState = current
+        }
+        // server's valid_until passes, labels and motion change immediately.
+        .task(id: evidenceDeadlineKey) {
+            guard let deadline = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) else {
+                return
+            }
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            }
+            if !Task.isCancelled {
+                evidenceNow = Date()
+            }
+        }
+        .task(id: noticeTaskKey) {
+            guard let deadline = noticeUntil else { return }
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            }
+            if !Task.isCancelled {
+                noticeNow = Date()
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: evidenceDisclosure)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: noticeIsVisible)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
     }
@@ -42,6 +102,37 @@ struct SessionRuntimeDock: View {
     private var elapsedAnchorKey: String {
         [detail.id, detail.stateFacts.primary?.key ?? "", detail.stateFacts.activityTool ?? "", detail.stateFacts.activityState]
             .joined(separator: ":")
+    }
+
+    private var evidenceDeadlineKey: String {
+        "\(detail.id):\(detail.stateFacts.activityValidUntil ?? "")"
+    }
+    private var statusSignature: String {
+        [
+            detail.id,
+            detail.stateFacts.primary?.key ?? "",
+            detail.stateFacts.activityValidUntil ?? "",
+            detail.stateFacts.lastResultAt ?? "",
+            String(describing: ledger(asOf: evidenceNow)),
+            String(describing: realtimeConnection),
+            detail.runtimeDisplay.hostState,
+            detail.stateFacts.transcriptConvergence
+        ].joined(separator: "|")
+    }
+
+    private var noticeTaskKey: String {
+        "\(notice.map { String(describing: $0) } ?? "none"):\(noticeUntil?.timeIntervalSince1970 ?? 0)"
+    }
+
+    private var noticeIsVisible: Bool {
+        guard notice != nil, let noticeUntil else { return false }
+        return noticeNow < noticeUntil
+    }
+
+    private func startNotice(_ next: LedgerNotice) {
+        notice = next
+        noticeUntil = Date().addingTimeInterval(4)
+        noticeNow = Date()
     }
 
     private func reanchorElapsed() {
@@ -64,53 +155,106 @@ struct SessionRuntimeDock: View {
         }
         return detail.activityStartedAt
     }
-    private var tone: Color { style.dot.color }
+
     private var isExecuting: Bool { detail.isSessionExecuting }
+    private func ledger(asOf now: Date) -> SessionLedgerEvidence {
+        detail.ledgerEvidence(connection: realtimeConnection, asOf: now)
+    }
 
-    private var standardLines: some View {
-        VStack(alignment: .leading, spacing: 3) {
+    private func evidenceIsLive(asOf now: Date) -> Bool {
+        guard ledger(asOf: now) == .working else { return false }
+        guard detail.stateFacts.activityEvidenceIsLive(asOf: now) else { return false }
+        return true
+    }
+
+    private func statusLines(asOf now: Date) -> some View {
+        let state = ledger(asOf: now)
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                ActivityStrip(store: activity, tone: tone)
-                Text(detail.runtimeHeadline)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(headlineColor)
-                    .lineLimit(1)
-                elapsed
-                if let runtimeDetail = detail.runtimeDetail, !typeSize.isAccessibilitySize {
-                    Text(runtimeDetail)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                Image(systemName: statusGlyph(for: state))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(headlineColor(for: state))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(headline(for: state))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(headlineColor(for: state))
+                        .lineLimit(2)
+                    if let connectionLabel = connectionLabel(for: state) {
+                        Text(connectionLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                Spacer(minLength: 8)
-                capabilityChip
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+                ActivityStrip(
+                    store: activity,
+                    tone: tone(for: state),
+                    evidenceLive: evidenceIsLive(asOf: now)
+                )
+                if state == .uncertain || realtimeConnection == .connected || shouldExpand {
+                    Button {
+                        evidenceDisclosure.toggle()
+                    } label: {
+                        Image(systemName: evidenceDisclosure ? "chevron.up" : "info.circle")
+                            .font(.caption.weight(.semibold))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(evidenceDisclosure ? "Hide status evidence" : "Show status evidence")
+                    .accessibilityIdentifier("session-runtime-evidence-toggle")
+                }
             }
-            if let tail = detail.runtimeTailLine, !typeSize.isAccessibilitySize {
-                // A command is identified by its start; streaming text by its
-                // end. Truncate whichever side carries less.
-                Text(tail)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(tail.hasPrefix("$ ") ? .tail : .head)
-                    .padding(.leading, ActivityStrip.size.width + 8)
-                    .accessibilityIdentifier("session-runtime-tail")
+            if shouldExpand || evidenceDisclosure || noticeIsVisible {
+                evidenceContext(state: state)
+                    .transition(reduceMotion ? .identity : .opacity)
             }
         }
     }
+    private var shouldExpand: Bool {
+        ledger(asOf: evidenceNow) == .uncertain
+            || detail.activePauseRequest != nil
+            || detail.stateFacts.pendingInteractionKind != nil
+            || ["offline", "stale"].contains(detail.runtimeDisplay.hostState)
+            || detail.controlBlock.isFault
+            || detail.isTranscriptSyncing
+    }
 
-    private var launchSetupLine: some View {
-        HStack(spacing: 8) {
-            ActivityStrip(store: activity, tone: RuntimeSignal.live.color)
-            Text(detail.launchSetupStatusLabel)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
+    private func statusGlyph(for state: SessionLedgerEvidence) -> String {
+        switch state {
+        case .working: return "bolt.fill"
+        case .attention: return "hand.raised.fill"
+        case .uncertain: return "questionmark.circle"
+        case .quiet: return "circle"
         }
     }
 
-    private var headlineColor: Color {
+    private func connectionLabel(for state: SessionLedgerEvidence) -> String? {
+        switch realtimeConnection {
+        case .connected:
+            return "Updates connected"
+        case .connecting:
+            return "Updates connecting"
+        case .disconnected:
+            return state == .uncertain ? "Updates disconnected" : nil
+        }
+    }
+
+    private func headline(for state: SessionLedgerEvidence) -> String {
+        switch state {
+        case .uncertain: return "Activity uncertain"
+        default: return detail.runtimeHeadline
+        }
+    }
+    private func tone(for state: SessionLedgerEvidence) -> Color {
+        state == .uncertain ? Color.secondary : style.dot.color
+    }
+
+    private func headlineColor(for state: SessionLedgerEvidence) -> Color {
+        if state == .uncertain { return .secondary }
         switch style.dot {
         case .attention: return TranscriptPalette.attention
         case .live: return .primary
@@ -118,30 +262,96 @@ struct SessionRuntimeDock: View {
         }
     }
 
-    // Executing: a precise count that ticks once a second — the cheapest honest
-    // "still alive" there is. Otherwise a coarse age, and no ticking.
+
+    private func evidenceContext(state: SessionLedgerEvidence) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if noticeIsVisible, let notice {
+                Text(notice == .finished ? "Turn finished" : "Activity evidence restored")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: state == .uncertain ? "questionmark.circle" : "antenna.radiowaves.left.and.right")
+                    .font(.caption)
+                Text(evidenceLabel(state))
+                    .font(.caption.weight(.medium))
+            }
+            .foregroundStyle(.secondary)
+            if detail.controlBlock.isFault, let message = detail.controlHealthMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
+            }
+            if detail.isTranscriptSyncing {
+                Text("Transcript is catching up with the session.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
+            }
+            if evidenceDisclosure, let tail = detail.runtimeTailLine, !typeSize.isAccessibilitySize {
+                Text(tail)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+                    .truncationMode(tail.hasPrefix("$ ") ? .tail : .head)
+                    .accessibilityIdentifier("session-runtime-tail")
+            }
+            if evidenceDisclosure {
+                elapsed(asOf: evidenceNow, state: state)
+                capabilityChip
+            }
+        }
+        .padding(.leading, 24)
+    }
+
+    private func evidenceLabel(_ state: SessionLedgerEvidence) -> String {
+        switch realtimeConnection {
+        case .connected:
+            if state == .uncertain {
+                return "The update connection is healthy, but current provider activity is unconfirmed."
+            }
+            return "Updates connected"
+        case .connecting:
+            return "Updates connecting"
+        case .disconnected:
+            if state == .uncertain {
+                return "Updates disconnected; the agent may still be running"
+            }
+            return "Updates disconnected"
+        }
+    }
+
+    private var launchSetupLine: some View {
+        HStack(spacing: 8) {
+            ActivityStrip(store: activity, tone: RuntimeSignal.live.color, evidenceLive: false)
+            Text(detail.launchSetupStatusLabel)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+        }
+    }
+
+    // Executing: a precise count while server evidence is valid. Once it
+    // expires, the count freezes rather than following a wall-clock timer.
     @ViewBuilder
-    private var elapsed: some View {
+    private func elapsed(asOf now: Date, state: SessionLedgerEvidence) -> some View {
         if let start = elapsedStart {
-            let evidenceLive = detail.stateFacts.activityEvidenceIsLive()
-            let ticking = isExecuting && evidenceLive
-            if ticking {
-                // The schedule outlives the facts that started it: once the
-                // evidence window passes with no new frame, the count freezes
-                // there instead of following the wall clock into a wedge.
-                let validUntil = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse)
+            let validUntil = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse)
+            let live = evidenceIsLive(asOf: now)
+            if live {
                 SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
                     let end = validUntil.map { min($0, context.date) } ?? context.date
-                    elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true))
+                    elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true), state: state)
                 }
             } else {
-                let end = (isExecuting ? detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) : nil) ?? Date()
-                elapsedText(RuntimeElapsed.label(from: start, to: end, precise: isExecuting))
+                let end = (isExecuting ? validUntil : nil) ?? now
+                elapsedText(RuntimeElapsed.label(from: start, to: end, precise: isExecuting), state: state)
             }
         }
     }
 
-    private func elapsedText(_ label: String) -> some View {
+    private func elapsedText(_ label: String, state: SessionLedgerEvidence) -> some View {
         Text(label)
             .font(.subheadline)
             .monospacedDigit()
@@ -150,9 +360,6 @@ struct SessionRuntimeDock: View {
             .accessibilityIdentifier("session-runtime-elapsed")
     }
 
-    // Absent while control is live. The server declines to emit a label when
-    // the primary already carries the story; the client declines to repeat
-    // "Live control" beside a composer that is plainly enabled.
     @ViewBuilder
     private var capabilityChip: some View {
         if style.capability != .live, let label = detail.runtimeCapabilityLabel {
@@ -174,16 +381,20 @@ struct SessionRuntimeDock: View {
     }
 
     private var accessibilityLabel: String {
-        if detail.canDraftBeforeSendReady {
-            return detail.launchSetupStatusLabel
-        }
-        var parts = [detail.runtimeHeadline]
+        let state = ledger(asOf: evidenceNow)
+        if detail.canDraftBeforeSendReady { return detail.launchSetupStatusLabel }
+        var parts = [headline(for: state)]
         if let start = elapsedStart {
-            parts.append(RuntimeElapsed.label(from: start, to: Date(), precise: isExecuting))
+            let end = (isExecuting ? detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) : nil) ?? evidenceNow
+            parts.append(RuntimeElapsed.label(from: start, to: end, precise: isExecuting))
         }
         if let detailLabel = detail.runtimeDetail { parts.append(detailLabel) }
         if style.capability != .live, let label = detail.runtimeCapabilityLabel { parts.append(label) }
-        if let tail = detail.runtimeTailLine { parts.append(tail) }
+        if let connectionLabel = connectionLabel(for: state) { parts.append(connectionLabel) }
+        if state == .uncertain { parts.append(evidenceLabel(state)) }
+        if noticeIsVisible, let notice {
+            parts.append(notice == .finished ? "Turn finished" : "Activity evidence restored")
+        }
         return parts.joined(separator: ", ")
     }
 }

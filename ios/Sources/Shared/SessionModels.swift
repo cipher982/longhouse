@@ -43,6 +43,46 @@ extension SessionStateFacts {
         return now <= expiresAt
     }
 }
+/// Connection state belongs to the viewer's workspace stream, not the provider.
+/// A connected stream only means updates can arrive; it is never provider
+/// liveness or host reachability evidence.
+enum SessionRealtimeConnection: Equatable, Sendable {
+    case connecting
+    case connected
+    case disconnected
+}
+
+/// Semantic state used by the native Ledger renderer. Provider activity and
+/// expiry remain server-owned; the stream state only qualifies what the viewer
+/// can currently know.
+enum SessionLedgerEvidence: Equatable, Sendable {
+    case working
+    case attention
+    case quiet
+    case uncertain
+}
+
+extension SessionStateFacts {
+    func ledgerEvidence(
+        connection: SessionRealtimeConnection,
+        hasPendingInteraction: Bool = false,
+        asOf now: Date = Date()
+    ) -> SessionLedgerEvidence {
+        if hasPendingInteraction || pendingInteractionKind != nil {
+            return .attention
+        }
+        guard ["thinking", "executing"].contains(activityState) else { return .quiet }
+        guard activityEvidenceIsLive(asOf: now) else { return .uncertain }
+        switch connection {
+        case .disconnected:
+            return .uncertain
+        case .connecting, .connected:
+            return .working
+        }
+    }
+}
+
+
 
 struct SessionStateFacts: Hashable, Codable, Sendable {
     let contractVersion: Int
@@ -1213,6 +1253,25 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var withoutTranscriptPreview: SessionDetail {
         replacingTranscriptPreview(nil)
+    }
+}
+
+extension SessionDetail {
+    func ledgerEvidence(
+        connection: SessionRealtimeConnection,
+        asOf now: Date = Date()
+    ) -> SessionLedgerEvidence {
+        guard !isClosed else { return .quiet }
+        let base = stateFacts.ledgerEvidence(
+            connection: connection,
+            hasPendingInteraction: activePauseRequest != nil,
+            asOf: now
+        )
+        if base == .attention { return base }
+        if ["offline", "stale"].contains(runtimeDisplay.hostState) {
+            return .uncertain
+        }
+        return base
     }
 }
 

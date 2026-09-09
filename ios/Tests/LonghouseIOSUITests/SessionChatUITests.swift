@@ -169,6 +169,10 @@ final class SessionChatUITests: XCTestCase {
         assertAnchoredAboveBottomChrome(currentLastMessage, app: app)
         assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
+        let frame = XCTAttachment(screenshot: app.screenshot())
+        frame.name = "ledger-keyboard-draft"
+        frame.lifetime = .keepAlways
+        add(frame)
     }
 
     func testAssistantUpdateKeepsPinnedTranscriptAtBottom() {

@@ -20,7 +20,7 @@ if (!option("--capture"))
     "--capture is required (private JSON from make capture-live-status)",
   );
 const url = option("--url", "http://127.0.0.1:47213/live-status-lab.html");
-const surface = option("--surface", "island");
+const surface = option("--surface", "ledger");
 const output = resolve(
   option(
     "--output",
@@ -144,7 +144,7 @@ async function recordMorph(
       const deadline = performance.now() + end - start + 5000;
       while (performance.now() < deadline) {
         const app = document.querySelector(".lab-app")!;
-        const ribbon = document.querySelector(".lwr-ribbon")!;
+        const ribbon = document.querySelector(".session-ledger")!;
         const box = ribbon.getBoundingClientRect();
         const input = document
           .querySelector("#lab-draft")!
@@ -160,7 +160,7 @@ async function recordMorph(
           visualTop: box.top + insetTop,
           visualHeight: box.height - insetTop - insetBottom,
           copyOpacity: getComputedStyle(
-            document.querySelector(".lwr-context-copy")!,
+            document.querySelector(".session-ledger__context-inner")!,
           ).opacity,
           draftX: input.x,
           draftY: input.y,

@@ -11,6 +11,9 @@ import SwiftUI
 struct ActivityStrip: View {
     @ObservedObject var store: ActivityPulseStore
     let tone: Color
+    /// Provider work evidence gates painting. Viewer receipts may continue
+    /// arriving after the server's activity window, but they are not work.
+    var evidenceLive: Bool = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// True from the newest frame until it leaves the window. The 30 fps
@@ -23,18 +26,26 @@ struct ActivityStrip: View {
     static let size = CGSize(width: 32, height: 14)
 
     var body: some View {
-        SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !drifting || holdStill)) { context in
-            Canvas(rendersAsynchronously: false) { ctx, size in
-                // With drift paused the schedule date is stale; bars still need
-                // to sit where they belong the moment a new frame lands or the
-                // last one expires.
-                draw(in: &ctx, size: size, now: (drifting && !holdStill) ? context.date : Date())
+        Group {
+            if evidenceLive {
+                SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !drifting || holdStill)) { context in
+                    Canvas(rendersAsynchronously: false) { ctx, size in
+                        // With drift paused the schedule date is stale; bars still need
+                        // to sit where they belong the moment a new frame lands or the
+                        // last one expires.
+                        draw(in: &ctx, size: size, now: (drifting && !holdStill) ? context.date : Date())
+                    }
+                }
+            } else {
+                Canvas(rendersAsynchronously: false) { ctx, size in
+                    draw(in: &ctx, size: size, now: Date(), includePulses: false)
+                }
             }
         }
         .frame(width: Self.size.width, height: Self.size.height)
         .accessibilityHidden(true)
-        .task(id: store.pulses.last?.at) {
-            guard let last = store.pulses.last else {
+        .task(id: "\(store.pulses.last?.at.timeIntervalSince1970 ?? 0)-\(evidenceLive)") {
+            guard evidenceLive, let last = store.pulses.last else {
                 drifting = false
                 return
             }
@@ -49,7 +60,7 @@ struct ActivityStrip: View {
         }
     }
 
-    private func draw(in ctx: inout GraphicsContext, size: CGSize, now: Date) {
+    private func draw(in ctx: inout GraphicsContext, size: CGSize, now: Date, includePulses: Bool = true) {
         let window = ActivityPulseStore.window
         let baseY = size.height - 1
         let barWidth: CGFloat = 2
@@ -60,6 +71,7 @@ struct ActivityStrip: View {
             with: .color(tone.opacity(0.28))
         )
 
+        guard includePulses else { return }
         for pulse in store.pulses.reversed() {
             let age = now.timeIntervalSince(pulse.at)
             if age < 0 { continue }

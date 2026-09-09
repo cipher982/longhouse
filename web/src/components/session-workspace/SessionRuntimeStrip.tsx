@@ -1,15 +1,17 @@
-import { useRef } from "react";
-import type { AgentSession, SessionTranscriptPreview } from "../../services/api/agents";
+import { useEffect, useRef, useState } from "react";
+import type { AgentSession } from "../../services/api/agents";
 import type { SessionInteractionCapabilities } from "../../lib/sessionWorkspace";
 import type { SessionActivityFeed } from "../../lib/sessionActivityFeed";
-import { ActivityStrip, type ActivityStripTone } from "./ActivityStrip";
 import { useWallClock } from "../../hooks/useWallClock";
+import { activityEvidenceIsLive } from "../../lib/activityEvidence";
+import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
 import {
   getRuntimeDisplayCopy,
   getRuntimeMetaLabel,
   getRuntimeOutcomeLabel,
 } from "../../lib/sessionUtils";
-import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
+import { SessionLedger, type SessionLedgerState } from "./SessionLedger";
+import "./SessionLedger.css";
 
 interface SessionRuntimeStripProps {
   session: AgentSession;
@@ -22,74 +24,116 @@ interface SessionRuntimeStripProps {
   testId?: string;
   /** Per-frame stream feed; absent when the caller has no live stream. */
   activityFeed?: SessionActivityFeed | null;
+  /** Viewer subscription state from the existing workspace stream. */
+  streamConnected?: boolean;
 }
 
-const TAIL_MAX_CHARS = 160;
+/** Build Ledger copy strictly from canonical facts plus the viewer's stream evidence. */
+export function buildSessionLedgerState(
+  session: AgentSession,
+  interaction: SessionRuntimeStripProps["interaction"],
+  nowMs: number,
+  streamConnected: boolean,
+  activityFeed: SessionActivityFeed | null = null,
+): SessionLedgerState {
+  const runtime = resolveSessionRuntimeState(session);
+  const facts = runtime.stateFacts;
+  const display = getRuntimeDisplayCopy(runtime);
+  const evidenceLive = activityEvidenceIsLive(facts.activity, nowMs);
+  const pending = facts.pending_interaction != null;
+  const rawProviderWorking =
+    facts.activity.state === "thinking" || facts.activity.state === "executing";
+  const openSession = facts.working_set === "open";
+  const hostConcern =
+    openSession &&
+    (facts.host.state === "offline" || facts.host.state === "stale");
+  const transcriptConcern =
+    openSession && facts.transcript.convergence === "lagging";
+  const providerWorking = evidenceLive && rawProviderWorking;
+  const viewerNeedsDisclosure =
+    (!streamConnected &&
+      (rawProviderWorking ||
+        pending ||
+        facts.activity.state === "blocked" ||
+        facts.activity.state === "stalled")) ||
+    hostConcern ||
+    transcriptConcern ||
+    (rawProviderWorking && !evidenceLive);
+  const tone: SessionLedgerState["tone"] = pending
+    ? "attention"
+    : viewerNeedsDisclosure
+      ? "unknown"
+      : evidenceLive &&
+          (runtime.tone === "blocked" || runtime.tone === "stalled")
+        ? "attention"
+        : providerWorking
+          ? "working"
+          : rawProviderWorking && !evidenceLive
+            ? "unknown"
+            : "quiet";
+  const headline = pending
+    ? "Needs your response"
+    : tone === "unknown"
+      ? "Work status unconfirmed"
+      : interaction.isManagedLocalSession
+        ? display.headline
+        : getRuntimeOutcomeLabel(runtime);
+  const detail = pending
+    ? "A response is required before another message."
+    : tone === "unknown"
+      ? hostConcern
+        ? `Host is ${facts.host.state}; the agent may still be running.`
+        : transcriptConcern
+          ? "Transcript is lagging the observed session state."
+          : `Last reported: ${display.headline}.`
+      : display.detail;
+  const connection: SessionLedgerState["connection"] = streamConnected
+    ? "connected"
+    : tone === "unknown" || tone === "attention"
+      ? "reconnecting"
+      : "recorded";
+  const observation = streamConnected
+    ? pending
+      ? "Updates connected · waiting for your response"
+      : hostConcern
+        ? `Updates connected · host is ${facts.host.state}`
+        : transcriptConcern
+          ? "Updates connected · transcript is lagging"
+          : tone === "working"
+            ? "Updates connected · provider evidence is still valid"
+            : "Updates connected · provider work is not asserted"
+    : tone === "unknown"
+      ? "Updates disconnected · the agent may still be running"
+      : "Saved session state · no live updates claimed";
+  const primary = facts.presentation.primary;
+  const host = facts.host;
+  const runtimeMeta = getRuntimeMetaLabel(runtime, nowMs);
+  return {
+    tone,
+    headline,
+    detail,
+    detailKind: "explanation",
+    observation,
+    connection,
+    animateWork: tone === "working" && providerWorking && streamConnected,
+    outputAgeSeconds: null,
+    heartbeatAgeMs: activityFeed?.heartbeatAgeMs() ?? null,
 
-function parseIsoMs(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? null : parsed;
-}
-
-/**
- * "31s" while a turn is live so the number itself reads as a heartbeat;
- * "4m" / "2h" once the session has gone quiet and seconds stop mattering.
- */
-function formatElapsed(ms: number, fine: boolean): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (fine) {
-    if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-    if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-    return `${seconds}s`;
-  }
-  if (hours >= 24) return `${Math.floor(hours / 24)}d`;
-  if (hours > 0) return `${hours}h`;
-  if (minutes > 0) return `${minutes}m`;
-  return "now";
-}
-
-function lastLine(text: string | null | undefined): string | null {
-  if (!text) return null;
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  const line = lines.at(-1);
-  if (!line) return null;
-  return line.length > TAIL_MAX_CHARS ? line.slice(line.length - TAIL_MAX_CHARS) : line;
-}
-
-function extractCommand(input: unknown): string | null {
-  let value = input;
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-  if (value && typeof value === "object" && "command" in value) {
-    const command = (value as { command?: unknown }).command;
-    if (typeof command === "string" && command.trim()) {
-      return command.replace(/\s+/g, " ").trim();
-    }
-  }
-  return null;
-}
-
-/** The newest thing the agent is doing, as one mono line. */
-function tailFromPreview(preview: SessionTranscriptPreview): string | null {
-  if (preview.tool_name && preview.tool_call_state === "running") {
-    const command = extractCommand(preview.tool_input_json);
-    if (command) return `$ ${command}`;
-    const output = lastLine(preview.tool_output_text);
-    if (output) return output;
-  }
-  return lastLine(preview.text);
+    receiptMarks: [],
+    facts: [
+      {
+        label: "Provider evidence",
+        value: `${primary?.label ?? "Activity unknown"} · ${facts.activity.state}; valid until ${facts.activity.valid_until ?? "not bounded"}`,
+      },
+      {
+        label: "Host",
+        value: `${host.state} · observed ${host.observed_at ?? "not recorded"}`,
+      },
+      { label: "Transcript", value: facts.transcript.convergence },
+      { label: "Control", value: interaction.capabilityLabel },
+      ...(runtimeMeta ? [{ label: "Runtime", value: runtimeMeta }] : []),
+    ],
+  };
 }
 
 export function SessionRuntimeStrip({
@@ -99,145 +143,78 @@ export function SessionRuntimeStrip({
   variant = "inline",
   testId,
   activityFeed = null,
+  streamConnected = false,
 }: SessionRuntimeStripProps) {
-  const runtime = resolveSessionRuntimeState(session);
-  const facts = runtime.stateFacts;
-  const runtimeDisplay = getRuntimeDisplayCopy(runtime);
-  const headline = interaction.isManagedLocalSession
-    ? runtimeDisplay.headline
-    : getRuntimeOutcomeLabel(runtime);
-  const runtimeDetail = interaction.isManagedLocalSession ? runtimeDisplay.detail : null;
-  const runtimeMeta = getRuntimeMetaLabel(runtime);
-  const isClosed = facts.disposition.state === "closed";
-
-  const attention = runtime.tone === "blocked" || runtime.tone === "stalled";
-  const stripTone: ActivityStripTone =
-    runtime.isExecuting || runtime.tone === "active"
-      ? "live"
-      : attention
-        ? "attention"
-        : "idle";
-  // Seconds only while a turn is live or waiting on the user; a quiet session
-  // ticks once a minute so the whole page is not re-rendered for a number.
-  const fine = runtime.isExecuting || attention;
-  const nowMs = useWallClock(!isClosed, fine ? 1_000 : 60_000);
-
-  // The primary label's observed_at can refresh with every provisional delta
-  // on a streaming provider. Anchor the counter on the earliest observation
-  // for the current label+tool so it counts up instead of resetting.
-  const primary = facts.presentation.primary ?? null;
-  const observedAtMs = parseIsoMs(primary?.observed_at ?? facts.activity.observed_at);
-  const anchorKey = `${session.id}:${primary?.key ?? ""}:${facts.activity.tool ?? ""}:${facts.activity.state}`;
-  const anchorRef = useRef<{ key: string; startMs: number } | null>(null);
-  if (observedAtMs !== null) {
-    const current = anchorRef.current;
-    anchorRef.current =
-      current && current.key === anchorKey
-        ? { key: anchorKey, startMs: Math.min(current.startMs, observedAtMs) }
-        : { key: anchorKey, startMs: observedAtMs };
-  } else if (anchorRef.current && anchorRef.current.key !== anchorKey) {
-    anchorRef.current = null;
-  }
-  const validUntilMs = parseIsoMs(facts.activity.valid_until);
-  const elapsedEndMs = fine && validUntilMs !== null && nowMs > validUntilMs ? validUntilMs : nowMs;
-  const elapsedLabel =
-    anchorRef.current && !isClosed
-      ? formatElapsed(elapsedEndMs - anchorRef.current.startMs, fine)
-      : null;
-
-  const preview = session.transcript_preview ?? null;
-  const tail = runtime.isExecuting && preview && !preview.is_stale ? tailFromPreview(preview) : null;
-
-  // An enabled composer already proves control is live. The label earns its
-  // pixels only when something is off: offline, reconnecting, observe-only.
-  const showCapabilityChip = interaction.mode !== "managed_local";
-  const capabilityChipTone =
-    interaction.mode === "managed_local_unavailable" ? "warning" : "neutral";
-
-  const stripTitle =
-    runtime.presenceState === "running" && runtime.presenceTool
-      ? `Running: ${runtime.presenceTool}`
-      : runtime.presenceState === "blocked" && runtime.presenceTool
-        ? `Blocked: ${runtime.presenceTool}`
-        : headline;
-
-  const metaParts = [
-    runtimeMeta && runtimeMeta !== "Live on host"
-      ? { key: "runtime", label: runtimeMeta, className: null }
-      : null,
-    startedLabel
-      ? { key: "started", label: startedLabel, className: "session-runtime-strip__started" }
-      : null,
-  ].filter((part): part is { key: string; label: string; className: string | null } => part != null);
-  const showMeta = showCapabilityChip || metaParts.length > 0;
-
+  const closed = session.session_state.disposition.state === "closed";
+  const nowMs = useWallClock(!closed, 1_000);
+  const state = buildSessionLedgerState(
+    session,
+    interaction,
+    nowMs,
+    streamConnected,
+    activityFeed,
+  );
+  const previousTransitionRef = useRef<{
+    sessionId: string;
+    tone: SessionLedgerState["tone"];
+    resultAt: string | null | undefined;
+  } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    const resultAt = session.session_state.last_result_at;
+    const previous = previousTransitionRef.current;
+    let nextNotice: string | null = null;
+    if (previous && previous.sessionId === session.id) {
+      if (resultAt && resultAt !== previous.resultAt) {
+        const outcome = session.session_state.last_result_outcome;
+        nextNotice = outcome ? `Turn ended · ${outcome}.` : "Turn ended.";
+      } else if (
+        previous.tone === "unknown" &&
+        state.tone === "working" &&
+        streamConnected
+      ) {
+        nextNotice = "Fresh provider evidence restored.";
+      }
+    }
+    previousTransitionRef.current = {
+      sessionId: session.id,
+      tone: state.tone,
+      resultAt,
+    };
+    setNotice(nextNotice);
+  }, [
+    session.id,
+    session.session_state.last_result_at,
+    session.session_state.last_result_outcome,
+    state.tone,
+    streamConnected,
+  ]);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   return (
     <div
-      className={[
-        "session-runtime-strip",
-        `session-runtime-strip--${variant}`,
-        `session-runtime-strip--tone-${runtime.tone}`,
-        interaction.isManagedLocalSession
-          ? "session-runtime-strip--managed"
-          : "session-runtime-strip--unmanaged",
-      ].join(" ")}
+      className={`session-runtime-strip session-runtime-strip--${variant} session-runtime-strip--tone-${state.tone}`}
       data-testid={testId}
-      data-strip-tone={stripTone}
+      data-strip-tone={
+        state.tone === "working"
+          ? "live"
+          : state.tone === "attention"
+            ? "attention"
+            : "idle"
+      }
+      data-stream-connected={streamConnected ? "true" : "false"}
+      data-started-label={startedLabel ?? undefined}
     >
-      <div className="session-runtime-strip__presence">
-        <ActivityStrip
-          feed={activityFeed}
-          tone={stripTone}
-          label={`Activity: ${headline}`}
-          title={stripTitle}
-        />
-        <div className="session-runtime-strip__copy">
-          <span className="session-runtime-strip__headline">{headline}</span>
-          {elapsedLabel ? (
-            <span
-              className="session-runtime-strip__elapsed"
-              data-testid="session-runtime-elapsed"
-              aria-label={`Elapsed ${elapsedLabel}`}
-            >
-              {elapsedLabel}
-            </span>
-          ) : null}
-          {runtimeDetail ? (
-            <span className="session-runtime-strip__detail">{runtimeDetail}</span>
-          ) : null}
-        </div>
-      </div>
-      {tail ? (
-        <div className="session-runtime-strip__tail" data-testid="session-runtime-tail" title={tail}>
-          <bdi>{tail}</bdi>
-        </div>
-      ) : null}
-      {showMeta ? (
-        <div className="session-runtime-strip__meta">
-          {showCapabilityChip ? (
-            <span
-              className={`session-runtime-strip__chip session-runtime-strip__chip--${capabilityChipTone}`}
-              data-testid="session-capability-chip"
-            >
-              {interaction.capabilityLabel}
-            </span>
-          ) : null}
-          {metaParts.map((part, index) => (
-            <span key={part.key} className="session-runtime-strip__meta-item">
-              {index > 0 || showCapabilityChip ? (
-                <span
-                  className="session-runtime-strip__meta-separator"
-                  aria-hidden="true"
-                >
-                  {" "}
-                  •{" "}
-                </span>
-              ) : null}
-              <span className={part.className ?? undefined}>{part.label}</span>
-            </span>
-          ))}
-        </div>
-      ) : null}
+      <SessionLedger
+        state={state}
+        surface="ledger"
+        notice={notice}
+        activityFeed={activityFeed}
+        testId="live-work-ribbon"
+      />
     </div>
   );
 }

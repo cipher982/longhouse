@@ -46,8 +46,25 @@ const MAX_FRAMES = 400;
  * update is bookkeeping and draws nothing (null).
  */
 export function classifyWorkspaceChange(
-  change: Pick<SessionWorkspaceStreamChange, "transcript_preview"> & { change_kind?: string | null },
+  change: Pick<SessionWorkspaceStreamChange, "transcript_preview"> &
+    Partial<
+      Pick<SessionWorkspaceStreamChange, "latest_event_id" | "pubsub_seq">
+    > & {
+      change_kind?: string | null;
+    },
 ): ActivityFrameKind | null {
+  const hasStreamCoordinate =
+    Object.prototype.hasOwnProperty.call(change, "latest_event_id") ||
+    Object.prototype.hasOwnProperty.call(change, "pubsub_seq");
+  if (
+    hasStreamCoordinate &&
+    !change.change_kind &&
+    (change.latest_event_id ?? 0) === 0 &&
+    (change.pubsub_seq ?? 0) === 0 &&
+    !change.transcript_preview
+  ) {
+    return null;
+  }
   const preview = change.transcript_preview;
   if (!preview) {
     switch (change.change_kind) {
@@ -71,7 +88,8 @@ export function classifyWorkspaceChange(
 type ActivityListener = (frame: ActivityFrame | null) => void;
 
 function monotonicNow(): number {
-  return typeof performance !== "undefined" && typeof performance.now === "function"
+  return typeof performance !== "undefined" &&
+    typeof performance.now === "function"
     ? performance.now()
     : Date.now();
 }
@@ -80,6 +98,7 @@ export class SessionActivityFeed {
   private frames: ActivityFrame[] = [];
   private readonly listeners = new Set<ActivityListener>();
   private readonly now: () => number;
+  private heartbeatAt: number | null = null;
 
   constructor(now: () => number = monotonicNow) {
     this.now = now;
@@ -97,6 +116,20 @@ export class SessionActivityFeed {
     return frame;
   }
 
+  /** Records a viewer heartbeat without presenting it as provider progress. */
+  markHeartbeat(at: number = this.now()): void {
+    this.heartbeatAt = at;
+    for (const listener of this.listeners) {
+      listener(null);
+    }
+  }
+
+  heartbeatAgeMs(now: number = this.now()): number | null {
+    return this.heartbeatAt === null
+      ? null
+      : Math.max(0, now - this.heartbeatAt);
+  }
+
   subscribe(listener: ActivityListener): () => void {
     this.listeners.add(listener);
     return () => {
@@ -112,6 +145,7 @@ export class SessionActivityFeed {
   /** Drops every frame and wakes subscribers so a strip repaints empty. */
   reset(): void {
     this.frames = [];
+    this.heartbeatAt = null;
     for (const listener of this.listeners) {
       listener(null);
     }

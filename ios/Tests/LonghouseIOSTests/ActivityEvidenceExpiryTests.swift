@@ -48,4 +48,33 @@ struct ActivityEvidenceExpiryTests {
         #expect(facts.activityEvidenceIsLive(asOf: at("2026-08-23T12:09:00Z")))
         #expect(!facts.activityEvidenceIsLive(asOf: at("2026-08-23T12:11:00Z")))
     }
+
+    @Test
+    func ledgerStopsWorkAtExpiryEvenWhenViewerIsConnected() {
+        let facts = makeSessionStateFacts(
+            activity: "executing",
+            activityValidUntil: "2026-08-23T12:10:00Z"
+        )
+        #expect(
+            facts.ledgerEvidence(
+                connection: .connected,
+                asOf: at("2026-08-23T12:11:00Z")
+            ) == .uncertain
+        )
+    }
+
+    @Test
+    func pendingInteractionKeepsAttentionAboveTransportState() {
+        let facts = makeSessionStateFacts(
+            activity: "executing",
+            pendingInteractionKind: "approval",
+            activityValidUntil: "2026-08-23T12:10:00Z"
+        )
+        #expect(
+            facts.ledgerEvidence(
+                connection: .disconnected,
+                asOf: at("2026-08-23T12:11:00Z")
+            ) == .attention
+        )
+    }
 }

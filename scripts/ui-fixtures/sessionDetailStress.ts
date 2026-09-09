@@ -107,8 +107,8 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
   const available = { state: "available" };
   const notApplicable = { state: "unavailable", reason: "not_applicable" };
   return {
-    state_contract_version: 1,
-    presentation_policy_version: 1,
+    state_contract_version: 2,
+    presentation_policy_version: 2,
     mode: "helm",
     disposition: { state: "open", closed_at: null, close_reason: null },
     run: { lifecycle: "running", started_at: "2026-04-15T15:15:00Z", ended_at: null },
@@ -128,6 +128,8 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
         terminate: available,
         reattach: notApplicable,
         resume: notApplicable,
+        start_turn: notApplicable,
+        branch: notApplicable,
       },
     },
     pending_interaction: null,
@@ -292,6 +294,8 @@ export function buildSessionDetailStressFixture(): {
           terminate: { state: "unavailable", reason: "closed" },
           reattach: { state: "unavailable", reason: "closed" },
           resume: { state: "unavailable", reason: "closed" },
+          start_turn: { state: "unavailable", reason: "closed" },
+          branch: { state: "unavailable", reason: "closed" },
         },
       },
       presentation: {

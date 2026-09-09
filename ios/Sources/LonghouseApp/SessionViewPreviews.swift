@@ -214,6 +214,7 @@ private struct SessionScreenPreview: View {
         "The restore has reached 9.2 GB and remains healthy.",
         "Checksums so far match the manifest; continuing with the exact restore.",
     ]
+    var connection: SessionRealtimeConnection = .connected
     @State private var text = ""
 
     var body: some View {
@@ -229,7 +230,7 @@ private struct SessionScreenPreview: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
-                    SessionRuntimeDock(detail: detail, activity: activity)
+                    SessionRuntimeDock(detail: detail, activity: activity, realtimeConnection: connection)
                     composerRow
                 }
                 .padding(.horizontal, 14)
@@ -398,6 +399,84 @@ private struct PreviewSubtitle: ViewModifier {
         ),
         activity: seededActivity([(9.5, .toolStart)]),
         transcript: ["The cache is stale. I’ll clear it before rebuilding."]
+    )
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Activity expired · connected viewer · Light") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "codex",
+            canSteer: true,
+            canQueue: true,
+            executing: true,
+            placeholder: "Steer this turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "shell",
+                observedAt: isoDate(secondsAgo: 100),
+                validUntil: isoDate(secondsAgo: 10),
+                primaryKey: "executing",
+                primaryLabel: "Using shell",
+                primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            ),
+            transcriptPreviewJSON: toolPreviewJSON(
+                tool: "shell",
+                command: "tail -f /var/log/restore.log"
+            )
+        ),
+        activity: seededActivity([(1.5, .toolStart)]),
+        transcript: ["The restore has not reported a new checkpoint."],
+        connection: .connected
+    )
+    .preferredColorScheme(.light)
+}
+
+#Preview("Ledger · Accessibility text") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "codex", canSteer: true, canQueue: true, executing: true,
+            placeholder: "Steer this turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing", tool: "shell",
+                observedAt: isoDate(secondsAgo: 100), validUntil: isoDate(secondsAgo: 10),
+                primaryKey: "executing", primaryLabel: "Using shell", primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            )
+        ),
+        activity: seededActivity([]),
+        transcript: ["The restore has not reported a new checkpoint."],
+        connection: .connected
+    )
+    .preferredColorScheme(.dark)
+    .environment(\.dynamicTypeSize, .accessibility2)
+}
+
+#Preview("Activity uncertain · stream disconnected · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "claude",
+            executing: true,
+            placeholder: "Queue for next turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "Bash",
+                observedAt: isoDate(secondsAgo: 45),
+                validUntil: isoDate(secondsAgo: -45),
+                primaryKey: "executing",
+                primaryLabel: "Using Bash",
+                primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            ),
+            transcriptPreviewJSON: toolPreviewJSON(
+                tool: "Bash",
+                command: "pg_restore --verbose backups/latest.dump"
+            )
+        ),
+        activity: seededActivity([(2.0, .toolResult)]),
+        transcript: ["The session was working when this viewer lost updates."],
+        connection: .disconnected
     )
     .preferredColorScheme(.dark)
 }

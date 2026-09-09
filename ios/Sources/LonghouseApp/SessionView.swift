@@ -247,7 +247,11 @@ struct SessionView: View {
     @ViewBuilder
     private var runtimeDock: some View {
         if let detail = viewModel.detail {
-            SessionRuntimeDock(detail: detail, activity: viewModel.activity)
+            SessionRuntimeDock(
+                detail: detail,
+                activity: viewModel.activity,
+                realtimeConnection: viewModel.realtimeConnection
+            )
         }
     }
 

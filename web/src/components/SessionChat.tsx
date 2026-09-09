@@ -6,7 +6,14 @@
  * - Error handling with retry
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelSessionInput,
@@ -20,7 +27,10 @@ import {
   type SessionLockInfo,
 } from "../services/api";
 import type { AgentSession } from "../services/api/agents";
-import type { ManagedLaunchSuggestion, TimelineItem } from "../lib/sessionWorkspace";
+import type {
+  ManagedLaunchSuggestion,
+  TimelineItem,
+} from "../lib/sessionWorkspace";
 import { useComposerAttachments } from "../lib/useComposerAttachments";
 import { Badge, Button } from "./ui";
 import { AttachmentTray } from "./AttachmentTray";
@@ -79,7 +89,10 @@ interface SessionChatProps {
   timelineItems?: TimelineItem[];
 }
 
-export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider" | "capabilities" | "session_state">;
+export type SessionChatTarget = Pick<
+  AgentSession,
+  "id" | "project" | "provider" | "capabilities" | "session_state"
+>;
 
 function newClientRequestId(): string {
   const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
@@ -97,10 +110,16 @@ function timelineHasDurableSubmittedInput(
     if (event.role !== "user" || event.is_head_branch === false) return false;
     const origin = event.input_origin;
     if (!origin || origin.authored_via !== "longhouse") return false;
-    if (pendingInput.serverInputId != null && origin.session_input_id === pendingInput.serverInputId) {
+    if (
+      pendingInput.serverInputId != null &&
+      origin.session_input_id === pendingInput.serverInputId
+    ) {
       return true;
     }
-    return Boolean(origin.client_request_id && origin.client_request_id === pendingInput.clientRequestId);
+    return Boolean(
+      origin.client_request_id &&
+      origin.client_request_id === pendingInput.clientRequestId,
+    );
   });
 }
 
@@ -127,9 +146,14 @@ export function SessionChat({
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
   const isComposerDisabled = Boolean(composerDisabledReason);
-  const attachImagesEnabled = isManagedLocal && Boolean(session.capabilities?.attach_images);
+  const attachImagesEnabled =
+    isManagedLocal && Boolean(session.capabilities?.attach_images);
   const composerAttachments = useComposerAttachments();
-  const showComposerUnavailableState = isComposerDisabled;
+  const hasHadComposer = useRef(false);
+  if (!isComposerDisabled) hasHadComposer.current = true;
+  const retainDockComposer = isDock && hasHadComposer.current;
+  const showComposerUnavailableState =
+    isComposerDisabled && !retainDockComposer;
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -141,7 +165,9 @@ export function SessionChat({
   const [pendingManagedLocalInput, setPendingManagedLocalInput] =
     useState<PendingManagedLocalInput | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const autoResizeDockTextarea = useCallback((el: HTMLTextAreaElement) => {
     el.style.height = "auto";
@@ -152,7 +178,8 @@ export function SessionChat({
 
   useEffect(() => {
     return () => {
-      if (sentConfirmationTimerRef.current) clearTimeout(sentConfirmationTimerRef.current);
+      if (sentConfirmationTimerRef.current)
+        clearTimeout(sentConfirmationTimerRef.current);
     };
   }, []);
 
@@ -169,19 +196,33 @@ export function SessionChat({
   const refreshCurrentSessionWorkspace = useCallback(async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["session-lock", session.id] }),
-      queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", session.id] }),
-      queryClient.invalidateQueries({ queryKey: ["agent-session", session.id] }),
-      queryClient.invalidateQueries({ queryKey: ["agent-session-thread", session.id] }),
-      queryClient.invalidateQueries({ queryKey: ["agent-session-projection-infinite", session.id] }),
-      queryClient.invalidateQueries({ queryKey: ["agent-session-events", session.id] }),
-      queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", session.id] }),
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session-workspace", session.id],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session", session.id],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session-thread", session.id],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session-projection-infinite", session.id],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session-events", session.id],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session-events-infinite", session.id],
+      }),
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] }),
     ]);
   }, [queryClient, session.id]);
 
   useEffect(() => {
     if (!pendingManagedLocalInput || !timelineItems) return;
-    if (timelineHasDurableSubmittedInput(timelineItems, pendingManagedLocalInput)) {
+    if (
+      timelineHasDurableSubmittedInput(timelineItems, pendingManagedLocalInput)
+    ) {
       setPendingManagedLocalInput(null);
     }
   }, [pendingManagedLocalInput, timelineItems]);
@@ -228,7 +269,9 @@ export function SessionChat({
     // Poll while any row is queued/delivering so the UI sees drain progress.
     refetchInterval: (query) => {
       const rows = query.state.data ?? [];
-      return rows.some((r) => r.status === "queued" || r.status === "delivering")
+      return rows.some(
+        (r) => r.status === "queued" || r.status === "delivering",
+      )
         ? 2_000
         : false;
     },
@@ -243,7 +286,9 @@ export function SessionChat({
   // duplicate red "failed" chip afterward reads like a second unrelated
   // system failure.
   const failedInputs = queuedInputs.filter(
-    (row) => row.status === "failed" && !(row.intent === "steer" && row.last_error === "turn_ended"),
+    (row) =>
+      row.status === "failed" &&
+      !(row.intent === "steer" && row.last_error === "turn_ended"),
   );
   const queueFull = activeQueuedInputs.length >= 5;
 
@@ -290,16 +335,23 @@ export function SessionChat({
         setTurnEndedDraft(null);
 
         if (result.outcome === "sent") {
-          queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
-            locked: true,
-            holder: null,
-            time_remaining_seconds: null,
-            fork_available: true,
-          });
+          queryClient.setQueryData<SessionLockInfo | null>(
+            ["session-lock", session.id],
+            {
+              locked: true,
+              holder: null,
+              time_remaining_seconds: null,
+              fork_available: true,
+            },
+          );
 
-          if (sentConfirmationTimerRef.current) clearTimeout(sentConfirmationTimerRef.current);
+          if (sentConfirmationTimerRef.current)
+            clearTimeout(sentConfirmationTimerRef.current);
           setSentConfirmation(true);
-          sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
+          sentConfirmationTimerRef.current = setTimeout(
+            () => setSentConfirmation(false),
+            2000,
+          );
 
           void refreshCurrentSessionWorkspace();
           setPendingManagedLocalInput(null);
@@ -327,13 +379,21 @@ export function SessionChat({
 
         // Parse structured backend errors so turn_ended on steer surfaces
         // as an actionable prompt, not a mystery failure.
-        const errorBody = (e as {
-          body?: { detail?: { code?: string; error_code?: string; message?: string } };
-        })?.body;
-        const errorCode = errorBody?.detail?.error_code ?? errorBody?.detail?.code;
+        const errorBody = (
+          e as {
+            body?: {
+              detail?: { code?: string; error_code?: string; message?: string };
+            };
+          }
+        )?.body;
+        const errorCode =
+          errorBody?.detail?.error_code ?? errorBody?.detail?.code;
         if (intent === "steer" && errorCode === "turn_ended") {
           setTurnEndedDraft(message);
-          setError(errorBody?.detail?.message ?? "Active turn ended before your update arrived.");
+          setError(
+            errorBody?.detail?.message ??
+              "Active turn ended before your update arrived.",
+          );
         } else if (persistedFailure) {
           setError(null);
         } else {
@@ -364,38 +424,58 @@ export function SessionChat({
         );
         void queuedInputsQuery.refetch();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not cancel queued input");
+        setError(
+          e instanceof Error ? e.message : "Could not cancel queued input",
+        );
       }
     },
     [queryClient, queuedInputsQuery, session.id],
   );
 
   const handleInterrupt = useCallback(async () => {
-    if (!isManagedLocal || isInterrupting || session.session_state.control.actions.interrupt.state !== "available") return;
+    if (
+      !isManagedLocal ||
+      isInterrupting ||
+      session.session_state.control.actions.interrupt.state !== "available"
+    )
+      return;
     setIsInterrupting(true);
     setError(null);
     try {
       await (session.session_state.mode === "console"
         ? interruptConsoleTurn(session.id)
         : interruptLiveSession(session.id));
-      queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
-        locked: false,
-        holder: null,
-        time_remaining_seconds: null,
-        fork_available: false,
-      });
+      queryClient.setQueryData<SessionLockInfo | null>(
+        ["session-lock", session.id],
+        {
+          locked: false,
+          holder: null,
+          time_remaining_seconds: null,
+          fork_available: false,
+        },
+      );
       await refreshCurrentSessionWorkspace();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not interrupt running turn");
+      setError(
+        e instanceof Error ? e.message : "Could not interrupt running turn",
+      );
     } finally {
       setIsInterrupting(false);
     }
-  }, [isInterrupting, isManagedLocal, queryClient, refreshCurrentSessionWorkspace, session.id, session.session_state]);
+  }, [
+    isInterrupting,
+    isManagedLocal,
+    queryClient,
+    refreshCurrentSessionWorkspace,
+    session.id,
+    session.session_state,
+  ]);
 
   const canSteerNow = isSendLocked && canSteerActiveTurn;
   const canQueueNow = isSendLocked && canQueueNextInput && !queueFull;
   const canInterruptTurn =
-    isManagedLocal && session.session_state.control.actions.interrupt.state === "available";
+    isManagedLocal &&
+    session.session_state.control.actions.interrupt.state === "available";
   const attachmentInputEnabled = attachImagesEnabled && !isSendLocked;
   // Inline interrupt is only offered while a turn is actually running — an
   // idle session has nothing to stop. When the stall-recovery card is showing
@@ -407,16 +487,17 @@ export function SessionChat({
   const primaryIntent: "auto" | "queue" | "steer" = !isSendLocked
     ? "auto"
     : canSteerNow
-    ? "steer"
-    : canQueueNow
-    ? "queue"
-    : "auto";
+      ? "steer"
+      : canQueueNow
+        ? "queue"
+        : "auto";
   // Primary send is blocked when there's no available action.
   const isSendBlocked = isSendLocked && !canSteerNow && !canQueueNow;
   const attachmentSendBlocked =
     composerAttachments.attachments.length > 0 && primaryIntent !== "auto";
   // Attachment-only sends are valid when the route accepts them.
-  const hasComposerContent = Boolean(draft.trim()) || composerAttachments.attachments.length > 0;
+  const hasComposerContent =
+    Boolean(draft.trim()) || composerAttachments.attachments.length > 0;
 
   const handleSend = useCallback(
     async (e: FormEvent) => {
@@ -430,7 +511,9 @@ export function SessionChat({
       if (!message && !hasAttachments) return;
       if (isSubmitting || isComposerDisabled || isSendBlocked) return;
       if (hasAttachments && primaryIntent !== "auto") {
-        setError("Image attachments can only be sent when the session is ready for a new turn.");
+        setError(
+          "Image attachments can only be sent when the session is ready for a new turn.",
+        );
         return;
       }
       // Block send while compression is in flight; the snapshot would miss
@@ -442,9 +525,16 @@ export function SessionChat({
       setBlockedKeyboardSubmit(false);
 
       const attachmentArgs = hasAttachments
-        ? pendingAttachments.map((a) => ({ blob: a.blob, filename: a.filename }))
+        ? pendingAttachments.map((a) => ({
+            blob: a.blob,
+            filename: a.filename,
+          }))
         : [];
-      const sent = await handleManagedLocalSend(message, primaryIntent, attachmentArgs);
+      const sent = await handleManagedLocalSend(
+        message,
+        primaryIntent,
+        attachmentArgs,
+      );
       if (sent) {
         if (hasAttachments) composerAttachments.clear();
       } else {
@@ -506,11 +596,17 @@ export function SessionChat({
 
   const handleSecondaryQueue = useCallback(async () => {
     const message = draft.trim();
-    if (!message || isSubmitting || !canQueueNow) return;
+    if (!message || isSubmitting || isComposerDisabled || !canQueueNow) return;
     setDraft("");
     setError(null);
     await handleManagedLocalSend(message, "queue");
-  }, [draft, isSubmitting, canQueueNow, handleManagedLocalSend]);
+  }, [
+    draft,
+    isSubmitting,
+    isComposerDisabled,
+    canQueueNow,
+    handleManagedLocalSend,
+  ]);
 
   const handleQueueInsteadAfterTurnEnded = useCallback(async () => {
     if (!turnEndedDraft) return;
@@ -540,48 +636,23 @@ export function SessionChat({
     ? { variant: "warning" as const, label: "Unavailable" }
     : isSubmitting
       ? { variant: "warning" as const, label: "Sending" }
-    : isStalled
-      ? { variant: "warning" as const, label: "Stalled" }
-    : isSendLocked
-      ? { variant: "warning" as const, label: "Working" }
-      : { variant: "neutral" as const, label: "Input available" };
+      : isStalled
+        ? { variant: "warning" as const, label: "Stalled" }
+        : isSendLocked
+          ? { variant: "warning" as const, label: "Working" }
+          : { variant: "neutral" as const, label: "Input available" };
   const submitButtonLabel = !isSendLocked
     ? submitLabel
     : canSteerNow
-    ? "Send update"
-    : canQueueNow
-    ? "Queue next"
-    : queueFull
-    ? "Queue full"
-    : "Waiting";
-  let turnNoticeText =
-    "Agent is working. You can draft the next message; sending will be available when it is ready.";
-  if (canSteerNow) {
-    if (canQueueNow && canInterruptTurn) {
-      turnNoticeText =
-        "Agent is working. Send update injects mid-turn, Queue next waits, Stop interrupts - Enter will not send while working.";
-    } else if (canInterruptTurn) {
-      turnNoticeText =
-        "Agent is working. Send update injects mid-turn, Stop interrupts - Enter will not send while working.";
-    } else if (canQueueNow) {
-      turnNoticeText =
-        "Agent is working. Send update injects mid-turn, or Queue next waits - Enter will not send while working.";
-    } else {
-      turnNoticeText =
-        "Agent is working. Send update injects mid-turn - Enter will not send while working.";
-    }
-  } else if (canQueueNow) {
-    turnNoticeText = canInterruptTurn
-      ? "Agent is working. Queue next auto-sends at the next turn boundary, Stop interrupts - Enter will not queue."
-      : "Agent is working. Queue next auto-sends at the next turn boundary - Enter will not queue.";
-  } else if (canQueueNextInput && queueFull) {
-    turnNoticeText = canInterruptTurn
-      ? "Agent is working. The queue is full, but Stop can interrupt the current turn."
-      : "Agent is working. The queue is full; sending will be available when space opens.";
-  } else if (canInterruptTurn) {
-    turnNoticeText =
-      "Agent is working. Draft a message or Stop to interrupt; sending will be available when it is ready.";
-  }
+      ? "Send update"
+      : canQueueNow
+        ? "Queue next"
+        : queueFull
+          ? "Queue full"
+          : "Waiting";
+  const turnNoticeText = canSteerNow
+    ? "Send update reaches the active turn. Queue next waits for its boundary. Enter does not send while a turn is active."
+    : "Queue next waits for the next turn boundary. Enter does not queue while a turn is active.";
 
   return (
     <div
@@ -636,11 +707,17 @@ export function SessionChat({
       )}
 
       {isManagedLocal && isStalled ? (
-        <div className="session-chat-stall-recovery" data-testid="session-chat-stall-recovery">
+        <div
+          className="session-chat-stall-recovery"
+          data-testid="session-chat-stall-recovery"
+        >
           <div className="session-chat-stall-recovery__copy">
-            <span className="session-chat-stall-recovery__title">Managed session appears stalled</span>
+            <span className="session-chat-stall-recovery__title">
+              Managed session appears stalled
+            </span>
             <span className="session-chat-stall-recovery__detail">
-              No progress has arrived from this managed session. Interrupt releases the current turn.
+              No progress has arrived from this managed session. Interrupt
+              releases the current turn.
             </span>
           </div>
           <Button
@@ -655,7 +732,7 @@ export function SessionChat({
         </div>
       ) : null}
 
-      {isSendLocked && !isStalled && (
+      {isSendLocked && !isStalled && !isDock && (
         <div className="session-chat-turn-notice">
           <span>{turnNoticeText}</span>
         </div>
@@ -689,15 +766,22 @@ export function SessionChat({
 
       {isManagedLocal && activeQueuedInputs.length > 0 ? (
         <div className="session-chat-queued" data-testid="session-chat-queued">
-          <div className="session-chat-queued__label">Queued (auto-sends next)</div>
+          <div className="session-chat-queued__label">
+            Queued (auto-sends next)
+          </div>
           <ul className="session-chat-queued__list">
             {activeQueuedInputs.map((row) => (
-              <li key={row.live_input_id ?? row.id ?? row.text} className="session-chat-queued__item">
+              <li
+                key={row.live_input_id ?? row.id ?? row.text}
+                className="session-chat-queued__item"
+              >
                 <span className="session-chat-queued__text">{row.text}</span>
                 <span
                   className={`session-chat-queued__status session-chat-queued__status--${row.status}`}
                 >
-                  {row.status === "delivering" ? row.last_error || "Sending…" : "Queued"}
+                  {row.status === "delivering"
+                    ? row.last_error || "Sending…"
+                    : "Queued"}
                 </span>
                 {row.status === "queued" ? (
                   <button
@@ -723,7 +807,10 @@ export function SessionChat({
           <div className="session-chat-queued__label">Delivery failed</div>
           <ul className="session-chat-queued__list">
             {failedInputs.map((row) => (
-              <li key={row.live_input_id ?? row.id ?? row.text} className="session-chat-queued__item">
+              <li
+                key={row.live_input_id ?? row.id ?? row.text}
+                className="session-chat-queued__item"
+              >
                 <span className="session-chat-queued__text">{row.text}</span>
                 <span className="session-chat-queued__status session-chat-queued__status--failed">
                   {row.last_error || "failed"}
@@ -737,16 +824,23 @@ export function SessionChat({
       {isDock ? null : (
         <div className="session-chat-messages">
           <div className="session-chat-empty">
-            <p>{emptyStateTitle || "Start a conversation with this session."}</p>
+            <p>
+              {emptyStateTitle || "Start a conversation with this session."}
+            </p>
             <p className="session-chat-hint">
-              {hintText
-                || (isManagedLocal
+              {hintText ||
+                (isManagedLocal
                   ? `Longhouse will send your next prompt into the live ${session.provider} session.`
                   : "Earlier synced turns stay visible here. Your first message continues from that context.")}
             </p>
           </div>
         </div>
       )}
+      {isComposerDisabled && retainDockComposer ? (
+        <p className="session-chat-control-note" role="status">
+          {composerDisabledReason}
+        </p>
+      ) : null}
 
       <form
         className={`session-chat-composer${isDock ? " session-chat-composer--dock" : ""}`}
@@ -778,15 +872,23 @@ export function SessionChat({
         ) : (
           <>
             {blockedKeyboardSubmit ? (
-              <div className="session-chat-confirmation" data-testid="session-chat-explicit-submit-hint">
+              <div
+                className="session-chat-confirmation"
+                data-testid="session-chat-explicit-submit-hint"
+              >
                 {keyboardHintText || `Click "${submitLabel}" to confirm.`}
               </div>
             ) : isDock ? null : (
-              <div className="session-chat-confirmation session-chat-confirmation--spacer" aria-hidden="true" />
+              <div
+                className="session-chat-confirmation session-chat-confirmation--spacer"
+                aria-hidden="true"
+              />
             )}
             {isManagedLocal && pendingManagedLocalInput ? (
               <div className="session-chat-pending-message">
-                <span className="session-chat-pending-message__text">{pendingManagedLocalInput.text}</span>
+                <span className="session-chat-pending-message__text">
+                  {pendingManagedLocalInput.text}
+                </span>
                 <span className="session-chat-pending-message__status">
                   Delivering...
                 </span>
@@ -819,6 +921,7 @@ export function SessionChat({
                   }}
                   onKeyDown={handleKeyDown}
                   placeholder={composerPlaceholder || "Message"}
+                  aria-label="Next instruction"
                   disabled={isSubmitting}
                   rows={1}
                 />
@@ -830,11 +933,31 @@ export function SessionChat({
                     type="button"
                     variant="danger"
                     size="sm"
+                    aria-label={isInterrupting ? "Stopping" : "Stop"}
+                    title="Interrupt the active turn"
                     onClick={() => void handleInterrupt()}
                     disabled={isInterrupting}
                     data-testid="session-chat-interrupt"
                   >
-                    {isInterrupting ? "Stopping" : "Stop"}
+                    <span className="session-chat-action-label">
+                      {isInterrupting ? "Stopping" : "Stop"}
+                    </span>
+                    <svg
+                      className="session-chat-action-icon"
+                      width="18"
+                      height="18"
+                      viewBox="0 0 18 18"
+                      aria-hidden="true"
+                    >
+                      <rect
+                        x="5"
+                        y="5"
+                        width="8"
+                        height="8"
+                        rx="1"
+                        fill="currentColor"
+                      />
+                    </svg>
                   </Button>
                 ) : null}
                 {canSteerNow && canQueueNow ? (
@@ -843,18 +966,63 @@ export function SessionChat({
                     variant="secondary"
                     size="sm"
                     onClick={() => void handleSecondaryQueue()}
-                    disabled={!draft.trim() || isSubmitting}
+                    disabled={
+                      isComposerDisabled || !draft.trim() || isSubmitting
+                    }
+                    aria-label="Queue next"
+                    title="Queue for the next turn boundary"
                   >
-                    Queue next
+                    <span className="session-chat-action-label">
+                      Queue next
+                    </span>
+                    <svg
+                      className="session-chat-action-icon"
+                      width="18"
+                      height="18"
+                      viewBox="0 0 18 18"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                      aria-hidden="true"
+                    >
+                      <circle cx="9" cy="9" r="6" />
+                      <path d="M9 5v4l3 2" />
+                    </svg>
                   </Button>
                 ) : null}
                 <Button
                   type="submit"
                   variant="primary"
+                  aria-label={submitButtonLabel}
                   size="sm"
-                  disabled={!hasComposerContent || isSubmitting || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
+                  disabled={
+                    isComposerDisabled ||
+                    !hasComposerContent ||
+                    isSubmitting ||
+                    isSendBlocked ||
+                    attachmentSendBlocked ||
+                    composerAttachments.isCompressing
+                  }
+                  title={
+                    composerDisabledReason ||
+                    (isSendLocked ? turnNoticeText : undefined)
+                  }
                 >
-                  {submitButtonLabel}
+                  <span className="session-chat-action-label">
+                    {submitButtonLabel}
+                  </span>
+                  <svg
+                    className="session-chat-action-icon"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 18 18"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    aria-hidden="true"
+                  >
+                    <path d="M9 14V4M4.5 8.5 9 4l4.5 4.5" />
+                  </svg>
                 </Button>
               </div>
             ) : (
@@ -888,7 +1056,9 @@ export function SessionChat({
                       variant="secondary"
                       size="sm"
                       onClick={() => void handleSecondaryQueue()}
-                      disabled={isComposerDisabled || !draft.trim() || isSubmitting}
+                      disabled={
+                        isComposerDisabled || !draft.trim() || isSubmitting
+                      }
                     >
                       Queue next
                     </Button>
@@ -897,7 +1067,14 @@ export function SessionChat({
                     type="submit"
                     variant="primary"
                     size="sm"
-                    disabled={isComposerDisabled || !hasComposerContent || isSubmitting || isSendBlocked || attachmentSendBlocked || composerAttachments.isCompressing}
+                    disabled={
+                      isComposerDisabled ||
+                      !hasComposerContent ||
+                      isSubmitting ||
+                      isSendBlocked ||
+                      attachmentSendBlocked ||
+                      composerAttachments.isCompressing
+                    }
                     title={composerDisabledReason ?? undefined}
                   >
                     {submitButtonLabel}

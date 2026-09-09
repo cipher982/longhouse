@@ -83,11 +83,10 @@ final class ActivityPulseStore: ObservableObject {
         return .state
     }
 
-    /// A frame without a preview still says what woke it. Durable ingest is
-    /// how a Claude turn shows its tool boundaries (it never streams text), so
-    /// it draws as a result bar; a bare runtime wake is a state tick; a read
-    /// or title update is bookkeeping and draws nothing.
+    /// Initial stream snapshots use a zero cursor and are not an observed
+    /// arrival. They must not paint a receipt bar or imply fresh work.
     nonisolated static func classify(_ change: SessionWorkspaceStream.WorkspaceChanged) -> ActivityPulse.Kind? {
+        guard change.latest_event_id > 0 || (change.pubsub_seq ?? 0) > 0 else { return nil }
         if let preview = change.transcript_preview {
             return classify(
                 toolName: preview.tool_name,
@@ -97,6 +96,7 @@ final class ActivityPulseStore: ObservableObject {
         }
         return classify(changeKind: change.change_kind)
     }
+
 
     nonisolated static func classify(changeKind: String?) -> ActivityPulse.Kind? {
         switch changeKind {

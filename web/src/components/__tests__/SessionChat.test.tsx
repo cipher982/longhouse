@@ -28,7 +28,15 @@ vi.mock("../../services/api/base", () => {
     readonly status: number;
     readonly url: string;
     readonly body: unknown;
-    constructor({ url, status, body }: { url: string; status: number; body: unknown }) {
+    constructor({
+      url,
+      status,
+      body,
+    }: {
+      url: string;
+      status: number;
+      body: unknown;
+    }) {
       super(`Request failed (${status})`);
       this.name = "ApiError";
       this.status = status;
@@ -52,12 +60,17 @@ vi.mock("../../lib/imageCompression", () => ({
   })),
 }));
 
-function makeSession(overrides: Partial<SessionChatTarget> = {}): SessionChatTarget {
+function makeSession(
+  overrides: Partial<SessionChatTarget> = {},
+): SessionChatTarget {
   return {
     id: "sess-1",
     project: "zerg",
     provider: "claude",
-    session_state: makeSessionStateFacts({ access: "live_control", interruptAvailable: true }),
+    session_state: makeSessionStateFacts({
+      access: "live_control",
+      interruptAvailable: true,
+    }),
     ...overrides,
   };
 }
@@ -70,11 +83,15 @@ function jsonResponse(body: unknown, status: number = 200): Response {
 }
 
 function getRequestCallCount(pathSuffix: string) {
-  return fetchWithRefreshMock.mock.calls.filter(([url]) => String(url).endsWith(pathSuffix)).length;
+  return fetchWithRefreshMock.mock.calls.filter(([url]) =>
+    String(url).endsWith(pathSuffix),
+  ).length;
 }
 
 function getLastRequestBody(pathSuffix: string) {
-  const call = [...fetchWithRefreshMock.mock.calls].reverse().find(([url]) => String(url).endsWith(pathSuffix));
+  const call = [...fetchWithRefreshMock.mock.calls]
+    .reverse()
+    .find(([url]) => String(url).endsWith(pathSuffix));
   if (!call) {
     throw new Error(`Expected a ${pathSuffix} request`);
   }
@@ -118,15 +135,17 @@ function renderSessionChat(
   };
 
   const renderResult = render(
-      <QueryClientProvider client={queryClient}>
-        <SessionChat {...defaultProps} />
-      </QueryClientProvider>,
+    <QueryClientProvider client={queryClient}>
+      <SessionChat {...defaultProps} />
+    </QueryClientProvider>,
   );
 
   return {
     queryClient,
     ...renderResult,
-    rerenderSessionChat(nextProps: Partial<React.ComponentProps<typeof SessionChat>>) {
+    rerenderSessionChat(
+      nextProps: Partial<React.ComponentProps<typeof SessionChat>>,
+    ) {
       renderResult.rerender(
         <QueryClientProvider client={queryClient}>
           <SessionChat {...defaultProps} {...nextProps} />
@@ -194,6 +213,28 @@ describe("SessionChat", () => {
     URL.createObjectURL = vi.fn(() => "blob:test-preview");
     URL.revokeObjectURL = vi.fn();
   });
+  it("retains an editable draft when control is revoked without allowing a send", async () => {
+    const user = userEvent.setup();
+    const view = renderSessionChat({
+      chatMode: "managed_local",
+      isSessionExecuting: true,
+      canSteerActiveTurn: true,
+      canQueueNextInput: true,
+    });
+    const draft = screen.getByRole("textbox");
+    await user.type(draft, "Preserve this instruction");
+    view.rerenderSessionChat({
+      composerDisabledReason: "Answer in the terminal first.",
+    });
+    expect(screen.getByRole("textbox")).toBe(draft);
+    expect(draft).toHaveFocus();
+    expect(draft).toHaveValue("Preserve this instruction");
+    expect(screen.getByRole("button", { name: "Send update" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Queue next" })).toBeDisabled();
+    view.rerenderSessionChat({ composerDisabledReason: null });
+    expect(screen.getByRole("textbox")).toBe(draft);
+    expect(draft).toHaveValue("Preserve this instruction");
+  });
 
   it("shows a manual interrupt affordance for stalled managed sessions", async () => {
     const user = userEvent.setup();
@@ -227,7 +268,9 @@ describe("SessionChat", () => {
 
     const recovery = await screen.findByTestId("session-chat-stall-recovery");
     expect(recovery).toHaveTextContent(/managed session appears stalled/i);
-    expect(screen.queryByText(/queue next auto-sends at the next turn boundary/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/queue next auto-sends at the next turn boundary/i),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /interrupt/i }));
     await waitFor(() => expect(interruptCalls).toBe(1));
@@ -270,9 +313,15 @@ describe("SessionChat", () => {
       if (String(path).endsWith("/lock")) {
         return Promise.resolve({ locked: false, fork_available: false });
       }
-      if (String(path).endsWith("/turns/current/interrupt") && init?.method === "POST") {
+      if (
+        String(path).endsWith("/turns/current/interrupt") &&
+        init?.method === "POST"
+      ) {
         consoleInterruptCalls += 1;
-        return Promise.resolve({ interrupt_dispatched: true, session_id: "sess-1" });
+        return Promise.resolve({
+          interrupt_dispatched: true,
+          session_id: "sess-1",
+        });
       }
       return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
@@ -304,38 +353,45 @@ describe("SessionChat", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
-      locked: true,
-      holder: null,
-      time_remaining_seconds: null,
-      fork_available: true,
-    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
 
     renderSessionChat({}, { queryClient });
 
-    expect(screen.getByText(/you can draft the next message/i)).not.toHaveTextContent(/Stop/i);
-    expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /stop/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the dock visible but shows the blocker it was given, not a hardcoded heading", () => {
     renderSessionChat({
       composerDisabledTitle: "Can't send",
-      composerDisabledReason: "This session's machine isn't accepting new Codex turns.",
+      composerDisabledReason:
+        "This session's machine isn't accepting new Codex turns.",
     });
 
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
-      "Can't send",
-    );
-    expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
-      "isn't accepting new Codex turns",
-    );
+    expect(
+      screen.queryByRole("button", { name: "Send" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).toHaveTextContent("Can't send");
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).toHaveTextContent("isn't accepting new Codex turns");
     // The heading used to be the literal string "Control offline" regardless of
     // the blocker, which is how a connected machine got told to reconnect.
-    expect(screen.getByTestId("session-chat-disabled-reason")).not.toHaveTextContent(
-      "Control offline",
-    );
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).not.toHaveTextContent("Control offline");
   });
 
   it("replaces disabled full-panel composer controls with status copy", () => {
@@ -347,19 +403,22 @@ describe("SessionChat", () => {
     });
 
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
-      "Machine offline",
-    );
-    expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
-      "Sending resumes when it reconnects",
-    );
+    expect(
+      screen.queryByRole("button", { name: "Send" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).toHaveTextContent("Machine offline");
+    expect(
+      screen.getByTestId("session-chat-disabled-reason"),
+    ).toHaveTextContent("Sending resumes when it reconnects");
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
 
   it("shows a managed-launch hint card for unmanaged sessions", () => {
     renderSessionChat({
-      composerDisabledReason: "This unmanaged Codex session is read-only in Longhouse.",
+      composerDisabledReason:
+        "This unmanaged Codex session is read-only in Longhouse.",
       managedLaunchSuggestion: {
         title: "Start the next Codex session through Longhouse",
         body: "This session stays searchable here. Use this command when you want the next Codex session to stay steerable from Longhouse.",
@@ -368,17 +427,21 @@ describe("SessionChat", () => {
     });
 
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-chat-managed-launch-hint")).toHaveTextContent(
-      "Start the next Codex session through Longhouse",
-    );
-    expect(screen.getByTestId("session-chat-managed-launch-hint-command")).toHaveTextContent(
-      "longhouse codex",
-    );
-    expect(screen.queryByTestId("session-chat-disabled-reason")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /copy command: longhouse codex/i })).toHaveTextContent(
-      "Copy",
-    );
+    expect(
+      screen.queryByRole("button", { name: "Send" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("session-chat-managed-launch-hint"),
+    ).toHaveTextContent("Start the next Codex session through Longhouse");
+    expect(
+      screen.getByTestId("session-chat-managed-launch-hint-command"),
+    ).toHaveTextContent("longhouse codex");
+    expect(
+      screen.queryByTestId("session-chat-disabled-reason"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /copy command: longhouse codex/i }),
+    ).toHaveTextContent("Copy");
   });
 
   it("shows empty-state copy instead of resume wording", () => {
@@ -386,9 +449,13 @@ describe("SessionChat", () => {
       layout: "panel",
     });
 
-    expect(screen.getByText("Start a conversation with this session.")).toBeInTheDocument();
     expect(
-      screen.getByText("Earlier synced turns stay visible here. Your first message continues from that context."),
+      screen.getByText("Start a conversation with this session."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Earlier synced turns stay visible here. Your first message continues from that context.",
+      ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/--resume/i)).not.toBeInTheDocument();
   });
@@ -432,11 +499,15 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    const inputCall = requestMock.mock.calls.find(([path, init]) =>
-      String(path).endsWith("/input") && (init as RequestInit | undefined)?.method === "POST",
+    const inputCall = requestMock.mock.calls.find(
+      ([path, init]) =>
+        String(path).endsWith("/input") &&
+        (init as RequestInit | undefined)?.method === "POST",
     );
     expect(inputCall).toBeTruthy();
-    const inputPayload = JSON.parse(String((inputCall?.[1] as RequestInit).body ?? "{}"));
+    const inputPayload = JSON.parse(
+      String((inputCall?.[1] as RequestInit).body ?? "{}"),
+    );
     expect(inputPayload).toEqual({
       text: "Continue locally",
       intent: "auto",
@@ -467,11 +538,16 @@ describe("SessionChat", () => {
     expect(screen.getByRole("textbox")).toHaveValue("Next follow-up");
     const inputPostCount = requestMock.mock.calls.filter(
       ([path, init]) =>
-        String(path).endsWith("/input") && (init as RequestInit | undefined)?.method === "POST",
+        String(path).endsWith("/input") &&
+        (init as RequestInit | undefined)?.method === "POST",
     ).length;
     expect(inputPostCount).toBe(1);
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-lock", "sess-1"] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["session-lock", "sess-1"],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["agent-session-workspace", "sess-1"],
+    });
   });
 
   it("clears managed-local pending input after a sent response without waiting for durable identity", async () => {
@@ -498,12 +574,19 @@ describe("SessionChat", () => {
       return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
 
-    renderSessionChat({ chatMode: "managed_local", timelineItems: [] }, { queryClient });
+    renderSessionChat(
+      { chatMode: "managed_local", timelineItems: [] },
+      { queryClient },
+    );
 
     await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] }));
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ["agent-session-workspace", "sess-1"],
+      }),
+    );
     await waitFor(() => {
       expect(screen.queryByText("Continue locally")).not.toBeInTheDocument();
       expect(screen.queryByText("Delivering...")).not.toBeInTheDocument();
@@ -519,7 +602,10 @@ describe("SessionChat", () => {
       if (String(path).endsWith("/lock")) {
         return Promise.resolve({ locked: false, fork_available: false });
       }
-      if (String(path).endsWith("/inputs-multipart") && init?.method === "POST") {
+      if (
+        String(path).endsWith("/inputs-multipart") &&
+        init?.method === "POST"
+      ) {
         multipartBody = init.body as FormData;
         return Promise.resolve({
           outcome: "sent",
@@ -542,9 +628,13 @@ describe("SessionChat", () => {
       }),
     });
 
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    const input = container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement | null;
     expect(input).toBeTruthy();
-    const file = new File([new Uint8Array([1, 2, 3])], "shot.png", { type: "image/png" });
+    const file = new File([new Uint8Array([1, 2, 3])], "shot.png", {
+      type: "image/png",
+    });
     await user.upload(input!, file);
 
     expect(await screen.findByAltText("shot.png")).toBeInTheDocument();
@@ -586,9 +676,9 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.keyboard("{Enter}");
 
-    expect(screen.getByTestId("session-chat-explicit-submit-hint")).toHaveTextContent(
-      "Click send to confirm.",
-    );
+    expect(
+      screen.getByTestId("session-chat-explicit-submit-hint"),
+    ).toHaveTextContent("Click send to confirm.");
     expect(inputCalls).toBe(0);
 
     await user.click(screen.getByRole("button", { name: /send/i }));
@@ -601,12 +691,15 @@ describe("SessionChat", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
-      locked: true,
-      holder: null,
-      time_remaining_seconds: null,
-      fork_available: true,
-    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
 
     let inputsReads = 0;
     requestMock.mockImplementation((path: string, init?: RequestInit) => {
@@ -653,23 +746,23 @@ describe("SessionChat", () => {
       { queryClient },
     );
 
-    // Lock notice adapts to the queue-next affordance.
-    expect(
-      screen.getByText(/queue next auto-sends at the next turn boundary/i),
-    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /stop/i })).toBeEnabled();
 
     await user.type(screen.getByRole("textbox"), "wait for it");
     // Button says "Queue next" while working with queue capability, and is
     // enabled once a draft exists.
-    const queueButton = await screen.findByRole("button", { name: /queue next/i });
+    const queueButton = await screen.findByRole("button", {
+      name: /queue next/i,
+    });
     expect(queueButton).toBeEnabled();
     await user.click(queueButton);
 
     const chip = await screen.findByTestId("session-chat-queued");
     expect(chip).toHaveTextContent("wait for it");
     expect(chip).toHaveTextContent(/queued/i);
-    expect(screen.getByRole("button", { name: /cancel queued message/i })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: /cancel queued message/i }),
+    ).toBeEnabled();
   });
 
   it("shows an uncertain Console dispatch instead of leaving it silently sending", async () => {
@@ -685,7 +778,8 @@ describe("SessionChat", () => {
             intent: "auto",
             status: "delivering",
             created_at: null,
-            last_error: "turn_start_outcome_unknown: Machine control channel disconnected",
+            last_error:
+              "turn_start_outcome_unknown: Machine control channel disconnected",
           },
         ]);
       }
@@ -696,7 +790,9 @@ describe("SessionChat", () => {
 
     const chip = await screen.findByTestId("session-chat-queued");
     expect(chip).toHaveTextContent("survive the reconnect");
-    expect(chip).toHaveTextContent("turn_start_outcome_unknown: Machine control channel disconnected");
+    expect(chip).toHaveTextContent(
+      "turn_start_outcome_unknown: Machine control channel disconnected",
+    );
     expect(chip).not.toHaveTextContent("Sending…");
   });
 
@@ -747,7 +843,9 @@ describe("SessionChat", () => {
 
     const failure = await screen.findByTestId("session-chat-queued-failed");
     expect(failure).toHaveTextContent("launch from missing cwd");
-    expect(failure).toHaveTextContent("cwd_not_found: cwd does not exist: /missing");
+    expect(failure).toHaveTextContent(
+      "cwd_not_found: cwd does not exist: /missing",
+    );
     expect(screen.queryByText("Request failed (502)")).not.toBeInTheDocument();
   });
 
@@ -776,7 +874,9 @@ describe("SessionChat", () => {
 
     const failure = await screen.findByTestId("session-chat-queued-failed");
     expect(failure).toHaveTextContent("launch from missing cwd");
-    expect(failure).toHaveTextContent("cwd_not_found: cwd does not exist: /missing");
+    expect(failure).toHaveTextContent(
+      "cwd_not_found: cwd does not exist: /missing",
+    );
   });
 
   it("shows Send update primary + Queue next secondary when steer capability is on", async () => {
@@ -784,12 +884,15 @@ describe("SessionChat", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
-      locked: true,
-      holder: null,
-      time_remaining_seconds: null,
-      fork_available: true,
-    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
 
     let steerCalls = 0;
     let queueCalls = 0;
@@ -847,12 +950,15 @@ describe("SessionChat", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
-      locked: false,
-      holder: null,
-      time_remaining_seconds: null,
-      fork_available: false,
-    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: false,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: false,
+      },
+    );
 
     let submittedIntent: string | null = null;
     requestMock.mockImplementation((path: string, init?: RequestInit) => {
@@ -897,12 +1003,15 @@ describe("SessionChat", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
-      locked: true,
-      holder: null,
-      time_remaining_seconds: null,
-      fork_available: true,
-    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
 
     requestMock.mockImplementation((path: string, init?: RequestInit) => {
       if (String(path).endsWith("/lock")) {
@@ -948,12 +1057,15 @@ describe("SessionChat", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
-      locked: true,
-      holder: null,
-      time_remaining_seconds: null,
-      fork_available: true,
-    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
 
     const { ApiError } = await import("../../services/api/base");
 
@@ -1018,12 +1130,15 @@ describe("SessionChat", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
-      locked: true,
-      holder: null,
-      time_remaining_seconds: null,
-      fork_available: true,
-    });
+    queryClient.setQueryData<SessionLockInfo | null>(
+      ["session-lock", "sess-1"],
+      {
+        locked: true,
+        holder: null,
+        time_remaining_seconds: null,
+        fork_available: true,
+      },
+    );
 
     let postCalls = 0;
     requestMock.mockImplementation((path: string, init?: RequestInit) => {
@@ -1050,7 +1165,10 @@ describe("SessionChat", () => {
       { queryClient },
     );
 
-    await user.type(screen.getByRole("textbox"), "do not silently queue{enter}");
+    await user.type(
+      screen.getByRole("textbox"),
+      "do not silently queue{enter}",
+    );
     expect(postCalls).toBe(0);
     expect(screen.getByRole("textbox")).toHaveValue("do not silently queue");
   });

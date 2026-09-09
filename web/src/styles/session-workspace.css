@@ -2556,9 +2556,9 @@
     }
 
     .timeline-pane--with-dock .timeline-pane__list {
-      /* Cap list height on mobile so the chat dock stays visible without scrolling
-         past hundreds of events. The list scrolls internally instead. */
-      max-height: min(64svh, 520px);
+      /* The viewport-sized flex shell already keeps the dock visible. A
+         separate list cap leaves a gap and shifts drafts as status expands. */
+      max-height: none;
     }
 
     .timeline-row--message {
@@ -2663,68 +2663,21 @@
 
   .session-runtime-strip--bar {
     width: 100%;
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    padding: 4px var(--space-2);
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    flex-wrap: nowrap;
-    overflow: hidden;
-    min-height: 22px;
-    font-size: 11.5px;
-    color: var(--color-text-secondary);
-  }
-
-  .session-runtime-strip--bar .session-runtime-strip__presence {
-    flex: 1 1 auto;
+    display: block;
     min-width: 0;
-    overflow: hidden;
   }
 
-  .session-runtime-strip--bar .session-runtime-strip__copy {
-    min-width: 0;
-    flex-wrap: nowrap;
-  }
-
-  .session-runtime-strip--bar .session-runtime-strip__headline {
-    font-size: 11.5px;
-    font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .session-runtime-strip--bar .session-runtime-strip__detail {
-    font-size: 11.5px;
-    color: var(--color-text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .session-runtime-strip--bar .session-runtime-strip__meta {
-    flex: 0 0 auto;
-    color: var(--color-text-muted);
-    font-size: 11px;
-    white-space: nowrap;
-  }
 
   /* ===== Composer dock (bar layout) ===== */
 
   .session-control-dock--bar {
     width: min(100%, var(--tl-tool-max));
-    gap: 4px;
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--session-energy-border);
+    gap: 0;
+    padding: 0;
+    border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-lg);
-    background:
-      radial-gradient(circle at 18% 0%, var(--session-energy-soft), transparent 52%),
-      rgba(18, 11, 9, 0.9);
-    box-shadow:
-      inset 3px 0 0 var(--session-control-accent),
-      0 12px 34px rgba(0, 0, 0, 0.24);
+    background: var(--color-surface-card);
+    box-shadow: var(--shadow-sm);
   }
 
   .session-control-dock--bar .session-control-dock__composer {
@@ -2732,6 +2685,7 @@
     flex-direction: column;
     gap: var(--space-1);
     width: 100%;
+    padding: 0 var(--space-3) var(--space-3);
   }
 
   .session-pause-panel {

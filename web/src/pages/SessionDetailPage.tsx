@@ -32,10 +32,16 @@ import {
   ResumeSessionModal,
 } from "../components/session-workspace/ResumeSessionModal";
 import { BranchSessionCard } from "../components/session-workspace/BranchSessionCard";
-import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
+import {
+  isSessionClosed,
+  resolveSessionRuntimeState,
+} from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { useWallClock } from "../hooks/useWallClock";
-import { isActivityExecuting, isActivityStalled } from "../lib/activityEvidence";
+import {
+  isActivityExecuting,
+  isActivityStalled,
+} from "../lib/activityEvidence";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useAuth } from "../lib/auth";
 import { config } from "../lib/config";
@@ -56,7 +62,12 @@ import { ApiError, DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
 
-const GENERIC_HOME_LABELS = new Set(["On this Mac", "Hosted", "Moved to cloud", "This machine"]);
+const GENERIC_HOME_LABELS = new Set([
+  "On this Mac",
+  "Hosted",
+  "Moved to cloud",
+  "This machine",
+]);
 
 function SessionDetailWorkspaceRoute({
   highlightEventId,
@@ -102,6 +113,7 @@ function SessionDetailWorkspaceRoute({
     selectKey,
     handleVisibleSelectionChange,
     registerTimelineList,
+    streamConnected,
     activityFeed,
   } = workspace;
   const nowMs = useWallClock(Boolean(session && !isSessionClosed(session)));
@@ -133,7 +145,9 @@ function SessionDetailWorkspaceRoute({
   const [confirmingArchive, setConfirmingArchive] = useState(false);
   const [hidingSession, setHidingSession] = useState(false);
   const [resumeLoading, setResumeLoading] = useState(false);
-  const [resumeIntent, setResumeIntent] = useState<SessionResumeIntent | null>(null);
+  const [resumeIntent, setResumeIntent] = useState<SessionResumeIntent | null>(
+    null,
+  );
 
   const handleArchiveConfirm = useCallback(async () => {
     if (!session) return;
@@ -165,8 +179,14 @@ function SessionDetailWorkspaceRoute({
       const hidden = !session.user_hidden_from_timeline;
       await setSessionTimelineVisibility(session.id, hidden);
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
-      queryClient.invalidateQueries({ queryKey: ["agent-session", session.id] });
-      toast.success(hidden ? "Session hidden from timeline" : "Session restored to timeline");
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session", session.id],
+      });
+      toast.success(
+        hidden
+          ? "Session hidden from timeline"
+          : "Session restored to timeline",
+      );
       if (hidden) handleBack();
     } catch {
       toast.error("Failed to update timeline visibility");
@@ -181,7 +201,9 @@ function SessionDetailWorkspaceRoute({
     try {
       setResumeIntent(await createSessionResumeIntent(session.id));
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "Couldn't prepare Resume");
+      toast.error(
+        error instanceof ApiError ? error.message : "Couldn't prepare Resume",
+      );
     } finally {
       setResumeLoading(false);
     }
@@ -194,9 +216,15 @@ function SessionDetailWorkspaceRoute({
 
   const refreshSessionQueries = useCallback(
     (targetSessionId: string) => {
-      queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", targetSessionId] });
-      queryClient.invalidateQueries({ queryKey: ["agent-session", targetSessionId] });
-      queryClient.invalidateQueries({ queryKey: ["agent-session-thread", targetSessionId] });
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session-workspace", targetSessionId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session", targetSessionId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session-thread", targetSessionId],
+      });
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
     },
     [queryClient],
@@ -256,7 +284,8 @@ function SessionDetailWorkspaceRoute({
     sessionSharer !== null &&
     sessionSharer !== undefined &&
     (currentUserId === null || sessionSharer.id !== currentUserId);
-  const sharedByDisplayName = sessionSharer?.display_name?.trim() || "a teammate";
+  const sharedByDisplayName =
+    sessionSharer?.display_name?.trim() || "a teammate";
 
   const branchSourceSession = currentThreadSession || session;
   const interaction = getSessionInteractionCapabilities({
@@ -292,13 +321,18 @@ function SessionDetailWorkspaceRoute({
   const identityHost =
     displaySession.control?.source_runner_name?.trim() ||
     (homeLabel && !GENERIC_HOME_LABELS.has(homeLabel) ? homeLabel : null);
-  const identityLabel = [interaction.providerLabel, displaySession.project?.trim() || null, identityHost]
+  const identityLabel = [
+    interaction.providerLabel,
+    displaySession.project?.trim() || null,
+    identityHost,
+  ]
     .filter((part): part is string => Boolean(part))
     .join(" · ");
   const runtime = resolveSessionRuntimeState(displaySession);
   const resumeAvailable =
     isViewingHead &&
-    branchSourceSession.session_state.control.actions.resume.state === "available";
+    branchSourceSession.session_state.control.actions.resume.state ===
+      "available";
   // Branching is offered wherever Resume is, because the reason it is not
   // offered is worth showing too: an ended session that cannot be continued
   // should say why rather than simply have nothing there.
@@ -307,7 +341,9 @@ function SessionDetailWorkspaceRoute({
   // same edge afterwards, so the relationship is visible for the whole life of
   // the child rather than appearing once its first transcript lands.
   const branchedFromSessionId =
-    displaySession.continuation_kind === "fork" ? displaySession.continued_from_session_id : null;
+    displaySession.continuation_kind === "fork"
+      ? displaySession.continued_from_session_id
+      : null;
   const showBranchCard =
     isViewingHead &&
     branchSourceSession.session_state.run?.lifecycle === "ended" &&
@@ -325,22 +361,33 @@ function SessionDetailWorkspaceRoute({
     const state = launchFacts?.state ?? null;
     if (state === "pending" || state === "dispatched") {
       return (
-        <div className="launch-pending-banner" role="status" data-testid="launch-pending-banner">
+        <div
+          className="launch-pending-banner"
+          role="status"
+          data-testid="launch-pending-banner"
+        >
           <Spinner size="sm" />
           <span>
             Starting session on {runtimeHostLabel}…{" "}
-            {state === "dispatched" ? "waiting for the machine to confirm." : ""}
+            {state === "dispatched"
+              ? "waiting for the machine to confirm."
+              : ""}
           </span>
         </div>
       );
     }
     if (state === "failed" || state === "abandoned") {
       return (
-        <div className="launch-failed-banner" role="alert" data-testid="launch-failed-banner">
+        <div
+          className="launch-failed-banner"
+          role="alert"
+          data-testid="launch-failed-banner"
+        >
           <strong>Launch failed</strong>
           <span>
             {launchFacts?.error_code ? `${launchFacts.error_code}: ` : ""}
-            {launchFacts?.error_message || "The machine did not start this session."}
+            {launchFacts?.error_message ||
+              "The machine did not start this session."}
           </span>
         </div>
       );
@@ -379,7 +426,9 @@ function SessionDetailWorkspaceRoute({
             title={`Shared by ${sharedByDisplayName}`}
           >
             <span className="session-shared-by-pill__label">Shared by</span>
-            <span className="session-shared-by-pill__name">{sharedByDisplayName}</span>
+            <span className="session-shared-by-pill__name">
+              {sharedByDisplayName}
+            </span>
           </span>
         ) : null}
         {branchedFromSessionId ? (
@@ -469,7 +518,9 @@ function SessionDetailWorkspaceRoute({
     </div>
   );
 
-  const handlePauseRequestResponse = async (body: PauseRequestResponseRequest) => {
+  const handlePauseRequestResponse = async (
+    body: PauseRequestResponseRequest,
+  ) => {
     if (!activePauseRequest) return;
     if (config.demoMode) {
       throw new Error(DEMO_READ_ONLY_MESSAGE);
@@ -480,17 +531,25 @@ function SessionDetailWorkspaceRoute({
       body,
     );
     refreshSessionQueries(branchSourceSession.id);
-    toast.success(result.status === "rejected" ? "Question cancelled" : "Answer sent");
+    toast.success(
+      result.status === "rejected" ? "Question cancelled" : "Answer sent",
+    );
   };
 
   return (
     <div
       className={workspaceClassName}
       data-session-id={displaySession.id}
-      data-state-commit-seq={displaySession.session_state.commit_seq ?? undefined}
+      data-state-commit-seq={
+        displaySession.session_state.commit_seq ?? undefined
+      }
       data-activity-state={displaySession.session_state.activity.state}
-      data-activity-observed-at={displaySession.session_state.activity.observed_at ?? undefined}
-      data-control-path={interaction.isManagedLocalSession ? "managed" : "unmanaged"}
+      data-activity-observed-at={
+        displaySession.session_state.activity.observed_at ?? undefined
+      }
+      data-control-path={
+        interaction.isManagedLocalSession ? "managed" : "unmanaged"
+      }
       data-runtime-tone={runtime.tone}
     >
       {launchPendingBanner}
@@ -532,10 +591,10 @@ function SessionDetailWorkspaceRoute({
               <SessionRuntimeStrip
                 session={displaySession}
                 interaction={interaction}
-                startedLabel={sessionStartedLabel}
                 variant="bar"
                 testId="session-control-strip"
                 activityFeed={activityFeed ?? null}
+                streamConnected={streamConnected}
               />
               <div className="session-control-dock__composer">
                 {activePauseRequest ? (
@@ -545,7 +604,7 @@ function SessionDetailWorkspaceRoute({
                   />
                 ) : null}
                 <SessionChat
-                  key={`${sessionChatTarget.id}:${interaction.mode}`}
+                  key={sessionChatTarget.id}
                   session={sessionChatTarget}
                   layout="dock"
                   chatMode={

@@ -6,9 +6,16 @@ import {
 } from "./useAgentSessions";
 import { useDocumentVisible } from "./useDocumentVisible";
 import { useOnlineEpoch } from "./useOnlineEpoch";
-import { emitRenderBeacon, emitStateRenderBeacon, recordServerClockSkew } from "../lib/renderBeacon";
+import {
+  emitRenderBeacon,
+  emitStateRenderBeacon,
+  recordServerClockSkew,
+} from "../lib/renderBeacon";
 import { isSessionClosed } from "../lib/sessionRuntime";
-import { SessionActivityFeed, classifyWorkspaceChange } from "../lib/sessionActivityFeed";
+import {
+  SessionActivityFeed,
+  classifyWorkspaceChange,
+} from "../lib/sessionActivityFeed";
 import {
   buildTimelineModel,
   getPreferredSelectionKey,
@@ -27,13 +34,15 @@ import {
   fetchSessionSubagents,
 } from "../services/api/agents";
 
+const STREAM_FRAME_FRESHNESS_MS = 45_000;
 const INITIAL_EVENTS_PAGE_SIZE = 200;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
 const AUTO_SCROLL_EPSILON_PX = 1;
 /** Fallback polling interval when SSE stream is disconnected.
  *  Short so a broken stream still delivers updates within SLA ceiling. */
 const WORKSPACE_FALLBACK_REFRESH_MS =
-  (typeof window !== "undefined" && window.__TEST_WORKSPACE_FALLBACK_MS__) || 5_000;
+  (typeof window !== "undefined" && window.__TEST_WORKSPACE_FALLBACK_MS__) ||
+  5_000;
 
 /** Slow reconciliation interval used even when SSE is connected.
  *  Server flips unpaired tool calls older than DROPPED_TOOL_AGE (1h) to
@@ -118,8 +127,10 @@ function shouldRefreshWorkspaceSession(
 
   // Closed and inactive sessions cannot keep polling because of a stale
   // pending interaction or activity signal.
-  return !isSessionClosed(session)
-    && (session.user_state == null || session.user_state === "active");
+  return (
+    !isSessionClosed(session) &&
+    (session.user_state == null || session.user_state === "active")
+  );
 }
 
 function applyTranscriptPreviewToSession(
@@ -143,12 +154,17 @@ export function useSessionWorkspace(
   const onlineEpoch = useOnlineEpoch();
   const queryClient = useQueryClient();
   const [streamConnected, setStreamConnected] = useState(false);
-  const [streamTranscriptPreview, setStreamTranscriptPreview] =
-    useState<SessionTranscriptPreview | null | undefined>(undefined);
+  const [streamTranscriptPreview, setStreamTranscriptPreview] = useState<
+    SessionTranscriptPreview | null | undefined
+  >(undefined);
   const pendingRenderBeaconRef = useRef<PendingRenderBeacon | null>(null);
-  const pendingStateRenderBeaconRef = useRef<PendingStateRenderBeacon | null>(null);
-  const [pendingRenderBeaconVersion, setPendingRenderBeaconVersion] = useState(0);
-  const [pendingStateRenderBeaconVersion, setPendingStateRenderBeaconVersion] = useState(0);
+  const pendingStateRenderBeaconRef = useRef<PendingStateRenderBeacon | null>(
+    null,
+  );
+  const [pendingRenderBeaconVersion, setPendingRenderBeaconVersion] =
+    useState(0);
+  const [pendingStateRenderBeaconVersion, setPendingStateRenderBeaconVersion] =
+    useState(0);
   // One frame per stream wake, kept out of React state on purpose: the
   // activity strip subscribes directly and repaints its own canvas.
   const activityFeedRef = useRef<SessionActivityFeed | null>(null);
@@ -207,7 +223,8 @@ export function useSessionWorkspace(
       return WORKSPACE_FALLBACK_REFRESH_MS;
     },
   });
-  const knownWorkspaceFingerprint = workspaceData?.workspace_revision?.fingerprint ?? null;
+  const knownWorkspaceFingerprint =
+    workspaceData?.workspace_revision?.fingerprint ?? null;
   const knownWorkspaceFingerprintRef = useRef(knownWorkspaceFingerprint);
   knownWorkspaceFingerprintRef.current = knownWorkspaceFingerprint;
   const workspaceReady = workspaceData !== undefined;
@@ -237,7 +254,14 @@ export function useSessionWorkspace(
     let refreshInFlight: Promise<void> | null = null;
     let queuedIncludeTranscript = false;
     let disposed = false;
-
+    let freshnessTimer: number | null = null;
+    const armFreshnessDeadline = () => {
+      if (freshnessTimer !== null) window.clearTimeout(freshnessTimer);
+      freshnessTimer = window.setTimeout(() => {
+        freshnessTimer = null;
+        if (!disposed) setStreamConnected(false);
+      }, STREAM_FRAME_FRESHNESS_MS);
+    };
     const refreshWorkspaceQueries = (includeTranscript: boolean) => {
       if (refreshInFlight) {
         queuedIncludeTranscript = queuedIncludeTranscript || includeTranscript;
@@ -270,12 +294,18 @@ export function useSessionWorkspace(
         onConnected: (data) => {
           recordServerClockSkew(data?.server_now_ms);
           setStreamConnected(true);
+          armFreshnessDeadline();
+        },
+        onHeartbeat: () => {
+          activityFeed.markHeartbeat();
+          armFreshnessDeadline();
         },
         onReplayGap: () => {
           refreshWorkspaceQueries(true);
         },
         onWorkspaceChanged: (data) => {
           recordServerClockSkew(data?.server_now_ms);
+          armFreshnessDeadline();
           const frameKind = classifyWorkspaceChange(data);
           if (frameKind) activityFeed.push(frameKind);
           if (data.catalog_commit_seq != null && data.catalog_commit_seq > 0) {
@@ -288,15 +318,24 @@ export function useSessionWorkspace(
             };
             setPendingStateRenderBeaconVersion((value) => value + 1);
           }
-          const hasTranscriptPreview = Object.prototype.hasOwnProperty.call(data, "transcript_preview");
+          const hasTranscriptPreview = Object.prototype.hasOwnProperty.call(
+            data,
+            "transcript_preview",
+          );
           const transcriptPreview = data.transcript_preview ?? null;
           const isFreshTranscriptPreview =
-            transcriptPreview !== null && shouldRenderTranscriptPreview(transcriptPreview);
+            transcriptPreview !== null &&
+            shouldRenderTranscriptPreview(transcriptPreview);
           const isTranscriptMutation =
             data.change_kind === "ingest" ||
-            (data.change_kind === "transcript_preview" && !isFreshTranscriptPreview) ||
-            (!data.change_kind && (data.latest_event_id > 0 || hasTranscriptPreview));
-          if (hasTranscriptPreview && (isTranscriptMutation || isFreshTranscriptPreview)) {
+            (data.change_kind === "transcript_preview" &&
+              !isFreshTranscriptPreview) ||
+            (!data.change_kind &&
+              (data.latest_event_id > 0 || hasTranscriptPreview));
+          if (
+            hasTranscriptPreview &&
+            (isTranscriptMutation || isFreshTranscriptPreview)
+          ) {
             setStreamTranscriptPreview(transcriptPreview);
             queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
               { queryKey: ["agent-session-workspace", sessionId] },
@@ -304,11 +343,19 @@ export function useSessionWorkspace(
                 if (!current) return current;
                 return {
                   ...current,
-                  session: applyTranscriptPreviewToSession(current.session, transcriptPreview),
+                  session: applyTranscriptPreviewToSession(
+                    current.session,
+                    transcriptPreview,
+                  ),
                   thread: {
                     ...current.thread,
                     sessions: current.thread.sessions.map((item) =>
-                      item.id === sessionId ? applyTranscriptPreviewToSession(item, transcriptPreview) : item,
+                      item.id === sessionId
+                        ? applyTranscriptPreviewToSession(
+                            item,
+                            transcriptPreview,
+                          )
+                        : item,
                     ),
                   },
                 };
@@ -334,7 +381,13 @@ export function useSessionWorkspace(
           }
           refreshWorkspaceQueries(isTranscriptMutation);
         },
-        onError: () => setStreamConnected(false),
+        onError: () => {
+          if (freshnessTimer !== null) {
+            window.clearTimeout(freshnessTimer);
+            freshnessTimer = null;
+          }
+          setStreamConnected(false);
+        },
       },
       {
         skipInitial: workspaceReady,
@@ -344,9 +397,17 @@ export function useSessionWorkspace(
 
     return () => {
       disposed = true;
+      if (freshnessTimer !== null) window.clearTimeout(freshnessTimer);
       cleanup();
     };
-  }, [sessionId, documentVisible, workspaceReady, queryClient, onlineEpoch, activityFeed]);
+  }, [
+    sessionId,
+    documentVisible,
+    workspaceReady,
+    queryClient,
+    onlineEpoch,
+    activityFeed,
+  ]);
   const rawSession = workspaceData?.session ?? null;
   const session = useMemo(
     () =>
@@ -363,7 +424,9 @@ export function useSessionWorkspace(
     return {
       ...rawThread,
       sessions: rawThread.sessions.map((item) =>
-        item.id === sessionId ? applyTranscriptPreviewToSession(item, streamTranscriptPreview) : item,
+        item.id === sessionId
+          ? applyTranscriptPreviewToSession(item, streamTranscriptPreview)
+          : item,
       ),
     };
   }, [workspaceData?.thread, sessionId, streamTranscriptPreview]);
@@ -380,16 +443,25 @@ export function useSessionWorkspace(
     enabled: Boolean(workspaceData),
     initialPage: workspaceData?.projection ?? null,
     refetchInterval:
-      streamConnected || !documentVisible || !shouldRefreshWorkspaceSession(workspaceData?.session)
+      streamConnected ||
+      !documentVisible ||
+      !shouldRefreshWorkspaceSession(workspaceData?.session)
         ? false
         : WORKSPACE_FALLBACK_REFRESH_MS,
   });
 
-  const [manualSelectedKey, setManualSelectedKey] = useState<string | null>(null);
+  const [manualSelectedKey, setManualSelectedKey] = useState<string | null>(
+    null,
+  );
   // Tracks which key is actually visible after TimelinePane's local filtering
-  const [filteredVisibleKey, setFilteredVisibleKey] = useState<string | null | undefined>(undefined);
-  const [timelineListElement, setTimelineListElement] = useState<HTMLDivElement | null>(null);
-  const [evictedTailItems, setEvictedTailItems] = useState<AgentSessionProjectionItem[]>([]);
+  const [filteredVisibleKey, setFilteredVisibleKey] = useState<
+    string | null | undefined
+  >(undefined);
+  const [timelineListElement, setTimelineListElement] =
+    useState<HTMLDivElement | null>(null);
+  const [evictedTailItems, setEvictedTailItems] = useState<
+    AgentSessionProjectionItem[]
+  >([]);
   const highlightedEventRef = useRef<AgentEventId | null>(null);
   const autoScrolledSelectionRef = useRef(false);
   const lastTailPageRef = useRef<AgentSessionProjectionResponse | null>(null);
@@ -408,15 +480,16 @@ export function useSessionWorkspace(
     if (projectionPagesData.pages.some((page) => page.generation_id)) {
       return projectionPagesData.pages;
     }
-    return [...projectionPagesData.pages]
-      .sort((left, right) => (left.page_offset ?? 0) - (right.page_offset ?? 0));
+    return [...projectionPagesData.pages].sort(
+      (left, right) => (left.page_offset ?? 0) - (right.page_offset ?? 0),
+    );
   }, [projectionPagesData]);
 
   useEffect(() => {
     const tailPage =
       sortedProjectionPages.length > 0
         ? sortedProjectionPages[sortedProjectionPages.length - 1]
-        : workspaceData?.projection ?? null;
+        : (workspaceData?.projection ?? null);
     if (!tailPage) return;
 
     const previousTailPage = lastTailPageRef.current;
@@ -432,7 +505,9 @@ export function useSessionWorkspace(
     const droppedItems = previousTailPage.items.slice(0, evictedCount);
     if (droppedItems.length === 0) return;
 
-    setEvictedTailItems((current) => mergeProjectionItems(current, droppedItems));
+    setEvictedTailItems((current) =>
+      mergeProjectionItems(current, droppedItems),
+    );
   }, [sortedProjectionPages, workspaceData?.projection]);
 
   const projectionItems = useMemo(() => {
@@ -443,12 +518,19 @@ export function useSessionWorkspace(
       .slice(0, -1)
       .flatMap((page) => page.items);
 
-    return mergeProjectionItems(historicalItems, evictedTailItems, tailPage.items);
+    return mergeProjectionItems(
+      historicalItems,
+      evictedTailItems,
+      tailPage.items,
+    );
   }, [sortedProjectionPages, evictedTailItems]);
 
   // Count rendered transcript entries (events and actions), not seam dividers.
   const loadedEntryCount = useMemo(
-    () => projectionItems.filter((item) => item.kind === "event" || item.kind === "action").length,
+    () =>
+      projectionItems.filter(
+        (item) => item.kind === "event" || item.kind === "action",
+      ).length,
     [projectionItems],
   );
 
@@ -475,7 +557,10 @@ export function useSessionWorkspace(
     enabled: Boolean(sessionId),
     staleTime: 60_000,
   });
-  const subagents = useMemo(() => subagentsData?.children ?? [], [subagentsData]);
+  const subagents = useMemo(
+    () => subagentsData?.children ?? [],
+    [subagentsData],
+  );
 
   const model = useMemo(
     () => buildTimelineModel(visibleProjectionItems, subagents),
@@ -489,15 +574,21 @@ export function useSessionWorkspace(
   );
 
   const headSessionId =
-    threadData?.head_session_id || session?.thread_head_session_id || session?.id || null;
+    threadData?.head_session_id ||
+    session?.thread_head_session_id ||
+    session?.id ||
+    null;
 
   const currentThreadSession = useMemo(
-    () => threadSessions.find((item) => item.id === session?.id) || session || null,
+    () =>
+      threadSessions.find((item) => item.id === session?.id) || session || null,
     [threadSessions, session],
   );
 
   const headThreadSession = useMemo(
-    () => threadSessions.find((item) => item.id === headSessionId) || currentThreadSession,
+    () =>
+      threadSessions.find((item) => item.id === headSessionId) ||
+      currentThreadSession,
     [threadSessions, headSessionId, currentThreadSession],
   );
 
@@ -505,11 +596,15 @@ export function useSessionWorkspace(
     const pending = pendingRenderBeaconRef.current;
     if (!pending || pending.sessionId !== sessionId) return;
     if (!pending.latestEventEmittedAtMs) return;
-    const latestEventIsRendered = events.some((event) => event.id === pending.latestEventId);
+    const latestEventIsRendered = events.some(
+      (event) => event.id === pending.latestEventId,
+    );
     if (!latestEventIsRendered) return;
 
     const caps = currentThreadSession?.capabilities;
-    const managed = Boolean(caps && (caps.live_control_available || caps.host_reattach_available));
+    const managed = Boolean(
+      caps && (caps.live_control_available || caps.host_reattach_available),
+    );
     emitRenderBeacon({
       sessionId: pending.sessionId,
       latestEventId: pending.latestEventId,
@@ -528,10 +623,16 @@ export function useSessionWorkspace(
     const currentSession = workspaceData?.session;
     if (!currentSession) return;
     const renderedCommitSeq = currentSession?.session_state.commit_seq;
-    if (renderedCommitSeq == null || renderedCommitSeq < pending.catalogCommitSeq) return;
+    if (
+      renderedCommitSeq == null ||
+      renderedCommitSeq < pending.catalogCommitSeq
+    )
+      return;
 
     const caps = currentSession?.capabilities;
-    const managed = Boolean(caps && (caps.live_control_available || caps.host_reattach_available));
+    const managed = Boolean(
+      caps && (caps.live_control_available || caps.host_reattach_available),
+    );
     const observedAt = currentSession.session_state.activity.observed_at;
     emitStateRenderBeacon({
       sessionId: pending.sessionId,
@@ -553,9 +654,13 @@ export function useSessionWorkspace(
 
   const resolvedHighlightEventId = useMemo(() => {
     if (highlightEventId == null) return null;
-    return events.find((event) => String(event.id) === String(highlightEventId))?.id ?? null;
+    return (
+      events.find((event) => String(event.id) === String(highlightEventId))
+        ?.id ?? null
+    );
   }, [highlightEventId, events]);
-  const hasHighlightEvent = highlightEventId == null || resolvedHighlightEventId != null;
+  const hasHighlightEvent =
+    highlightEventId == null || resolvedHighlightEventId != null;
 
   const highlightSelectionKey = useMemo(() => {
     if (highlightEventId == null || !hasHighlightEvent) {
@@ -563,15 +668,22 @@ export function useSessionWorkspace(
     }
     return resolvedHighlightEventId == null
       ? null
-      : model.eventIdToSelectionKey.get(resolvedHighlightEventId) ?? null;
-  }, [highlightEventId, hasHighlightEvent, resolvedHighlightEventId, model.eventIdToSelectionKey]);
+      : (model.eventIdToSelectionKey.get(resolvedHighlightEventId) ?? null);
+  }, [
+    highlightEventId,
+    hasHighlightEvent,
+    resolvedHighlightEventId,
+    model.eventIdToSelectionKey,
+  ]);
 
   const visibleManualSelectedKey = useMemo(() => {
     if (model.items.length === 0 || manualSelectedKey == null) {
       return null;
     }
 
-    return model.items.some((item) => timelineItemContainsSelection(item, manualSelectedKey))
+    return model.items.some((item) =>
+      timelineItemContainsSelection(item, manualSelectedKey),
+    )
       ? manualSelectedKey
       : null;
   }, [model.items, manualSelectedKey]);
@@ -583,14 +695,23 @@ export function useSessionWorkspace(
     if (hasHighlightEvent) return;
     if (!hasPreviousPage || isFetchingPreviousPage) return;
     void fetchPreviousPage();
-  }, [highlightEventId, hasHighlightEvent, hasPreviousPage, isFetchingPreviousPage, fetchPreviousPage]);
+  }, [
+    highlightEventId,
+    hasHighlightEvent,
+    hasPreviousPage,
+    isFetchingPreviousPage,
+    fetchPreviousPage,
+  ]);
 
   useEffect(() => {
     if (highlightEventId == null) return;
     if (!hasHighlightEvent) return;
     if (highlightedEventRef.current === highlightEventId) return;
 
-    const rowId = resolvedHighlightEventId == null ? null : model.eventIdToRowId.get(resolvedHighlightEventId);
+    const rowId =
+      resolvedHighlightEventId == null
+        ? null
+        : model.eventIdToRowId.get(resolvedHighlightEventId);
 
     let frameId: number | null = null;
 
@@ -613,16 +734,28 @@ export function useSessionWorkspace(
         window.cancelAnimationFrame(frameId);
       }
     };
-  }, [highlightEventId, hasHighlightEvent, resolvedHighlightEventId, model.eventIdToRowId]);
+  }, [
+    highlightEventId,
+    hasHighlightEvent,
+    resolvedHighlightEventId,
+    model.eventIdToRowId,
+  ]);
 
   useEffect(() => {
     if (highlightEventId != null) return;
     if (projectionLoading) return;
     if (autoScrolledSelectionRef.current) return;
     if (model.items.length === 0) return;
-    const fallbackItem = [...model.items].reverse().find((item) => getPreferredSelectionKey(item)) ?? null;
-    const targetKey = selectedKey || (fallbackItem ? getPreferredSelectionKey(fallbackItem) : null);
-    const selection = targetKey ? model.selectionMap.get(targetKey) ?? null : null;
+    const fallbackItem =
+      [...model.items]
+        .reverse()
+        .find((item) => getPreferredSelectionKey(item)) ?? null;
+    const targetKey =
+      selectedKey ||
+      (fallbackItem ? getPreferredSelectionKey(fallbackItem) : null);
+    const selection = targetKey
+      ? (model.selectionMap.get(targetKey) ?? null)
+      : null;
 
     if (selectedKey && !selection) return;
 
@@ -635,7 +768,10 @@ export function useSessionWorkspace(
       if (!selectedKey) {
         const list = timelineListElement;
         if (list instanceof HTMLElement) {
-          const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+          const maxScrollTop = Math.max(
+            0,
+            list.scrollHeight - list.clientHeight,
+          );
           if (maxScrollTop > AUTO_SCROLL_EPSILON_PX) {
             list.scrollTop = maxScrollTop;
             if (list.scrollTop > AUTO_SCROLL_EPSILON_PX) {
@@ -645,7 +781,8 @@ export function useSessionWorkspace(
           }
 
           if (attempts >= AUTO_SCROLL_MAX_ATTEMPTS) {
-            autoScrolledSelectionRef.current = maxScrollTop <= AUTO_SCROLL_EPSILON_PX;
+            autoScrolledSelectionRef.current =
+              maxScrollTop <= AUTO_SCROLL_EPSILON_PX;
             return;
           }
         }
@@ -673,14 +810,25 @@ export function useSessionWorkspace(
         window.cancelAnimationFrame(frameId);
       }
     };
-  }, [highlightEventId, projectionLoading, selectedKey, model.items, model.selectionMap, timelineListElement]);
+  }, [
+    highlightEventId,
+    projectionLoading,
+    selectedKey,
+    model.items,
+    model.selectionMap,
+    timelineListElement,
+  ]);
 
   // When TimelinePane reports a filtered visible key, use that for the inspector.
   // `undefined` means no filter callback has fired yet (treat as unfiltered).
-  const effectiveSelectedKey = filteredVisibleKey === undefined ? selectedKey : filteredVisibleKey;
+  const effectiveSelectedKey =
+    filteredVisibleKey === undefined ? selectedKey : filteredVisibleKey;
 
   const selectedSelection = useMemo(
-    () => (effectiveSelectedKey ? model.selectionMap.get(effectiveSelectedKey) ?? null : null),
+    () =>
+      effectiveSelectedKey
+        ? (model.selectionMap.get(effectiveSelectedKey) ?? null)
+        : null,
     [effectiveSelectedKey, model.selectionMap],
   );
 
@@ -688,9 +836,12 @@ export function useSessionWorkspace(
     setManualSelectedKey(key);
   };
 
-  const handleVisibleSelectionChange = useCallback((visibleKey: string | null) => {
-    setFilteredVisibleKey(visibleKey);
-  }, []);
+  const handleVisibleSelectionChange = useCallback(
+    (visibleKey: string | null) => {
+      setFilteredVisibleKey(visibleKey);
+    },
+    [],
+  );
 
   return {
     session,
@@ -719,6 +870,7 @@ export function useSessionWorkspace(
     selectKey,
     handleVisibleSelectionChange,
     registerTimelineList,
+    streamConnected,
     activityFeed,
   };
 }

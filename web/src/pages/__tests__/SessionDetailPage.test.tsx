@@ -77,7 +77,8 @@ vi.mock("react-hot-toast", () => {
 });
 
 vi.mock("../../services/api/agents", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../services/api/agents")>();
+  const actual =
+    await importOriginal<typeof import("../../services/api/agents")>();
   return {
     ...actual,
     createSessionShare: agentApiMocks.createSessionShare,
@@ -192,22 +193,26 @@ function makePauseRequest(
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const capabilities = overrides.capabilities ?? makeCapabilities();
   const runtimeDisplay = overrides.runtime_display ?? makeRuntimeDisplay();
-  const access = runtimeDisplay.control_path === "managed"
-    ? capabilities.live_control_available
-      ? "live_control"
-      : capabilities.host_reattach_available
-        ? "reattach"
-        : null
-    : "search_only";
-  const activity = runtimeDisplay.state === "running"
-    ? "executing"
-    : runtimeDisplay.state === "thinking"
-      ? "thinking"
-      : runtimeDisplay.state === "idle" || runtimeDisplay.state === "needs_user"
-        ? "quiescent"
-        : runtimeDisplay.state === "blocked" || runtimeDisplay.state === "stalled"
-          ? runtimeDisplay.state
-          : "unknown";
+  const access =
+    runtimeDisplay.control_path === "managed"
+      ? capabilities.live_control_available
+        ? "live_control"
+        : capabilities.host_reattach_available
+          ? "reattach"
+          : null
+      : "search_only";
+  const activity =
+    runtimeDisplay.state === "running"
+      ? "executing"
+      : runtimeDisplay.state === "thinking"
+        ? "thinking"
+        : runtimeDisplay.state === "idle" ||
+            runtimeDisplay.state === "needs_user"
+          ? "quiescent"
+          : runtimeDisplay.state === "blocked" ||
+              runtimeDisplay.state === "stalled"
+            ? runtimeDisplay.state
+            : "unknown";
   return {
     id: "session-codex",
     provider: "codex",
@@ -246,8 +251,12 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
       closed: runtimeDisplay.lifecycle === "closed",
       access,
       activity,
-      pendingInteraction: runtimeDisplay.needs_attention || runtimeDisplay.pause_request != null,
-      observedAt: runtimeDisplay.activity_recency === "live" ? "2026-03-22T22:04:30Z" : null,
+      pendingInteraction:
+        runtimeDisplay.needs_attention || runtimeDisplay.pause_request != null,
+      observedAt:
+        runtimeDisplay.activity_recency === "live"
+          ? "2026-03-22T22:04:30Z"
+          : null,
       tool: runtimeDisplay.compact_tool_label,
       sendAvailable: capabilities.reply_to_live_session_available === true,
     }),
@@ -360,7 +369,8 @@ describe("SessionDetailPage", () => {
         "--resume-session",
         "session-codex",
       ],
-      command: "longhouse codex --cwd /Users/example/git/zerg --resume-session session-codex",
+      command:
+        "longhouse codex --cwd /Users/example/git/zerg --resume-session session-codex",
       handoff: "terminal_command",
     });
     clipboardMocks.copyToClipboard.mockResolvedValue(true);
@@ -383,7 +393,9 @@ describe("SessionDetailPage", () => {
       (baseUrl, shareUrlOrToken) => {
         const cleanBase = baseUrl.replace(/\/+$/, "");
         const raw = String(shareUrlOrToken);
-        return raw.startsWith("/") ? `${cleanBase}${raw}` : `${cleanBase}/share/${raw}`;
+        return raw.startsWith("/")
+          ? `${cleanBase}${raw}`
+          : `${cleanBase}/share/${raw}`;
       },
     );
 
@@ -607,11 +619,15 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
     await user.click(screen.getByTestId("session-resume-button"));
 
-    expect(agentApiMocks.createSessionResumeIntent).toHaveBeenCalledWith("session-codex");
-    expect(screen.getByTestId("resume-session-modal")).toHaveTextContent("Resume on cinder");
-    expect(screen.getByTestId("resume-session-recovery-copy")).toHaveTextContent(
-      "This Helm stopped unexpectedly",
+    expect(agentApiMocks.createSessionResumeIntent).toHaveBeenCalledWith(
+      "session-codex",
     );
+    expect(screen.getByTestId("resume-session-modal")).toHaveTextContent(
+      "Resume on cinder",
+    );
+    expect(
+      screen.getByTestId("resume-session-recovery-copy"),
+    ).toHaveTextContent("This Helm stopped unexpectedly");
     expect(screen.getByTestId("resume-session-command")).toHaveTextContent(
       "longhouse codex --cwd /Users/example/git/zerg --resume-session session-codex",
     );
@@ -670,9 +686,9 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
       "Attach command",
     );
-    expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
-      "codex-bridge attach --session-id session-codex",
-    );
+    expect(
+      screen.getByTestId("session-debug-attach-command"),
+    ).toHaveTextContent("codex-bridge attach --session-id session-codex");
     const continuationNotice = screen.getByTestId(
       "session-continuation-unavailable",
     );
@@ -689,7 +705,9 @@ describe("SessionDetailPage", () => {
 
     renderSessionDetailPage();
 
-    expect(screen.queryByTestId("session-continue-button")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("session-continue-button"),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps unresolved live tool calls pending from the row into the inspector", () => {
@@ -735,19 +753,21 @@ describe("SessionDetailPage", () => {
 
       {
         const label = screen.getByText("Bash");
-        const row = label.closest("[data-row-kind=\"tool\"]");
+        const row = label.closest('[data-row-kind="tool"]');
         expect(row).toHaveTextContent("running");
       }
 
       const toolLabel = screen.getByText("Bash");
       const toolRow = toolLabel.closest("button");
       if (!(toolRow instanceof HTMLButtonElement)) {
-        throw new Error("Expected the tool label to live inside a clickable row");
+        throw new Error(
+          "Expected the tool label to live inside a clickable row",
+        );
       }
 
       fireEvent.click(toolRow);
 
-      const row = screen.getByText("Bash").closest("[data-row-kind=\"tool\"]");
+      const row = screen.getByText("Bash").closest('[data-row-kind="tool"]');
       expect(row).not.toBeNull();
       expect(row).toHaveTextContent("Result not recorded yet.");
       expect(row).not.toHaveTextContent(
@@ -826,7 +846,9 @@ describe("SessionDetailPage", () => {
     const banner = screen.getByTestId("launch-pending-banner");
     expect(banner).toHaveTextContent("Starting session on cinder");
     expect(banner).toHaveTextContent("waiting for the machine to confirm");
-    expect(screen.queryByTestId("launch-failed-banner")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("launch-failed-banner"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the backend launch lifecycle failure reason", () => {
@@ -837,7 +859,8 @@ describe("SessionDetailPage", () => {
         mode: "helm",
         launchState: "abandoned",
         launchErrorCode: "launch_timeout",
-        launchErrorMessage: "Machine Agent did not report back before lease expired",
+        launchErrorMessage:
+          "Machine Agent did not report back before lease expired",
       }),
     });
 
@@ -850,7 +873,9 @@ describe("SessionDetailPage", () => {
     expect(banner).toHaveTextContent(
       "Machine Agent did not report back before lease expired",
     );
-    expect(screen.queryByTestId("launch-pending-banner")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("launch-pending-banner"),
+    ).not.toBeInTheDocument();
   });
 
   it("marks unresolved ended-session tool calls as dropped in both row and inspector", () => {
@@ -889,7 +914,7 @@ describe("SessionDetailPage", () => {
 
     {
       const label = screen.getByText("Bash");
-      const row = label.closest("[data-row-kind=\"tool\"]");
+      const row = label.closest('[data-row-kind="tool"]');
       expect(row).toHaveTextContent("dropped");
     }
 
@@ -901,85 +926,12 @@ describe("SessionDetailPage", () => {
 
     fireEvent.click(toolRow);
 
-    const row = screen.getByText("Bash").closest("[data-row-kind=\"tool\"]");
+    const row = screen.getByText("Bash").closest('[data-row-kind="tool"]');
     expect(row).not.toBeNull();
     expect(row).toHaveTextContent(
       "Tool call dropped \u2014 no result was ever recorded.",
     );
     expect(row).not.toHaveTextContent("Result not recorded yet.");
-  });
-
-  it("stamps session age in the control strip instead of a running counter", () => {
-    const session = makeSession({
-      ended_at: null,
-      status: "working",
-      presence_state: "running",
-      active_tool: "Bash",
-      runtime_source: "managed_local_transport",
-      confidence: "live",
-      display_phase: "Running Bash",
-      last_live_at: "2026-03-22T22:04:30Z",
-    });
-    const model = buildTimelineModel([
-      {
-        kind: "event",
-        session_id: session.id,
-        timestamp: "2026-03-22T22:00:01Z",
-        event: {
-          id: 1,
-          role: "assistant",
-          content_text: "Still working.",
-          tool_name: null,
-          tool_input_json: null,
-          tool_output_text: null,
-          tool_call_id: null,
-          timestamp: "2026-03-22T22:00:01Z",
-          in_active_context: true,
-        },
-      },
-    ]);
-
-    workspaceMocks.useSessionWorkspace.mockImplementation(() => {
-      const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
-      return {
-        session,
-        sessionLoading: false,
-        sessionError: null,
-        threadSessions: [session],
-        currentThreadSession: session,
-        headThreadSession: session,
-        isViewingHead: true,
-        totalEntries: model.items.length,
-        loadedEntryCount: model.items.length,
-        items: model.items,
-        eventsLoading: false,
-        eventsError: null,
-        fetchPreviousPage: vi.fn(),
-        hasPreviousPage: false,
-        isFetchingPreviousPage: false,
-        abandonedEvents: 0,
-        showAbandonedBranches: false,
-        setShowAbandonedBranches: vi.fn(),
-        selectedKey,
-        selectedSelection: selectedKey
-          ? (model.selectionMap.get(selectedKey) ?? null)
-          : null,
-        selectKey: setSelectedKey,
-        handleVisibleSelectionChange: vi.fn(),
-        registerTimelineList: vi.fn(),
-      };
-    });
-
-    renderSessionDetailPage();
-
-    expect(
-      screen.queryByTestId("session-detail-header-runtime"),
-    ).not.toBeInTheDocument();
-    const strip = screen.getByTestId("session-control-strip");
-    expect(strip).toHaveTextContent("Started 4m ago");
-    // A per-second stopwatch asserts live work purely by moving; the state
-    // label and the "Updated ..." stamp own that question instead.
-    expect(strip.textContent).not.toMatch(/\d+:\d{2}/);
   });
 
   it("keeps managed waiting states explicit in the dock", () => {
@@ -1062,7 +1014,9 @@ describe("SessionDetailPage", () => {
     expect(
       screen.queryByTestId("session-detail-header-runtime"),
     ).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-control-strip")).toHaveTextContent("Idle");
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Idle",
+    );
   });
 
   it("renders an answerable provider pause request and posts selected answers", async () => {
@@ -1095,8 +1049,12 @@ describe("SessionDetailPage", () => {
     mockWorkspaceState({ session, model: buildTimelineModel([]) });
     renderSessionDetailPage();
 
-    expect(screen.getByTestId("session-control-strip")).toHaveTextContent("Needs answer");
-    expect(screen.getByTestId("session-pause-panel")).toHaveTextContent("Choose storage");
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Needs answer",
+    );
+    expect(screen.getByTestId("session-pause-panel")).toHaveTextContent(
+      "Choose storage",
+    );
     expect(screen.getByTestId("session-pause-panel")).toHaveTextContent(
       "Which storage backend should I use?",
     );
@@ -1119,7 +1077,9 @@ describe("SessionDetailPage", () => {
         }),
       );
     });
-    expect(agentApiMocks.respondToPauseRequest.mock.calls.at(-1)?.[2]).not.toHaveProperty("content");
+    expect(
+      agentApiMocks.respondToPauseRequest.mock.calls.at(-1)?.[2],
+    ).not.toHaveProperty("content");
   });
 
   it("posts multi-select pause answers as arrays", async () => {
@@ -1169,7 +1129,9 @@ describe("SessionDetailPage", () => {
         }),
       );
     });
-    expect(agentApiMocks.respondToPauseRequest.mock.calls.at(-1)?.[2]).not.toHaveProperty("content");
+    expect(
+      agentApiMocks.respondToPauseRequest.mock.calls.at(-1)?.[2],
+    ).not.toHaveProperty("content");
   });
 
   it("posts freeform pause answers as content when no questions are available", async () => {
@@ -1247,7 +1209,9 @@ describe("SessionDetailPage", () => {
 
   it("surfaces pause response errors without crashing", async () => {
     const user = userEvent.setup();
-    agentApiMocks.respondToPauseRequest.mockRejectedValueOnce(new Error("Request already resolved"));
+    agentApiMocks.respondToPauseRequest.mockRejectedValueOnce(
+      new Error("Request already resolved"),
+    );
     const pauseRequest = makePauseRequest();
     const session = makeSession({
       ended_at: null,
@@ -1268,7 +1232,9 @@ describe("SessionDetailPage", () => {
     await user.click(screen.getByLabelText(/SQLite/));
     await user.click(screen.getByRole("button", { name: /Send answer/ }));
 
-    expect(await screen.findByText("Request already resolved")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Request already resolved"),
+    ).toBeInTheDocument();
   });
 
   it("renders non-answerable provider pause requests as terminal-only", () => {
@@ -1305,7 +1271,9 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-pause-panel")).toHaveTextContent(
       "Waiting in terminal",
     );
-    expect(screen.queryByRole("button", { name: /Send answer/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Send answer/ }),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
       "Answer the provider question in the terminal before sending another prompt.",
@@ -1321,7 +1289,8 @@ describe("SessionDetailPage", () => {
         {
           id: "terminal_answer",
           header: null,
-          question: "Claude is waiting for an interactive answer in the terminal.",
+          question:
+            "Claude is waiting for an interactive answer in the terminal.",
           multi_select: false,
           options: [],
         },
@@ -1344,31 +1313,16 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     const panel = screen.getByTestId("session-pause-panel");
-    expect(panel).toHaveTextContent("Claude is waiting for an interactive answer in the terminal.");
-    expect(panel).toHaveTextContent("Waiting in terminal");
-    expect(panel.querySelector(".session-pause-freeform")).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /Answer/ })).not.toBeInTheDocument();
-  });
-
-  it("uses explicit runtime facts for the dock presence marker", () => {
-    const session = makeSession({
-      ended_at: null,
-      status: "working",
-      presence_state: null,
-      active_tool: null,
-      runtime_source: null,
-      confidence: null,
-      display_phase: null,
-      last_live_at: null,
-    });
-    mockWorkspaceState({ session, model: buildTimelineModel([]) });
-
-    renderSessionDetailPage();
-
-    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Using Shell",
+    expect(panel).toHaveTextContent(
+      "Claude is waiting for an interactive answer in the terminal.",
     );
-    expect(screen.getByTitle("Running: Shell")).toBeInTheDocument();
+    expect(panel).toHaveTextContent("Waiting in terminal");
+    expect(
+      panel.querySelector(".session-pause-freeform"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /Answer/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not promote recent transcript timestamps into live runtime tone", () => {
@@ -1513,7 +1467,8 @@ describe("SessionDetailPage", () => {
 
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     const disabledReason =
-      screen.getByTestId("session-chat").getAttribute("data-disabled-reason") ?? "";
+      screen.getByTestId("session-chat").getAttribute("data-disabled-reason") ??
+      "";
     expect(disabledReason).toMatch(/Antigravity/);
     expect(disabledReason.toLowerCase()).toMatch(/unmanaged|read-only|cannot/);
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
@@ -1663,20 +1618,21 @@ function renderSessionDetailPageAt(
   });
 
   authMocks.useAuth.mockReturnValue({
-    user: options.user === undefined
-      ? null
-      : options.user === null
+    user:
+      options.user === undefined
         ? null
-        : {
-            id: options.user.id,
-            email: options.user.email,
-            display_name: options.user.display_name ?? null,
-            avatar_url: null,
-            is_active: true,
-            created_at: "2026-01-01T00:00:00Z",
-            last_login: null,
-            role: "USER",
-          },
+        : options.user === null
+          ? null
+          : {
+              id: options.user.id,
+              email: options.user.email,
+              display_name: options.user.display_name ?? null,
+              avatar_url: null,
+              is_active: true,
+              created_at: "2026-01-01T00:00:00Z",
+              last_login: null,
+              role: "USER",
+            },
     isAuthenticated: options.user !== null && options.user !== undefined,
     isLoading: false,
     login: vi.fn(),
@@ -1717,7 +1673,9 @@ describe("SessionDetailPage — signed copy link + shared attribution", () => {
       (baseUrl, shareUrlOrToken) => {
         const cleanBase = baseUrl.replace(/\/+$/, "");
         const raw = String(shareUrlOrToken);
-        return raw.startsWith("/") ? `${cleanBase}${raw}` : `${cleanBase}/share/${raw}`;
+        return raw.startsWith("/")
+          ? `${cleanBase}${raw}`
+          : `${cleanBase}/share/${raw}`;
       },
     );
   });
@@ -1747,11 +1705,11 @@ describe("SessionDetailPage — signed copy link + shared attribution", () => {
     renderSessionDetailPageAt("/timeline/session-codex", {
       user: { id: 1, email: "david@example.com", display_name: "David Rose" },
     });
-    expect(screen.queryByRole("button", { name: /copy link/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /copy link/i }),
+    ).not.toBeInTheDocument();
     expect(agentApiMocks.createSessionShare).not.toHaveBeenCalled();
   });
-
-
 
   it("shows where a branch came from, from the moment it exists", () => {
     // The live thread edge is written at create time, so this must not wait
@@ -1769,9 +1727,14 @@ describe("SessionDetailPage — signed copy link + shared attribution", () => {
 
   it("does not claim parentage for an ordinary session", () => {
     renderSessionDetailPageAt("/timeline/session-codex", {
-      session: makeSession({ continuation_kind: null, continued_from_session_id: null }),
+      session: makeSession({
+        continuation_kind: null,
+        continued_from_session_id: null,
+      }),
     });
-    expect(screen.queryByTestId("session-branched-from")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("session-branched-from"),
+    ).not.toBeInTheDocument();
   });
 
   it("does not render the Shared by pill when ?shared_by is absent", () => {
