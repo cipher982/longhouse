@@ -1011,3 +1011,25 @@
     gap: 18px;
   }
 }
+
+.lab-app[data-surface="island"] .lab-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+}
+
+.lab-app[data-surface="island"] .lab-composer__draft {
+  width: 100%;
+  margin: 0;
+  padding-inline: 12px;
+  border: 1px solid var(--lab-line);
+  border-radius: 12px;
+  background: var(--lab-surface);
+}
+
+.lab-app[data-surface="island"]
+  .lab-composer__draft:has(textarea:focus-visible) {
+  border-color: var(--lab-sage);
+}

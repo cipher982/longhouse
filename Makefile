@@ -60,9 +60,9 @@ capture-live-status: ## Record a read-only session snapshot + SSE (SESSION=<id>)
 	@test -n "$(SESSION)" || (echo "SESSION is required" >&2; exit 2)
 	@bun scripts/qa/capture-live-status.ts "$(SESSION)" --output "$(LAB_OUTPUT)" --seconds "$(LAB_SECONDS)"
 
-capture-live-status-frames: ## Capture replay states and motion (CAPTURE=<private.json>; lab running)
+capture-live-status-frames: ## Capture replay states and motion (CAPTURE=<private.json>; optional SURFACE)
 	@test -n "$(CAPTURE)" || (echo "CAPTURE is required" >&2; exit 2)
-	@bun scripts/qa/capture-live-status-frames.ts --capture "$(CAPTURE)" --url "http://127.0.0.1:$(LAB_PORT)/live-status-lab.html" $(if $(OUTPUT),--output "$(OUTPUT)",)
+	@bun scripts/qa/capture-live-status-frames.ts --capture "$(CAPTURE)" --url "http://127.0.0.1:$(LAB_PORT)/live-status-lab.html" $(if $(OUTPUT),--output "$(OUTPUT)",) $(if $(SURFACE),--surface "$(SURFACE)",)
 
 demo-db: ## Build demo SQLite database
 	@uv run --project server python server/scripts/build_demo_db.py --force

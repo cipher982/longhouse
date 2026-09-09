@@ -20,7 +20,7 @@ import {
   REPLAY_DURATION_MS,
   SCENES,
 } from "./model";
-import type { Scene, SessionCapture } from "./types";
+import type { LiveSurface, Scene, SessionCapture } from "./types";
 import "../../styles/tokens.css";
 import "../../styles/session-workspace.css";
 import "./App.css";
@@ -60,6 +60,10 @@ export default function App() {
   const [timeMs, setTimeMs] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [surface, setSurface] = useState<LiveSurface>("ledger");
+  const [previewDecision, setPreviewDecision] = useState<
+    "allow" | "deny" | null
+  >(null);
   const [motionOverride, setMotionOverride] = useState<boolean | null>(null);
   const [largerText, setLargerText] = useState(false);
   const [draft, setDraft] = useState("");
@@ -103,6 +107,12 @@ export default function App() {
     scene === "recorded"
       ? "Recorded snapshot · no live connection"
       : "Design replay · real recorded content · simulated states";
+  const notice =
+    scene === "finished" && timeMs >= 10000 && timeMs < 14000
+      ? "Output remains available in the transcript."
+      : scene === "reconnect" && timeMs >= 18000 && timeMs < 22000
+        ? "Fresh work evidence restored."
+        : null;
 
   function seek(nextTimeMs: number) {
     const next = Math.max(0, Math.min(REPLAY_DURATION_MS, nextTimeMs));
@@ -151,6 +161,7 @@ export default function App() {
       setScene("recorded");
       seek(0);
       setDraft("");
+      setPreviewDecision(null);
       setSelectedKey(null);
       setShowAbandonedBranches(false);
     } catch {
@@ -165,6 +176,7 @@ export default function App() {
 
   function changeScene(nextScene: Scene) {
     setPlaying(false);
+    setPreviewDecision(null);
     seek(0);
     setScene(nextScene);
   }
@@ -189,6 +201,7 @@ export default function App() {
       data-theme={theme}
       data-reduce-motion={reduceMotion}
       data-larger-text={largerText}
+      data-surface={surface}
     >
       <header className="lab-toolbar">
         <div className="lab-toolbar__identity">
@@ -314,6 +327,21 @@ export default function App() {
               </section>
 
               <section className="lab-control-section">
+                <label className="lab-control-label" htmlFor="lab-surface">
+                  Surface
+                </label>
+                <select
+                  id="lab-surface"
+                  aria-label="Surface"
+                  value={surface}
+                  onChange={(event) =>
+                    setSurface(event.target.value as LiveSurface)
+                  }
+                >
+                  <option value="dock">Dock · compact baseline</option>
+                  <option value="ledger">Ledger · integrated row</option>
+                  <option value="island">Island · detached capsule</option>
+                </select>
                 <label className="lab-control-label" htmlFor="lab-theme">
                   Appearance
                 </label>
@@ -414,6 +442,10 @@ export default function App() {
                       state={frame.ribbon}
                       motionTimeMs={timeMs}
                       reduceMotion={reduceMotion}
+                      surface={surface}
+                      notice={notice}
+                      previewDecision={previewDecision}
+                      onPreviewDecision={setPreviewDecision}
                     />
                     <div className="lab-composer__draft">
                       <label

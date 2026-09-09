@@ -48,8 +48,13 @@ export interface ReplayFrame {
   explanation: string;
   sourceLabel: string;
 }
+export type LiveSurface = "dock" | "ledger" | "island";
 export interface LiveWorkRibbonProps {
   state: RibbonState;
   motionTimeMs: number;
   reduceMotion: boolean;
+  surface: LiveSurface;
+  notice: string | null;
+  previewDecision: "allow" | "deny" | null;
+  onPreviewDecision: (decision: "allow" | "deny") => void;
 }

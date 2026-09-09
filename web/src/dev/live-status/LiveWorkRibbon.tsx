@@ -66,6 +66,10 @@ export function LiveWorkRibbon({
   state,
   motionTimeMs,
   reduceMotion,
+  surface,
+  notice,
+  previewDecision,
+  onPreviewDecision,
 }: LiveWorkRibbonProps) {
   const workIsMoving =
     state.tone === "working" && state.animateWork && !reduceMotion;
@@ -97,6 +101,11 @@ export function LiveWorkRibbon({
   }, [state.detail, state.detailKind]);
   const connectionLabel = CONNECTION_LABELS[state.connection];
   const showContext = state.tone === "unknown" || state.tone === "attention";
+  const prominence = showContext
+    ? "expanded"
+    : notice && surface !== "dock"
+      ? "notice"
+      : "rest";
 
   return (
     <div
@@ -106,11 +115,14 @@ export function LiveWorkRibbon({
       data-work-motion={workIsMoving ? "active" : "off"}
       data-connection={state.connection}
       data-reduce-motion={reduceMotion ? "true" : "false"}
+      data-surface={surface}
+      data-prominence={prominence}
     >
       <details className="lwr-observation">
         <summary
           className="lwr-primary"
           title="Inspect the observed session evidence"
+          aria-label={`Inspect evidence: ${state.headline}. ${connectionLabel}.`}
         >
           <span
             className="lwr-work-glyph"
@@ -217,19 +229,58 @@ export function LiveWorkRibbon({
           </p>
         </div>
       </details>
-      {showContext && state.observation !== connectionLabel && (
-        <p className="lwr-note">{state.observation}</p>
-      )}
-      {state.detail && (showContext || state.detailKind === "explanation") && (
-        <p
-          className={
-            state.detailKind === "literal" ? "lwr-command" : "lwr-note"
-          }
-          title={state.detail}
-        >
-          {displayDetail}
-        </p>
-      )}
+      <div
+        className="lwr-context"
+        aria-hidden={
+          surface !== "dock" && prominence === "rest" ? true : undefined
+        }
+      >
+        <div className="lwr-context__inner">
+          {showContext && state.observation !== connectionLabel && (
+            <p className="lwr-note">{state.observation}</p>
+          )}
+          {notice && surface !== "dock" ? (
+            <p className="lwr-note">{notice}</p>
+          ) : state.detail &&
+            (showContext || state.detailKind === "explanation") ? (
+            <p
+              className={
+                state.detailKind === "literal" ? "lwr-command" : "lwr-note"
+              }
+              title={state.detail}
+            >
+              {displayDetail}
+            </p>
+          ) : surface !== "dock" ? (
+            <p className="lwr-note">{state.observation}</p>
+          ) : null}
+          {state.tone === "attention" && surface !== "dock" && (
+            <div className="lwr-approval">
+              <div className="lwr-approval__actions">
+                <button
+                  type="button"
+                  disabled={previewDecision !== null}
+                  onClick={() => onPreviewDecision("deny")}
+                >
+                  Deny
+                </button>
+                <button
+                  type="button"
+                  disabled={previewDecision !== null}
+                  onClick={() => onPreviewDecision("allow")}
+                >
+                  Allow once
+                </button>
+              </div>
+              <p className="lwr-approval__note" role="status">
+                {previewDecision
+                  ? `Mock choice: ${previewDecision === "allow" ? "Allow once" : "Deny"}. No command sent; request remains unconfirmed.`
+                  : "Preview choices only · no command is sent"}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

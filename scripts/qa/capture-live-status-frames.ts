@@ -20,6 +20,7 @@ if (!option("--capture"))
     "--capture is required (private JSON from make capture-live-status)",
   );
 const url = option("--url", "http://127.0.0.1:47213/live-status-lab.html");
+const surface = option("--surface", "dock");
 const output = resolve(
   option(
     "--output",
@@ -30,6 +31,21 @@ await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const errors: string[] = [];
 const evidence: Array<Record<string, unknown>> = [];
+
+async function settle(page: Page) {
+  await page.waitForFunction(
+    () =>
+      !document
+        .getAnimations()
+        .some(
+          (animation) =>
+            animation.playState === "running" &&
+            animation.effect instanceof KeyframeEffect &&
+            animation.effect.target instanceof Element &&
+            animation.effect.target.closest(".lab-composer"),
+        ),
+  );
+}
 
 async function controls(page: Page, open: boolean) {
   await page
@@ -68,15 +84,15 @@ async function seek(page: Page, scene: string, time: number) {
     if (document.activeElement instanceof HTMLElement)
       document.activeElement.blur();
   });
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
-  );
+  await page.evaluate(() => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    return promise;
+  });
 }
 async function snapshot(page: Page, name: string, scene: string, time: number) {
   await seek(page, scene, time);
+  await settle(page);
   const ribbon = page.getByTestId("live-work-ribbon");
   const observation = await ribbon.innerText();
   const work = await ribbon.getAttribute("data-work-motion");
@@ -102,7 +118,7 @@ async function snapshot(page: Page, name: string, scene: string, time: number) {
     horizontalOverflow: overflow,
     ...layout,
   });
-  return { work, observation };
+  return { work, observation, ...layout };
 }
 try {
   for (const size of [
@@ -126,6 +142,7 @@ try {
     try {
       const page = await context.newPage();
       page.on("pageerror", (error) => errors.push(error.message));
+      // Every candidate consumes the same capture and evidence scenarios.
       await context.route("**/*", (route) => {
         const request = route.request();
         const parsed = new URL(request.url());
@@ -138,6 +155,8 @@ try {
         return route.continue();
       });
       await page.goto(url);
+      await controls(page, true);
+      await page.getByLabel("Surface", { exact: true }).selectOption(surface);
       await page.locator("#capture-file").setInputFiles(capture);
       await page.getByTestId("lab-ready").waitFor();
       if (size.name === "compact-large") {
@@ -173,6 +192,7 @@ try {
         .getByTestId("live-work-ribbon")
         .locator("summary");
       await disclosure.click();
+      await settle(page);
       const editingDraft = await draft.boundingBox();
       assert.ok(
         editingDraft && editingDraft.y + editingDraft.height <= size.height,
@@ -182,6 +202,7 @@ try {
         path: `${output}/${size.name}-editing-details.png`,
       });
       await disclosure.click();
+      await settle(page);
       assert.equal(
         await draft.inputValue(),
         "Keep this draft.\nWait for my next instruction.",
@@ -261,7 +282,52 @@ try {
       await snapshot(page, `${size.name}-machine-unreachable`, "machine", 9000);
       await snapshot(page, `${size.name}-foreground-check`, "return", 3000);
       await snapshot(page, `${size.name}-approval`, "attention", 8000);
-      await snapshot(page, `${size.name}-finished`, "finished", 12000);
+      if (surface !== "dock") {
+        await draft.fill("Keep this draft while approval is pending.");
+        const beforeChoice = await draft.boundingBox();
+        await page
+          .getByRole("button", { name: "Allow once", exact: true })
+          .click();
+        assert.match(
+          await page.locator(".lwr-approval__note").innerText(),
+          /No command sent/,
+        );
+        assert.equal(
+          await page
+            .getByTestId("live-work-ribbon")
+            .getAttribute("data-work-motion"),
+          "off",
+          "A local preview choice must not invent resumed work",
+        );
+        const afterChoice = await draft.boundingBox();
+        assert.deepEqual(
+          afterChoice,
+          beforeChoice,
+          "A pending approval response must not move the draft",
+        );
+        await page.screenshot({
+          path: `${output}/${size.name}-approval-local-choice.png`,
+        });
+        await draft.fill("");
+        await draft.press("Shift+Tab");
+      }
+      const finishedNotice = await snapshot(
+        page,
+        `${size.name}-finished`,
+        "finished",
+        12000,
+      );
+      const finishedRest = await snapshot(
+        page,
+        `${size.name}-finished-settled`,
+        "finished",
+        20000,
+      );
+      if (surface !== "dock")
+        assert.ok(
+          finishedRest.composerHeight < finishedNotice.composerHeight,
+          "Completion must return its extra space after the notice dwell",
+        );
       const recorded = await snapshot(
         page,
         `${size.name}-recorded`,
@@ -324,6 +390,7 @@ try {
       await page.getByLabel("Theme", { exact: true }).selectOption("light");
       await snapshot(page, `${size.name}-light`, "working", 4000);
       await page.getByTestId("live-work-ribbon").locator("summary").click();
+      await settle(page);
       await page.screenshot({
         path: `${output}/${size.name}-observation-details.png`,
       });
@@ -347,13 +414,55 @@ try {
         await page
           .getByRole("button", { name: "Play replay", exact: true })
           .click();
-        await page.waitForFunction(
-          () =>
-            Number(
-              document.querySelector(".lab-app")?.getAttribute("data-time-ms"),
-            ) >= 19000,
-          undefined,
-          { timeout: 25000 },
+        const geometry = await page.evaluate(async () => {
+          const samples = [];
+          const deadline = performance.now() + 25000;
+          while (performance.now() < deadline) {
+            const app = document.querySelector(".lab-app")!;
+            const ribbon = document.querySelector(".lwr-ribbon")!;
+            const draft = document.querySelector("#lab-draft")!;
+            const box = ribbon.getBoundingClientRect();
+            const input = draft.getBoundingClientRect();
+            const time = Number(app.getAttribute("data-time-ms"));
+            samples.push({
+              time,
+              width: box.width,
+              height: box.height,
+              draftX: input.x,
+              draftY: input.y,
+              draftWidth: input.width,
+              draftHeight: input.height,
+              motion: ribbon.getAttribute("data-work-motion"),
+            });
+            if (time >= 19000) return samples;
+            const { promise, resolve } = Promise.withResolvers<void>();
+            setTimeout(resolve, 50);
+            await promise;
+          }
+          throw new Error("Replay did not reach recovery within 25 seconds");
+        });
+        assert.ok(
+          geometry.some(
+            (sample) =>
+              sample.time >= 5000 &&
+              sample.time < 18000 &&
+              sample.motion === "off",
+          ),
+          "Truth loss must stop work motion during playback",
+        );
+        assert.ok(
+          geometry.every(
+            (sample) =>
+              Math.abs(sample.draftY - geometry[0].draftY) < 1 &&
+              sample.draftX === geometry[0].draftX &&
+              sample.draftWidth === geometry[0].draftWidth &&
+              sample.draftHeight === geometry[0].draftHeight,
+          ),
+          "Automatic shape changes must not move or resize the draft",
+        );
+        await writeFile(
+          `${output}/${size.name}-morph-geometry.json`,
+          JSON.stringify(geometry, null, 2),
         );
         await page
           .getByRole("button", { name: "Pause replay", exact: true })
@@ -380,7 +489,14 @@ try {
   await writeFile(
     `${output}/manifest.json`,
     JSON.stringify(
-      { capture, url, createdAt: new Date().toISOString(), evidence, errors },
+      {
+        capture,
+        surface,
+        url,
+        createdAt: new Date().toISOString(),
+        evidence,
+        errors,
+      },
       null,
       2,
     ),
