@@ -18,9 +18,9 @@ SCENARIO_ID = "pi_console_tool_lifecycle"
 ASSERTION_ID = "pi_console_tool_enabled"
 REGISTRATION = ProducerRegistration(
     producer_id="pi.console_tool.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -88,6 +88,7 @@ def run_pi_console_tool(args: argparse.Namespace) -> dict[str, object]:
         "generated_at": now(),
         "status": "pass" if generic.get("status") == "pass" and all(assertions.values()) else "fail",
         "assertions": assertions,
+        "provider_binary": generic.get("provider_binary"),
         "observation": observation,
         "generic_lifecycle_result": generic,
         "artifact_manifest": artifact_manifest(root),

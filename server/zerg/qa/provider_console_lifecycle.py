@@ -36,6 +36,7 @@ from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import isolated_provider_home
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
+from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -557,6 +558,235 @@ def _pi_tool_evidence(claim: Mapping[str, object], marker: str) -> dict[str, obj
             len(item.get("native_shapes") or {}),
         ),
     )
+
+
+def _pi_native_tool_observation(path: Path, marker: str) -> dict[str, object]:
+    """Extract one native Pi tool pair and its following marker response."""
+
+    rows, provider_session_id, metadata = pi_transcript_rows(path)
+    raw_messages: dict[str, Mapping[str, object]] = {}
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, Mapping) or event.get("type") != "message":
+                continue
+            event_id = event.get("id")
+            message = event.get("message")
+            if isinstance(event_id, str) and isinstance(message, Mapping):
+                raw_messages[event_id] = message
+    except OSError as exc:
+        return {"error": f"{type(exc).__name__}: {exc}", "provider_session_id": provider_session_id}
+
+    calls: dict[str, dict[str, object]] = {}
+    results: dict[str, dict[str, object]] = {}
+    marker_responses: list[dict[str, object]] = []
+    for row in rows:
+        if row.get("type") == "assistant":
+            text = str(row.get("text") or "")
+            if marker and marker in text:
+                marker_responses.append(
+                    {
+                        "native_event_id": row.get("entry_id"),
+                        "source_offset": row.get("source_offset"),
+                        "marker_count": text.count(marker),
+                    }
+                )
+            tool_calls = row.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                continue
+            for tool in tool_calls:
+                if not isinstance(tool, Mapping) or not tool.get("id"):
+                    continue
+                call_id = str(tool["id"])
+                calls[call_id] = {
+                    "id": call_id,
+                    "name": tool.get("name"),
+                    "arguments": tool.get("arguments"),
+                    "native_event_id": row.get("entry_id"),
+                    "source_offset": row.get("source_offset"),
+                }
+        elif row.get("type") == "tool_result" and row.get("tool_call_id"):
+            call_id = str(row["tool_call_id"])
+            native_event_id = row.get("entry_id")
+            message = raw_messages.get(str(native_event_id))
+            results[call_id] = {
+                "id": native_event_id,
+                "tool_call_id": call_id,
+                "name": row.get("tool_name"),
+                "result": message.get("content") if isinstance(message, Mapping) and "content" in message else row.get("text"),
+                "is_error": row.get("is_error"),
+                "native_event_id": native_event_id,
+                "source_offset": row.get("source_offset"),
+            }
+
+    pairs: list[tuple[dict[str, object], dict[str, object], dict[str, object]]] = []
+    for call_id, call in calls.items():
+        result = results.get(call_id)
+        if result is None:
+            continue
+        call_offset = call.get("source_offset")
+        result_offset = result.get("source_offset")
+        if not isinstance(call_offset, int) or not isinstance(result_offset, int) or result_offset <= call_offset:
+            continue
+        if (
+            not isinstance(call.get("name"), str)
+            or not call["name"]
+            or "arguments" not in call
+            or call.get("arguments") is None
+            or not isinstance(result.get("id"), str)
+            or not result["id"]
+            or result.get("name") != call.get("name")
+            or result.get("tool_call_id") != call_id
+        ):
+            continue
+        for response in marker_responses:
+            response_offset = response.get("source_offset")
+            if isinstance(response_offset, int) and response_offset > result_offset:
+                pairs.append((call, result, response))
+                break
+
+    return {
+        "provider_session_id": provider_session_id,
+        "header_present": metadata.get("has_header") is True,
+        "calls": calls,
+        "results": results,
+        "marker_responses": marker_responses,
+        "pair": pairs[0] if pairs else None,
+    }
+
+
+def _pi_native_tool_receipt(
+    *,
+    native_source: Path | None,
+    provider_response_source: Path | None,
+    inspection: Mapping[str, object] | None,
+    dispatch: Mapping[str, object],
+    binding: Mapping[str, object],
+    binary_receipt: Mapping[str, object],
+    cleanup: Mapping[str, object],
+    marker: str,
+) -> dict[str, object]:
+    """Bind retained native call/result evidence to the live Console turn."""
+
+    receipt: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_kind": "pi_native_tool_receipt",
+        "provider": "pi",
+        "status": "fail",
+        "provider_binary": dict(binary_receipt),
+        "session_id": dispatch.get("session_id"),
+        "thread_id": dispatch.get("thread_id"),
+        "run_id": dispatch.get("run_id"),
+        "provider_thread_id": binding.get("provider_thread_id"),
+        "provider_response": {
+            "marker": marker,
+            "source_kind": binding.get("provider_response_source_kind"),
+            "source_sha256": binding.get("provider_response_source_sha256"),
+            "retained_source_path": str(provider_response_source) if provider_response_source is not None else None,
+            "bound_assistant_event_id": binding.get("bound_assistant_event_id"),
+            "bound_assistant_event_origin": binding.get("bound_assistant_event_origin"),
+        },
+        "linkage": {},
+        "failure_reasons": [],
+    }
+    failures: list[str] = []
+    if native_source is None:
+        failures.append("retained_native_source_missing")
+        receipt["native_source"] = None
+        native: dict[str, object] = {}
+    else:
+        try:
+            receipt["native_source"] = {
+                "path": str(native_source),
+                "sha256": _sha256_file(native_source),
+                "kind": "provider_native_session_jsonl",
+            }
+            native = _pi_native_tool_observation(native_source, marker)
+        except (OSError, ValueError, RuntimeError) as exc:
+            native = {"error": f"{type(exc).__name__}: {exc}"}
+            failures.append("retained_native_source_unreadable")
+
+    pair = native.get("pair")
+    if isinstance(pair, tuple) and len(pair) == 3:
+        call, result, response = pair
+        receipt["tool_call"] = call
+        receipt["tool_result"] = result
+        provider_response = receipt["provider_response"]
+        if isinstance(provider_response, dict):
+            provider_response["native_event_id"] = response.get("native_event_id")
+            provider_response["native_marker_count"] = response.get("marker_count")
+    else:
+        receipt["tool_call"] = None
+        receipt["tool_result"] = None
+        failures.append("native_tool_call_result_pair_missing")
+
+    provider_session_id = native.get("provider_session_id")
+    provider_response = receipt["provider_response"]
+    if isinstance(provider_response, dict):
+        provider_response["native_source_path"] = str(native_source) if native_source is not None else None
+        provider_response["native_provider_session_id"] = provider_session_id
+    native_session_matches = (
+        isinstance(provider_session_id, str)
+        and bool(provider_session_id)
+        and provider_session_id == dispatch.get("provider_thread_id")
+        and provider_session_id == binding.get("provider_thread_id")
+        and native.get("header_present") is True
+    )
+    if not native_session_matches:
+        failures.append("native_session_provider_response_mismatch")
+
+    inspection_ok = (
+        inspection is not None
+        and bool(inspection.get("linked_tool_call_ids"))
+        and inspection.get("output_marker_observed") is True
+        and bool(inspection.get("native_shapes"))
+    )
+    if not inspection_ok:
+        failures.append("live_pi_tool_inspection_incomplete")
+    provider_response_marker_count = binding.get("provider_response_marker_count")
+    provider_response_ok = (
+        binding.get("status") == "pass"
+        and binding.get("marker") == marker
+        and isinstance(provider_response_marker_count, int)
+        and not isinstance(provider_response_marker_count, bool)
+        and provider_response_marker_count >= 1
+        and binding.get("bound_assistant_event_id") is not None
+        and isinstance(pair, tuple)
+        and len(pair) == 3
+        and pair[2].get("marker_count") == 1
+        and len(native.get("marker_responses") or []) == 1
+    )
+    if not provider_response_ok:
+        failures.append("provider_response_not_bound_to_native_session")
+    cleanup_ok = (
+        cleanup.get("status") == "pass"
+        and cleanup.get("provider_process_dead") is True
+        and cleanup.get("process_group_dead") is True
+        and cleanup.get("orphan_count") == 0
+    )
+    if not cleanup_ok:
+        failures.append("cleanup_failed")
+    runtime_identity_ok = all(
+        dispatch.get(key) == binding.get(key) for key in ("provider", "session_id", "thread_id", "run_id", "prompt_digest")
+    )
+    if not runtime_identity_ok:
+        failures.append("provider_response_runtime_identity_mismatch")
+
+    receipt["provider_session_id"] = provider_session_id
+    receipt["linkage"] = {
+        "live_inspection_confirmed": inspection_ok,
+        "native_session_matches_provider_thread": native_session_matches,
+        "native_response_follows_tool_result": isinstance(pair, tuple) and len(pair) == 3,
+        "provider_response_bound": provider_response_ok,
+        "runtime_identity_matches": runtime_identity_ok,
+        "cleanup_pass": cleanup_ok,
+    }
+    receipt["failure_reasons"] = failures
+    receipt["status"] = "pass" if not failures else "fail"
+    return receipt
 
 
 def _retain_flush_diagnostics(receipt: Mapping[str, object]) -> dict[str, object]:
@@ -1237,6 +1467,28 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         }
         write_json(root / "cleanup-receipt.json", cleanup)
         retained_sources = _retain_claim_sources(root, claims, environment)
+        native_tool_receipt: dict[str, object] | None = None
+        if provider == "pi":
+            retained_by_source = {
+                str(item["source"]): Path(str(item["path"]))
+                for item in retained_sources
+                if item.get("retained") is True and isinstance(item.get("source"), str) and isinstance(item.get("path"), str)
+            }
+            raw_native_source = first_claim.get("source_path")
+            native_source = retained_by_source.get(raw_native_source) if isinstance(raw_native_source, str) else None
+            raw_response_source = first_claim.get(str(binding.get("provider_response_source_kind") or ""))
+            provider_response_source = retained_by_source.get(raw_response_source) if isinstance(raw_response_source, str) else None
+            native_tool_receipt = _pi_native_tool_receipt(
+                native_source=native_source,
+                provider_response_source=provider_response_source,
+                inspection=pi_tool_evidence,
+                dispatch=dispatch,
+                binding=binding,
+                binary_receipt=binary_receipt,
+                cleanup=cleanup,
+                marker=marker,
+            )
+            write_json(root / "native-tool-receipt.json", native_tool_receipt)
         cleanup_written = True
         observation = _observation_from_receipts(
             dispatch=dispatch,
@@ -1252,6 +1504,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     "native_tool_result_linked": bool(pi_tool_evidence and pi_tool_evidence.get("linked_tool_call_ids")),
                     "native_tool_output_exact": bool(pi_tool_evidence and pi_tool_evidence.get("output_marker_observed")),
                     "native_shadow_taxonomy_observed": bool(pi_tool_evidence and pi_tool_evidence.get("native_shapes")),
+                    "native_tool_receipt_valid": native_tool_receipt is not None and native_tool_receipt.get("status") == "pass",
                 }
             )
             observation["pi_tool_enabled"] = all(
@@ -1262,6 +1515,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     "native_tool_result_linked",
                     "native_tool_output_exact",
                     "native_shadow_taxonomy_observed",
+                    "native_tool_receipt_valid",
                 )
             )
         observation["provider_source_artifacts"] = retained_sources

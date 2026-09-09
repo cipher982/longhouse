@@ -2,10 +2,37 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa.pi_console_tool_producer import REGISTRATION as PI_CONSOLE_REGISTRATION
 from zerg.qa.pi_console_tool_producer import pi_console_tool_assertions
 from zerg.qa.pi_helm_lifecycle import _cleanup_receipt
+from zerg.qa.pi_helm_lifecycle import _redact_value
+from zerg.qa.pi_helm_lifecycle import _state_identity
 from zerg.qa.pi_native import pi_native_model_evidence
 from zerg.qa.pi_native import pi_native_shadow_taxonomy
+
+
+def test_helm_retained_evidence_excludes_live_channel_authority() -> None:
+    secret = "ephemeral-control-authority"
+    state = {"session_id": "session", "run_id": "run", "channel_token": secret}
+    retained = _redact_value({"owner": _state_identity(state), "frame": {"auth_token": secret, "session_id": "session"}}, [])
+    assert secret not in json.dumps(retained)
+    assert "channel_token" not in retained["owner"]
+    assert "auth_token" not in retained["frame"]
+
+
+def test_helm_auth_failure_is_not_hidden_as_a_convergence_timeout(monkeypatch) -> None:
+    from zerg.qa import pi_helm_lifecycle as helm
+
+    def rejected(*args):
+        raise helm._RuntimeHostHTTPError(403, "access denied")
+
+    monkeypatch.setattr(helm, "_runtime_snapshot", rejected)
+    with pytest.raises(helm._RuntimeHostHTTPError) as error:
+        helm._wait_runtime_convergence("https://runtime.invalid", "fixture", "session", "native", "marker", timeout=1)
+    assert error.value.status == 403
 
 
 def test_pi_native_taxonomy_pairs_native_tool_call_and_result() -> None:
@@ -50,6 +77,126 @@ def test_pi_console_tool_oracle_rejects_unpaired_native_tool_evidence() -> None:
         "pi_tool_enabled": False,
     }
     assert pi_console_tool_assertions(observation)["pi_console_tool_enabled"] is False
+
+
+def _write_native_tool_session(path, *, result_call_id: str | None = "call-1", include_result: bool = True) -> None:
+    events = [
+        {"type": "session", "id": "native-session-1"},
+        {
+            "type": "message",
+            "id": "assistant-tool-1",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "toolCall", "id": "call-1", "name": "read", "arguments": {"path": "proof.txt"}}],
+                "stopReason": "toolUse",
+            },
+        },
+    ]
+    if include_result:
+        events.append(
+            {
+                "type": "message",
+                "id": "tool-result-1",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": result_call_id,
+                    "toolName": "read",
+                    "content": [{"type": "text", "text": "PI_CONSOLE_PROOF"}],
+                    "isError": False,
+                },
+            }
+        )
+    events.append(
+        {
+            "type": "message",
+            "id": "assistant-final-1",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "LH_MARKER"}], "stopReason": "stop"},
+        }
+    )
+    path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+
+def _native_tool_receipt_inputs(native_source):
+    identity = {
+        "provider": "pi",
+        "session_id": "session-1",
+        "thread_id": "thread-1",
+        "run_id": "run-1",
+        "prompt_digest": "sha256:" + "a" * 64,
+        "provider_thread_id": "native-session-1",
+    }
+    return {
+        "native_source": native_source,
+        "provider_response_source": native_source,
+        "inspection": {
+            "linked_tool_call_ids": ["call-1"],
+            "output_marker_observed": True,
+            "native_shapes": {"tool_execution_start": 1, "tool_execution_end": 1},
+        },
+        "dispatch": {"status": "pass", **identity},
+        "binding": {
+            "status": "pass",
+            **identity,
+            "marker": "LH_MARKER",
+            "provider_response_source_kind": "stdout_path",
+            "provider_response_source_sha256": "sha256:" + "b" * 64,
+            "provider_response_marker_count": 1,
+            "bound_assistant_event_id": "event-1",
+            "bound_assistant_event_origin": "durable",
+        },
+        "binary_receipt": {"provider": "pi", "path": "/opt/pi", "sha256": "sha256:" + "c" * 64, "version": "0.85.1"},
+        "cleanup": {"status": "pass", "provider_process_dead": True, "process_group_dead": True, "orphan_count": 0},
+        "marker": "LH_MARKER",
+    }
+
+
+def test_pi_native_tool_receipt_binds_actual_call_result_session_and_response(tmp_path) -> None:
+    native_source = tmp_path / "native.jsonl"
+    _write_native_tool_session(native_source)
+
+    receipt = lifecycle._pi_native_tool_receipt(**_native_tool_receipt_inputs(native_source))
+
+    assert receipt["status"] == "pass"
+    assert receipt["provider_session_id"] == "native-session-1"
+    assert receipt["tool_call"]["id"] == "call-1"
+    assert receipt["tool_call"]["name"] == "read"
+    assert receipt["tool_call"]["arguments"] == {"path": "proof.txt"}
+    assert receipt["tool_call"]["native_event_id"] == "assistant-tool-1"
+    assert receipt["tool_result"]["id"] == "tool-result-1"
+    assert receipt["tool_result"]["tool_call_id"] == "call-1"
+    assert receipt["tool_result"]["result"] == [{"type": "text", "text": "PI_CONSOLE_PROOF"}]
+    assert receipt["provider_response"]["native_event_id"] == "assistant-final-1"
+    assert receipt["provider_response"]["retained_source_path"] == str(native_source)
+    assert receipt["linkage"] == {
+        "live_inspection_confirmed": True,
+        "native_session_matches_provider_thread": True,
+        "native_response_follows_tool_result": True,
+        "provider_response_bound": True,
+        "runtime_identity_matches": True,
+        "cleanup_pass": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("result_call_id", "include_result"),
+    [("call-other", True), (None, False)],
+)
+def test_pi_native_tool_receipt_rejects_missing_or_mismatched_native_pair(tmp_path, result_call_id, include_result) -> None:
+    native_source = tmp_path / "native.jsonl"
+    _write_native_tool_session(native_source, result_call_id=result_call_id, include_result=include_result)
+
+    receipt = lifecycle._pi_native_tool_receipt(**_native_tool_receipt_inputs(native_source))
+
+    assert receipt["status"] == "fail"
+    assert "native_tool_call_result_pair_missing" in receipt["failure_reasons"]
+
+
+def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
+    registration = PI_CONSOLE_REGISTRATION.to_dict()
+
+    assert registration["producer_revision"] == 2
+    assert registration["scenario_revision"] == 2
+    assert "native_tool_receipt" in registration["required_artifacts"]
 
 
 def test_pi_helm_cleanup_oracle_does_not_accept_missing_process_identity() -> None:

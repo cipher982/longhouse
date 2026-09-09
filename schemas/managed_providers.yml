@@ -1901,7 +1901,7 @@ providers:
         id: pi_helm_launch_registration
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 1
+        minimum_scenario_revision: 2
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - <<: *pi_helm_lifecycle_assertion
@@ -1945,7 +1945,7 @@ providers:
       - id: pi_console_tool_enabled
         scenario_id: pi_console_tool_lifecycle
         oracle_source: server/zerg/qa/pi_console_tool_producer.py
-        minimum_scenario_revision: 1
+        minimum_scenario_revision: 2
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
   can_resume: true
