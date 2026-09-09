@@ -22,6 +22,21 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertNil(WebTranscriptView.documentBaseURL(nil))
     }
 
+    func testRetryRevisionChangesIdentityForUnchangedPayload() {
+        let initial = WebTranscriptView.ContentIdentity(
+            serverURL: "https://example.longhouse.ai",
+            revision: 7,
+            retryRevision: 0
+        )
+        let retry = WebTranscriptView.ContentIdentity(
+            serverURL: "https://example.longhouse.ai",
+            revision: 7,
+            retryRevision: 1
+        )
+
+        XCTAssertNotEqual(initial, retry)
+    }
+
     func testPreparedPayloadReportsDiagnosticsFacts() {
         let payload = WebTranscriptView.preparedPayload(
             timelineItems: [

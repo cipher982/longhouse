@@ -208,7 +208,7 @@ struct SessionView: View {
                 .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("session-chat-bottom-chrome-card")
-            } else if viewModel.isInitialLoading || viewModel.detail != nil {
+            } else if viewModel.isInitialLoading || transcriptState == .restoring {
                 SessionLoadingDock()
             }
         }
@@ -334,6 +334,7 @@ struct SessionView: View {
                     submittedInputs: viewModel.submittedInputs,
                     errorMessage: viewModel.errorMessage,
                     contentRevision: viewModel.transcriptRevision,
+                    retryRevision: viewModel.transcriptRenderRetryRevision,
                     sourceRevision: viewModel.benchmarkSourceRevision,
                     sourceOperation: viewModel.benchmarkSourceOperation,
                     onNearTop: {
@@ -363,7 +364,10 @@ struct SessionView: View {
 
             TranscriptStateOverlay(
                 state: state,
-                onRetry: { Task { await viewModel.reload(sessionId: sessionId, appState: appState) } }
+                onRetry: {
+                    viewModel.prepareTranscriptRetry()
+                    Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
+                }
             )
         }
     }

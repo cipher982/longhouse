@@ -263,6 +263,41 @@ struct SessionStreamResumeTests {
     }
 
     @Test
+    func pausingDuringRealtimeTailDoesNotPublishRetryOrRestartWork() async throws {
+        let before = try TestWorkspaceFactory.make(eventId: 10, content: "Before stream wake")
+        let after = try TestWorkspaceFactory.make(eventId: 11, content: "Final durable message")
+        let api = FakeStreamResumeClient(workspaces: [before, after])
+        await api.delayTailResponses(nanoseconds: 200_000_000)
+        let recorder = StreamFactoryRecorder()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
+            enableRealtime: true,
+            snapshotStore: Self.isolatedSnapshotStore(),
+            realtimeRefreshRetryDelaysNanoseconds: [20_000_000]
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForItemIds(model, ["user:10"])
+        let requestCountBeforeWake = await api.tailRequestCount()
+        recorder.emitChanged(latestEventId: 11, pubsubSeq: 778)
+        await waitForTailRequests(api, atLeast: requestCountBeforeWake + 1)
+
+        model.pauseRealtime()
+        try? await Task.sleep(nanoseconds: 350_000_000)
+
+        #expect(await api.tailRequestCount() == requestCountBeforeWake + 1)
+        #expect(model.refreshErrorMessage == nil)
+        #expect(!model.hasRealtimeStreamTaskForTesting)
+        model.stop()
+    }
+
+
+    @Test
     func undecodableFrameStillRefreshesDurableState() async throws {
         // The SSE cursor has already moved past a frame that failed to
         // decode; a reconnect will never replay it, so the only way its

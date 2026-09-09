@@ -1105,6 +1105,25 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func rendererRetryClearsErrorAndBumpsRenderRevision() async throws {
+        let workspace = try makeWorkspace(eventId: 1, content: "Visible content")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        model.recordTranscriptLifecycle("transcript_frame_failed")
+        let previousRevision = model.transcriptRenderRetryRevision
+
+        model.prepareTranscriptRetry()
+
+        #expect(model.isTranscriptFrameReady == false)
+        #expect(model.transcriptRendererErrorMessage == nil)
+        #expect(model.transcriptRenderRetryRevision == previousRevision + 1)
+    }
+
+    @Test
     func submittedInputClearsWhenTheServerReceiptLinksAnEchoBehindTheWindow() async throws {
         // A long turn projects more items than the phone's tail window holds,
         // so the durable echo of the send is behind the window by the time the

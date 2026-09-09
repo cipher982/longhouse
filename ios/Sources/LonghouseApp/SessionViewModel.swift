@@ -49,6 +49,9 @@ final class SessionViewModel: ObservableObject {
     /// A failed frame acknowledgement must reveal a retryable native error,
     /// not leave the restoring surface spinning forever.
     @Published private(set) var transcriptRendererErrorMessage: String?
+    /// Monotonic retry nonce used to force WebKit to render an unchanged
+    /// payload again after a frame acknowledgement failure.
+    @Published private(set) var transcriptRenderRetryRevision: UInt64 = 0
     @Published var isSending = false
     @Published var isRespondingToPauseRequest = false
     /// Frames received on the workspace stream, for the dock's activity strip.
@@ -185,6 +188,7 @@ final class SessionViewModel: ObservableObject {
             isInitialLoading = true
             isTranscriptFrameReady = false
             transcriptRendererErrorMessage = nil
+            transcriptRenderRetryRevision = 0
             detail = nil
             detailWasLoadedFromTail = false
 
@@ -431,6 +435,7 @@ final class SessionViewModel: ObservableObject {
     private func isCurrentRoute(sessionId: String, generation: Int) -> Bool {
         activeSessionId == sessionId
             && routeLoadGeneration == generation
+            && !realtimePaused
             && !Task.isCancelled
     }
 
@@ -764,6 +769,13 @@ final class SessionViewModel: ObservableObject {
         )
     }
 
+    func prepareTranscriptRetry() {
+        guard hasLoadedTranscript else { return }
+        isTranscriptFrameReady = false
+        transcriptRendererErrorMessage = nil
+        transcriptRenderRetryRevision &+= 1
+    }
+
     func recordTranscriptLifecycle(_ stage: String) {
         openWaterfall?.mark(stage)
         switch stage {
@@ -1048,19 +1060,25 @@ final class SessionViewModel: ObservableObject {
     }
 
     private func refreshTailAfterRealtimeWake(api: SessionWorkspaceClient, sessionId: String) async {
+        guard activeSessionId == sessionId, !realtimePaused else { return }
+        let generation = routeLoadGeneration
         do {
             try await refreshTail(api: api, sessionId: sessionId)
+            guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return }
             realtimeRefreshFailureCount = 0
             realtimeRefreshRetryTask?.cancel()
             realtimeRefreshRetryTask = nil
             refreshErrorMessage = nil
+        } catch is CancellationError {
+            return
         } catch {
+            guard isCurrentRoute(sessionId: sessionId, generation: generation), !realtimePaused else { return }
             scheduleRealtimeRefreshRetry(api: api, sessionId: sessionId)
         }
     }
 
     private func scheduleRealtimeRefreshRetry(api: SessionWorkspaceClient, sessionId: String) {
-        guard activeSessionId == sessionId else { return }
+        guard activeSessionId == sessionId, !realtimePaused else { return }
         realtimeRefreshFailureCount += 1
         refreshErrorMessage = "Live update delayed. Retrying..."
         let delays = realtimeRefreshRetryDelaysNanoseconds.isEmpty

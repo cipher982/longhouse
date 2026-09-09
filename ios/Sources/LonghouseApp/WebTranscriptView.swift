@@ -54,6 +54,9 @@ struct WebTranscriptView: UIViewRepresentable {
     /// encodes and base64s the whole transcript, so the encode is gated on this
     /// rather than on the encoded bytes.
     let contentRevision: UInt64
+    /// Nonzero only when the native surface is retrying a failed frame
+    /// acknowledgement for an otherwise unchanged transcript payload.
+    let retryRevision: UInt64
     let sourceRevision: Int?
     let sourceOperation: String?
     let onNearTop: (() -> Void)?
@@ -72,6 +75,7 @@ struct WebTranscriptView: UIViewRepresentable {
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
         contentRevision: UInt64,
+        retryRevision: UInt64 = 0,
         sourceRevision: Int? = nil,
         sourceOperation: String? = nil,
         onNearTop: (() -> Void)? = nil,
@@ -87,6 +91,7 @@ struct WebTranscriptView: UIViewRepresentable {
         self.submittedInputs = submittedInputs
         self.errorMessage = errorMessage
         self.contentRevision = contentRevision
+        self.retryRevision = retryRevision
         self.sourceRevision = sourceRevision
         self.sourceOperation = sourceOperation
         self.onNearTop = onNearTop
@@ -162,7 +167,11 @@ struct WebTranscriptView: UIViewRepresentable {
         context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
         context.coordinator.ensureDocumentServerURL(serverURL, on: webView)
         context.coordinator.send(
-            contentIdentity: ContentIdentity(serverURL: serverURL, revision: contentRevision),
+            contentIdentity: ContentIdentity(
+                serverURL: serverURL,
+                revision: contentRevision,
+                retryRevision: retryRevision
+            ),
             preparingPayload: preparedPayload,
             to: webView,
             diagnosticsEnabled: WebTranscriptDiagnosticsFeature.isEnabled,
@@ -178,6 +187,7 @@ struct WebTranscriptView: UIViewRepresentable {
     struct ContentIdentity: Equatable {
         let serverURL: String
         let revision: UInt64
+        let retryRevision: UInt64
     }
 
     static let bridgeName = "longhouse"
@@ -907,6 +917,7 @@ struct WebTranscriptView: UIViewRepresentable {
         private var dragStartOffsetY: CGFloat?
         /// Identity of the transcript the most recent payload was prepared from.
         private var preparedIdentity: ContentIdentity?
+        private var lastRetryRevision: UInt64 = 0
         private var pendingPayload: WebTranscriptPreparedPayload?
         private var inFlightPayload: WebTranscriptPreparedPayload?
         private var lastRenderedPayload: WebTranscriptPreparedPayload?
@@ -1185,6 +1196,7 @@ struct WebTranscriptView: UIViewRepresentable {
 
         func prepareForReuse() {
             preparedIdentity = nil
+            lastRetryRevision = 0
             // Strands any deferred viewport write before the WebView is recycled.
             viewportReconcileGeneration &+= 1
             contentSizeObservation?.invalidate()
@@ -1222,10 +1234,12 @@ struct WebTranscriptView: UIViewRepresentable {
             self.webView = webView
             self.diagnosticsEnabled = diagnosticsEnabled
             self.onNearTop = onNearTop
-        self.onNeedsMoreHistory = onNeedsMoreHistory
+            self.onNeedsMoreHistory = onNeedsMoreHistory
             self.onDiagnostics = onDiagnostics
             self.onLifecycle = onLifecycle
-            guard contentIdentity != preparedIdentity else { return }
+            let forceRender = contentIdentity.retryRevision != lastRetryRevision
+            lastRetryRevision = contentIdentity.retryRevision
+            guard forceRender || contentIdentity != preparedIdentity else { return }
             preparedIdentity = contentIdentity
             send(
                 preparingPayload(),
@@ -1234,7 +1248,8 @@ struct WebTranscriptView: UIViewRepresentable {
                 onNearTop: onNearTop,
                 onNeedsMoreHistory: onNeedsMoreHistory,
                 onDiagnostics: onDiagnostics,
-                onLifecycle: onLifecycle
+                onLifecycle: onLifecycle,
+                forceRender: forceRender
             )
         }
 
@@ -1245,15 +1260,19 @@ struct WebTranscriptView: UIViewRepresentable {
             onNearTop: (() -> Void)?,
             onNeedsMoreHistory: (() -> Void)?,
             onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?,
-            onLifecycle: ((String) -> Void)?
+            onLifecycle: ((String) -> Void)?,
+            forceRender: Bool = false
         ) {
             self.webView = webView
             self.diagnosticsEnabled = diagnosticsEnabled
             self.onNearTop = onNearTop
-        self.onNeedsMoreHistory = onNeedsMoreHistory
+            self.onNeedsMoreHistory = onNeedsMoreHistory
             self.onDiagnostics = onDiagnostics
             self.onLifecycle = onLifecycle
-            if payload.base64 == lastPayload
+            if forceRender {
+                lastPayload = nil
+                lastDuplicatePayload = nil
+            } else if payload.base64 == lastPayload
                 || payload.base64 == inFlightPayload?.base64
                 || payload.base64 == pendingPayload?.base64 {
                 emitDuplicateDiagnosticsOnce(
