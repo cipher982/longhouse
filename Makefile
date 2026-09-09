@@ -138,8 +138,7 @@ ios-ui-shot: ## Run one iOS UI test and export its screenshots (TEST=SessionChat
 	@scripts/ci/ios_ui_shot.sh "$(TEST)"
 
 ios-previews: ## Render every SwiftUI #Preview to PNG under artifacts/ios-previews/<timestamp>/
-	@out="$(CURDIR)/artifacts/ios-previews/$$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$$out"; ios/scripts/render-previews.sh "$$out" >/dev/null 2>&1 || true; \
-	ls "$$out"/*.png >/dev/null 2>&1 && echo "Previews in $$out" && ls "$$out" | grep -v manifest || (echo "no previews rendered; run ios/scripts/render-previews.sh $$out to see why" >&2; exit 1)
+	@out="$(CURDIR)/artifacts/ios-previews/$$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$$out"; ios/scripts/render-previews.sh "$$out"
 
 test-ios-perf: ## iOS wall-clock benchmarks (simulator) — never gates a merge
 	@python3 scripts/build/generate_build_identity.py

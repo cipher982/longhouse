@@ -237,7 +237,8 @@
   .session-ledger__context {
     transition: none;
   }
-  .session-ledger[data-work-motion="active"] .session-ledger__glyph {
+  .session-ledger[data-clocked-motion="false"][data-work-motion="active"]
+    .session-ledger__glyph {
     animation: none;
   }
 }

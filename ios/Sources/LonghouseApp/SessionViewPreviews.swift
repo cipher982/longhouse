@@ -123,6 +123,7 @@ private extension SessionDetail {
             "pauseRequest": \(pauseRequestJSON ?? "null")
           },
           "stateFacts": \(stateFactsJSON)\(transcriptPreviewJSON.map { ",\n          \"transcriptPreview\": \($0)" } ?? "")
+        }
         """
         do {
             return try JSONDecoder().decode(SessionDetail.self, from: Data(json.utf8))

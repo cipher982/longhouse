@@ -88,7 +88,7 @@ def cleanup(name):
     return name
 seen = {}
 for src, name in records:
-    if not src or not name: continue
+    if not src or not name or not src.lower().endswith(".png"): continue
     src_path = os.path.join(out, src)
     if not os.path.exists(src_path): continue
     base = cleanup(name)
