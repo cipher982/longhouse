@@ -42,14 +42,14 @@ restore_apt_sources() {
 }
 trap restore_apt_sources EXIT
 
-disable_problematic_microsoft_sources() {
+disable_unneeded_vendor_sources() {
   [[ "$with_deps" == "1" ]] || return 0
   [[ "$OS_NAME" == "Linux" ]] || return 0
   [[ -d "$APT_SOURCES_DIR" ]] || return 0
 
   local source_file backup
   while IFS= read -r -d '' source_file; do
-    if ! grep -q "packages.microsoft.com" "$source_file"; then
+    if ! grep -Eq 'packages\.microsoft\.com|dl\.google\.com/linux/chrome' "$source_file"; then
       continue
     fi
     backup="${source_file}.longhouse-disabled"
@@ -57,13 +57,13 @@ disable_problematic_microsoft_sources() {
       echo "Playwright apt source already disabled: $source_file" >&2
       continue
     fi
-    echo "Temporarily disabling Microsoft apt source for Playwright install: $source_file" >&2
+    echo "Temporarily disabling unrelated vendor apt source for Playwright install: $source_file" >&2
     move_file "$source_file" "$backup"
     disabled_sources+=("${backup}::${source_file}")
   done < <(find "$APT_SOURCES_DIR" -maxdepth 1 -type f \( -name "*.list" -o -name "*.sources" \) -print0)
 }
 
-disable_problematic_microsoft_sources
+disable_unneeded_vendor_sources
 
 install_args=(playwright install)
 if [[ "$with_deps" == "1" ]]; then
