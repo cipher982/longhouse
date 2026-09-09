@@ -5,6 +5,10 @@ import Foundation
 /// cheapest honest "still alive" signal there is; and a coarse age ("4m",
 /// "2h") for idle or ended sessions, where seconds would be noise.
 enum RuntimeElapsed {
+    static func observedEnd(validUntil: Date?, now: Date) -> Date {
+        validUntil.map { min($0, now) } ?? now
+    }
+
     static func label(seconds raw: TimeInterval, precise: Bool) -> String {
         let seconds = max(0, Int(raw.rounded(.down)))
         if precise {

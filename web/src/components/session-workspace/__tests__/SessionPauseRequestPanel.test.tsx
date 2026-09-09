@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { SessionPauseRequestPanel } from "../SessionPauseRequestPanel";
 import type { SessionPauseRequest } from "../../../services/api/agents";
 
-function permissionPrompt(overrides: Partial<SessionPauseRequest> = {}): SessionPauseRequest {
+function permissionPrompt(
+  overrides: Partial<SessionPauseRequest> = {},
+): SessionPauseRequest {
   return {
     id: "pause-1",
     session_id: "11111111-1111-1111-1111-111111111111",
@@ -27,7 +29,12 @@ function permissionPrompt(overrides: Partial<SessionPauseRequest> = {}): Session
 
 describe("SessionPauseRequestPanel — permission prompt", () => {
   it("renders Allow/Deny and a Permission eyebrow, no free-text answer", () => {
-    render(<SessionPauseRequestPanel pauseRequest={permissionPrompt()} onRespond={vi.fn()} />);
+    render(
+      <SessionPauseRequestPanel
+        pauseRequest={permissionPrompt()}
+        onRespond={vi.fn()}
+      />,
+    );
     expect(screen.getByText("Permission")).toBeInTheDocument();
     expect(screen.getByText("Permission: Bash")).toBeInTheDocument();
     expect(screen.getByText("Allow")).toBeInTheDocument();
@@ -38,7 +45,12 @@ describe("SessionPauseRequestPanel — permission prompt", () => {
 
   it("Allow submits decision=answer", async () => {
     const onRespond = vi.fn().mockResolvedValue(undefined);
-    render(<SessionPauseRequestPanel pauseRequest={permissionPrompt()} onRespond={onRespond} />);
+    render(
+      <SessionPauseRequestPanel
+        pauseRequest={permissionPrompt()}
+        onRespond={onRespond}
+      />,
+    );
     fireEvent.click(screen.getByText("Allow"));
     await waitFor(() => expect(onRespond).toHaveBeenCalled());
     expect(onRespond.mock.calls[0][0]).toMatchObject({ decision: "answer" });
@@ -46,7 +58,12 @@ describe("SessionPauseRequestPanel — permission prompt", () => {
 
   it("Deny submits decision=cancel", async () => {
     const onRespond = vi.fn().mockResolvedValue(undefined);
-    render(<SessionPauseRequestPanel pauseRequest={permissionPrompt()} onRespond={onRespond} />);
+    render(
+      <SessionPauseRequestPanel
+        pauseRequest={permissionPrompt()}
+        onRespond={onRespond}
+      />,
+    );
     fireEvent.click(screen.getByText("Deny"));
     await waitFor(() => expect(onRespond).toHaveBeenCalled());
     expect(onRespond.mock.calls[0][0]).toMatchObject({ decision: "cancel" });
@@ -57,7 +74,13 @@ describe("SessionPauseRequestPanel — permission prompt", () => {
       kind: "structured_question",
       title: "Which approach?",
       questions: [
-        { id: "q1", header: null, question: "Pick one", multi_select: false, options: [{ label: "A", value: "A", description: null }] },
+        {
+          id: "q1",
+          header: null,
+          question: "Pick one",
+          multi_select: false,
+          options: [{ label: "A", value: "A", description: null }],
+        },
       ],
     } as Partial<SessionPauseRequest>);
     render(<SessionPauseRequestPanel pauseRequest={sq} onRespond={vi.fn()} />);
@@ -83,12 +106,16 @@ describe("SessionPauseRequestPanel — permission prompt", () => {
       ],
     } as Partial<SessionPauseRequest>);
 
-    render(<SessionPauseRequestPanel pauseRequest={plan} onRespond={vi.fn()} />);
+    render(
+      <SessionPauseRequestPanel pauseRequest={plan} onRespond={vi.fn()} />,
+    );
 
     expect(screen.getByText("Plan approval")).toBeInTheDocument();
     expect(screen.getByText("Approve")).toBeInTheDocument();
     expect(screen.getByText("Reject")).toBeInTheDocument();
-    expect(screen.getByText("1. Inspect. 2. Patch. 3. Test.")).toBeInTheDocument();
+    expect(
+      screen.getByText("1. Inspect. 2. Patch. 3. Test."),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Answer")).not.toBeInTheDocument();
   });
 });

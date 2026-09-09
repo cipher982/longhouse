@@ -63,6 +63,26 @@ Run the tier that matches your change — don't over-test:
 Backend tests go in `server/tests_lite/` (per-test SQLite DBs, no shared
 conftest). For `ios/` changes, run the Xcode `Longhouse` scheme tests.
 
+### Session status and motion
+
+The web session and local replay studio use the same Ledger renderer. Start
+`make live-status-lab`, then run `make capture-ledger-journeys` to exercise the
+production session route against isolated HTTP/SSE fixtures. This checks activity
+expiry, a silent open connection, recovery, host/transcript uncertainty, approval,
+draft retention, completion, narrow layouts, and reduced motion without issuing
+provider commands.
+
+For recorded transcript content, use `make capture-live-status SESSION=<id>`,
+then pass `CAPTURE=<private.json>` to the journey target or to
+`make capture-live-status-frames SURFACE=ledger`. Captures contain private session
+content; keep the generated frames, videos, and manifests local and untracked.
+Inspect the frames as well as the assertions, then stop the owned lab process.
+For native status layouts use `make ios-previews`; `make ios-ui-shot
+TEST=SessionChatUITests/testKeyboardFocusKeepsLatestTranscriptMessageVisible`
+also captures the real keyboard and composer.
+
+### Native pipeline recovery
+
 On macOS with Xcode and an iOS Simulator installed, `make simlab-run` exercises
 the real app against a scratch Runtime Host and Machine Agent. It covers live
 transcript arrival, malformed/split input, abandoned sends, app termination and

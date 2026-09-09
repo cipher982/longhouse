@@ -1268,9 +1268,6 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-pause-panel")).toHaveTextContent(
       "Question waiting in terminal",
     );
-    expect(screen.getByTestId("session-pause-panel")).toHaveTextContent(
-      "Waiting in terminal",
-    );
     expect(
       screen.queryByRole("button", { name: /Send answer/ }),
     ).not.toBeInTheDocument();
@@ -1316,7 +1313,6 @@ describe("SessionDetailPage", () => {
     expect(panel).toHaveTextContent(
       "Claude is waiting for an interactive answer in the terminal.",
     );
-    expect(panel).toHaveTextContent("Waiting in terminal");
     expect(
       panel.querySelector(".session-pause-freeform"),
     ).not.toBeInTheDocument();

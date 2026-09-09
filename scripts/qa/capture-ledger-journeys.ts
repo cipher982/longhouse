@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
 /** Exercise the production session route with isolated HTTP/SSE facts.
  * Transcript content may come from a private capture; states are controlled.
+ * This journey proves runtime invalidation/recovery, not transcript replay.
  * No API request can reach the linked Runtime Host. Keep output private.
  */
 import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
@@ -20,6 +22,14 @@ function option(name: string, fallback = "") {
   const index = args.indexOf(name);
   return index < 0 ? fallback : args[index + 1] || fallback;
 }
+const sourceSha =
+  option("--sha") ||
+  execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+assert.match(
+  sourceSha,
+  /^[0-9a-f]{7,40}$/i,
+  "source SHA must be a git revision",
+);
 const vite = new URL(option("--url", "http://127.0.0.1:47213"));
 assert.ok(
   ["127.0.0.1", "localhost"].includes(vite.hostname),
@@ -368,6 +378,51 @@ try {
       await motion(page, true);
       await page.waitForTimeout(4_200);
       await shot(page, `${size.name}-working`);
+      assert.equal(
+        await page
+          .getByText("Fresh provider evidence restored.", { exact: true })
+          .count(),
+        0,
+        "Initial connection must not announce provider recovery",
+      );
+      if (size.reducedMotion === "reduce") {
+        const reducedMotionFrame = await page.evaluate(() => {
+          const ribbon = document.querySelector<HTMLElement>(
+            '[data-testid="live-work-ribbon"]',
+          );
+          const glyph = ribbon?.querySelector<HTMLElement>(
+            ".session-ledger__glyph",
+          );
+          const canvas = ribbon?.querySelector<HTMLCanvasElement>(
+            '[data-testid="session-activity-strip"]',
+          );
+          const context = canvas?.getContext("2d");
+          const pixels =
+            context && canvas
+              ? context.getImageData(0, 0, canvas.width, canvas.height).data
+              : null;
+          return {
+            animationName: glyph ? getComputedStyle(glyph).animationName : "",
+            canvasWidth: canvas?.width ?? 0,
+            canvasPainted: Boolean(
+              pixels &&
+              Array.from(pixels).some(
+                (value, index) => index % 4 === 3 && value > 0,
+              ),
+            ),
+          };
+        });
+        assert.equal(
+          reducedMotionFrame.animationName,
+          "none",
+          "Reduced motion freezes the working glyph",
+        );
+        assert.ok(
+          reducedMotionFrame.canvasWidth > 0 &&
+            reducedMotionFrame.canvasPainted,
+          "Reduced motion still paints the active update canvas",
+        );
+      }
       assert.ok(
         (await page.getByTestId("session-control-dock").boundingBox())!
           .height <= 120,
@@ -404,7 +459,7 @@ try {
       for (let index = 0; index < 30; index++) publish();
       await page.waitForTimeout(500);
       await motion(page, false);
-      await shot(page, `${size.name}-old-updates`);
+      await shot(page, `${size.name}-runtime-invalidation-burst`);
       restoreWork();
       await motion(page, true);
       refuseStream = true;
@@ -423,10 +478,23 @@ try {
       publish();
       await motion(page, false);
       await shot(page, `${size.name}-reconnected-stale`);
+      assert.equal(
+        await page
+          .getByText("Fresh provider evidence restored.", { exact: true })
+          .count(),
+        0,
+        "Reconnect with stale provider evidence must not announce recovery",
+      );
       restoreWork();
       await motion(page, true);
       await preserveDraft();
       await shot(page, `${size.name}-recovered`);
+      assert.ok(
+        (await page
+          .getByText("Fresh provider evidence restored.", { exact: true })
+          .count()) > 0,
+        "A genuinely refreshed provider observation announces recovery",
+      );
       session.session_state.host.state = "offline";
       publish();
       await motion(page, false);
@@ -447,6 +515,13 @@ try {
             .getByTestId("live-work-ribbon")
             .getAttribute("data-connection"),
           "reconnecting",
+        );
+        assert.equal(
+          await page
+            .getByText("Fresh provider evidence restored.", { exact: true })
+            .count(),
+          0,
+          "Heartbeat silence must not announce refreshed provider evidence",
         );
         await shot(page, "desktop-silent-open-socket");
         silence = false;
@@ -589,9 +664,10 @@ try {
     `${output}/manifest.json`,
     JSON.stringify(
       {
+        source_sha: sourceSha,
         source: capturePath
-          ? "private recorded transcript; controlled states"
-          : "synthetic transcript; controlled states",
+          ? "private recorded transcript metadata; runtime invalidation journeys (not transcript replay)"
+          : "synthetic fixture; runtime invalidation journeys (not transcript replay)",
         errors,
         evidence,
         apiWrites,
@@ -603,5 +679,9 @@ try {
   );
 }
 console.log(
-  JSON.stringify({ output, checks: evidence.length, errors }, null, 2),
+  JSON.stringify(
+    { output, source_sha: sourceSha, checks: evidence.length, errors },
+    null,
+    2,
+  ),
 );

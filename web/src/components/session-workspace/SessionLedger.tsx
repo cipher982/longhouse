@@ -104,13 +104,15 @@ function WorkGlyph({ tone }: { tone: SessionLedgerState["tone"] }) {
           strokeWidth="1.35"
           strokeLinecap="round"
         />
-      ) : (
+      ) : tone === "working" ? (
         <path
-          d="M5.4 9h7.2M9 5.4v7.2"
+          d="M9 3.1a5.9 5.9 0 1 0 5.9 5.9"
           stroke="currentColor"
-          strokeWidth="1.4"
+          strokeWidth="1.8"
           strokeLinecap="round"
         />
+      ) : (
+        <circle cx="9" cy="9" r="2" fill="currentColor" />
       )}
     </svg>
   );

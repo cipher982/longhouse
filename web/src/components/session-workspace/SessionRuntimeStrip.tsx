@@ -28,6 +28,103 @@ interface SessionRuntimeStripProps {
   streamConnected?: boolean;
 }
 
+type ProviderEvidence = Pick<SessionLedgerState, "tone"> & {
+  sessionId: string;
+  resultAt: string | null | undefined;
+  streamConnected: boolean;
+  providerEvidenceIdentity: string | null;
+  preInterruptionEvidenceIdentity: string | null;
+  hadObservedWork: boolean;
+  interrupted: boolean;
+};
+
+/**
+ * The provider observation is deliberately narrower than the stream frame:
+ * heartbeats and connection handshakes carry no provider activity identity.
+ * `valid_until` is omitted because renewing a window is not new evidence.
+ */
+export function providerEvidenceIdentity(
+  activity:
+    | {
+        state?: string | null;
+        tool?: string | null;
+        source?: string | null;
+        observed_at?: string | null;
+      }
+    | null
+    | undefined,
+): string | null {
+  if (!activity?.observed_at) return null;
+  return JSON.stringify([
+    activity.observed_at,
+    activity.state ?? null,
+    activity.tool ?? null,
+    activity.source ?? null,
+  ]);
+}
+
+export function advanceProviderEvidenceTransition(
+  previous: ProviderEvidence | null,
+  current: ProviderEvidence,
+  outcome: string | null | undefined,
+): { snapshot: ProviderEvidence; notice: string | null } {
+  if (!previous || previous.sessionId !== current.sessionId) {
+    return {
+      snapshot: {
+        ...current,
+        preInterruptionEvidenceIdentity: current.providerEvidenceIdentity,
+        hadObservedWork: current.tone === "working",
+        interrupted: false,
+      },
+      notice: null,
+    };
+  }
+  if (
+    current.tone === "quiet" &&
+    current.resultAt &&
+    current.resultAt !== previous.resultAt
+  ) {
+    return {
+      snapshot: {
+        ...current,
+        preInterruptionEvidenceIdentity: current.providerEvidenceIdentity,
+        hadObservedWork: false,
+        interrupted: false,
+      },
+      notice: outcome ? `Turn ended · ${outcome}.` : "Turn ended.",
+    };
+  }
+
+  const hadObservedWork =
+    previous.hadObservedWork || current.tone === "working";
+  const interrupted =
+    previous.interrupted ||
+    (hadObservedWork &&
+      (!current.streamConnected || current.tone === "unknown"));
+  const preInterruptionEvidenceIdentity = previous.interrupted
+    ? previous.preInterruptionEvidenceIdentity
+    : interrupted
+      ? previous.providerEvidenceIdentity
+      : current.providerEvidenceIdentity;
+  const refreshed =
+    interrupted &&
+    hadObservedWork &&
+    current.tone === "working" &&
+    current.streamConnected &&
+    preInterruptionEvidenceIdentity !== null &&
+    current.providerEvidenceIdentity !== null &&
+    current.providerEvidenceIdentity !== preInterruptionEvidenceIdentity;
+  return {
+    snapshot: {
+      ...current,
+      preInterruptionEvidenceIdentity,
+      hadObservedWork,
+      interrupted: refreshed ? false : interrupted,
+    },
+    notice: refreshed ? "Fresh provider evidence restored." : null,
+  };
+}
+
 /** Build Ledger copy strictly from canonical facts plus the viewer's stream evidence. */
 export function buildSessionLedgerState(
   session: AgentSession,
@@ -74,7 +171,7 @@ export function buildSessionLedgerState(
   const headline = pending
     ? "Needs your response"
     : tone === "unknown"
-      ? "Work status unconfirmed"
+      ? "Activity uncertain"
       : interaction.isManagedLocalSession
         ? display.headline
         : getRuntimeOutcomeLabel(runtime);
@@ -85,7 +182,7 @@ export function buildSessionLedgerState(
         ? `Host is ${facts.host.state}; the agent may still be running.`
         : transcriptConcern
           ? "Transcript is lagging the observed session state."
-          : `Last reported: ${display.headline}.`
+          : "Provider activity is unconfirmed."
       : display.detail;
   const connection: SessionLedgerState["connection"] = streamConnected
     ? "connected"
@@ -101,7 +198,7 @@ export function buildSessionLedgerState(
           ? "Updates connected · transcript is lagging"
           : tone === "working"
             ? "Updates connected · provider evidence is still valid"
-            : "Updates connected · provider work is not asserted"
+            : "Updates connected · provider activity is unconfirmed"
     : tone === "unknown"
       ? "Updates disconnected · the agent may still be running"
       : "Saved session state · no live updates claimed";
@@ -154,40 +251,49 @@ export function SessionRuntimeStrip({
     streamConnected,
     activityFeed,
   );
-  const previousTransitionRef = useRef<{
-    sessionId: string;
-    tone: SessionLedgerState["tone"];
-    resultAt: string | null | undefined;
-  } | null>(null);
+  const runtimeEvidence =
+    resolveSessionRuntimeState(session).stateFacts.activity;
+  const currentTransition: ProviderEvidence = {
+    sessionId: session.id,
+    tone: state.tone,
+    resultAt: session.session_state.last_result_at,
+    streamConnected,
+    providerEvidenceIdentity: providerEvidenceIdentity(runtimeEvidence),
+    preInterruptionEvidenceIdentity: null,
+    hadObservedWork: false,
+    interrupted: false,
+  };
+  const previousTransitionRef = useRef<ProviderEvidence | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
-    const resultAt = session.session_state.last_result_at;
+    const outcome = session.session_state.last_result_outcome;
     const previous = previousTransitionRef.current;
-    let nextNotice: string | null = null;
-    if (previous && previous.sessionId === session.id) {
-      if (resultAt && resultAt !== previous.resultAt) {
-        const outcome = session.session_state.last_result_outcome;
-        nextNotice = outcome ? `Turn ended · ${outcome}.` : "Turn ended.";
-      } else if (
-        previous.tone === "unknown" &&
-        state.tone === "working" &&
-        streamConnected
-      ) {
-        nextNotice = "Fresh provider evidence restored.";
-      }
+    const transition = advanceProviderEvidenceTransition(
+      previousTransitionRef.current,
+      currentTransition,
+      outcome,
+    );
+    previousTransitionRef.current = transition.snapshot;
+    if (transition.notice !== null) {
+      setNotice(transition.notice);
+    } else if (
+      !previous ||
+      previous.sessionId !== currentTransition.sessionId ||
+      previous.tone !== currentTransition.tone ||
+      previous.resultAt !== currentTransition.resultAt ||
+      previous.streamConnected !== currentTransition.streamConnected ||
+      currentTransition.tone === "unknown" ||
+      currentTransition.tone === "attention"
+    ) {
+      setNotice(null);
     }
-    previousTransitionRef.current = {
-      sessionId: session.id,
-      tone: state.tone,
-      resultAt,
-    };
-    setNotice(nextNotice);
   }, [
-    session.id,
-    session.session_state.last_result_at,
+    currentTransition.providerEvidenceIdentity,
+    currentTransition.resultAt,
+    currentTransition.sessionId,
+    currentTransition.streamConnected,
+    currentTransition.tone,
     session.session_state.last_result_outcome,
-    state.tone,
-    streamConnected,
   ]);
   useEffect(() => {
     if (!notice) return;

@@ -67,6 +67,37 @@ struct SessionStreamResumeTests {
     }
 
     @Test
+    func pausingReleasesTheProducerAndResumeOwnsOnlyOneStream() async throws {
+        let workspace = try TestWorkspaceFactory.make(eventId: 30, content: "Retained tail")
+        let api = FakeStreamResumeClient(workspaces: [workspace, workspace])
+        let recorder = StreamFactoryRecorder()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, cursor, fingerprint in
+                recorder.make(sinceSeq: cursor, knownWorkspaceFingerprint: fingerprint)
+            },
+            enableRealtime: true,
+            snapshotStore: Self.isolatedSnapshotStore()
+        )
+        defer { model.stop() }
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForStartCount(recorder, atLeast: 1)
+        model.pauseRealtime()
+        await waitForProducerCount(recorder, 0)
+        #expect(recorder.activeProducerCount == 0)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForStartCount(recorder, atLeast: 2)
+        #expect(recorder.activeProducerCount == 1)
+        model.stop()
+        await waitForProducerCount(recorder, 0)
+        #expect(recorder.activeProducerCount == 0)
+    }
+
+    @Test
     func unauthorizedTriggersSingleAuthRefreshAndRestart() async throws {
         let workspace = try TestWorkspaceFactory.make(eventId: 30, content: "Tail")
         let api = FakeStreamResumeClient(workspaces: [workspace])
@@ -469,6 +500,14 @@ struct SessionStreamResumeTests {
         }
     }
 
+    private func waitForProducerCount(_ recorder: StreamFactoryRecorder, _ expected: Int) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: waitBudget)
+        while clock.now < deadline && recorder.activeProducerCount != expected {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
     private func waitForStreamDetached(_ model: SessionViewModel) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: waitBudget)
@@ -491,6 +530,7 @@ private final class StreamFactoryRecorder: Sendable {
         var lastKnownWorkspaceFingerprint: String?
         var startCount = 0
         var nextToken = 0
+        var activeProducers = Set<Int>()
         /// Which source owns `continuation` right now. `startStream` stops the
         /// stream it is replacing on a detached task, so a stale `stop()` can
         /// land after its successor has already registered; without this it
@@ -503,6 +543,7 @@ private final class StreamFactoryRecorder: Sendable {
     var lastSinceSeq: Int? { state.withLock { $0.lastSinceSeq } }
     var lastKnownWorkspaceFingerprint: String? { state.withLock { $0.lastKnownWorkspaceFingerprint } }
     var startCount: Int { state.withLock { $0.startCount } }
+    var activeProducerCount: Int { state.withLock { $0.activeProducers.count } }
 
     func make(sinceSeq: Int?, knownWorkspaceFingerprint: String?) -> SessionWorkspaceStreamSource {
         let token = state.withLock { state -> Int in
@@ -519,6 +560,7 @@ private final class StreamFactoryRecorder: Sendable {
                 AsyncStream { continuation in
                     state.withLock {
                         $0.startCount += 1
+                        $0.activeProducers.insert(token)
                         $0.activeToken = token
                         $0.continuation = continuation
                     }
@@ -526,6 +568,7 @@ private final class StreamFactoryRecorder: Sendable {
             },
             stop: { [state] in
                 state.withLock {
+                    $0.activeProducers.remove(token)
                     guard $0.activeToken == token else { return }
                     $0.continuation?.finish()
                     $0.continuation = nil

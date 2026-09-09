@@ -79,7 +79,8 @@ private extension SessionDetail {
         executing: Bool = false,
         placeholder: String = "Message",
         stateFactsJSON: String,
-        transcriptPreviewJSON: String? = nil
+        transcriptPreviewJSON: String? = nil,
+        pauseRequestJSON: String? = nil
     ) -> SessionDetail {
         let json = """
         {
@@ -118,10 +119,10 @@ private extension SessionDetail {
             "activityRecency": "live",
             "lifecycle": "open",
             "hostState": "online",
-            "terminalReason": null
+            "terminalReason": null,
+            "pauseRequest": \(pauseRequestJSON ?? "null")
           },
           "stateFacts": \(stateFactsJSON)\(transcriptPreviewJSON.map { ",\n          \"transcriptPreview\": \($0)" } ?? "")
-        }
         """
         do {
             return try JSONDecoder().decode(SessionDetail.self, from: Data(json.utf8))
@@ -132,6 +133,28 @@ private extension SessionDetail {
             fatalError("Failed to decode SessionDetail mock: \(error)")
         }
     }
+}
+
+private func approvalPreviewJSON() -> String {
+    """
+    {
+      "id": "pause-preview",
+      "sessionId": "preview-1",
+      "runtimeKey": "claude:preview-1",
+      "kind": "approval",
+      "status": "pending",
+      "provider": "claude",
+      "canRespond": false,
+      "title": "Allow the Bash command?",
+      "summary": "The provider is waiting before it runs the cleanup command.",
+      "toolName": "Bash",
+      "questions": [],
+      "occurredAt": "\(isoDate(secondsAgo: 8))",
+      "lastSeenAt": "\(isoDate(secondsAgo: 2))",
+      "resolvedAt": null,
+      "expiresAt": null
+    }
+    """
 }
 
 private func toolPreviewJSON(tool: String, command: String, running: Bool = true) -> String {
@@ -395,10 +418,10 @@ private struct PreviewSubtitle: ViewModifier {
                 primaryTone: "blocked",
                 access: ("live_control", "Live control", "success"),
                 pendingInteractionKind: "approval"
-            )
+            ),
+            pauseRequestJSON: approvalPreviewJSON()
         ),
         activity: seededActivity([(9.5, .toolStart)]),
-        transcript: ["The cache is stale. I’ll clear it before rebuilding."]
     )
     .preferredColorScheme(.dark)
 }

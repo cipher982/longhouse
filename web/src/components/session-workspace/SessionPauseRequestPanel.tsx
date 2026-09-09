@@ -31,7 +31,10 @@ function answerHasValue(value: AnswerValue | undefined): boolean {
   return Boolean(value?.trim());
 }
 
-function answerParts(questions: SessionPauseQuestion[], draft: AnswerDraft): string[] {
+function answerParts(
+  questions: SessionPauseQuestion[],
+  draft: AnswerDraft,
+): string[] {
   return questions.flatMap((question, index) => {
     const key = questionKey(question, index);
     const values = normalizedAnswerValues(draft[key]);
@@ -49,7 +52,10 @@ function normalizedAnswerValues(value: AnswerValue | undefined): string[] {
   return single ? [single] : [];
 }
 
-function normalizedAnswers(questions: SessionPauseQuestion[], draft: AnswerDraft): Record<string, string[]> {
+function normalizedAnswers(
+  questions: SessionPauseQuestion[],
+  draft: AnswerDraft,
+): Record<string, string[]> {
   return Object.fromEntries(
     questions.map((question, index) => {
       const key = questionKey(question, index);
@@ -71,14 +77,21 @@ export function SessionPauseRequestPanel({
   pauseRequest,
   onRespond,
 }: SessionPauseRequestPanelProps) {
-  const questions = useMemo(() => pauseRequest.questions ?? [], [pauseRequest.questions]);
+  const questions = useMemo(
+    () => pauseRequest.questions ?? [],
+    [pauseRequest.questions],
+  );
   // Binary provider gates reuse this panel but read as Allow/Deny or
   // Approve/Reject rather than Send answer/Cancel.
   const isPermissionPrompt = pauseRequest.kind === "permission_prompt";
   const isPlanApproval = pauseRequest.kind === "plan_approval";
-  const [draft, setDraft] = useState<AnswerDraft>(() => initialDraft(questions));
+  const [draft, setDraft] = useState<AnswerDraft>(() =>
+    initialDraft(questions),
+  );
   const [fallbackMessage, setFallbackMessage] = useState("");
-  const [submitting, setSubmitting] = useState<"answer" | "reject" | null>(null);
+  const [submitting, setSubmitting] = useState<"answer" | "reject" | null>(
+    null,
+  );
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -97,11 +110,14 @@ export function SessionPauseRequestPanel({
     (isPermissionPrompt || isPlanApproval
       ? true
       : questions.length > 0
-        ? questions.every((question, index) => answerHasValue(draft[questionKey(question, index)]))
+        ? questions.every((question, index) =>
+            answerHasValue(draft[questionKey(question, index)]),
+          )
         : fallbackMessage.trim().length > 0);
 
   const providerLabel = pauseRequest.provider
-    ? pauseRequest.provider.slice(0, 1).toUpperCase() + pauseRequest.provider.slice(1)
+    ? pauseRequest.provider.slice(0, 1).toUpperCase() +
+      pauseRequest.provider.slice(1)
     : "Provider";
   const detail =
     pauseRequest.summary?.trim() ||
@@ -173,10 +189,19 @@ export function SessionPauseRequestPanel({
         <MessageSquareIcon width={16} height={16} />
         <div className="session-pause-panel__title-block">
           <span className="session-pause-panel__eyebrow">
-            {isPermissionPrompt ? "Permission" : isPlanApproval ? "Plan approval" : "Needs answer"}
+            {isPermissionPrompt
+              ? "Permission"
+              : isPlanApproval
+                ? "Plan approval"
+                : "Needs answer"}
           </span>
           <h2>
-            {pauseRequest.title?.trim() || (isPermissionPrompt ? "Tool permission" : isPlanApproval ? "Plan approval" : "Provider question")}
+            {pauseRequest.title?.trim() ||
+              (isPermissionPrompt
+                ? "Tool permission"
+                : isPlanApproval
+                  ? "Plan approval"
+                  : "Provider question")}
           </h2>
           <p>{detail}</p>
         </div>
@@ -192,7 +217,9 @@ export function SessionPauseRequestPanel({
               <fieldset key={key} className="session-pause-question">
                 <legend>
                   {question.header ? (
-                    <span className="session-pause-question__header">{question.header}</span>
+                    <span className="session-pause-question__header">
+                      {question.header}
+                    </span>
                   ) : null}
                   <span>{question.question}</span>
                 </legend>
@@ -205,25 +232,41 @@ export function SessionPauseRequestPanel({
                         ? currentValue.includes(value)
                         : currentValue === value;
                       return (
-                        <label key={`${value}-${optionIndex}`} htmlFor={inputId} className="session-pause-option">
+                        <label
+                          key={`${value}-${optionIndex}`}
+                          htmlFor={inputId}
+                          className="session-pause-option"
+                        >
                           <input
                             id={inputId}
                             type={question.multi_select ? "checkbox" : "radio"}
                             name={`pause-${pauseRequest.id}-${key}`}
                             checked={checked}
-                            disabled={!pauseRequest.can_respond || submitting != null || submitted}
+                            disabled={
+                              !pauseRequest.can_respond ||
+                              submitting != null ||
+                              submitted
+                            }
                             onChange={(event) => {
                               if (question.multi_select) {
-                                toggleMultiValue(key, value, event.currentTarget.checked);
+                                toggleMultiValue(
+                                  key,
+                                  value,
+                                  event.currentTarget.checked,
+                                );
                               } else {
                                 setQuestionAnswer(key, value);
                               }
                             }}
                           />
                           <span className="session-pause-option__copy">
-                            <span className="session-pause-option__label">{option.label}</span>
+                            <span className="session-pause-option__label">
+                              {option.label}
+                            </span>
                             {option.description ? (
-                              <span className="session-pause-option__description">{option.description}</span>
+                              <span className="session-pause-option__description">
+                                {option.description}
+                              </span>
                             ) : null}
                           </span>
                         </label>
@@ -234,8 +277,14 @@ export function SessionPauseRequestPanel({
                   <textarea
                     className="session-pause-freeform"
                     value={typeof currentValue === "string" ? currentValue : ""}
-                    disabled={!pauseRequest.can_respond || submitting != null || submitted}
-                    onChange={(event) => setQuestionAnswer(key, event.currentTarget.value)}
+                    disabled={
+                      !pauseRequest.can_respond ||
+                      submitting != null ||
+                      submitted
+                    }
+                    onChange={(event) =>
+                      setQuestionAnswer(key, event.currentTarget.value)
+                    }
                     rows={2}
                   />
                 ) : null}
@@ -276,9 +325,9 @@ export function SessionPauseRequestPanel({
                     ? submitting === "answer"
                       ? "Approving"
                       : "Approve"
-                  : submitting === "answer"
-                    ? "Sending"
-                    : "Send answer"}
+                    : submitting === "answer"
+                      ? "Sending"
+                      : "Send answer"}
               </span>
             </Button>
             <Button
@@ -298,17 +347,13 @@ export function SessionPauseRequestPanel({
                     ? submitting === "reject"
                       ? "Rejecting"
                       : "Reject"
-                  : submitting === "reject"
-                    ? "Cancelling"
-                    : "Cancel"}
+                    : submitting === "reject"
+                      ? "Cancelling"
+                      : "Cancel"}
               </span>
             </Button>
           </>
-        ) : (
-          <span className="session-pause-panel__terminal-note">
-            Waiting in terminal
-          </span>
-        )}
+        ) : null}
       </div>
     </section>
   );

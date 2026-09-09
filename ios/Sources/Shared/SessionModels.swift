@@ -62,6 +62,31 @@ enum SessionLedgerEvidence: Equatable, Sendable {
     case uncertain
 }
 
+/// Identity of one canonical provider activity observation. Transport frames,
+/// heartbeats and control leases deliberately do not participate in this
+/// identity: recovery needs a newer provider fact, not merely a live socket.
+struct SessionProviderEvidenceIdentity: Equatable, Sendable {
+    let observedAt: String
+    let state: String
+    let tool: String?
+    let source: String?
+}
+
+extension SessionStateFacts {
+    var providerEvidenceIdentity: SessionProviderEvidenceIdentity? {
+        guard let observedAt = activityObservedAt,
+              !observedAt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return SessionProviderEvidenceIdentity(
+            observedAt: observedAt,
+            state: activityState,
+            tool: activityTool,
+            source: activitySource
+        )
+    }
+}
+
 extension SessionStateFacts {
     func ledgerEvidence(
         connection: SessionRealtimeConnection,
@@ -74,13 +99,14 @@ extension SessionStateFacts {
         guard ["thinking", "executing"].contains(activityState) else { return .quiet }
         guard activityEvidenceIsLive(asOf: now) else { return .uncertain }
         switch connection {
-        case .disconnected:
-            return .uncertain
-        case .connecting, .connected:
+        case .connected:
             return .working
+        case .connecting, .disconnected:
+            return .uncertain
         }
     }
 }
+
 
 
 

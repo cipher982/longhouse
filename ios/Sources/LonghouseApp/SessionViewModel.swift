@@ -287,6 +287,9 @@ final class SessionViewModel: ObservableObject {
         streamTask?.cancel()
         streamTask = nil
         realtimeConnection = .disconnected
+        if let oldStream = stream {
+            Task { await oldStream.stop() }
+        }
         stream = nil
         streamConnected = false
     }

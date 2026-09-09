@@ -1,5 +1,57 @@
 import SwiftUI
 
+/// Observed transitions, not transport reconnection alone, earn a notice.
+struct SessionLedgerNoticeState {
+    enum Notice { case finished, restored }
+    private var previousState: SessionLedgerEvidence?
+    private var previousEvidence: SessionProviderEvidenceIdentity?
+    private var interruptedEvidence: SessionProviderEvidenceIdentity?
+    private var previousResultAt: String?
+    private(set) var notice: Notice?
+    private(set) var until: Date?
+
+    mutating func observe(
+        state: SessionLedgerEvidence,
+        evidence: SessionProviderEvidenceIdentity?,
+        connection: SessionRealtimeConnection,
+        resultAt: String?,
+        now: Date
+    ) {
+        defer {
+            previousState = state
+            previousEvidence = evidence
+            previousResultAt = resultAt
+        }
+        guard let previousState else { return }
+        if state == .uncertain {
+            if previousState == .working { interruptedEvidence = previousEvidence }
+            clear()
+        } else if state == .attention {
+            interruptedEvidence = nil
+            clear()
+        } else if state == .quiet {
+            interruptedEvidence = nil
+            if let resultAt, resultAt != previousResultAt {
+                notice = .finished
+                until = now.addingTimeInterval(4)
+            }
+        } else if connection == .connected,
+                  let interruptedEvidence, let evidence,
+                  evidence != interruptedEvidence {
+            notice = .restored
+            until = now.addingTimeInterval(4)
+            self.interruptedEvidence = nil
+        } else if notice == .finished || resultAt != previousResultAt {
+            clear()
+        }
+    }
+
+    private mutating func clear() {
+        notice = nil
+        until = nil
+    }
+}
+
 /// The integrated Ledger status row of the control card: an evidence-gated
 /// activity strip, provider headline, elapsed observation and scoped stream
 /// state. Literal tool/context details stay behind deliberate disclosure.
@@ -21,15 +73,7 @@ struct SessionRuntimeDock: View {
         let key: String
         let start: Date
     }
-    private enum LedgerNotice: Equatable {
-        case finished
-        case restored
-    }
-
-    @State private var previousLedgerState: SessionLedgerEvidence?
-    @State private var observedLastResultAt: String?
-    @State private var notice: LedgerNotice?
-    @State private var noticeUntil: Date?
+    @State private var transition = SessionLedgerNoticeState()
     @State private var noticeNow = Date()
 
     var body: some View {
@@ -44,29 +88,18 @@ struct SessionRuntimeDock: View {
         .onAppear {
             evidenceNow = Date()
             noticeNow = Date()
-            previousLedgerState = ledger(asOf: evidenceNow)
-            observedLastResultAt = detail.stateFacts.lastResultAt
+            observeStatus()
             reanchorElapsed()
         }
         .onChange(of: detail.activityStartedAt) { _, _ in reanchorElapsed() }
         .onChange(of: detail.id) { _, _ in
             evidenceDisclosure = false
-            previousLedgerState = ledger(asOf: evidenceNow)
-            observedLastResultAt = detail.stateFacts.lastResultAt
-            notice = nil
-            noticeUntil = nil
+            transition = SessionLedgerNoticeState()
+            observeStatus()
         }
         .onChange(of: elapsedAnchorKey) { _, _ in reanchorElapsed() }
         .onChange(of: statusSignature) { _, _ in
-            let current = ledger(asOf: evidenceNow)
-            if let resultAt = detail.stateFacts.lastResultAt,
-               resultAt != observedLastResultAt {
-                startNotice(.finished)
-            } else if previousLedgerState == .uncertain, current == .working {
-                startNotice(.restored)
-            }
-            observedLastResultAt = detail.stateFacts.lastResultAt
-            previousLedgerState = current
+            observeStatus()
         }
         // server's valid_until passes, labels and motion change immediately.
         .task(id: evidenceDeadlineKey) {
@@ -82,7 +115,7 @@ struct SessionRuntimeDock: View {
             }
         }
         .task(id: noticeTaskKey) {
-            guard let deadline = noticeUntil else { return }
+            guard let deadline = transition.until else { return }
             let remaining = deadline.timeIntervalSinceNow
             if remaining > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
@@ -111,6 +144,10 @@ struct SessionRuntimeDock: View {
         [
             detail.id,
             detail.stateFacts.primary?.key ?? "",
+            detail.stateFacts.activityState,
+            detail.stateFacts.activityTool ?? "",
+            detail.stateFacts.activitySource ?? "",
+            detail.stateFacts.activityObservedAt ?? "",
             detail.stateFacts.activityValidUntil ?? "",
             detail.stateFacts.lastResultAt ?? "",
             String(describing: ledger(asOf: evidenceNow)),
@@ -121,18 +158,24 @@ struct SessionRuntimeDock: View {
     }
 
     private var noticeTaskKey: String {
-        "\(notice.map { String(describing: $0) } ?? "none"):\(noticeUntil?.timeIntervalSince1970 ?? 0)"
+        "\(transition.notice.map { String(describing: $0) } ?? "none"):\(transition.until?.timeIntervalSince1970 ?? 0)"
     }
 
     private var noticeIsVisible: Bool {
-        guard notice != nil, let noticeUntil else { return false }
-        return noticeNow < noticeUntil
+        guard transition.notice != nil, let until = transition.until else { return false }
+        return noticeNow < until
     }
 
-    private func startNotice(_ next: LedgerNotice) {
-        notice = next
-        noticeUntil = Date().addingTimeInterval(4)
-        noticeNow = Date()
+    private func observeStatus() {
+        let now = Date()
+        transition.observe(
+            state: ledger(asOf: evidenceNow),
+            evidence: detail.stateFacts.providerEvidenceIdentity,
+            connection: realtimeConnection,
+            resultAt: detail.stateFacts.lastResultAt,
+            now: now
+        )
+        noticeNow = now
     }
 
     private func reanchorElapsed() {
@@ -193,7 +236,7 @@ struct SessionRuntimeDock: View {
                     tone: tone(for: state),
                     evidenceLive: evidenceIsLive(asOf: now)
                 )
-                if state == .uncertain || realtimeConnection == .connected || shouldExpand {
+                if state == .uncertain || realtimeConnection == .connected || shouldExpand || evidenceDisclosure {
                     Button {
                         evidenceDisclosure.toggle()
                     } label: {
@@ -265,18 +308,27 @@ struct SessionRuntimeDock: View {
 
     private func evidenceContext(state: SessionLedgerEvidence) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            if noticeIsVisible, let notice {
+            if noticeIsVisible, let notice = transition.notice {
                 Text(notice == .finished ? "Turn finished" : "Activity evidence restored")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            HStack(spacing: 6) {
-                Image(systemName: state == .uncertain ? "questionmark.circle" : "antenna.radiowaves.left.and.right")
-                    .font(.caption)
-                Text(evidenceLabel(state))
-                    .font(.caption.weight(.medium))
+            if let pauseRequest = detail.activePauseRequest {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pauseRequestTitle(pauseRequest))
+                        .font(.caption.weight(.semibold))
+                    Text(pauseRequest.canRespond ? "Answer in the session card below." : "Answer in the provider terminal.")
+                }
+                .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: state == .uncertain ? "questionmark.circle" : "antenna.radiowaves.left.and.right")
+                        .font(.caption)
+                    Text(evidenceLabel(state))
+                        .font(.caption.weight(.medium))
+                }
+                .foregroundStyle(.secondary)
             }
-            .foregroundStyle(.secondary)
             if detail.controlBlock.isFault, let message = detail.controlHealthMessage {
                 Text(message)
                     .font(.caption)
@@ -321,6 +373,12 @@ struct SessionRuntimeDock: View {
             return "Updates disconnected"
         }
     }
+    private func pauseRequestTitle(_ request: SessionPauseRequest) -> String {
+        if let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        return request.kind == "permission_prompt" ? "Tool permission" : "Provider question"
+    }
 
     private var launchSetupLine: some View {
         HStack(spacing: 8) {
@@ -341,11 +399,13 @@ struct SessionRuntimeDock: View {
             let live = evidenceIsLive(asOf: now)
             if live {
                 SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let end = validUntil.map { min($0, context.date) } ?? context.date
+                    let end = RuntimeElapsed.observedEnd(validUntil: validUntil, now: context.date)
                     elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true), state: state)
                 }
             } else {
-                let end = (isExecuting ? validUntil : nil) ?? now
+                let end = isExecuting
+                    ? RuntimeElapsed.observedEnd(validUntil: validUntil, now: now)
+                    : now
                 elapsedText(RuntimeElapsed.label(from: start, to: end, precise: isExecuting), state: state)
             }
         }
@@ -385,14 +445,16 @@ struct SessionRuntimeDock: View {
         if detail.canDraftBeforeSendReady { return detail.launchSetupStatusLabel }
         var parts = [headline(for: state)]
         if let start = elapsedStart {
-            let end = (isExecuting ? detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) : nil) ?? evidenceNow
+            let end = isExecuting
+                ? RuntimeElapsed.observedEnd(validUntil: detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse), now: evidenceNow)
+                : evidenceNow
             parts.append(RuntimeElapsed.label(from: start, to: end, precise: isExecuting))
         }
         if let detailLabel = detail.runtimeDetail { parts.append(detailLabel) }
         if style.capability != .live, let label = detail.runtimeCapabilityLabel { parts.append(label) }
         if let connectionLabel = connectionLabel(for: state) { parts.append(connectionLabel) }
         if state == .uncertain { parts.append(evidenceLabel(state)) }
-        if noticeIsVisible, let notice {
+        if noticeIsVisible, let notice = transition.notice {
             parts.append(notice == .finished ? "Turn finished" : "Activity evidence restored")
         }
         return parts.joined(separator: ", ")
