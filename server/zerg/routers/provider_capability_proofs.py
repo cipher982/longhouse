@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
+import re
+import time
 from datetime import UTC
 from datetime import datetime
 from typing import Any
@@ -14,14 +17,24 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
+from fastapi import Response
 from fastapi import status
 
+from zerg.auth.caller import Caller
+from zerg.auth.managed_session_tokens import ManagedSessionToken
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.product_assurance_proof_archive import ProductAssuranceProofArchive
 from zerg.services.provider_assurance_plan_projection import validate_plan_projection
+from zerg.services.provider_capability_blob_resolver import FactoryBlobReference
+from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobMissing
+from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobResolver
+from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobResolverConfigurationError
+from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobTampered
+from zerg.services.provider_capability_blob_resolver import ProviderCapabilityBlobUnavailable
+from zerg.services.provider_capability_blob_resolver import resolver_from_settings
 from zerg.services.provider_capability_projection import PROJECTION_VERSION
 from zerg.services.provider_capability_projection import project_capabilities
 from zerg.services.provider_capability_proof import PROOF_SCHEMA_VERSION
@@ -38,7 +51,10 @@ _BUNDLE_KIND = "provider_capability_proof_bundle"
 _TRUSTED_BUNDLE_KIND = "trusted_provider_capability_proof_bundle"
 _FACTORY_PRODUCER_CLASS = "release_factory"
 _MAX_BODY_BYTES = 2 * 1024 * 1024
+_MAX_V4_BUNDLE_BYTES = 1 * 1024 * 1024
 _MAX_RECORDS = 512
+_MAX_V4_REFS = 512
+_MAX_V4_TOTAL_BYTES = 50 * 1024 * 1024
 
 
 def _proof_store() -> ProviderCapabilityProofStore:
@@ -48,6 +64,13 @@ def _proof_store() -> ProviderCapabilityProofStore:
 
 def _legacy_proof_store() -> ProviderCapabilityProofStore:
     return ProviderCapabilityProofStore(_proof_store().root.parent / "historical-factory-v2")
+
+
+def _blob_resolver() -> ProviderCapabilityBlobResolver | None:
+    try:
+        return resolver_from_settings(get_settings())
+    except ProviderCapabilityBlobResolverConfigurationError:
+        return None
 
 
 def _product_assurance_archive() -> ProductAssuranceProofArchive:
@@ -87,6 +110,8 @@ async def _read_capped_json(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Proof bundle must be valid JSON") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Proof bundle must be an object")
+    if payload.get("schema_version") == 4 and total > _MAX_V4_BUNDLE_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="v4 proof metadata is too large")
     return payload
 
 
@@ -187,6 +212,142 @@ def _validated_records(
     return tuple(records), tuple(blobs), publication
 
 
+def _reject_v4_inline_content(value: Any) -> None:
+    if isinstance(value, dict):
+        if {"content_base64", "content", "bytes_base64", "data_base64"} & value.keys():
+            raise ValueError("v4 proof bundles cannot carry inline content")
+        for child in value.values():
+            _reject_v4_inline_content(child)
+    elif isinstance(value, list):
+        for child in value:
+            _reject_v4_inline_content(child)
+
+
+def _validated_v4_bundle(
+    payload: dict[str, Any],
+) -> tuple[tuple[ProviderCapabilityProofRecord, ...], tuple[FactoryBlobReference, ...], ProofPublication]:
+    expected_keys = {"schema_version", "artifact_kind", "records", "blobs", "publication", "bundle_digest"}
+    if set(payload) != expected_keys:
+        raise ValueError("v4 proof bundle has an unexpected schema")
+    _reject_v4_inline_content(payload)
+    if payload.get("schema_version") != 4:
+        raise ValueError("v4 proof bundle schema_version must be 4")
+    if payload.get("artifact_kind") != _BUNDLE_KIND:
+        raise ValueError(f"proof bundle artifact_kind must be {_BUNDLE_KIND}")
+    if payload.get("bundle_digest") != _bundle_digest(payload):
+        raise ValueError("proof bundle digest does not match canonical content")
+    publication_payload = payload.get("publication")
+    if not isinstance(publication_payload, dict) or set(publication_payload) != {
+        "worker_id",
+        "worker_census_digest",
+        "auth_mechanism",
+        "published_at",
+    }:
+        raise ValueError("v4 proof publication has an unexpected schema")
+    worker_id = publication_payload.get("worker_id")
+    worker_census_digest = publication_payload.get("worker_census_digest")
+    auth_mechanism = publication_payload.get("auth_mechanism")
+    published_at = publication_payload.get("published_at")
+    if not all(isinstance(value, str) and value.strip() for value in (worker_id, worker_census_digest, auth_mechanism, published_at)):
+        raise ValueError("proof bundle publication identity is incomplete")
+    try:
+        parsed_published_at = datetime.fromisoformat(str(published_at).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("proof bundle publication timestamp is invalid") from exc
+    if parsed_published_at.tzinfo is None:
+        raise ValueError("proof bundle publication timestamp must include a timezone")
+    if auth_mechanism != "factory_token_v1":
+        raise ValueError("proof bundle auth_mechanism is not admitted")
+
+    raw_records = payload.get("records")
+    if not isinstance(raw_records, list) or len(raw_records) != 1:
+        raise ValueError("v4 proof publication must contain exactly one record")
+    records: list[ProviderCapabilityProofRecord] = []
+    for raw_record in raw_records:
+        if not isinstance(raw_record, dict):
+            raise ValueError("proof bundle records must be objects")
+        if (raw_record.get("subject_kind") or "provider_release") != "provider_release":
+            raise ValueError("v4 proof bundles admit provider_release subjects only")
+        record = proof_record_from_mapping(raw_record)
+        if raw_record != record.serialize():
+            raise ValueError("v4 proof records must use their canonical serialized form")
+        if record.provider not in managed_provider_names():
+            raise ValueError(f"unsupported managed provider: {record.provider}")
+        if record.producer_class != _FACTORY_PRODUCER_CLASS:
+            raise ValueError(f"proof producer_class must be {_FACTORY_PRODUCER_CLASS}")
+        if not record.run_reference:
+            raise ValueError("factory proof records must bind a run_reference")
+        if not record.raw_reference_digests:
+            raise ValueError("factory proof records must bind raw evidence digests")
+        gaps = v3_provenance_gaps(record)
+        if gaps:
+            raise ValueError(f"factory proof record has incomplete v3 provenance: {', '.join(gaps)}")
+        if record.worker_id != worker_id or record.worker_census_digest != worker_census_digest:
+            raise ValueError("factory proof record differs from publication worker identity")
+        if record.auth_mechanism != auth_mechanism:
+            raise ValueError("factory proof record differs from publication auth mechanism")
+        records.append(record)
+    invocations = {(record.invocation_id, record.run_reference) for record in records}
+    if len(invocations) != 1:
+        raise ValueError("proof bundle records must share one invocation and run_reference")
+
+    raw_blobs = payload.get("blobs")
+    if not isinstance(raw_blobs, list) or not raw_blobs or len(raw_blobs) > _MAX_V4_REFS:
+        raise ValueError("v4 proof bundle blobs must contain between 1 and 512 references")
+    refs: list[FactoryBlobReference] = []
+    seen: set[str] = set()
+    for raw_blob in raw_blobs:
+        ref = FactoryBlobReference.from_mapping(raw_blob) if isinstance(raw_blob, dict) else None
+        if ref is None:
+            raise ValueError("v4 proof bundle blob reference is invalid")
+        if ref.digest in seen:
+            raise ValueError("v4 proof bundle references the same blob twice")
+        seen.add(ref.digest)
+        refs.append(ref)
+    if sum(ref.byte_length for ref in refs) > _MAX_V4_TOTAL_BYTES:
+        raise ValueError("v4 proof bundle references exceed the 50 MiB total byte cap")
+    referenced = set().union(*(set(record.referenced_content_digests()) for record in records))
+    declared = {ref.digest for ref in refs}
+    missing = referenced - declared
+    unreferenced = declared - referenced
+    if missing:
+        raise ValueError(f"v4 proof bundle omits referenced content: {sorted(missing)}")
+    if unreferenced:
+        raise ValueError(f"v4 proof bundle contains unreferenced content: {sorted(unreferenced)}")
+    publication = ProofPublication(
+        worker_id=str(worker_id),
+        worker_census_digest=str(worker_census_digest),
+        auth_mechanism=str(auth_mechanism),
+        published_at=str(published_at),
+        bundle_digest=str(payload["bundle_digest"]),
+        bundle_schema_version=4,
+    )
+    return tuple(records), tuple(refs), publication
+
+
+def _reference_verification_payloads(
+    resolver: ProviderCapabilityBlobResolver,
+    refs: tuple[FactoryBlobReference, ...],
+    records: tuple[ProviderCapabilityProofRecord, ...],
+) -> tuple[tuple[dict[str, Any], ...], dict[str, bytes]]:
+    projection_digests = {
+        str(record.provenance_extension["plan_projection_digest"])
+        for record in records
+        if isinstance(record.provenance_extension, dict) and record.provenance_extension.get("plan_projection_digest")
+    }
+    verification: list[dict[str, Any]] = []
+    projection_content: dict[str, bytes] = {}
+    deadline = time.monotonic() + 90
+    for ref in refs:
+        verified = resolver.resolve(ref, collect=ref.digest in projection_digests, deadline=deadline)
+        verification.append(dict(verified.verification))
+        if verified.content is not None:
+            projection_content[ref.digest] = verified.content
+    for record in records:
+        validate_plan_projection(record.canonical_payload(), projection_content)
+    return tuple(verification), projection_content
+
+
 def _bounded_records(store: ProviderCapabilityProofStore) -> tuple[tuple[ProviderCapabilityProofRecord, ...], int]:
     """Return a provider-fair newest-first window that always fits the machine contract."""
     queues = {provider: list(reversed(store.records(provider))) for provider in sorted(managed_provider_names())}
@@ -218,6 +379,11 @@ async def publish_provider_capability_proofs(
     if isinstance(raw_records, list) and raw_records:
         subject_kinds = {record.get("subject_kind", "provider_release") for record in raw_records if isinstance(record, dict)}
         if "longhouse_product" in subject_kinds:
+            if payload.get("schema_version") == 4:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="v4 proof bundles admit provider_release subjects only",
+                )
             if subject_kinds != {"longhouse_product"} or len(subject_kinds) != 1:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -232,6 +398,60 @@ async def publish_provider_capability_proofs(
                 "accepted": len(trusted_ids),
                 "trusted_artifact_ids": trusted_ids,
             }
+    if payload.get("schema_version") == 4:
+        try:
+            records, refs, publication = _validated_v4_bundle(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        resolver = _blob_resolver()
+        if resolver is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "provider_capability_blob_store_unavailable", "message": "v4 evidence resolver is not configured"},
+            )
+        try:
+            verification, _projection_content = await asyncio.to_thread(_reference_verification_payloads, resolver, refs, records)
+        except ProviderCapabilityBlobMissing as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "provider_capability_blob_missing", "message": str(exc)},
+            ) from exc
+        except ProviderCapabilityBlobTampered as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"code": "provider_capability_blob_tampered", "message": str(exc)},
+            ) from exc
+        except ProviderCapabilityBlobUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "provider_capability_blob_store_unavailable", "message": str(exc)},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        store = _proof_store()
+        ref_payloads = tuple(dict(ref) for ref in payload["blobs"])
+        try:
+            for record in records:
+                metadata = store.build_reference_metadata(
+                    record,
+                    bundle_digest=publication.bundle_digest,
+                    publication=publication,
+                    refs=ref_payloads,
+                    verification=verification,
+                )
+                store.write_reference_metadata(record, metadata)
+                store.write(record, publication=publication, rebuild_index=False)
+                integrity = store.integrity_report(record.provider, records=(record,), available=frozenset())
+                if record.artifact_id not in integrity.admissible_artifact_ids:
+                    raise ValueError("stored reference proof did not retain its authenticated integrity")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        return {
+            "schema_version": 2,
+            "proof_bundle_schema_version": 4,
+            "accepted": len(records),
+            "trusted_artifact_ids": [record.artifact_id for record in records],
+        }
     try:
         records, blobs, publication = _validated_records(payload)
     except ValueError as exc:
@@ -313,6 +533,73 @@ def list_provider_capability_proofs(
         "total_records": total,
         "truncated": total > len(records),
     }
+
+
+def _require_owner_capable_evidence_caller(caller: Caller = Depends(verify_agents_caller)) -> Caller:
+    if isinstance(caller.principal, ManagedSessionToken):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Managed-session tokens cannot read owner-wide provider evidence",
+        )
+    if caller.owner_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Provider evidence requires an owner-bound caller")
+    return caller
+
+
+@router.get("/agents/provider-capability-proofs/blobs/{sha256}", dependencies=[Depends(require_single_tenant)])
+def get_provider_capability_proof_blob(
+    sha256: str,
+    _caller: Caller = Depends(_require_owner_capable_evidence_caller),
+) -> Response:
+    if re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="provider capability evidence not found")
+    digest = f"sha256:{sha256}"
+    found = _proof_store().reference_for_digest(digest)
+    if found is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="provider capability evidence not found")
+    ref_payload, _record = found
+    try:
+        reference = FactoryBlobReference.from_mapping(ref_payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "provider_capability_reference_tampered", "message": str(exc)},
+        ) from exc
+    resolver = _blob_resolver()
+    if resolver is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "provider_capability_blob_store_unavailable", "message": "v4 evidence resolver is not configured"},
+        )
+    try:
+        verified = resolver.resolve(reference, collect=True)
+    except ProviderCapabilityBlobMissing as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "provider_capability_blob_missing", "message": str(exc)},
+        ) from exc
+    except ProviderCapabilityBlobTampered as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "provider_capability_blob_tampered", "message": str(exc)},
+        ) from exc
+    except ProviderCapabilityBlobUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "provider_capability_blob_store_unavailable", "message": str(exc)},
+        ) from exc
+    if verified.content is None:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="provider capability evidence was not collected")
+    return Response(
+        content=verified.content,
+        media_type=reference.media_type,
+        headers={
+            "Content-Length": str(reference.byte_length),
+            "Content-Disposition": f'attachment; filename="provider-capability-{sha256}.bin"',
+            "X-Content-Type-Options": "nosniff",
+            "X-Provider-Capability-Sha256": reference.digest,
+        },
+    )
 
 
 def build_capability_projection_payload(

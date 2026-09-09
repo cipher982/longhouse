@@ -11,6 +11,18 @@ longhouse-server serve
 
 Full docs and the recommended hosted/self-host flows live in the main repository README: https://github.com/cipher982/longhouse
 
+## Provider capability evidence
+
+Reference-based factory proofs use a dedicated read-only S3-compatible store,
+configured through `PROVIDER_CAPABILITY_BLOB_S3_*` in the root `.env.example`.
+This is separate from tenant media storage; no ambient AWS credentials are used.
+An unconfigured resolver rejects reference-proof publication explicitly.
+
+The Runtime Host verifies every referenced object's length and SHA-256 before
+acceptance, retaining attested metadata rather than copying evidence bytes.
+Existing inline proofs remain immutable and readable. Evidence downloads require
+owner-capable authentication; managed-session credentials cannot read them.
+
 ## Repairing held interactions
 
 The live catalog owns provider-wait lifecycle. Execution end revokes held

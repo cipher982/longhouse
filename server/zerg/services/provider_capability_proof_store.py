@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -12,11 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from zerg.services.provider_capability_blob_resolver import FactoryBlobReference
 from zerg.services.provider_capability_proof import ProviderCapabilityProofRecord
 from zerg.services.provider_capability_proof import proof_record_from_mapping
 
 _SAFE_PROVIDER = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+_ARTIFACT_ID = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,7 @@ class ProofPublication:
     published_at: str
     bundle_digest: str
     authenticated: bool = True
+    bundle_schema_version: int = 3
 
 
 @dataclass(frozen=True)
@@ -77,6 +81,14 @@ class ProviderCapabilityProofStore:
     @property
     def _epoch_root(self) -> Path:
         return self.root / "_epoch_roots"
+
+    @property
+    def _reference_root(self) -> Path:
+        return self.root / "_references"
+
+    @property
+    def _reference_admission_root(self) -> Path:
+        return self.root / "_reference_admissions"
 
     @staticmethod
     def _digest_bytes(payload: bytes) -> str:
@@ -171,6 +183,102 @@ class ProviderCapabilityProofStore:
             self.rebuild_index(record.provider)
         return destination
 
+    def build_reference_metadata(
+        self,
+        record: ProviderCapabilityProofRecord,
+        *,
+        bundle_digest: str,
+        publication: ProofPublication,
+        refs: tuple[Mapping[str, Any], ...],
+        verification: tuple[Mapping[str, Any], ...],
+    ) -> dict[str, Any]:
+        """Build content-free, immutable evidence verification metadata."""
+        payload: dict[str, Any] = {
+            "schema_version": 1,
+            "artifact_kind": "provider_capability_proof_reference_metadata",
+            "bundle_schema_version": 4,
+            "artifact_id": record.artifact_id,
+            "provider": record.provider,
+            "bundle_digest": bundle_digest,
+            "publication": {
+                "worker_id": publication.worker_id,
+                "worker_census_digest": publication.worker_census_digest,
+                "auth_mechanism": publication.auth_mechanism,
+                "published_at": publication.published_at,
+            },
+            "refs": [dict(ref) for ref in refs],
+            "verification": [dict(item) for item in verification],
+        }
+        payload["metadata_digest"] = f"sha256:{hashlib.sha256(self._canonical_json(payload)).hexdigest()}"
+        self._validate_reference_metadata(record, payload)
+        return payload
+
+    def write_reference_metadata(self, record: ProviderCapabilityProofRecord, payload: Mapping[str, Any]) -> Path:
+        self._validate_reference_metadata(record, payload)
+        record_path = self._provider_root(record.provider) / f"{record.artifact_id}.json"
+        if (
+            record_path.exists()
+            and not self._reference_path(record).exists()
+            and not self._reference_admission_path(record).exists()
+            and not self._has_matching_reference_publication_event(record, payload)
+        ):
+            raise ValueError("historical proof artifacts cannot be converted or rebound to reference proofs")
+        destination = self._reference_path(record)
+        encoded = self._canonical_json(payload, pretty=True)
+        if destination.exists():
+            if destination.read_bytes() != encoded:
+                raise ValueError(f"proof reference metadata would be rewritten: {record.artifact_id}")
+        else:
+            self._atomic_bytes(destination, encoded)
+
+        admission = {
+            "schema_version": 1,
+            "artifact_kind": "provider_capability_proof_reference_admission",
+            "artifact_id": record.artifact_id,
+            "provider": record.provider,
+            "metadata_digest": payload["metadata_digest"],
+        }
+        admission_path = self._reference_admission_path(record)
+        admission_encoded = self._canonical_json(admission, pretty=True)
+        if admission_path.exists():
+            if admission_path.read_bytes() != admission_encoded:
+                raise ValueError(f"proof reference admission would be rewritten: {record.artifact_id}")
+        else:
+            self._atomic_bytes(admission_path, admission_encoded)
+        return destination
+
+    def reference_for_digest(self, digest: str) -> tuple[dict[str, Any], ProviderCapabilityProofRecord] | None:
+        """Return one admissible v4 ref bound to an authenticated local proof."""
+        self._digest_name(digest)
+        if not self._reference_root.exists():
+            return None
+        for provider_root in sorted(self._reference_root.iterdir()):
+            if not provider_root.is_dir() or not _SAFE_PROVIDER.fullmatch(provider_root.name):
+                continue
+            for metadata_path in provider_root.glob("*.json"):
+                try:
+                    artifact_id = metadata_path.stem
+                    if _ARTIFACT_ID.fullmatch(artifact_id) is None:
+                        continue
+                    record_path = self._provider_root(provider_root.name) / f"{artifact_id}.json"
+                    if not record_path.is_file():
+                        continue
+                    record = self.read_path(record_path)
+                    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    self._validate_reference_metadata(record, payload)
+                    admission_path = self._reference_admission_path(record)
+                    if not admission_path.is_file() or not self._valid_reference_admission(record, payload, admission_path):
+                        continue
+                    report = self.integrity_report(record.provider, records=(record,), available=frozenset())
+                    if not report.admissible_artifact_ids.__contains__(record.artifact_id):
+                        continue
+                    for ref in payload["refs"]:
+                        if ref["digest"] == digest:
+                            return dict(ref), record
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    continue
+        return None
+
     def _write_publication_event(self, record: ProviderCapabilityProofRecord, publication: ProofPublication) -> Path:
         payload = {
             "schema_version": 1,
@@ -183,6 +291,8 @@ class ProviderCapabilityProofStore:
             "published_at": publication.published_at,
             "bundle_digest": publication.bundle_digest,
         }
+        if publication.bundle_schema_version == 4:
+            payload["bundle_schema_version"] = 4
         event_id = hashlib.sha256(self._canonical_json(payload)).hexdigest()
         payload["event_id"] = event_id
         destination = self._event_root / record.provider / f"{event_id}.json"
@@ -259,17 +369,30 @@ class ProviderCapabilityProofStore:
         for record in records:
             reasons: list[str] = []
             refs = set(record.referenced_content_digests())
-            if refs - available:
-                reasons.append("proof_referenced_content_missing")
+            reference_path = self._reference_path(record)
+            admission_path = self._reference_admission_path(record)
             publication = published_artifact_facts.get(record.artifact_id, frozenset())
-            if (
-                self.require_authenticated_publication
-                and (
-                    record.worker_id,
-                    record.worker_census_digest,
-                    record.auth_mechanism,
-                )
-                not in publication
+            is_reference_proof = reference_path.is_file() or admission_path.is_file() or any(fact[3] == 4 for fact in publication)
+            if is_reference_proof:
+                if not reference_path.is_file():
+                    reasons.append("proof_reference_metadata_missing")
+                else:
+                    try:
+                        metadata = json.loads(reference_path.read_text(encoding="utf-8"))
+                        self._validate_reference_metadata(record, metadata)
+                        if not admission_path.is_file() or not self._valid_reference_admission(record, metadata, admission_path):
+                            reasons.append("proof_reference_admission_missing_or_tampered")
+                        elif not self._has_matching_reference_publication_event(record, metadata):
+                            reasons.append("proof_reference_publication_mismatch")
+                    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                        reasons.append("proof_reference_metadata_invalid")
+            elif refs - available:
+                # This is the unchanged v3 local-blob behavior. A v4
+                # admission always leaves the marker above, so missing v4
+                # metadata cannot be mistaken for a legacy proof.
+                reasons.append("proof_referenced_content_missing")
+            if self.require_authenticated_publication and not any(
+                fact[:3] == (record.worker_id, record.worker_census_digest, record.auth_mechanism) for fact in publication
             ):
                 reasons.append("proof_authenticated_publication_missing")
             if self.require_authenticated_publication:
@@ -297,7 +420,7 @@ class ProviderCapabilityProofStore:
             orphan_blob_digests=(tuple(sorted(available - self._all_referenced_content_digests())) if full_scan else ()),
         )
 
-    def _published_artifact_facts(self, provider: str) -> dict[str, frozenset[tuple[str, str, str]]]:
+    def _published_artifact_facts(self, provider: str) -> dict[str, frozenset[tuple[str, str, str, int]]]:
         """Return valid authenticated publication identities for one provider.
 
         The event directory is append-only and each event names its artifact.
@@ -308,7 +431,7 @@ class ProviderCapabilityProofStore:
         root = self._event_root / provider
         if not root.exists():
             return {}
-        published: dict[str, set[tuple[str, str, str]]] = {}
+        published: dict[str, set[tuple[str, str, str, int]]] = {}
         for path in root.glob("*.json"):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
@@ -323,6 +446,7 @@ class ProviderCapabilityProofStore:
             worker_id = payload.get("worker_id")
             worker_census_digest = payload.get("worker_census_digest")
             auth_mechanism = payload.get("auth_mechanism")
+            bundle_schema = payload.get("bundle_schema_version", 3)
             if (
                 event_id == expected_id
                 and path.stem == expected_id
@@ -333,17 +457,141 @@ class ProviderCapabilityProofStore:
                 and isinstance(worker_id, str)
                 and isinstance(worker_census_digest, str)
                 and isinstance(auth_mechanism, str)
+                and type(bundle_schema) is int
+                and bundle_schema in (3, 4)
                 and _SHA256.fullmatch(str(payload.get("bundle_digest") or ""))
             ):
-                published.setdefault(artifact_id, set()).add((worker_id, worker_census_digest, auth_mechanism))
+                published.setdefault(artifact_id, set()).add((worker_id, worker_census_digest, auth_mechanism, bundle_schema))
         return {artifact_id: frozenset(facts) for artifact_id, facts in published.items()}
 
     def _has_publication_event(self, record: ProviderCapabilityProofRecord) -> bool:
-        return (
-            record.worker_id,
-            record.worker_census_digest,
-            record.auth_mechanism,
-        ) in self._published_artifact_facts(record.provider).get(record.artifact_id, frozenset())
+        expected = (record.worker_id, record.worker_census_digest, record.auth_mechanism)
+        return any(fact[:3] == expected for fact in self._published_artifact_facts(record.provider).get(record.artifact_id, frozenset()))
+
+    def _reference_path(self, record: ProviderCapabilityProofRecord) -> Path:
+        return self._reference_root / self._provider_root(record.provider).name / f"{record.artifact_id}.json"
+
+    def _reference_admission_path(self, record: ProviderCapabilityProofRecord) -> Path:
+        return self._reference_admission_root / self._provider_root(record.provider).name / f"{record.artifact_id}.json"
+
+    def _valid_reference_admission(self, record: ProviderCapabilityProofRecord, metadata: Mapping[str, Any], path: Path) -> bool:
+        try:
+            admission = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+        return admission == {
+            "schema_version": 1,
+            "artifact_kind": "provider_capability_proof_reference_admission",
+            "artifact_id": record.artifact_id,
+            "provider": record.provider,
+            "metadata_digest": metadata.get("metadata_digest"),
+        }
+
+    def _has_matching_reference_publication_event(self, record: ProviderCapabilityProofRecord, metadata: Mapping[str, Any]) -> bool:
+        publication = metadata["publication"]
+        payload = {
+            "schema_version": 1,
+            "artifact_kind": "provider_capability_proof_publication",
+            "artifact_id": record.artifact_id,
+            "provider": record.provider,
+            "worker_id": publication["worker_id"],
+            "worker_census_digest": publication["worker_census_digest"],
+            "auth_mechanism": publication["auth_mechanism"],
+            "published_at": publication["published_at"],
+            "bundle_digest": metadata["bundle_digest"],
+            "bundle_schema_version": 4,
+        }
+        event_id = hashlib.sha256(self._canonical_json(payload)).hexdigest()
+        path = self._event_root / record.provider / f"{event_id}.json"
+        try:
+            event = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return False
+        return event == {**payload, "event_id": event_id}
+
+    def _validate_reference_metadata(self, record: ProviderCapabilityProofRecord, payload: Mapping[str, Any]) -> None:
+        expected_keys = {
+            "schema_version",
+            "artifact_kind",
+            "bundle_schema_version",
+            "artifact_id",
+            "provider",
+            "bundle_digest",
+            "publication",
+            "refs",
+            "verification",
+            "metadata_digest",
+        }
+        if not isinstance(payload, Mapping) or set(payload) != expected_keys:
+            raise ValueError("proof reference metadata schema is invalid")
+        unsigned = {key: value for key, value in payload.items() if key != "metadata_digest"}
+        if (
+            payload.get("schema_version") != 1
+            or payload.get("artifact_kind") != "provider_capability_proof_reference_metadata"
+            or payload.get("bundle_schema_version") != 4
+            or payload.get("artifact_id") != record.artifact_id
+            or payload.get("provider") != record.provider
+            or not isinstance(payload.get("bundle_digest"), str)
+            or _SHA256.fullmatch(str(payload.get("bundle_digest"))) is None
+            or payload.get("metadata_digest") != f"sha256:{hashlib.sha256(self._canonical_json(unsigned)).hexdigest()}"
+        ):
+            raise ValueError("proof reference metadata identity is invalid")
+        publication = payload.get("publication")
+        if not isinstance(publication, Mapping) or set(publication) != {
+            "worker_id",
+            "worker_census_digest",
+            "auth_mechanism",
+            "published_at",
+        }:
+            raise ValueError("proof reference metadata publication is invalid")
+        if any(publication.get(name) != getattr(record, name) for name in ("worker_id", "worker_census_digest", "auth_mechanism")):
+            raise ValueError("proof reference metadata publication differs from its record")
+        refs = payload.get("refs")
+        if not isinstance(refs, list) or not 1 <= len(refs) <= 512:
+            raise ValueError("proof reference metadata refs are invalid")
+        ref_digests: set[str] = set()
+        for ref in refs:
+            if not isinstance(ref, Mapping):
+                raise ValueError("proof reference metadata ref shape is invalid")
+            reference = FactoryBlobReference.from_mapping(ref)
+            digest = reference.digest
+            if digest in ref_digests:
+                raise ValueError("proof reference metadata refs are duplicated")
+            ref_digests.add(digest)
+        if ref_digests != set(record.referenced_content_digests()):
+            raise ValueError("proof reference metadata refs do not bind the record")
+        if sum(ref["byte_length"] for ref in refs) > 50 * 1024 * 1024:
+            raise ValueError("proof reference metadata exceeds the total byte cap")
+        bundle = {
+            "schema_version": 4,
+            "artifact_kind": "provider_capability_proof_bundle",
+            "records": [record.serialize()],
+            "blobs": refs,
+            "publication": dict(publication),
+        }
+        if self._digest_bytes(self._canonical_json(bundle)) != payload["bundle_digest"]:
+            raise ValueError("proof reference metadata differs from its authenticated bundle")
+        verification = payload.get("verification")
+        if not isinstance(verification, list) or len(verification) != len(refs):
+            raise ValueError("proof reference metadata verification is invalid")
+        by_digest = {item.get("digest"): item for item in verification if isinstance(item, Mapping)}
+        if set(by_digest) != ref_digests or len(by_digest) != len(verification):
+            raise ValueError("proof reference metadata verification identities are invalid")
+        for ref in refs:
+            item = by_digest[ref["digest"]]
+            expected_raw = ref["digest"].removeprefix("sha256:")
+            expected_checksum = base64.b64encode(bytes.fromhex(expected_raw)).decode("ascii")
+            if item != {
+                "digest": ref["digest"],
+                "key": ref["key"],
+                "content_length": ref["byte_length"],
+                "content_type": ref["media_type"],
+                "metadata_sha256": expected_raw,
+                "checksum_sha256": expected_checksum,
+                "body_sha256": expected_raw,
+                "complete": True,
+            }:
+                raise ValueError("proof reference metadata verification does not bind its ref")
 
     def rebuild_index(self, provider: str) -> Path:
         provider_root = self._provider_root(provider)
