@@ -208,12 +208,14 @@ export function buildInboxLayout(
       return a.repo.localeCompare(b.repo);
     });
     if (order?.repoOrder?.length) {
-      const defaultRepos = groups.map((g) => g.repo);
+      const defaultRepos = groups.filter((group) => group.kind !== "automation").map((g) => g.repo);
       const orderedRepos = applyOrder(defaultRepos, order.repoOrder);
       const byRepoName = new Map(groups.map((g) => [g.repo, g]));
-      return orderedRepos
+      const orderedProjects = orderedRepos
         .map((r) => byRepoName.get(r))
-        .filter((g): g is InboxRepoGroup => g != null);
+        .filter((g): g is InboxRepoGroup => g != null && g.kind !== "automation");
+      const automationGroups = groups.filter((group) => group.kind === "automation");
+      return [...orderedProjects, ...automationGroups];
     }
     return groups;
   };

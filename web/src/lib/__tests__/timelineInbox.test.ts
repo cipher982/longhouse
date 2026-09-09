@@ -261,6 +261,18 @@ describe("buildInboxLayout", () => {
     expect(layout.history[0].label).toBe("Automation runs");
     expect(layout.history[0].kind).toBe("automation");
   });
+  it("keeps automation runs last despite a stale saved repo order", () => {
+    const layout = buildInboxLayout([
+      makeCard({ id: "project", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
+      makeCard({ id: "automation", repo: "agent-sessions", startedAt: "2026-05-20T11:00:00Z" }),
+    ], {
+      shelfOrder: [],
+      repoOrder: ["agent-sessions", "zerg"],
+      sessionOrder: {},
+    }, fixedNow);
+
+    expect(layout.history.map((group) => group.label)).toEqual(["zerg", "Automation runs"]);
+  });
   it("sorts sessions within a repo by start time descending (frozen)", () => {
     const cards = [
       makeCard({ id: "old", repo: "zerg", startedAt: "2026-05-17T10:00:00Z" }),
