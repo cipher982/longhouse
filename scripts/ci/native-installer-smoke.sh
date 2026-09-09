@@ -168,7 +168,8 @@ GITHUB_EOF
 
 install_pair() {
   local tag="${1:-}" stage="$2"
-  local -a env_args=("LONGHOUSE_MACOS_APP_INSTALL_DIR=$HOME_DIR/Applications")
+  # Native installer smoke must not install a menu-bar app from its disposable HOME.
+  local -a env_args=("LONGHOUSE_MACOS_APP_INSTALL_DIR=$HOME_DIR/Applications" "LONGHOUSE_INSTALL_MENUBAR=0")
   if [[ "$REMOTE_RELEASE" == "1" ]]; then
     env_args+=("LONGHOUSE_INSTALL_VERSION=$tag")
   else
