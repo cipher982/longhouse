@@ -3,21 +3,28 @@ import { getProjectLabel } from "./sessionUtils";
 import { isSessionClosed } from "./sessionRuntime";
 import { applyOrder, type InboxOrderState } from "./inboxOrder";
 
+export type InboxGroupKind = "project" | "automation";
+
 export interface InboxRepoGroup {
+  /** Stable raw project key used for persisted drag ordering. */
   repo: string;
   sessions: TimelineSessionCard[];
+  /** User-facing label; intentionally separate from the raw project key. */
+  label: string;
+  /** Optional explanation for non-project groups. */
+  description: string | null;
+  kind: InboxGroupKind;
 }
 
 export interface InboxLayout {
   shelf: TimelineSessionCard[];
   unread: TimelineSessionCard[];
-  active: InboxRepoGroup[];
-  closed: InboxRepoGroup[];
-  closedCount: number;
+  /** Visible history: all non-shelf sessions, grouped by project. */
+  history: InboxRepoGroup[];
+  historyCount: number;
   shelfCount?: number;
 }
 
-export const SHELF_RECENCY_MS = 24 * 60 * 60 * 1000;
 
 function parseMs(value: string | null | undefined): number {
   if (!value) return 0;
@@ -43,6 +50,53 @@ function closedAtMs(card: TimelineSessionCard): number {
 function isCardClosed(card: TimelineSessionCard): boolean {
   const session = card.head;
   return isSessionClosed(session);
+}
+
+function historySortKey(card: TimelineSessionCard): number {
+  return isCardClosed(card) ? closedAtMs(card) : startedAtMs(card);
+}
+
+function isAutomationSession(session: TimelineSessionCard["head"]): boolean {
+  const actor = session.launch_actor?.trim().toLowerCase();
+  const origin = session.origin_kind?.trim().toLowerCase();
+  const cwd = session.cwd?.replace(/\/+$/, "").split("/").pop()?.toLowerCase();
+  return (
+    session.project === "agent-sessions" ||
+    cwd === "agent-sessions" ||
+    actor === "automation" ||
+    origin?.includes("automation") === true
+  );
+}
+
+export function getInboxGroupPresentation(
+  repo: string,
+  sessions: readonly TimelineSessionCard[],
+): Pick<InboxRepoGroup, "label" | "description" | "kind"> {
+  const automation = repo === "agent-sessions" || (
+    sessions.length > 0 && sessions.every((session) => isAutomationSession(session.head))
+  );
+  if (automation) {
+    return {
+      label: "Automation runs",
+      description: "Background OpenCode sessions · search only",
+      kind: "automation",
+    };
+  }
+  return {
+    label: repo,
+    description: null,
+    kind: "project",
+  };
+}
+
+function addToRepoMap(
+  groups: Map<string, TimelineSessionCard[]>,
+  repo: string,
+  card: TimelineSessionCard,
+): void {
+  const list = groups.get(repo);
+  if (list) list.push(card);
+  else groups.set(repo, [card]);
 }
 
 /**
@@ -82,22 +136,13 @@ export function unreadResultAtMs(card: TimelineSessionCard): number {
 }
 
 /**
- * Build the three-tier inbox layout:
- *   - Shelf: flat list of steerable or recent (<24h) open sessions,
- *     sorted by start time desc (frozen). Ordered by shelfOrder.
- *   - Active (archive): repo-grouped non-shelf open sessions,
- *     sorted by start time desc (frozen).
- *   - Closed: repo-grouped closed sessions, sorted by close time desc.
+ * Build the visible inbox layout:
+ *   - Shelf: flat list of sessions the server says are open now.
+ *   - Unread: a result-attention overlay between live work and history.
+ *   - History: every other session, grouped by project.
  *
- * Active ordering is intentionally anchored to start time so in-flight runtime
- * updates never reflow the page — that's what kills the timeline jitter when
- * several agents are churning. Closed sessions are terminal (no churn risk), so
- * we sort them by exit time instead: the thing you just stepped away from lands
- * on top.
- *
- * Optional `order` override applies user-driven reordering on top of the
- * default sort. Repo names / session ids absent from the override keep
- * their default-relative position.
+ * Every non-shelf, non-unread session enters History; liveness only controls
+ * the row's closed styling and its ordering key.
  */
 export function buildInboxLayout(
   cards: TimelineSessionCard[],
@@ -108,28 +153,18 @@ export function buildInboxLayout(
 
   const shelfCards: TimelineSessionCard[] = [];
   const unreadCards: TimelineSessionCard[] = [];
-  const activeByRepo = new Map<string, TimelineSessionCard[]>();
-  const closedByRepo = new Map<string, TimelineSessionCard[]>();
+  const historyByRepo = new Map<string, TimelineSessionCard[]>();
 
   for (const card of cards) {
-    // The unread band carves the card out of whichever bucket it would
-    // otherwise land in — active AND closed — never duplicates it. A running
-    // unread session stays on the shelf; its band membership re-derives when
-    // the new turn settles.
+    // The unread band carves the card out of the history bucket — never
+    // duplicates it. A running unread session stays on the shelf; its band
+    // membership re-derives when the new turn settles.
     if (isOnShelf(card, now)) {
       shelfCards.push(card);
     } else if (isUnread(card)) {
       unreadCards.push(card);
-    } else if (isCardClosed(card)) {
-      const repo = getProjectLabel(card.head);
-      const list = closedByRepo.get(repo);
-      if (list) list.push(card);
-      else closedByRepo.set(repo, [card]);
     } else {
-      const repo = getProjectLabel(card.head);
-      const list = activeByRepo.get(repo);
-      if (list) list.push(card);
-      else activeByRepo.set(repo, [card]);
+      addToRepoMap(historyByRepo, getProjectLabel(card.head), card);
     }
   }
 
@@ -137,9 +172,16 @@ export function buildInboxLayout(
   // The result that just landed goes on top (matches the closed-sort rationale).
   unreadCards.sort((a, b) => unreadResultAtMs(b) - unreadResultAtMs(a));
 
+  const makeGroup = (repo: string, sessions: TimelineSessionCard[]): InboxRepoGroup => ({
+    repo,
+    sessions,
+    ...getInboxGroupPresentation(repo, sessions),
+  });
+
   const toGroups = (
     byRepo: Map<string, TimelineSessionCard[]>,
     sortKey: (card: TimelineSessionCard) => number,
+    groupPriority?: (group: InboxRepoGroup) => number,
   ): InboxRepoGroup[] => {
     const groups: InboxRepoGroup[] = [];
     for (const [repo, sessions] of byRepo) {
@@ -151,12 +193,15 @@ export function buildInboxLayout(
         const reordered = orderedIds
           .map((id) => byId.get(id))
           .filter((s): s is TimelineSessionCard => s != null);
-        groups.push({ repo, sessions: reordered });
+        groups.push(makeGroup(repo, reordered));
       } else {
-        groups.push({ repo, sessions });
+        groups.push(makeGroup(repo, sessions));
       }
     }
     groups.sort((a, b) => {
+      const aPriority = groupPriority?.(a) ?? 0;
+      const bPriority = groupPriority?.(b) ?? 0;
+      if (aPriority !== bPriority) return aPriority - bPriority;
       const aTop = sortKey(a.sessions[0]);
       const bTop = sortKey(b.sessions[0]);
       if (aTop !== bTop) return bTop - aTop;
@@ -173,18 +218,16 @@ export function buildInboxLayout(
     return groups;
   };
 
-  const active = toGroups(activeByRepo, startedAtMs);
-  const closed = toGroups(closedByRepo, closedAtMs);
-  const closedCount = closed.reduce((n, g) => n + g.sessions.length, 0);
+  const history = toGroups(historyByRepo, historySortKey, (group) => group.kind === "automation" ? 1 : 0);
+  const historyCount = history.reduce((n, g) => n + g.sessions.length, 0);
 
   const shelfOrdered = applyShelfOrder(shelfCards, order?.shelfOrder);
 
   return {
     shelf: shelfOrdered,
     unread: unreadCards,
-    active,
-    closed,
-    closedCount,
+    history,
+    historyCount,
     shelfCount: shelfCards.length,
   };
 }

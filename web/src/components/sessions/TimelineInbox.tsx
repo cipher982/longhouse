@@ -1,9 +1,9 @@
 /**
  * TimelineInbox — inbox-style timeline render.
  *
- * Three tiers: Shelf (steerable/recent, flat), Active archive (repo-grouped
- * non-shelf open sessions), then Closed (repo-grouped). Layout is anchored to
- * start time so live runtime updates never reflow the page.
+ * Three tiers: Shelf (open now, flat), Needs attention (unread Console
+ * results), then History (all other sessions grouped by project). The history
+ * tier keeps open and closed sessions together, ordered by lifecycle activity.
  * See lib/timelineInbox.ts for the pure layout function.
  *
  * Drag-to-reorder: hold and drag any row or repo header. Threshold-based (5px),
@@ -36,6 +36,7 @@ import {
   type InboxOrderState,
 } from "../../lib/inboxOrder";
 import { SessionRow } from "./SessionRow";
+import { isSessionClosed } from "../../lib/sessionRuntime";
 
 const POINTER_ACTIVATION_DISTANCE = 5;
 
@@ -84,23 +85,22 @@ export function TimelineInbox({
   );
 
   const moveRepo = useCallback(
-    (tier: "active" | "closed", from: number, to: number) => {
+    (from: number, to: number) => {
       if (from === to) return;
-      const visibleRepos = (tier === "active" ? layout.active : layout.closed).map((g) => g.repo);
+      const visibleRepos = layout.history.map((g) => g.repo);
       const reorderedVisible = arrayMove(visibleRepos, from, to);
       setOrder((prev) => ({
         ...prev,
         repoOrder: applyOrder(prev.repoOrder.length ? prev.repoOrder : visibleRepos, reorderedVisible),
       }));
     },
-    [layout.active, layout.closed],
+    [layout.history],
   );
 
   const moveSession = useCallback(
-    (tier: "active" | "closed", repo: string, from: number, to: number) => {
+    (repo: string, from: number, to: number) => {
       if (from === to) return;
-      const tierGroups = tier === "active" ? layout.active : layout.closed;
-      const repoGroup = tierGroups.find((g) => g.repo === repo);
+      const repoGroup = layout.history.find((g) => g.repo === repo);
       if (!repoGroup) return;
       const visibleIds = repoGroup.sessions.map((s) => s.thread_id);
       const reorderedVisible = arrayMove(visibleIds, from, to);
@@ -112,38 +112,41 @@ export function TimelineInbox({
         },
       }));
     },
-    [layout.active, layout.closed],
+    [layout.history],
   );
 
   if (
     layout.shelf.length === 0 &&
     layout.unread.length === 0 &&
-    layout.active.length === 0 &&
-    layout.closed.length === 0
+    layout.history.length === 0
   ) {
     return null;
   }
 
-  const showArchiveDivider = (layout.shelf.length > 0 || layout.unread.length > 0) && layout.active.length > 0;
-
   return (
     <div className="inbox" data-testid="timeline-inbox">
       {layout.shelf.length > 0 ? (
-        <ShelfSection
-          sessions={layout.shelf}
-          onSessionClick={onSessionClick}
-          onSessionPrefetch={onSessionPrefetch}
-          allowHoverPrefetch={allowHoverPrefetch}
-          relativeNowMs={relativeNowMs}
-          highlightQuery={highlightQuery}
-          onMoveSession={moveShelf}
-        />
+        <>
+          <div className="inbox-live-divider" role="separator">
+            <span className="inbox-live-divider-label">Live now</span>
+            <span className="inbox-live-divider-count">{layout.shelf.length}</span>
+          </div>
+          <ShelfSection
+            sessions={layout.shelf}
+            onSessionClick={onSessionClick}
+            onSessionPrefetch={onSessionPrefetch}
+            allowHoverPrefetch={allowHoverPrefetch}
+            relativeNowMs={relativeNowMs}
+            highlightQuery={highlightQuery}
+            onMoveSession={moveShelf}
+          />
+        </>
       ) : null}
 
       {layout.unread.length > 0 ? (
         <div className="inbox-section inbox-section--unread" data-testid="timeline-unread">
           <div className="inbox-unread-divider" role="separator">
-            <span className="inbox-unread-divider-label">Unread</span>
+            <span className="inbox-unread-divider-label">Needs attention</span>
             <span className="inbox-unread-divider-count">{layout.unread.length}</span>
           </div>
           <div className="inbox-repo-rows">
@@ -163,42 +166,22 @@ export function TimelineInbox({
         </div>
       ) : null}
 
-      {showArchiveDivider ? (
-        <div className="inbox-archive-divider" role="separator">
-          <span className="inbox-archive-divider-label">Archive</span>
-        </div>
-      ) : null}
-
-      {layout.active.length > 0 ? (
-        <RepoTier
-          tier="active"
-          groups={layout.active}
-          onSessionClick={onSessionClick}
-          onSessionPrefetch={onSessionPrefetch}
-          allowHoverPrefetch={allowHoverPrefetch}
-          relativeNowMs={relativeNowMs}
-          highlightQuery={highlightQuery}
-          onMoveRepo={(from, to) => moveRepo("active", from, to)}
-          onMoveSession={(repo, from, to) => moveSession("active", repo, from, to)}
-        />
-      ) : null}
-
-      {layout.closed.length > 0 ? (
+      {layout.history.length > 0 ? (
         <>
-          <div className="inbox-closed-divider" role="separator">
-            <span className="inbox-closed-divider-label">Closed</span>
-            <span className="inbox-closed-divider-count">{layout.closedCount}</span>
+          <div className="inbox-history-divider" role="separator">
+            <span className="inbox-history-divider-label">History</span>
+            <span className="inbox-history-divider-count">{layout.historyCount}</span>
           </div>
           <RepoTier
-            tier="closed"
-            groups={layout.closed}
+            tier="history"
+            groups={layout.history}
             onSessionClick={onSessionClick}
             onSessionPrefetch={onSessionPrefetch}
             allowHoverPrefetch={allowHoverPrefetch}
             relativeNowMs={relativeNowMs}
             highlightQuery={highlightQuery}
-            onMoveRepo={(from, to) => moveRepo("closed", from, to)}
-            onMoveSession={(repo, from, to) => moveSession("closed", repo, from, to)}
+            onMoveRepo={moveRepo}
+            onMoveSession={moveSession}
           />
         </>
       ) : null}
@@ -246,7 +229,7 @@ function ShelfSection(props: ShelfSectionProps) {
                 key={thread.thread_id}
                 id={`shelf:${thread.thread_id}`}
                 thread={thread}
-                tier="active"
+                closed={false}
                 onSessionClick={props.onSessionClick}
                 onSessionPrefetch={props.onSessionPrefetch}
                 allowHoverPrefetch={props.allowHoverPrefetch}
@@ -262,7 +245,7 @@ function ShelfSection(props: ShelfSectionProps) {
 }
 
 interface RepoTierProps {
-  tier: "active" | "closed";
+  tier: "history";
   groups: InboxRepoGroup[];
   onSessionClick: (thread: TimelineSessionCard) => void;
   onSessionPrefetch?: (thread: TimelineSessionCard) => void;
@@ -320,7 +303,7 @@ function RepoTier(props: RepoTierProps) {
 interface SortableRepoBlockProps {
   id: string;
   group: InboxRepoGroup;
-  tier: "active" | "closed";
+  tier: "history";
   onSessionClick: (thread: TimelineSessionCard) => void;
   onSessionPrefetch?: (thread: TimelineSessionCard) => void;
   allowHoverPrefetch?: () => boolean;
@@ -353,18 +336,23 @@ function SortableRepoBlock({
       className="inbox-repo"
       data-tier={tier}
       data-repo={group.repo}
+      data-kind={group.kind}
       data-dragging={isDragging ? "true" : undefined}
-      aria-label={`${group.repo} sessions`}
+      aria-label={`${group.label} sessions`}
       style={style}
     >
       <header className="inbox-repo-header" {...attributes} {...listeners}>
-        <h2 className="inbox-repo-name">{group.repo}</h2>
+        <div className="inbox-repo-heading">
+          <h2 className="inbox-repo-name">{group.label}</h2>
+          {group.description ? (
+            <span className="inbox-repo-description">{group.description}</span>
+          ) : null}
+        </div>
         <span className="inbox-repo-count">{group.sessions.length}</span>
       </header>
       <SessionList
         repo={group.repo}
         sessions={group.sessions}
-        tier={tier}
         onSessionClick={onSessionClick}
         onSessionPrefetch={onSessionPrefetch}
         allowHoverPrefetch={allowHoverPrefetch}
@@ -379,7 +367,6 @@ function SortableRepoBlock({
 interface SessionListProps {
   repo: string;
   sessions: TimelineSessionCard[];
-  tier: "active" | "closed";
   onSessionClick: (thread: TimelineSessionCard) => void;
   onSessionPrefetch?: (thread: TimelineSessionCard) => void;
   allowHoverPrefetch?: () => boolean;
@@ -389,11 +376,10 @@ interface SessionListProps {
 }
 
 function SessionList(props: SessionListProps) {
-  const { sessions, repo, tier, onMoveSession } = props;
+  const { sessions, repo, onMoveSession } = props;
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: POINTER_ACTIVATION_DISTANCE } }),
   );
-
   const ids = sessions.map((s) => `session:${repo}:${s.thread_id}`);
 
   const handleDragEnd = useCallback(
@@ -417,7 +403,7 @@ function SessionList(props: SessionListProps) {
               key={thread.thread_id}
               id={`session:${repo}:${thread.thread_id}`}
               thread={thread}
-              tier={tier}
+              closed={isSessionClosed(thread.head)}
               onSessionClick={props.onSessionClick}
               onSessionPrefetch={props.onSessionPrefetch}
               allowHoverPrefetch={props.allowHoverPrefetch}
@@ -434,7 +420,7 @@ function SessionList(props: SessionListProps) {
 interface SortableSessionRowProps {
   id: string;
   thread: TimelineSessionCard;
-  tier: "active" | "closed";
+  closed: boolean;
   onSessionClick: (thread: TimelineSessionCard) => void;
   onSessionPrefetch?: (thread: TimelineSessionCard) => void;
   allowHoverPrefetch?: () => boolean;
@@ -445,7 +431,7 @@ interface SortableSessionRowProps {
 function SortableSessionRow({
   id,
   thread,
-  tier,
+  closed,
   onSessionClick,
   onSessionPrefetch,
   allowHoverPrefetch,
@@ -468,7 +454,7 @@ function SortableSessionRow({
       allowHoverPrefetch={allowHoverPrefetch}
       relativeNowMs={relativeNowMs}
       highlightQuery={highlightQuery}
-      closed={tier === "closed"}
+      closed={closed}
       dragging={isDragging}
       style={style}
       sortableAttributes={attributes}

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildInboxLayout, isOnShelf, SHELF_RECENCY_MS } from "../timelineInbox";
+import { buildInboxLayout, isOnShelf } from "../timelineInbox";
 import type {
   AgentSession,
   SessionCapabilities,
   SessionRuntimeDisplay,
+  SessionStateFacts,
   TimelineSessionCard,
 } from "../../services/api/agents";
 import { makeSessionStateFacts } from "../../test/sessionState";
@@ -79,7 +80,10 @@ function makeCard(args: {
   endedAt?: string;
   lastActivityAt?: string;
   capabilities?: SessionCapabilities;
-  state?: ReturnType<typeof makeSessionStateFacts>;
+  cwd?: string | null;
+  launchActor?: string | null;
+  originKind?: string | null;
+  state?: SessionStateFacts;
 }): TimelineSessionCard {
   const session = makeSession({
     id: args.id,
@@ -87,6 +91,9 @@ function makeCard(args: {
     ended_at: args.endedAt ?? null,
     last_activity_at: args.lastActivityAt ?? null,
     project: args.repo,
+    cwd: args.cwd ?? null,
+    launch_actor: args.launchActor ?? null,
+    origin_kind: args.originKind ?? null,
     capabilities: args.capabilities,
     session_state: args.state ?? makeSessionStateFacts({
       closed: args.closed,
@@ -154,7 +161,7 @@ describe("isOnShelf", () => {
   it("returns false for a recent session with no terminal and no work in flight", () => {
     // Age is not evidence of being open. A session started a minute ago and
     // already abandoned is history.
-    const recent = now - SHELF_RECENCY_MS + 60000;
+    const recent = now - 60_000;
     const card = makeCard({
       id: "c1",
       repo: "zerg",
@@ -196,10 +203,10 @@ describe("isOnShelf", () => {
 
 describe("buildInboxLayout", () => {
   // Use a fixed now far enough past all session dates that non-shelf
-  // sessions (>24h old, no capabilities) stay in archive.
+  // sessions (>24h old, no capabilities) stay in History.
   const fixedNow = Date.parse("2026-05-20T12:00:00Z");
 
-  it("groups sessions by repo and splits active from closed", () => {
+  it("groups open and closed sessions into one history tier", () => {
     const cards = [
       makeCard({ id: "a1", repo: "floodmap", startedAt: "2026-05-18T12:00:00Z" }),
       makeCard({ id: "a2", repo: "floodmap", startedAt: "2026-05-18T11:00:00Z", closed: true }),
@@ -208,15 +215,52 @@ describe("buildInboxLayout", () => {
 
     const layout = buildInboxLayout(cards, undefined, fixedNow);
 
-    expect(layout.active.map((g) => g.repo)).toEqual(["zerg", "floodmap"]);
-    expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["a3"]);
-    expect(layout.active[1].sessions.map((s) => s.thread_id)).toEqual(["a1"]);
-
-    expect(layout.closed.map((g) => g.repo)).toEqual(["floodmap"]);
-    expect(layout.closed[0].sessions.map((s) => s.thread_id)).toEqual(["a2"]);
-    expect(layout.closedCount).toBe(1);
+    expect(layout.history.map((g) => g.repo)).toEqual(["zerg", "floodmap"]);
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["a3"]);
+    expect(layout.history[1].sessions.map((s) => s.thread_id)).toEqual(["a1", "a2"]);
+    expect(layout.historyCount).toBe(3);
   });
 
+  it("presents one history tier and keeps automation runs after project history", () => {
+    const cards = [
+      makeCard({ id: "project-open", repo: "zerg", startedAt: "2026-05-18T12:00:00Z" }),
+      makeCard({
+        id: "automation-new",
+        repo: "agent-sessions",
+        startedAt: "2026-05-20T11:00:00Z",
+      }),
+      makeCard({
+        id: "project-closed",
+        repo: "zerg",
+        startedAt: "2026-05-18T11:00:00Z",
+        closed: true,
+        endedAt: "2026-05-20T10:00:00Z",
+      }),
+    ];
+
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
+
+    expect(layout.history.map((group) => group.label)).toEqual(["zerg", "Automation runs"]);
+    expect(layout.history[0].sessions.map((session) => session.thread_id)).toEqual([
+      "project-closed",
+      "project-open",
+    ]);
+    expect(layout.history[1].description).toBe("Background OpenCode sessions · search only");
+    expect(layout.historyCount).toBe(3);
+  });
+  it("uses source metadata and workspace path to identify automation runs", () => {
+    const layout = buildInboxLayout([
+      makeCard({
+        id: "sauron-email",
+        repo: "sauron-email-agent",
+        startedAt: "2026-05-18T12:00:00Z",
+        cwd: "/data/agent-sessions",
+      }),
+    ], undefined, fixedNow);
+
+    expect(layout.history[0].label).toBe("Automation runs");
+    expect(layout.history[0].kind).toBe("automation");
+  });
   it("sorts sessions within a repo by start time descending (frozen)", () => {
     const cards = [
       makeCard({ id: "old", repo: "zerg", startedAt: "2026-05-17T10:00:00Z" }),
@@ -226,7 +270,7 @@ describe("buildInboxLayout", () => {
 
     const layout = buildInboxLayout(cards, undefined, fixedNow);
 
-    expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual([
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual([
       "new",
       "mid",
       "old",
@@ -260,7 +304,7 @@ describe("buildInboxLayout", () => {
 
     const layout = buildInboxLayout(cards, undefined, fixedNow);
 
-    expect(layout.closed[0].sessions.map((s) => s.thread_id)).toEqual([
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual([
       "just-closed",
       "mid-closed",
       "long-runner",
@@ -285,7 +329,7 @@ describe("buildInboxLayout", () => {
       }),
     ];
 
-    expect(buildInboxLayout(cards, undefined, fixedNow).closed.map((g) => g.repo)).toEqual([
+    expect(buildInboxLayout(cards, undefined, fixedNow).history.map((g) => g.repo)).toEqual([
       "floodmap",
       "zerg",
     ]);
@@ -315,21 +359,21 @@ describe("buildInboxLayout", () => {
       }),
     ];
 
-    expect(buildInboxLayout(cards, undefined, fixedNow).closed[0].sessions.map((s) => s.thread_id)).toEqual([
+    expect(buildInboxLayout(cards, undefined, fixedNow).history[0].sessions.map((s) => s.thread_id)).toEqual([
       "ended",
       "activity-fallback",
       "start-only",
     ]);
   });
 
-  it("orders repos by their newest active session", () => {
+  it("orders project history by newest lifecycle activity", () => {
     const cards = [
       makeCard({ id: "f-old", repo: "floodmap", startedAt: "2026-05-17T10:00:00Z" }),
       makeCard({ id: "z-newest", repo: "zerg", startedAt: "2026-05-18T13:00:00Z" }),
       makeCard({ id: "s-mid", repo: "stopsign", startedAt: "2026-05-18T11:00:00Z" }),
     ];
 
-    expect(buildInboxLayout(cards, undefined, fixedNow).active.map((g) => g.repo)).toEqual([
+    expect(buildInboxLayout(cards, undefined, fixedNow).history.map((g) => g.repo)).toEqual([
       "zerg",
       "stopsign",
       "floodmap",
@@ -345,17 +389,16 @@ describe("buildInboxLayout", () => {
     const first = buildInboxLayout(cards, undefined, fixedNow);
     const second = buildInboxLayout(cards, undefined, fixedNow);
 
-    expect(second.active[0].sessions.map((s) => s.thread_id)).toEqual(
-      first.active[0].sessions.map((s) => s.thread_id),
+    expect(second.history[0].sessions.map((s) => s.thread_id)).toEqual(
+      first.history[0].sessions.map((s) => s.thread_id),
     );
   });
 
   it("returns empty layout for empty input", () => {
     const layout = buildInboxLayout([]);
     expect(layout.shelf).toEqual([]);
-    expect(layout.active).toEqual([]);
-    expect(layout.closed).toEqual([]);
-    expect(layout.closedCount).toBe(0);
+    expect(layout.history).toEqual([]);
+    expect(layout.historyCount).toBe(0);
   });
 
   it("applies a repo order override on top of default sort", () => {
@@ -371,7 +414,7 @@ describe("buildInboxLayout", () => {
       sessionOrder: {},
     }, fixedNow);
 
-    expect(layout.active.map((g) => g.repo)).toEqual(["alpha", "gamma", "beta"]);
+    expect(layout.history.map((g) => g.repo)).toEqual(["alpha", "gamma", "beta"]);
   });
 
   it("applies a session order override within a repo", () => {
@@ -387,7 +430,7 @@ describe("buildInboxLayout", () => {
       sessionOrder: { zerg: ["third"] },
     }, fixedNow);
 
-    expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual([
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual([
       "third",
       "first",
       "second",
@@ -405,8 +448,8 @@ describe("buildInboxLayout", () => {
       sessionOrder: { zerg: ["ghost-session", "a"] },
     }, fixedNow);
 
-    expect(layout.active.map((g) => g.repo)).toEqual(["zerg"]);
-    expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["a"]);
+    expect(layout.history.map((g) => g.repo)).toEqual(["zerg"]);
+    expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["a"]);
   });
 
   describe("shelf", () => {
@@ -426,7 +469,7 @@ describe("buildInboxLayout", () => {
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
       expect(layout.shelf.map((s) => s.thread_id)).toEqual(["steerable"]);
-      expect(layout.active).toEqual([]);
+      expect(layout.history).toEqual([]);
     });
 
     it("puts in-flight work on the shelf even without a terminal", () => {
@@ -440,7 +483,7 @@ describe("buildInboxLayout", () => {
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
       expect(layout.shelf.map((s) => s.thread_id)).toEqual(["reattachable"]);
-      expect(layout.active).toEqual([]);
+      expect(layout.history).toEqual([]);
     });
 
     it("keeps a recent but abandoned session off the shelf", () => {
@@ -450,16 +493,16 @@ describe("buildInboxLayout", () => {
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
       expect(layout.shelf).toEqual([]);
-      expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["recent"]);
+      expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["recent"]);
     });
 
-    it("puts old quiet Shadow in active archive, not shelf", () => {
+    it("puts old quiet Shadow in History, not shelf", () => {
       const cards = [
         makeCard({ id: "old-shadow", repo: "zerg", startedAt: "2026-05-01T10:00:00Z" }),
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
       expect(layout.shelf).toEqual([]);
-      expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["old-shadow"]);
+      expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["old-shadow"]);
     });
 
     it("never puts closed sessions on shelf", () => {
@@ -474,7 +517,7 @@ describe("buildInboxLayout", () => {
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
       expect(layout.shelf).toEqual([]);
-      expect(layout.closed[0].sessions.map((s) => s.thread_id)).toEqual(["closed-steerable"]);
+      expect(layout.history[0].sessions.map((s) => s.thread_id)).toEqual(["closed-steerable"]);
     });
 
     it("sorts shelf by start time desc by default", () => {
@@ -520,7 +563,7 @@ describe("buildInboxLayout", () => {
       expect(layout.shelf.map((s) => s.thread_id)).toEqual(["alpha", "beta"]);
     });
 
-    it("shelf plus archive plus closed coexist correctly", () => {
+    it("shelf plus History coexist correctly", () => {
       const recentIso = new Date(fixedNow - 60 * 60 * 1000).toISOString();
       const cards = [
         makeCard({
@@ -540,9 +583,8 @@ describe("buildInboxLayout", () => {
       ];
       const layout = buildInboxLayout(cards, undefined, fixedNow);
       expect(layout.shelf.map((s) => s.thread_id)).toEqual(["shelf-recent", "shelf-steerable"]);
-      expect(layout.active.map((g) => g.repo)).toEqual(["stopsign"]);
-      expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["active-old"]);
-      expect(layout.closed.map((g) => g.repo)).toEqual(["alpha"]);
+      expect(layout.history.map((g) => g.repo)).toEqual(["alpha", "stopsign"]);
+      expect(layout.history.flatMap((g) => g.sessions.map((s) => s.thread_id))).toEqual(["closed", "active-old"]);
       expect(layout.shelfCount).toBe(2);
     });
 
@@ -560,7 +602,7 @@ describe("buildInboxLayout", () => {
 describe("unread band", () => {
   const fixedNow = Date.parse("2026-05-18T12:00:00Z");
 
-  it("carves unread cards out of active and closed, never the shelf", () => {
+  it("carves unread cards out of History, never the shelf", () => {
     const cards = [
       // Running unread session stays on the shelf, not the band.
       makeCard({
@@ -573,7 +615,7 @@ describe("unread band", () => {
           lastResultAt: "2026-05-18T10:30:00Z",
         }),
       }),
-      // Open-disposition finished Console session: would land in active
+      // Open-disposition finished Console session: would land in History
       // without the carve-out (the ghost the review flagged).
       makeCard({
         id: "unread-open",
@@ -586,7 +628,7 @@ describe("unread band", () => {
           lastResultOutcome: "completed",
         }),
       }),
-      // Closed unread session moves out of Closed into the band.
+      // Closed unread sessions move out of History into the band.
       makeCard({
         id: "unread-closed",
         repo: "alpha",
@@ -607,14 +649,12 @@ describe("unread band", () => {
     expect(layout.shelf.map((s) => s.thread_id)).toEqual(["unread-running"]);
     // Sorted by result completion desc — the just-finished lands on top.
     expect(layout.unread.map((s) => s.thread_id)).toEqual(["unread-closed", "unread-open"]);
-    // Never duplicated into active or closed.
-    const activeIds = layout.active.flatMap((g) => g.sessions.map((s) => s.thread_id));
-    const closedIds = layout.closed.flatMap((g) => g.sessions.map((s) => s.thread_id));
-    expect(activeIds).toEqual(["plain-active"]);
-    expect(closedIds).toEqual([]);
+    // Never duplicated into History.
+    const historyIds = layout.history.flatMap((g) => g.sessions.map((s) => s.thread_id));
+    expect(historyIds).toEqual(["plain-active"]);
   });
 
-  it("read sessions fall back to their liveness tier", () => {
+  it("read sessions remain in History", () => {
     const cards = [
       makeCard({
         id: "read-closed",
@@ -632,6 +672,6 @@ describe("unread band", () => {
     ];
     const layout = buildInboxLayout(cards, undefined, fixedNow);
     expect(layout.unread).toEqual([]);
-    expect(layout.closed.flatMap((g) => g.sessions.map((s) => s.thread_id))).toEqual(["read-closed"]);
+    expect(layout.history.flatMap((g) => g.sessions.map((s) => s.thread_id))).toEqual(["read-closed"]);
   });
 });

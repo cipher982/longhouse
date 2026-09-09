@@ -16,6 +16,8 @@ const TIMELINE_SESSIONS_PREFIX = `${TIMELINE_API_PREFIX}/sessions`;
 // ---------------------------------------------------------------------------
 
 export interface AgentSession {
+  /** Canonical source classification when the ingest path supplied one. */
+  origin_kind?: string | null;
   id: string;
   provider: string;
   project: string | null;
@@ -97,6 +99,9 @@ export interface AgentSession {
   user_hidden_from_timeline?: boolean;
   hidden_from_default_timeline?: boolean;
   execution_lifetime?: "one_shot" | "live_control" | null;
+  launch_actor?: string | null;
+  launch_surface?: string | null;
+  is_sidechain?: boolean;
   /**
    * Attribution for the user whose signed share link or legacy
    * `?shared_by=<id>` URL surfaced this session. The server hides this when

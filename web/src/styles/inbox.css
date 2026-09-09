@@ -1,9 +1,9 @@
 /**
  * Timeline Inbox Layout
  *
- * Three-tier inbox: flat working-set shelf, then Active archive and Closed
- * grouped by repo. Reserved geometry on every row so live runtime updates
- * never reflow. Only opacity/color changes when status transitions.
+ * Three-tier inbox: flat live-now shelf, unread Console results, then History
+ * grouped by project. Closed rows remain in History with their own row state.
+ * Reserved geometry on every row so live runtime updates never reflow.
  */
 
   /* Tunable defaults — kept on :root so the InboxTuner debug panel (writes
@@ -36,31 +36,78 @@
     gap: 0;
   }
 
-  .inbox-archive-divider {
+  .inbox-live-divider,
+  .inbox-history-divider {
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    border-top: 1px solid var(--color-border-muted);
+  }
+
+  .inbox-live-divider {
     padding: var(--space-2) 0 var(--space-1);
     margin-top: var(--space-2);
-    border-top: 1px solid var(--color-border-muted);
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
+    color: var(--color-brand-primary, var(--color-text-secondary));
+    font-size: 12px;
+    font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
 
-  .inbox-archive-divider-label {
+  .inbox-live-divider-count,
+  .inbox-history-divider-count {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .inbox-history-divider {
+    padding: var(--space-3) 0 var(--space-2);
+    margin-top: var(--space-4);
     color: var(--color-text-secondary);
   }
 
-  .inbox-section--closed {
-    opacity: 0.62;
+  .inbox-history-divider-label {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+
+  .inbox-history-divider-count {
+    align-self: baseline;
+  }
+
+  .inbox-section--history {
+    gap: var(--space-2);
+  }
+
+  .inbox-section--history .inbox-repo-header {
+    background: transparent;
+  }
+
+  .inbox-section--history .inbox-repo {
+    border-bottom: 1px solid var(--color-border-muted);
+  }
+
+  .inbox-section--history .inbox-repo[data-kind="automation"] .inbox-repo-name {
+    color: var(--color-text-secondary);
+  }
+
+  .inbox-section--history .inbox-repo[data-kind="automation"] .inbox-repo-description {
+    color: var(--text-muted);
+  }
+
+  .inbox-section--history .inbox-repo[data-kind="automation"] .inbox-row {
+    opacity: 0.78;
+  }
+
+  .inbox-section--history .inbox-repo[data-kind="automation"] .inbox-row:hover {
+    opacity: 1;
   }
 
   /* ---------- Unread band ----------
-   * Email semantics: unacknowledged Console results sit between the shelf and
-   * the archive. Bold title + accent dot; clears read-on-open.
+   * Email semantics: unacknowledged Console results sit between live work and
+   * the History tier. Bold title + accent dot; clears read-on-open.
    */
   .inbox-unread-divider {
     display: flex;
@@ -100,28 +147,7 @@
     vertical-align: middle;
   }
 
-  .inbox-closed-divider {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) 0 var(--space-1);
-    margin-top: var(--space-2);
-    border-top: 1px solid var(--color-border-muted);
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .inbox-closed-divider-label {
-    color: var(--color-text-secondary);
-  }
-
-  .inbox-closed-divider-count {
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-  }
+  /* Closed cards remain in History; their row-level state supplies the dimming. */
 
   /* ---------- Repo block ----------
    * Repo title is the strongest visual element on the page. Sticky so it
@@ -144,8 +170,11 @@
     z-index: 2;
   }
 
-  .inbox-section--closed .inbox-repo-header {
-    background: transparent;
+  .inbox-repo-heading {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
   }
 
   .inbox-repo-name {
@@ -154,7 +183,12 @@
     font-weight: 700;
     color: var(--color-brand-primary);
     letter-spacing: 0;
-    text-transform: lowercase;
+  }
+
+  .inbox-repo-description {
+    color: var(--text-muted);
+    font-size: var(--inbox-meta-font);
+    font-weight: 400;
   }
 
   .inbox-repo-count {
