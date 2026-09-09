@@ -172,6 +172,41 @@ def test_large_reference_proof_verifies_bytes_without_copying_them_to_runtime(mo
     assert not (tmp_path / "proofs" / "_blobs").exists()
 
 
+@pytest.mark.parametrize("interrupted_write", ["write_reference_metadata", "_write_publication_event"])
+def test_interrupted_reference_publication_retries_the_immutable_bundle(monkeypatch, tmp_path, interrupted_write):
+    record = _record()
+    bundle, contents = _v4_bundle(record)
+    with _client(monkeypatch, tmp_path, _MemoryResolver(contents)) as client:
+        store = routes._proof_store()
+        original = getattr(store, interrupted_write)
+
+        def interrupt_after_write(*args, **kwargs):
+            original(*args, **kwargs)
+            raise OSError("interrupted publication")
+
+        monkeypatch.setattr(store, interrupted_write, interrupt_after_write)
+        with pytest.raises(OSError, match="interrupted publication"):
+            _publish(client, bundle)
+        listed = client.get("/api/agents/provider-capability-proofs")
+        assert record.artifact_id not in listed.json()["trusted_artifact_ids"]
+        assert client.get(_evidence_url(_digest("raw"))).status_code == 404
+
+        monkeypatch.setattr(store, interrupted_write, original)
+        response = _publish(client, bundle)
+        assert response.status_code == 201, response.text
+        assert _publish(client, bundle).status_code == 201
+        listed = client.get("/api/agents/provider-capability-proofs")
+        assert record.artifact_id in listed.json()["trusted_artifact_ids"]
+        assert client.get(_evidence_url(_digest("raw"))).status_code == 200
+
+        # Delivery retries retain the original envelope; a new timestamp is a
+        # conflicting publication identity, not a retry of that envelope.
+        changed = {**bundle, "publication": {**bundle["publication"], "published_at": "2026-09-10T00:00:00Z"}}
+        changed["bundle_digest"] = routes._bundle_digest(changed)
+        assert _publish(client, changed).status_code == 422
+        assert record.artifact_id in client.get("/api/agents/provider-capability-proofs").json()["trusted_artifact_ids"]
+
+
 @pytest.mark.parametrize("damage", ["delete_metadata", "delete_both_markers", "tamper_admission", "rewrite_metadata_and_admission"])
 def test_reference_metadata_damage_cannot_preserve_admissibility(monkeypatch, tmp_path, damage):
     record = _record()
