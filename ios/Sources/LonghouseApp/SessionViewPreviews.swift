@@ -239,7 +239,31 @@ private struct SessionScreenPreview: View {
         "Checksums so far match the manifest; continuing with the exact restore.",
     ]
     var connection: SessionRealtimeConnection = .connected
-    @State private var text = ""
+    var isSending: Bool = false
+    var queuedInputCount: Int = 0
+    @State private var text: String
+    @FocusState private var composerFocused: Bool
+
+    init(
+        detail: SessionDetail,
+        activity: ActivityPulseStore,
+        transcript: [String] = [
+            "The restore has reached 9.2 GB and remains healthy.",
+            "Checksums so far match the manifest; continuing with the exact restore.",
+        ],
+        connection: SessionRealtimeConnection = .connected,
+        draft: String = "",
+        isSending: Bool = false,
+        queuedInputCount: Int = 0
+    ) {
+        self.detail = detail
+        self.activity = activity
+        self.transcript = transcript
+        self.connection = connection
+        self.isSending = isSending
+        self.queuedInputCount = queuedInputCount
+        _text = State(initialValue: draft)
+    }
 
     var body: some View {
         NavigationStack {
@@ -255,7 +279,30 @@ private struct SessionScreenPreview: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     SessionRuntimeDock(detail: detail, activity: activity, realtimeConnection: connection)
-                    composerRow
+                    if SessionComposerControlState.isVisible(for: detail) {
+                        SessionComposer(
+                            detail: detail,
+                            text: $text,
+                            focused: $composerFocused,
+                            queuedInputCount: queuedInputCount,
+                            isSending: isSending,
+                            onQueueInstead: {},
+                            onDismissTurnEnded: {},
+                            onPauseRespond: { _, _, _, _ in false },
+                            onSend: { _ in },
+                            actionMenu: {
+                                SessionComposerActionMenu(
+                                    detail: detail,
+                                    attachmentSlotsLeft: ComposerAttachmentLimits.maxAttachments,
+                                    attachmentInputEnabled: SessionComposerControlState.attachmentInputEnabled(for: detail),
+                                    isProcessing: false,
+                                    isSending: isSending,
+                                    onAttach: {}
+                                )
+                            },
+                            attachmentTray: { EmptyView() }
+                        )
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -286,25 +333,6 @@ private struct SessionScreenPreview: View {
                     }
                 }
             }
-        }
-    }
-
-    private var composerRow: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            Image(systemName: "plus")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 32, height: 32)
-            TextField(detail.composerPlaceholder, text: $text, axis: .vertical)
-                .lineLimit(1...6)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            Image(systemName: detail.canQueueNextInput && !detail.canSteerActiveTurn ? "clock.arrow.circlepath" : "arrow.up")
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(Color(.systemGray))
-                .frame(width: 30, height: 30)
-                .background(Circle().fill(Color(.tertiarySystemFill)))
         }
     }
 }
@@ -345,7 +373,33 @@ private struct PreviewSubtitle: ViewModifier {
                 command: "rsync -a --info=progress2 /vol/backups/exact /mnt/restore"
             )
         ),
-        activity: codexBurst()
+        activity: codexBurst(),
+        draft: "Check the newest restore checkpoint"
+    )
+    .preferredColorScheme(.dark)
+}
+#Preview("Composer · sending · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "claude",
+            canSteer: false,
+            canQueue: true,
+            executing: true,
+            placeholder: "Queue for next turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "Bash",
+                observedAt: isoDate(secondsAgo: 4),
+                validUntil: isoDate(secondsAgo: -45),
+                primaryKey: "executing",
+                primaryLabel: "Using Bash",
+                primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            )
+        ),
+        activity: claudeSparse(),
+        draft: "Send the latest restore checkpoint",
+        isSending: true
     )
     .preferredColorScheme(.dark)
 }
@@ -374,7 +428,9 @@ private struct PreviewSubtitle: ViewModifier {
             )
         ),
         activity: claudeSparse(),
-        transcript: ["Running the full restore now. This will take a while."]
+        transcript: ["Running the full restore now. This will take a while."],
+        draft: "Queue a checksum comparison for the next turn",
+        queuedInputCount: 1
     )
     .preferredColorScheme(.dark)
 }

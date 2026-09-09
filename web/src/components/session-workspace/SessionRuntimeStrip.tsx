@@ -19,8 +19,6 @@ interface SessionRuntimeStripProps {
     SessionInteractionCapabilities,
     "mode" | "isManagedLocalSession" | "capabilityLabel"
   >;
-  startedLabel?: string | null;
-  variant?: "inline" | "block" | "dock" | "bar";
   testId?: string;
   /** Per-frame stream feed; absent when the caller has no live stream. */
   activityFeed?: SessionActivityFeed | null;
@@ -63,11 +61,19 @@ export function providerEvidenceIdentity(
   ]);
 }
 
+export type ProviderEvidenceNoticeAction = "show" | "clear" | "retain";
+
+export interface ProviderEvidenceTransition {
+  snapshot: ProviderEvidence;
+  notice: string | null;
+  noticeAction: ProviderEvidenceNoticeAction;
+}
+
 export function advanceProviderEvidenceTransition(
   previous: ProviderEvidence | null,
   current: ProviderEvidence,
   outcome: string | null | undefined,
-): { snapshot: ProviderEvidence; notice: string | null } {
+): ProviderEvidenceTransition {
   if (!previous || previous.sessionId !== current.sessionId) {
     return {
       snapshot: {
@@ -77,6 +83,7 @@ export function advanceProviderEvidenceTransition(
         interrupted: false,
       },
       notice: null,
+      noticeAction: "clear",
     };
   }
   if (
@@ -92,6 +99,7 @@ export function advanceProviderEvidenceTransition(
         interrupted: false,
       },
       notice: outcome ? `Turn ended · ${outcome}.` : "Turn ended.",
+      noticeAction: "show",
     };
   }
 
@@ -114,14 +122,30 @@ export function advanceProviderEvidenceTransition(
     preInterruptionEvidenceIdentity !== null &&
     current.providerEvidenceIdentity !== null &&
     current.providerEvidenceIdentity !== preInterruptionEvidenceIdentity;
+  const snapshot = {
+    ...current,
+    preInterruptionEvidenceIdentity,
+    hadObservedWork,
+    interrupted: refreshed ? false : interrupted,
+  };
+  if (refreshed) {
+    return {
+      snapshot,
+      notice: "Fresh provider evidence restored.",
+      noticeAction: "show",
+    };
+  }
+
+  const shouldClear =
+    previous.tone !== current.tone ||
+    previous.resultAt !== current.resultAt ||
+    previous.streamConnected !== current.streamConnected ||
+    current.tone === "unknown" ||
+    current.tone === "attention";
   return {
-    snapshot: {
-      ...current,
-      preInterruptionEvidenceIdentity,
-      hadObservedWork,
-      interrupted: refreshed ? false : interrupted,
-    },
-    notice: refreshed ? "Fresh provider evidence restored." : null,
+    snapshot,
+    notice: null,
+    noticeAction: shouldClear ? "clear" : "retain",
   };
 }
 
@@ -236,8 +260,6 @@ export function buildSessionLedgerState(
 export function SessionRuntimeStrip({
   session,
   interaction,
-  startedLabel,
-  variant = "inline",
   testId,
   activityFeed = null,
   streamConnected = false,
@@ -266,25 +288,15 @@ export function SessionRuntimeStrip({
   const previousTransitionRef = useRef<ProviderEvidence | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
-    const outcome = session.session_state.last_result_outcome;
-    const previous = previousTransitionRef.current;
     const transition = advanceProviderEvidenceTransition(
       previousTransitionRef.current,
       currentTransition,
-      outcome,
+      session.session_state.last_result_outcome,
     );
     previousTransitionRef.current = transition.snapshot;
-    if (transition.notice !== null) {
+    if (transition.noticeAction === "show") {
       setNotice(transition.notice);
-    } else if (
-      !previous ||
-      previous.sessionId !== currentTransition.sessionId ||
-      previous.tone !== currentTransition.tone ||
-      previous.resultAt !== currentTransition.resultAt ||
-      previous.streamConnected !== currentTransition.streamConnected ||
-      currentTransition.tone === "unknown" ||
-      currentTransition.tone === "attention"
-    ) {
+    } else if (transition.noticeAction === "clear") {
       setNotice(null);
     }
   }, [
@@ -302,7 +314,7 @@ export function SessionRuntimeStrip({
   }, [notice]);
   return (
     <div
-      className={`session-runtime-strip session-runtime-strip--${variant} session-runtime-strip--tone-${state.tone}`}
+      className={`session-runtime-strip session-runtime-strip--tone-${state.tone}`}
       data-testid={testId}
       data-strip-tone={
         state.tone === "working"
@@ -312,7 +324,6 @@ export function SessionRuntimeStrip({
             : "idle"
       }
       data-stream-connected={streamConnected ? "true" : "false"}
-      data-started-label={startedLabel ?? undefined}
     >
       <SessionLedger
         state={state}

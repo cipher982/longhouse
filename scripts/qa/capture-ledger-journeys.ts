@@ -322,6 +322,9 @@ async function shot(page: Page, name: string) {
     name,
     text: await ribbon.innerText(),
     workMotion: await ribbon.getAttribute("data-work-motion"),
+    ribbonBounds: await ribbon.boundingBox(),
+    dockBounds: await page.getByTestId("session-control-dock").boundingBox(),
+    draftBounds: await page.locator(".session-chat textarea").boundingBox(),
     horizontalOverflow: overflow,
   });
 }

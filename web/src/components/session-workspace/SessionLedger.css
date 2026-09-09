@@ -76,17 +76,6 @@
   min-width: 0;
   width: 100%;
 }
-.session-runtime-strip--bar,
-.session-runtime-strip--dock {
-  display: block;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.session-runtime-strip--tone-attention .session-ledger {
-  border-color: var(--color-intent-warning);
-}
 .session-ledger__receipts {
   position: relative;
   width: 32px;

@@ -35,21 +35,9 @@ struct SessionView: View {
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
-    private var composerHasText: Bool {
-        !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var composerHasContent: Bool {
-        composerHasText || !attachmentStore.isEmpty
-    }
-
     private var attachmentInputEnabled: Bool {
-        guard viewModel.detail?.attachImagesEnabled == true else { return false }
-        return primaryIntent == "auto"
-    }
-
-    private var attachmentSendBlocked: Bool {
-        !attachmentStore.isEmpty && primaryIntent != "auto"
+        guard let detail = viewModel.detail else { return false }
+        return SessionComposerControlState.attachmentInputEnabled(for: detail)
     }
 
     var body: some View {
@@ -339,7 +327,7 @@ struct SessionView: View {
     @ViewBuilder
     private var composer: some View {
         if let detail = viewModel.detail {
-            if detail.activePauseRequest != nil || detail.canSendLive || detail.canDraftBeforeSendReady {
+            if SessionComposerControlState.isVisible(for: detail) {
                 composerField(detail: detail)
             } else {
                 unavailableComposerFooter(detail: detail)
@@ -349,146 +337,52 @@ struct SessionView: View {
 
     private func composerField(detail: SessionDetail) -> some View {
         let pauseRequest = detail.activePauseRequest
-        return VStack(alignment: .leading, spacing: 6) {
-            if viewModel.failedInputCount > 0 {
-                Text(viewModel.failedInputCount == 1
-                     ? "1 queued message failed to send."
-                     : "\(viewModel.failedInputCount) queued messages failed to send.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .accessibilityIdentifier("session-chat-queued-failed")
-            }
-
-            if viewModel.queuedInputCount > 0 {
-                Text(viewModel.queuedInputCount == 1
-                     ? "1 message queued — will send at next turn boundary."
-                     : "\(viewModel.queuedInputCount) messages queued — will send at next turn boundary.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("session-chat-queued-indicator")
-            } else if viewModel.lastSendOutcome == .sent {
-                Text("Sent.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let draft = viewModel.turnEndedDraft {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Active turn ended")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
-                    Text(draft)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    HStack(spacing: 8) {
-                        Button("Queue instead") {
-                            Task { _ = await viewModel.queueInsteadOfSteer(sessionId: sessionId, appState: appState) }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        Button("Dismiss") {
-                            viewModel.turnEndedDraft = nil
-                            viewModel.errorMessage = nil
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-                .padding(8)
-                .background(Color.orange.opacity(0.08))
-                .cornerRadius(8)
-                .accessibilityIdentifier("session-chat-turn-ended")
-            }
-
-            if let pauseRequest {
-                SessionPauseRequestCard(
+        return SessionComposer(
+            detail: detail,
+            text: $composerText,
+            focused: $composerFocused,
+            failedInputCount: viewModel.failedInputCount,
+            queuedInputCount: viewModel.queuedInputCount,
+            lastSendOutcome: viewModel.lastSendOutcome,
+            isSending: viewModel.isSending,
+            attachmentIsEmpty: attachmentStore.isEmpty,
+            attachmentIsProcessing: attachmentStore.isProcessing,
+            isLoadingPickerItems: isLoadingPickerItems,
+            turnEndedDraft: viewModel.turnEndedDraft,
+            onQueueInstead: {
+                _ = await viewModel.queueInsteadOfSteer(sessionId: sessionId, appState: appState)
+            },
+            onDismissTurnEnded: {
+                viewModel.turnEndedDraft = nil
+                viewModel.errorMessage = nil
+            },
+            pauseIsResponding: viewModel.isRespondingToPauseRequest,
+            pauseErrorMessage: viewModel.pauseResponseErrorMessage,
+            onPauseRespond: { decision, answers, content, message in
+                guard let pauseRequest else { return false }
+                return await viewModel.respondToPauseRequest(
+                    sessionId: sessionId,
+                    appState: appState,
                     pauseRequest: pauseRequest,
-                    isResponding: viewModel.isRespondingToPauseRequest,
-                    errorMessage: viewModel.pauseResponseErrorMessage,
-                    onRespond: { decision, answers, content, message in
-                        await viewModel.respondToPauseRequest(
-                            sessionId: sessionId,
-                            appState: appState,
-                            pauseRequest: pauseRequest,
-                            decision: decision,
-                            answers: answers,
-                            content: content,
-                            message: message
-                        )
-                    }
+                    decision: decision,
+                    answers: answers,
+                    content: content,
+                    message: message
                 )
-            } else if detail.shouldShowAttentionFallback {
-                SessionAttentionFallbackCard(detail: detail)
-            }
-
-            if detail.attachImagesEnabled && pauseRequest == nil {
-                attachmentTray
-            }
-
-            if pauseRequest == nil {
-                let sendIsEnabled = detail.canSendLive
-                    && composerHasContent
-                    && !viewModel.isSending
-                    && !attachmentStore.isProcessing
-                    && !isLoadingPickerItems
-                    && !attachmentSendBlocked
-                HStack(alignment: .bottom, spacing: 8) {
-                    composerActionMenu(detail: detail)
-
-                    TextField(detail.composerPlaceholder, text: $composerText, axis: .vertical)
-                        .lineLimit(1...6)
-                        .focused($composerFocused)
-                        // Coding prompts contain paths, symbols, and identifiers that
-                        // QuickType routinely rewrites. Keeping prediction out of this
-                        // field also avoids doing that system layout work while the
-                        // transcript WebView is settling around the keyboard.
-                        .autocorrectionDisabled(true)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .accessibilityIdentifier("session-chat-composer")
-
-                    // Send button: monochrome circle (light fill + dark glyph when
-                    // armed, ghost when empty). Long-press reveals steer/queue split.
-                    Button {
-                        Task { await send() }
-                    } label: {
-                        if viewModel.isSending {
-                            ProgressView()
-                                .frame(width: 30, height: 30)
-                        } else {
-                            Image(systemName: sendIcon)
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(sendIsEnabled ? Color(.systemBackground) : Color(.systemGray))
-                                .frame(width: 30, height: 30)
-                                .background(
-                                    Circle().fill(sendIsEnabled
-                                        ? AnyShapeStyle(Color.primary)
-                                        : AnyShapeStyle(Color(.tertiarySystemFill)))
-                                )
-                        }
-                    }
-                    .disabled(!sendIsEnabled)
-                    .accessibilityLabel(sendAccessibilityLabel)
-                    .accessibilityIdentifier("session-chat-send")
-                    .contextMenu {
-                        if showSecondaryQueueAction && attachmentStore.isEmpty {
-                            Button {
-                                Task { await send(intent: "steer") }
-                            } label: {
-                                Label("Send update now", systemImage: "arrow.up.circle")
-                            }
-                            Button {
-                                Task { await send(intent: "queue") }
-                            } label: {
-                                Label("Queue for next turn", systemImage: "clock.arrow.circlepath")
-                            }
-                        }
-                    }
-                }
-            }
-        }
+            },
+            onSend: { intent in await send(intent: intent) },
+            actionMenu: {
+                SessionComposerActionMenu(
+                    detail: detail,
+                    attachmentSlotsLeft: attachmentStore.slotsLeft,
+                    attachmentInputEnabled: attachmentInputEnabled,
+                    isProcessing: attachmentStore.isProcessing || isLoadingPickerItems,
+                    isSending: viewModel.isSending,
+                    onAttach: { isShowingPhotoPicker = true }
+                )
+            },
+            attachmentTray: { attachmentTray }
+        )
         .photosPicker(
             isPresented: $isShowingPhotoPicker,
             selection: $pickerSelection,
@@ -539,41 +433,6 @@ struct SessionView: View {
         }
     }
 
-    private func composerActionMenu(detail: SessionDetail) -> some View {
-        let attachmentSlotsLeft = attachmentStore.slotsLeft
-        let attachmentIsProcessing = attachmentStore.isProcessing || isLoadingPickerItems
-        let canAttachImages = attachmentInputEnabled
-            && attachmentSlotsLeft > 0
-            && !attachmentIsProcessing
-            && !viewModel.isSending
-
-        return Menu {
-            if detail.attachImagesEnabled {
-                Button {
-                    isShowingPhotoPicker = true
-                } label: {
-                    Label("Attach images", systemImage: "paperclip")
-                }
-                .disabled(!canAttachImages)
-                .accessibilityIdentifier("session-chat-attach")
-            }
-        } label: {
-            Group {
-                if attachmentIsProcessing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 32, height: 32)
-            .contentShape(Rectangle())
-        }
-        .disabled(viewModel.isSending)
-        .accessibilityLabel("Message actions")
-        .accessibilityIdentifier("session-chat-compose-actions")
-    }
 
     @ViewBuilder
     private var attachmentTray: some View {
@@ -696,48 +555,15 @@ struct SessionView: View {
         )
     }
 
-    private var primaryIntent: String {
-        guard let detail = viewModel.detail else { return "auto" }
-        if detail.defaultInputIntent != "auto" { return detail.defaultInputIntent }
-        guard detail.isSessionExecuting else { return "auto" }
-        if detail.canSteerActiveTurn { return "steer" }
-        if detail.canQueueNextInput { return "queue" }
-        return "auto"
-    }
-
-    private var showSecondaryQueueAction: Bool {
-        guard let detail = viewModel.detail else { return false }
-        return detail.isSessionExecuting && detail.canSteerActiveTurn && detail.canQueueNextInput
-    }
-
-    // Bare glyphs — the surrounding circle is drawn by the send button itself.
-    private var sendIcon: String {
-        switch primaryIntent {
-        case "queue": return "clock.arrow.circlepath"
-        default: return "arrow.up"
-        }
-    }
-
-    private var sendAccessibilityLabel: String {
-        if viewModel.detail?.canSendLive != true {
-            return viewModel.detail?.controlHealthMessage ?? "Send unavailable"
-        }
-        switch primaryIntent {
-        case "steer": return "Send update mid-turn"
-        case "queue": return "Queue for next turn"
-        default: return "Send reply"
-        }
-    }
-
     private func send(intent: String? = nil) async {
         guard !viewModel.isSending else { return }
         guard !attachmentStore.isProcessing else { return }
         guard !isLoadingPickerItems else { return }
-        guard viewModel.detail?.canSendLive == true else { return }
+        guard let detail = viewModel.detail, detail.canSendLive else { return }
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         let pendingAttachments = attachmentStore.snapshot()
         guard !trimmed.isEmpty || !pendingAttachments.isEmpty else { return }
-        let requestedIntent = intent ?? primaryIntent
+        let requestedIntent = intent ?? SessionComposerControlState.primaryIntent(for: detail)
         if !pendingAttachments.isEmpty && requestedIntent != "auto" {
             attachmentStore.errorMessage = "Images can be sent when the session is ready for a new turn."
             return

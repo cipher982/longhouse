@@ -591,7 +591,6 @@ function SessionDetailWorkspaceRoute({
               <SessionRuntimeStrip
                 session={displaySession}
                 interaction={interaction}
-                variant="bar"
                 testId="session-control-strip"
                 activityFeed={activityFeed ?? null}
                 streamConnected={streamConnected}

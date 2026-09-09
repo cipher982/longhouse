@@ -3,7 +3,7 @@
 # Usage: ios/scripts/render-previews.sh [output-dir]
 #
 # Default output: /tmp/lh-previews
-# Override build cache with LH_DERIVED_DATA_PATH=/tmp/custom-derived-data.
+# Override isolated build cache and result bundle with LH_DERIVED_DATA_PATH.
 # Each preview is attached to the .xcresult by SnapshotPreviews and extracted
 # by xcresulttool. Filenames look like preview-<TypeName>-<index>.png.
 
@@ -16,8 +16,8 @@ OUT_DIR="${1:-/tmp/lh-previews}"
 # beside the Xcode project instead of where the caller asked.
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
-RESULT_BUNDLE="/tmp/lh-previews.xcresult"
 DERIVED_DATA_PATH="${LH_DERIVED_DATA_PATH:-/tmp/lh-previews-derived-data}"
+RESULT_BUNDLE="${DERIVED_DATA_PATH}.xcresult"
 SIM_NAME="${LH_SIM_NAME:-iPhone 17 Pro}"
 
 cd "$IOS_DIR"
