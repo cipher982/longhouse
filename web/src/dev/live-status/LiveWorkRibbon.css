@@ -7,7 +7,7 @@
   --lwr-hover: #282e31;
   box-sizing: border-box;
   min-width: 0;
-  padding: 14px 20px 4px;
+  padding: 0 14px;
   color: var(--lwr-text);
   font-family: var(
     --font-family-base,
@@ -27,24 +27,40 @@
 
 .lwr-primary {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 88px;
+  grid-template-columns: 18px minmax(0, 1fr) 64px auto;
   align-items: center;
-  gap: 10px;
-  min-height: 24px;
+  gap: 8px;
+  min-height: 44px;
+  padding-block: 8px;
+  list-style: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.lwr-work-glyph {
-  display: block;
-  width: 18px;
-  height: 18px;
-  color: var(--lwr-secondary);
-  transform-origin: center;
+.lwr-primary::-webkit-details-marker {
+  display: none;
 }
 
+.lwr-primary::marker {
+  content: "";
+}
+
+.lwr-primary:focus-visible {
+  outline: 2px solid var(--lwr-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.lwr-work-glyph,
 .lwr-work-glyph svg {
   display: block;
   width: 18px;
   height: 18px;
+}
+
+.lwr-work-glyph {
+  color: var(--lwr-secondary);
+  transform-origin: center;
 }
 
 .lwr-ribbon[data-work-state="working"] .lwr-work-glyph {
@@ -58,7 +74,7 @@
 .lwr-headline {
   min-width: 0;
   color: var(--lwr-text);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.4;
   letter-spacing: -0.015em;
@@ -68,7 +84,7 @@
 .lwr-receipt-trail {
   position: relative;
   display: block;
-  width: 88px;
+  width: 64px;
   height: 12px;
   overflow: hidden;
   contain: layout paint;
@@ -90,60 +106,14 @@
   background: transparent;
 }
 
-.lwr-command {
-  margin-top: 5px;
-  padding-left: 28px;
-  overflow: hidden;
-  color: var(--lwr-secondary);
-  font-family: var(--font-family-mono, "SF Mono", Menlo, monospace);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.6;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.lwr-note {
-  margin-top: 5px;
-  padding-left: 28px;
-  color: var(--lwr-secondary);
-  font-size: 13px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.lwr-observation {
-  margin-top: 2px;
-}
-
-.lwr-observation-toggle {
+.lwr-link {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  margin: -4px -6px;
-  padding: 4px 6px 4px 12px;
-  border-radius: 5px;
+  gap: 6px;
   color: var(--lwr-secondary);
-  font-size: 12px;
-  font-weight: 400;
+  font-size: 11px;
   line-height: 1.5;
-  list-style: none;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.lwr-observation-toggle::-webkit-details-marker {
-  display: none;
-}
-
-.lwr-observation-toggle::marker {
-  content: "";
-}
-
-.lwr-observation-toggle:focus-visible {
-  outline: 2px solid var(--lwr-focus);
-  outline-offset: 2px;
+  white-space: nowrap;
 }
 
 .lwr-heartbeat {
@@ -152,7 +122,6 @@
   flex: 0 0 6px;
   width: 6px;
   height: 6px;
-  margin-right: 6px;
   border: 1px solid var(--lwr-secondary);
   border-radius: 50%;
 }
@@ -170,24 +139,8 @@
   content: "";
 }
 
-.lwr-observation-copy {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.lwr-output-age {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.lwr-output-age::before {
-  content: " · ";
-}
-
 .lwr-disclosure {
   display: block;
-  flex: 0 0 12px;
   width: 12px;
   height: 12px;
 }
@@ -196,8 +149,22 @@
   transform: rotate(180deg);
 }
 
+.lwr-ribbon .lwr-command,
+.lwr-ribbon .lwr-note {
+  margin: 0 0 10px;
+  padding-left: 26px;
+  color: var(--lwr-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.lwr-command {
+  font-family: var(--font-family-mono, "SF Mono", Menlo, monospace);
+}
+
 .lwr-evidence {
-  padding: 4px 0 12px 28px;
+  padding: 2px 0 12px 26px;
   max-height: min(34svh, 320px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -214,7 +181,7 @@
 
 .lwr-fact {
   display: grid;
-  grid-template-columns: minmax(88px, 120px) minmax(0, 1fr);
+  grid-template-columns: minmax(70px, 110px) minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -251,8 +218,7 @@
   --lwr-hover: #e9ece6;
 }
 
-.lwr-ribbon[data-reduce-motion="true"] .lwr-work-glyph,
-.lwr-ribbon[data-reduce-motion="true"] .lwr-disclosure {
+.lwr-ribbon[data-reduce-motion="true"] .lwr-work-glyph {
   transform: none;
 }
 
@@ -261,51 +227,28 @@
 }
 
 @media (hover: hover) {
-  .lwr-observation-toggle:hover {
-    background: var(--lwr-hover);
+  .lwr-primary:hover .lwr-link {
+    color: var(--lwr-text);
   }
 }
 
 @media (max-width: 520px) {
   .lwr-ribbon {
-    padding: 14px 16px 4px;
-  }
-
-  .lwr-primary {
-    column-gap: 8px;
-  }
-
-  .lwr-command,
-  .lwr-note,
-  .lwr-evidence {
-    padding-left: 26px;
+    padding-inline: 12px;
   }
 
   .lwr-evidence {
-    max-height: 18svh;
-  }
-
-  .lwr-observation-toggle {
-    gap: 8px;
-  }
-
-  .lwr-ribbon[data-work-state="unknown"] .lwr-output-age {
-    display: block;
-  }
-
-  .lwr-ribbon[data-work-state="unknown"] .lwr-output-age::before {
-    content: "";
+    max-height: 24svh;
   }
 
   .lwr-fact {
-    grid-template-columns: 88px minmax(0, 1fr);
+    grid-template-columns: 70px minmax(0, 1fr);
     gap: 10px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lwr-ribbon .lwr-work-glyph,
-  .lwr-ribbon .lwr-disclosure {
+  .lwr-ribbon .lwr-work-glyph {
     transform: none !important;
   }
 
@@ -325,7 +268,7 @@
     background: Canvas;
   }
 
-  .lwr-observation-toggle:focus-visible {
+  .lwr-primary:focus-visible {
     outline-color: Highlight;
   }
 }

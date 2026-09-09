@@ -5,6 +5,12 @@ import "./LiveWorkRibbon.css";
 const RECEIPT_WINDOW_MS = 12_000;
 const HEARTBEAT_GLINT_MS = 420;
 const WORK_ROTATION_MS = 7_200;
+const CONNECTION_LABELS = {
+  connected: "Connected",
+  reconnecting: "Reconnecting",
+  checking: "Checking",
+  recorded: "Recorded",
+};
 
 function ageText(seconds: number): string {
   const age = Math.max(0, Math.floor(seconds));
@@ -89,6 +95,8 @@ export function LiveWorkRibbon({
     const parts = state.detail.split("/");
     return parts.length > 3 ? `…/${parts.slice(-2).join("/")}` : state.detail;
   }, [state.detail, state.detailKind]);
+  const connectionLabel = CONNECTION_LABELS[state.connection];
+  const showContext = state.tone === "unknown" || state.tone === "attention";
 
   return (
     <div
@@ -99,90 +107,93 @@ export function LiveWorkRibbon({
       data-connection={state.connection}
       data-reduce-motion={reduceMotion ? "true" : "false"}
     >
-      <div className="lwr-primary">
-        <span
-          className="lwr-work-glyph"
-          style={
-            workIsMoving ? { transform: `rotate(${workAngle}deg)` } : undefined
-          }
-        >
-          <WorkGlyph tone={state.tone} />
-        </span>
-        <span
-          className="lwr-headline"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          {state.headline}
-        </span>
-        <span
-          className="lwr-receipt-trail"
-          data-testid="receipt-trail"
-          aria-hidden="true"
-        >
-          {state.receiptMarks.map((mark) => {
-            if (mark.ageMs < 0 || mark.ageMs >= RECEIPT_WINDOW_MS) return null;
-            const freshness = 1 - mark.ageMs / RECEIPT_WINDOW_MS;
-            return (
-              <span
-                key={mark.id}
-                className="lwr-receipt-mark"
-                data-replay={mark.replay ? "true" : "false"}
-                data-receipt-id={mark.id}
-                style={{
-                  right: `${reduceMotion ? (mark.sequence % 22) * 4 : (1 - freshness) * 85}px`,
-                  opacity: reduceMotion ? 1 : freshness,
-                }}
-              />
-            );
-          })}
-        </span>
-      </div>
-
-      {state.detail && (
-        <div
-          className={
-            state.detailKind === "literal" ? "lwr-command" : "lwr-note"
-          }
-          title={state.detail}
-        >
-          {displayDetail}
-        </div>
-      )}
-
       <details className="lwr-observation">
         <summary
-          className="lwr-observation-toggle"
+          className="lwr-primary"
           title="Inspect the observed session evidence"
         >
           <span
-            className="lwr-heartbeat"
-            aria-hidden="true"
-            style={{ "--lwr-heartbeat-glint": heartbeatGlint } as CSSProperties}
-          />
-          <span className="lwr-observation-copy">
-            <span>{state.observation}</span>
-            {outputAge && <span className="lwr-output-age">{outputAge}</span>}
-          </span>
-          <svg
-            className="lwr-disclosure"
-            viewBox="0 0 16 16"
-            fill="none"
-            aria-hidden="true"
-            focusable="false"
+            className="lwr-work-glyph"
+            style={
+              workIsMoving
+                ? { transform: `rotate(${workAngle}deg)` }
+                : undefined
+            }
           >
-            <path
-              d="m5.5 6.5 2.5 2.5 2.5-2.5"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+            <WorkGlyph tone={state.tone} />
+          </span>
+          <span
+            className="lwr-headline"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {state.headline}
+          </span>
+          <span
+            className="lwr-receipt-trail"
+            data-testid="receipt-trail"
+            aria-hidden="true"
+          >
+            {state.receiptMarks.map((mark) => {
+              if (mark.ageMs < 0 || mark.ageMs >= RECEIPT_WINDOW_MS)
+                return null;
+              const freshness = 1 - mark.ageMs / RECEIPT_WINDOW_MS;
+              const position = reduceMotion
+                ? (mark.sequence % 22) / 21
+                : 1 - freshness;
+              return (
+                <span
+                  key={mark.id}
+                  className="lwr-receipt-mark"
+                  data-replay={mark.replay ? "true" : "false"}
+                  data-receipt-id={mark.id}
+                  style={{
+                    right: `calc(${position * 100}% - ${position * 3}px)`,
+                    opacity: reduceMotion ? 1 : freshness,
+                  }}
+                />
+              );
+            })}
+          </span>
+          <span className="lwr-link">
+            <span
+              className="lwr-heartbeat"
+              aria-hidden="true"
+              style={
+                { "--lwr-heartbeat-glint": heartbeatGlint } as CSSProperties
+              }
             />
-          </svg>
+            <span>{connectionLabel}</span>
+            <svg
+              className="lwr-disclosure"
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path
+                d="m5.5 6.5 2.5 2.5 2.5-2.5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
         </summary>
         <div className="lwr-evidence">
           <dl className="lwr-facts">
+            <div className="lwr-fact">
+              <dt>Connection</dt>
+              <dd>{state.observation}</dd>
+            </div>
+            {outputAge && (
+              <div className="lwr-fact">
+                <dt>Output</dt>
+                <dd>{outputAge}</dd>
+              </div>
+            )}
             {state.detail && (
               <div className="lwr-fact">
                 <dt>Detail</dt>
@@ -206,6 +217,19 @@ export function LiveWorkRibbon({
           </p>
         </div>
       </details>
+      {showContext && state.observation !== connectionLabel && (
+        <p className="lwr-note">{state.observation}</p>
+      )}
+      {state.detail && (showContext || state.detailKind === "explanation") && (
+        <p
+          className={
+            state.detailKind === "literal" ? "lwr-command" : "lwr-note"
+          }
+          title={state.detail}
+        >
+          {displayDetail}
+        </p>
+      )}
     </div>
   );
 }

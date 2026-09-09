@@ -64,6 +64,10 @@ async function seek(page: Page, scene: string, time: number) {
     { scene, time },
   );
   await controls(page, false);
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement)
+      document.activeElement.blur();
+  });
   await page.evaluate(
     () =>
       new Promise<void>((resolve) =>
@@ -80,6 +84,14 @@ async function snapshot(page: Page, name: string, scene: string, time: number) {
     () => document.documentElement.scrollWidth > innerWidth + 1,
   );
   assert.equal(overflow, false, `${name}: horizontal page overflow`);
+  const layout = await page.evaluate(() => ({
+    composerHeight: document
+      .querySelector(".lab-composer")!
+      .getBoundingClientRect().height,
+    transcriptHeight: document
+      .querySelector(".timeline-events")!
+      .getBoundingClientRect().height,
+  }));
   await page.screenshot({ path: `${output}/${name}.png`, fullPage: false });
   evidence.push({
     name,
@@ -88,6 +100,7 @@ async function snapshot(page: Page, name: string, scene: string, time: number) {
     work,
     observation,
     horizontalOverflow: overflow,
+    ...layout,
   });
   return { work, observation };
 }
@@ -142,6 +155,53 @@ try {
         "active",
         "Fresh simulated work should animate",
       );
+      const draft = page.getByRole("textbox", { name: "Draft message" });
+      const restingComposer = await page.locator(".lab-composer").boundingBox();
+      assert.ok(
+        restingComposer && restingComposer.height <= 120,
+        "The resting activity and composer must leave room for the transcript",
+      );
+      await draft.focus();
+      const editingComposer = await page.locator(".lab-composer").boundingBox();
+      assert.ok(
+        editingComposer && editingComposer.height > restingComposer.height,
+        "The composer must expand for editing",
+      );
+      await draft.fill("Keep this draft.\nWait for my next instruction.");
+      await page.screenshot({ path: `${output}/${size.name}-editing.png` });
+      const disclosure = page
+        .getByTestId("live-work-ribbon")
+        .locator("summary");
+      await disclosure.click();
+      const editingDraft = await draft.boundingBox();
+      assert.ok(
+        editingDraft && editingDraft.y + editingDraft.height <= size.height,
+        "Expanded evidence must leave the active draft onscreen",
+      );
+      await page.screenshot({
+        path: `${output}/${size.name}-editing-details.png`,
+      });
+      await disclosure.click();
+      assert.equal(
+        await draft.inputValue(),
+        "Keep this draft.\nWait for my next instruction.",
+      );
+      await draft.fill("");
+      await draft.press("Shift+Tab");
+      const restoredComposer = await page
+        .locator(".lab-composer")
+        .boundingBox();
+      assert.equal(
+        restoredComposer?.height,
+        restingComposer.height,
+        "An empty blurred draft must return to its compact size",
+      );
+      evidence.push({
+        name: `${size.name}-composer-interaction`,
+        restingHeight: restingComposer.height,
+        editingHeight: editingComposer.height,
+        draftRetained: true,
+      });
       const quiet = await snapshot(
         page,
         `${size.name}-healthy-silence`,

@@ -726,7 +726,7 @@
 .lab-app .timeline-pane__dock {
   position: static;
   flex: 0 0 auto;
-  padding: 14px 22px 20px;
+  padding: 8px 22px 14px;
   border: 0;
   background: var(--lab-bg);
 }
@@ -739,17 +739,22 @@
   background: var(--lab-surface);
 }
 .lab-app .lab-composer__draft {
-  margin: 0 20px;
-  padding-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  margin: 0 14px;
+  padding-block: 4px 8px;
   border-top: 1px solid var(--lab-line);
 }
 .lab-app .lab-composer textarea {
   display: block;
   width: 100%;
-  min-height: 50px;
+  min-height: 44px;
+  height: 44px;
   max-height: 160px;
-  resize: vertical;
-  padding: 0;
+  resize: none;
+  padding: 10px 0;
   border: 0;
   border-radius: 0;
   outline: none;
@@ -758,6 +763,10 @@
   color: var(--lab-text);
   font-size: var(--lab-body-size);
   line-height: 1.5;
+}
+.lab-app .lab-composer textarea:focus,
+.lab-app .lab-composer textarea:not(:placeholder-shown) {
+  height: 96px;
 }
 .lab-app .lab-composer textarea::placeholder {
   color: var(--lab-secondary);
@@ -768,24 +777,26 @@
 .lab-app .lab-composer:has(textarea:focus-visible) {
   border-color: var(--lab-sage);
 }
-.lab-app .lab-composer__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 0 14px;
-}
-.lab-app .lab-composer__footer > span {
+.lab-app .lab-draft-helper {
+  display: none;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding-bottom: 4px;
   color: var(--lab-secondary);
-  font-size: 12px;
+  font-size: 11px;
+}
+.lab-app .lab-composer__draft:has(textarea:focus) .lab-draft-helper,
+.lab-app
+  .lab-composer__draft:has(textarea:not(:placeholder-shown))
+  .lab-draft-helper {
+  display: block;
 }
 .lab-app .lab-queue {
   display: inline-flex;
-  flex-shrink: 0;
   align-items: center;
   gap: 14px;
-  min-height: 34px;
-  padding: 6px 12px;
+  min-height: 44px;
+  padding: 8px 12px;
   border: 1px solid var(--lab-line);
   border-radius: 6px;
   background: var(--lab-raised);
@@ -817,10 +828,7 @@
 
 @media (max-width: 600px) {
   .lab-app .lab-toolbar {
-    padding-inline: 16px;
-  }
-  .lab-app .lab-toolbar__identity {
-    gap: 12px;
+    display: none;
   }
   .lab-app .lab-studio {
     display: flex;
@@ -849,10 +857,7 @@
   }
   .lab-app .lab-controls__chevron {
     line-height: 1;
-    font-size: 17px;
-  }
-  .lab-app .lab-controls__details[open] .lab-controls__chevron {
-    transform: rotate(180deg);
+    font-size: 12px;
   }
   .lab-app .lab-controls__body {
     gap: 22px;
@@ -886,25 +891,23 @@
   }
   .lab-app .lab-stage {
     flex: 1 0 auto;
-    min-height: calc(100svh - 92px);
+    min-height: calc(100svh - 44px);
     padding: 0;
   }
   .lab-app .lab-stage__caption {
-    min-height: 54px;
-    padding: 10px 16px;
-    font-size: 11px;
+    display: none;
   }
   .lab-app .lab-preview {
     flex: 1 0 auto;
-    height: calc(100svh - 146px);
+    height: calc(100svh - 44px);
     min-height: 460px;
     border-inline: 0;
     border-bottom: 0;
     border-radius: 0;
   }
   .lab-app .timeline-pane__header {
-    min-height: 70px;
-    padding: 12px 16px;
+    min-height: 56px;
+    padding: 8px 16px;
   }
   .lab-app .timeline-pane__header-main {
     gap: 10px;
@@ -971,30 +974,23 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .lab-app .timeline-pane__dock {
-    padding: 12px 10px max(12px, env(safe-area-inset-bottom));
+    padding: 8px 10px max(10px, env(safe-area-inset-bottom));
   }
   .lab-app .lab-composer {
     border-radius: 11px;
   }
   .lab-app .lab-composer__draft {
-    margin-inline: 16px;
+    margin-inline: 12px;
   }
   .lab-app .lab-composer textarea {
     font-size: max(16px, var(--lab-body-size));
   }
-  .lab-app .lab-composer__footer {
-    gap: 8px;
-    padding-bottom: 12px;
-  }
-  .lab-app .lab-composer__footer > span {
-    font-size: 11px;
-  }
-  .lab-app .lab-draft-extra {
+  .lab-app .lab-queue__label {
     display: none;
   }
   .lab-app .lab-queue {
-    min-height: 36px;
-    gap: 10px;
+    width: 44px;
+    justify-content: center;
   }
   .lab-app .lab-empty {
     flex: 1;

@@ -221,9 +221,11 @@ export default function App() {
             }}
           >
             <summary className="lab-controls__summary">
-              <span>Replay controls</span>
+              <span>
+                Design lab · {scene === "recorded" ? "recorded" : "simulated"}
+              </span>
               <span className="lab-controls__chevron" aria-hidden="true">
-                ⌄
+                Controls ⌄
               </span>
             </summary>
             <div className="lab-controls__body">
@@ -422,29 +424,25 @@ export default function App() {
                       </label>
                       <textarea
                         id="lab-draft"
-                        rows={2}
-                        placeholder="Write the next instruction…"
+                        rows={1}
+                        placeholder="Message…"
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
                         aria-describedby="lab-draft-helper"
                       />
-                      <div className="lab-composer__footer">
-                        <span id="lab-draft-helper">
-                          Preview only
-                          <span className="lab-draft-extra">
-                            {" "}
-                            · draft stays here
-                          </span>
-                        </span>
-                        <button
-                          type="button"
-                          className="lab-queue"
-                          disabled
-                          title="Design preview; never sends to the session"
-                        >
-                          Queue <span aria-hidden="true">↑</span>
-                        </button>
-                      </div>
+                      <span id="lab-draft-helper" className="lab-draft-helper">
+                        Preview only · nothing is sent
+                      </span>
+                      <button
+                        type="button"
+                        className="lab-queue"
+                        disabled
+                        aria-label="Queue draft (preview only)"
+                        title="Design preview; never sends to the session"
+                      >
+                        <span className="lab-queue__label">Queue</span>
+                        <span aria-hidden="true">↑</span>
+                      </button>
                     </div>
                   </div>
                 }
