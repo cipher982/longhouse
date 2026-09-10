@@ -227,7 +227,7 @@ final class SessionViewModel: ObservableObject {
             // Scene activation can race the route task. The first opener
             // already owns cache/tail work; joining it here would read disk
             // again and wait on a second reload before the UI can settle.
-            if enableRealtime {
+            if enableRealtime, hasLoadedTranscript {
                 if streamTask == nil {
                     startStream(sessionId: sessionId, appState: appState)
                 }
@@ -260,6 +260,7 @@ final class SessionViewModel: ObservableObject {
             detailWasLoadedFromPrimary = false
 
             items = []
+            activity.reset()
             transcriptRowsReconciled = false
             subagents = []
             transcriptRowsPublishedPreview = nil
@@ -378,17 +379,6 @@ final class SessionViewModel: ObservableObject {
                 startVisiblePolling(sessionId: sessionId, appState: appState)
             }
         } else {
-            if enableRealtime {
-                // Re-entry into an unresolved route must attach before the
-                // cache/tail join too; the transcript lane is not a gate for
-                // live status or control affordances.
-                if streamTask == nil {
-                    startStream(sessionId: sessionId, appState: appState)
-                }
-                if pollTask == nil {
-                    startVisiblePolling(sessionId: sessionId, appState: appState)
-                }
-            }
             activeServerURL = appState.serverURL
             if let api = apiFactory(appState.serverURL),
                detail == nil,

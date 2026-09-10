@@ -12,7 +12,13 @@ struct SessionUnreadAcknowledgementTests {
             lastResultOutcome: "completed"
         )
 
-        #expect(SessionViewModel.unreadReadThrough(facts: unread, sceneIsActive: true) == "2026-08-01T12:00:00Z")
+        #expect(
+            SessionViewModel.unreadReadThrough(
+                facts: unread,
+                sceneIsActive: true,
+                renderedReadThrough: unread.lastResultAt
+            ) == "2026-08-01T12:00:00Z"
+        )
 
         #expect(
             SessionViewModel.unreadReadThrough(

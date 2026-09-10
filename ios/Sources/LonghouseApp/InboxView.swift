@@ -243,6 +243,13 @@ struct TimelineView: View {
                     await appState.ensurePushRegistrationIfPossible()
                 }
             }
+            // Warm WebKit while the timeline is idle, not from the session
+            // route where it would compete with the first detail request.
+            .task {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled else { return }
+                WebTranscriptWebViewPool.prewarm()
+            }
             .onDisappear {
                 viewModel.stopStream()
             }

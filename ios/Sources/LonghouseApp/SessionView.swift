@@ -72,10 +72,10 @@ struct SessionView: View {
             bottomChrome
                 .frame(maxWidth: .infinity)
         }
-        // The principal toolbar item is the only title surface. An empty
-        // navigation title avoids UIKit briefly laying out a second, fully
-        // sized title during a NavigationStack push.
-        .navigationTitle("")
+        // The principal toolbar item owns the visible title surface. Keep a
+        // stable fallback navigation title for the Back label; never bind the
+        // navigation title to detail so it cannot resize during the push.
+        .navigationTitle(fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
