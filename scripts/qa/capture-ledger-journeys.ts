@@ -134,6 +134,8 @@ function resetFixture() {
     reply_to_live_session_available: true,
     can_queue_next_input: true,
     can_steer_active_turn: true,
+    default_input_intent: "auto",
+    composer_placeholder: "Steer this turn",
   };
   session.is_writable_head = true;
   session.ended_at = null;
@@ -223,6 +225,8 @@ function finishTurn() {
   session.session_state.activity.state = "quiescent";
   session.session_state.pending_interaction = null;
   session.runtime_display.pause_request = null;
+  session.capabilities.default_input_intent = "auto";
+  session.capabilities.composer_placeholder = "Message";
   session.session_state.presentation.primary = {
     key: "finished",
     label: "Turn ended",
