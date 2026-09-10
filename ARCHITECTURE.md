@@ -46,6 +46,22 @@ the laptop sleeps. For durability you run the Runtime Host on an always-on box
   is happening right now" and must feel terminal-fast; a durable lane answers
   "what provably happened" and must be correct, ordered, and replayable.
 
+## iOS session opening
+
+The iOS session route schedules opening as two client lanes over the same
+server-owned facts:
+
+- **Primary lane** fetches compact session identity and native controls first,
+  so the title, runtime state, and composer do not wait for transcript rendering.
+- **Transcript lane** hydrates the recent tail, reconciles any cached snapshot,
+  and renders the body in WebKit. A cached snapshot is instant paint only; the
+  first accepted server tail remains authoritative.
+
+The timeline warms an idle WebKit spare before navigation. Route transitions
+keep the title and trailing action slot bounded while the transcript lane is
+loading. This is scheduling for responsiveness, not a second source of truth:
+server facts, transcript watermarks, and stale-result fences remain canonical.
+
 ## Session modes
 
 Every session has exactly one mode. This vocabulary is canonical here and in
