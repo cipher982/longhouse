@@ -27,8 +27,21 @@ final class SessionViewModel: ObservableObject {
     /// `WebTranscriptView` tells "the parent changed" from "the transcript
     /// changed". Keep it on every stored property the payload reads.
     private(set) var transcriptRevision: UInt64 = 0
+    /// Only inputs consumed by `TimelineBuilder` invalidate an in-flight tail
+    /// build. Worker metadata and renderer errors affect WebKit payloads, but
+    /// cannot make a detached timeline build stale.
+    private(set) var timelineBuildRevision: UInt64 = 0
+    /// Version of the durable projection inputs, independent of `items`.
+    /// Detached builders must not publish rows from before a tail/history
+    /// commit that happened while they were suspended.
+    private(set) var transcriptInputRevision: UInt64 = 0
 
-    @Published var items: [TimelineItem] = [] { didSet { transcriptRevision &+= 1 } }
+    @Published var items: [TimelineItem] = [] {
+        didSet {
+            transcriptRevision &+= 1
+            timelineBuildRevision &+= 1
+        }
+    }
     /// Workers this session spawned, attached to the tool rows that spawned them.
     @Published var subagents: [SessionSubagent] = [] { didSet { transcriptRevision &+= 1 } }
     /// Blocking load error: only set when there is genuinely nothing to show
@@ -43,6 +56,13 @@ final class SessionViewModel: ObservableObject {
     /// It stays true for a valid empty session, and gates the composer during
     /// cold-load errors so metadata cannot make sends appear prematurely.
     @Published private(set) var hasLoadedTranscript = false
+    /// The watermark attached to the payload whose frame WebKit has actually
+    /// presented. It is intentionally nil while a newer payload is in flight.
+    @Published private(set) var renderedTranscriptReadThrough: String?
+    /// Watermark for the accepted transcript payload currently being prepared.
+    /// It travels with the render receipt; session metadata alone cannot prove
+    /// that these rows have appeared on screen.
+    @Published private(set) var transcriptReadThrough: String?
     /// True only after the mounted transcript document has presented a frame.
     /// Having cached rows is not the same thing as having pixels on screen.
     @Published private(set) var isTranscriptFrameReady = false
@@ -84,7 +104,13 @@ final class SessionViewModel: ObservableObject {
     private var prefetchTask: Task<Void, Never>?
     private var realtimeRefreshRetryTask: Task<Void, Never>?
     private var primaryDetailTask: Task<Void, Never>?
+    /// A native-chrome wake that arrives while the primary request is in
+    /// flight gets one coalesced follow-up instead of being lost.
+    private var primaryDetailRefreshPending = false
     private var primaryDetailRequestToken = 0
+    private var subagentsTask: Task<Void, Never>?
+    private var subagentsRefreshPending = false
+    private var subagentsRequestToken = 0
     private var routeLoadGeneration = 0
     private var realtimePaused = false
     private var tailRefreshTask: Task<Void, Error>?
@@ -118,19 +144,40 @@ final class SessionViewModel: ObservableObject {
     private var prefetchInFlightToken: Int?
     private var nextPrefetchToken = 0
     private var isLoadingOlder = false
-    /// The loaded count at which the last short-viewport fill added nothing.
-    /// Stops a server that answers "older" with the same window from being
-    /// asked again on every render; any change to the loaded count re-arms it.
+    private var realtimeRefreshTask: Task<Void, Never>?
+    private var realtimeRefreshRequestToken = 0
+    private var realtimeRefreshPending = false
     private var historyFillStalledAtLoadedCount: Int?
     /// WebKit can measure a short document in the same callback that reports
     /// its first frame. Remember that request until MainActor records the frame.
     private var historyFillPendingFirstFrame = false
-    /// In-flight coalesced refresh for stream wakes, and whether another wake
-    /// landed while it ran.
-    private var realtimeRefreshTask: Task<Void, Never>?
-    private var realtimeRefreshPending = false
     private var openWaterfall: SessionOpenWaterfall?
+    /// Preview updates can arrive faster than TimelineBuilder can assemble
+    /// native rows. Keep one detached build in flight and replace only its
+    /// pending input; cancellation of a wrapper cannot interrupt a detached
+    /// synchronous build.
+    private struct RealtimePreviewBuildRequest {
+        let buildInput: [SessionProjectionItem]
+        let preview: SessionTranscriptPreview?
+        let transcriptReadThrough: String?
+        var buildRevision: UInt64
+        let sourceRevision: UInt64
+        let routeGeneration: Int
+        let sessionId: String
+    }
+    private var realtimePreviewBuildTask: Task<Void, Never>?
+    private var pendingRealtimePreviewBuild: RealtimePreviewBuildRequest?
+    private var pendingTranscriptReadThrough: String?
+    /// Receipts from a previous session must never make a replacement route
+    /// look ready, even if its retry nonce happens to match.
+    private var transcriptRevisionFloor: UInt64 = 0
+    /// Cache rows are an instant paint, not proof that the current network
+    /// projection has been reconciled. The first accepted tail must publish
+    /// even when the server fingerprint and preview happen to match the cache.
+    private var transcriptRowsReconciled = false
+    private var transcriptRowsPublishedPreview: SessionTranscriptPreview?
     private var detailWasLoadedFromTail = false
+    private var detailWasLoadedFromPrimary = false
     private let apiFactory: (String) -> SessionWorkspaceClient?
     private let streamFactory: (URL, String, Int?, String?) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
@@ -175,37 +222,62 @@ final class SessionViewModel: ObservableObject {
         }
         realtimePaused = false
         let startGeneration = routeLoadGeneration
+        if !sessionChanged,
+           tailRefreshTask != nil || primaryDetailTask != nil {
+            // Scene activation can race the route task. The first opener
+            // already owns cache/tail work; joining it here would read disk
+            // again and wait on a second reload before the UI can settle.
+            if enableRealtime {
+                if streamTask == nil {
+                    startStream(sessionId: sessionId, appState: appState)
+                }
+                if pollTask == nil {
+                    startVisiblePolling(sessionId: sessionId, appState: appState)
+                }
+            }
+            return
+        }
         var restoredFromCache = false
         var shouldRefreshCachedTail = false
+        var initialTailTask: Task<Void, Never>?
         if sessionChanged {
             openWaterfall = SessionOpenWaterfall(sessionId: sessionId)
             if let api = apiFactory(appState.serverURL) {
                 ClientDiagnosticsReporter.shared.sink = { payload in await api.postClientDiagnostics(payload) }
             }
+            transcriptReadThrough = nil
             hasLoadedTranscript = false
             activeSessionId = sessionId
+            pendingTranscriptReadThrough = nil
             activeServerURL = appState.serverURL
+            renderedTranscriptReadThrough = nil
             isInitialLoading = true
             isTranscriptFrameReady = false
             transcriptRendererErrorMessage = nil
             transcriptRenderRetryRevision = 0
             detail = nil
             detailWasLoadedFromTail = false
+            detailWasLoadedFromPrimary = false
 
             items = []
+            transcriptRowsReconciled = false
             subagents = []
+            transcriptRowsPublishedPreview = nil
             submittedInputs = []
+            loadedProjectionItemCount = 0
+            totalProjectionItemCount = 0
+            historyFillStalledAtLoadedCount = nil
+            transcriptInputRevision &+= 1
+            historyFillPendingFirstFrame = false
             transcriptDiagnostics = nil
             pendingRealtimeTelemetry = nil
             lastWorkspaceEvents = []
             lastWorkspaceProjectionItems = []
-            loadedProjectionItemCount = 0
-            totalProjectionItemCount = 0
-            historyFillStalledAtLoadedCount = nil
-            historyFillPendingFirstFrame = false
             realtimeRefreshTask?.cancel()
             realtimeRefreshTask = nil
             realtimeRefreshPending = false
+            realtimePreviewBuildTask?.cancel()
+            pendingRealtimePreviewBuild = nil
             tailSnapshotEventId = nil
             tailNextCursor = nil
             prefetchedOlderTail = nil
@@ -221,57 +293,167 @@ final class SessionViewModel: ObservableObject {
             tailRefreshTask?.cancel()
             tailRefreshTask = nil
             activeTailRefreshToken = nil
-            primaryDetailTask?.cancel()
-            primaryDetailTask = nil
+            cancelPrimaryDetailLoad()
+            subagentsTask?.cancel()
+            subagentsTask = nil
+            subagentsRequestToken &+= 1
+            subagentsRefreshPending = false
 
             realtimeRefreshFailureCount = 0
             errorMessage = nil
+            // Fence receipts after every transcript-reset mutation, including
+            // the final blocking-error clear above.
+            transcriptRevisionFloor = transcriptRevision
             refreshErrorMessage = nil
             pauseResponseErrorMessage = nil
             lastPubsubSeq = nil
             lastWorkspaceRevisionFingerprint = nil
             streamAuthRefreshAttempted = false
-            activity.reset()
+            // Start compact metadata and transcript networking together before
+            // touching durable cache I/O. Cache hydration may still win first,
+            // but a cold disk read can never delay the tail request.
+            if let api = apiFactory(appState.serverURL) {
+                loadPrimaryDetail(api: api, sessionId: sessionId)
+                initialTailTask = Task { [weak self] in
+                    await self?.reload(
+                        sessionId: sessionId,
+                        appState: appState,
+                        refreshSecondary: false
+                    )
+                }
+            }
+            // Realtime is a third, independent lane. It starts immediately
+            // after the small cache read so a persisted resume cursor is
+            // available when the stream is constructed. The primary detail
+            // and tail requests are already running and never wait for this
+            // local metadata hydration.
             // Warm path: the in-process tier survives backgrounding while the
             // process lives. Cold path: the durable on-disk tier survives app
-            // eviction, so a relaunch into a session renders instantly instead
-            // of a blank screen + lone warning triangle.
-            if let restored = snapshotStore?.load(serverURL: appState.serverURL, sessionId: sessionId) {
-                let ageMs = Int(Date().timeIntervalSince(restored.snapshot.savedAt) * 1000)
-                openWaterfall?.mark(
-                    "cache_hit",
-                    "tier=\(restored.tier.rawValue) events=\(restored.snapshot.events.count) age_ms=\(ageMs)"
+            // eviction, so a relaunch into a session renders the last-seen
+            // transcript instead of a blank screen with a lone warning icon.
+            if let snapshotStore {
+                let restored = await snapshotStore.loadAsync(
+                    serverURL: appState.serverURL,
+                    sessionId: sessionId
                 )
-                applySnapshot(restored)
-                restoredFromCache = true
-                // A snapshot is an instant paint, not the source of truth.
-                // Notification opens often land seconds after new transcript
-                // rows, while the SSE stream uses skip_initial=true and can miss
-                // the event that caused the notification. Disk snapshots are
-                // older still. Always reconcile after restoring.
-                shouldRefreshCachedTail = true
+                guard activeSessionId == sessionId,
+                      routeLoadGeneration == startGeneration,
+                      !Task.isCancelled,
+                      !realtimePaused
+                else { return }
+                if let restored {
+                    let ageMs = Int(Date().timeIntervalSince(restored.snapshot.savedAt) * 1000)
+                    openWaterfall?.mark(
+                        "cache_hit",
+                        "tier=\(restored.tier.rawValue) events=\(restored.snapshot.events.count) age_ms=\(ageMs)"
+                    )
+                    if !hasLoadedTranscript {
+                        if await applySnapshot(
+                            restored,
+                            sessionId: sessionId,
+                            generation: startGeneration
+                        ) {
+                            // A snapshot is an instant paint, not the source
+                            // of truth. The already-started tail will
+                            // reconcile it.
+                            restoredFromCache = true
+                            shouldRefreshCachedTail = true
+                        }
+                    } else {
+                        // The tail may win the transcript race before disk
+                        // hydration finishes. It does not carry the persisted
+                        // stream resume cursor, so retain only resume metadata
+                        // that the fresh tail has not already replaced.
+                        adoptResumeMetadata(from: restored.snapshot)
+                        openWaterfall?.mark("cache_discarded", "reason=tail_won")
+                    }
+                } else {
+                    openWaterfall?.mark("cache_miss")
+                }
             } else {
                 openWaterfall?.mark("cache_miss")
             }
+            if enableRealtime {
+                startStream(sessionId: sessionId, appState: appState)
+                startVisiblePolling(sessionId: sessionId, appState: appState)
+            }
         } else {
+            if enableRealtime {
+                // Re-entry into an unresolved route must attach before the
+                // cache/tail join too; the transcript lane is not a gate for
+                // live status or control affordances.
+                if streamTask == nil {
+                    startStream(sessionId: sessionId, appState: appState)
+                }
+                if pollTask == nil {
+                    startVisiblePolling(sessionId: sessionId, appState: appState)
+                }
+            }
             activeServerURL = appState.serverURL
+            if let api = apiFactory(appState.serverURL),
+               detail == nil,
+               primaryDetailTask == nil {
+                // Keep compact chrome independent from a cold cache read.
+                loadPrimaryDetail(api: api, sessionId: sessionId)
+            }
+            if isTranscriptFrameReady,
+               hasLoadedTranscript,
+               let api = apiFactory(appState.serverURL) {
+                // Re-entry is an explicit secondary-lane refresh. Stream
+                // wakes and ordinary polls do not need to refetch workers.
+                loadSubagents(api: api, sessionId: sessionId)
+            }
+            // A scene transition can interrupt the first disk hydration while
+            // leaving the same route mounted. Retry that cache lookup on
+            // re-entry; otherwise an offline resume falls through to a blank
+            // network-only load despite a valid saved transcript.
+            if !hasLoadedTranscript,
+               items.isEmpty,
+               let snapshotStore {
+                let restored = await snapshotStore.loadAsync(
+                    serverURL: appState.serverURL,
+                    sessionId: sessionId
+                )
+                guard activeSessionId == sessionId,
+                      routeLoadGeneration == startGeneration,
+                      !Task.isCancelled,
+                      !realtimePaused
+                else { return }
+                if let restored {
+                    openWaterfall?.mark(
+                        "cache_hit",
+                        "tier=\(restored.tier.rawValue) events=\(restored.snapshot.events.count)"
+                    )
+                    if await applySnapshot(
+                        restored,
+                        sessionId: sessionId,
+                        generation: startGeneration
+                    ) {
+                        restoredFromCache = true
+                        shouldRefreshCachedTail = true
+                    }
+                } else {
+                    openWaterfall?.mark("cache_miss")
+                }
+            }
         }
         if let api = apiFactory(appState.serverURL),
            detail == nil,
            primaryDetailTask == nil {
-            // Paint the route chrome from the compact catalog detail while the
-            // transcript tail takes its own, slower lane.
+            // Resume/re-entry can arrive with transcript content but without
+            // route metadata; keep the primary lane independently recoverable.
             loadPrimaryDetail(api: api, sessionId: sessionId)
         }
-
         let hasContentOnScreen = restoredFromCache || hasLoadedTranscript || !items.isEmpty
+
         if hasContentOnScreen {
             // We already have something to show (hydrated from cache/disk, or
             // preserved across a pause). Reconcile in the background so a
             // failed refresh degrades to a banner instead of erasing the
             // transcript. This is the path that fixes the lock/unlock blank.
             if let api = apiFactory(appState.serverURL) {
-                if shouldRefreshCachedTail || !sessionChanged {
+                if (shouldRefreshCachedTail || !sessionChanged),
+                   initialTailTask == nil {
                     Task { [weak self] in
                         await self?.refreshInBackground(
                             api: api,
@@ -283,9 +465,13 @@ final class SessionViewModel: ObservableObject {
             }
             isInitialLoading = false
         } else {
-            // True cold load with nothing cached: block on the fetch and show
-            // a full-screen error if it fails — there is nothing to preserve.
-            await reload(sessionId: sessionId, appState: appState)
+            // Cold loads await the already-started tail task. Cached opens
+            // intentionally return after cache paint while that task runs.
+            if let initialTailTask {
+                await initialTailTask.value
+            } else {
+                await reload(sessionId: sessionId, appState: appState, refreshSecondary: false)
+            }
         }
         guard activeSessionId == sessionId,
               routeLoadGeneration == startGeneration,
@@ -293,13 +479,13 @@ final class SessionViewModel: ObservableObject {
               !realtimePaused
         else { return }
         guard enableRealtime else { return }
-        // Re-attach only when the session changed or the stream was torn down
-        // (e.g. scenePhase != .active called pauseRealtime()). Otherwise a scenePhase
-        // flap would churn URLSessions and polling tasks.
-        if sessionChanged || streamTask == nil {
+        // Cache resume metadata has now been applied, if available. The
+        // primary and tail requests already ran independently while it was
+        // being read; this is only a malformed-URL/re-entry safety net.
+        if streamTask == nil {
             startStream(sessionId: sessionId, appState: appState)
         }
-        if sessionChanged || pollTask == nil {
+        if pollTask == nil {
             startVisiblePolling(sessionId: sessionId, appState: appState)
         }
     }
@@ -317,9 +503,11 @@ final class SessionViewModel: ObservableObject {
         // A metadata request has no value after the route leaves the
         // foreground. Cancel it with the rest of the route work; the next
         // active start will issue it again if the title is still unresolved.
-        primaryDetailRequestToken &+= 1
-        primaryDetailTask?.cancel()
-        primaryDetailTask = nil
+        subagentsTask?.cancel()
+        subagentsTask = nil
+        subagentsRequestToken &+= 1
+        subagentsRefreshPending = false
+        cancelPrimaryDetailLoad()
         tailRefreshTask?.cancel()
         tailRefreshTask = nil
         activeTailRefreshToken = nil
@@ -328,8 +516,11 @@ final class SessionViewModel: ObservableObject {
         prefetchTask?.cancel()
         prefetchTask = nil
         realtimeRefreshTask?.cancel()
+        realtimeRefreshRequestToken &+= 1
         realtimeRefreshTask = nil
         realtimeRefreshPending = false
+        realtimePreviewBuildTask?.cancel()
+        pendingRealtimePreviewBuild = nil
         realtimeRefreshRetryTask?.cancel()
         realtimeRefreshRetryTask = nil
         realtimeRefreshFailureCount = 0
@@ -352,6 +543,7 @@ final class SessionViewModel: ObservableObject {
             "memory_warning",
             "events=\(lastWorkspaceEvents.count) items=\(items.count) has_prefetch=\(hasPrefetch)"
         )
+        WebTranscriptWebViewPool.discardWarmSpare()
         prefetchTask?.cancel()
         prefetchTask = nil
         prefetchedOlderTail = nil
@@ -375,7 +567,11 @@ final class SessionViewModel: ObservableObject {
         activeServerURL = nil
     }
 
-    func reload(sessionId: String, appState: AppState) async {
+    func reload(
+        sessionId: String,
+        appState: AppState,
+        refreshSecondary: Bool = true
+    ) async {
         let requestGeneration = routeLoadGeneration
         // If we already have content on screen, a failed reload must degrade to
         // the non-destructive banner. Only a truly empty view earns the
@@ -398,27 +594,33 @@ final class SessionViewModel: ObservableObject {
         }
 
         openWaterfall?.mark("reload_start")
-        // Worker transcripts load beside the tail, never gating it: a session
-        // that spawned none is the common case, and a failure here must not
-        // cost the transcript.
-        loadSubagents(api: api, sessionId: sessionId)
         do {
             try await refreshTail(api: api, sessionId: sessionId)
             guard isCurrentRoute(sessionId: sessionId, generation: requestGeneration) else { return }
-            errorMessage = nil
-            refreshErrorMessage = nil
+            if refreshSecondary, isTranscriptFrameReady || items.isEmpty {
+                // Explicit pull-to-refresh/re-entry is an intentional worker
+                // refresh. The initial tail is intentionally data-only; the
+                // first-frame hook owns the opening worker request.
+                loadSubagents(api: api, sessionId: sessionId)
+            }
+            if errorMessage != nil {
+                errorMessage = nil
+            }
+            if refreshErrorMessage != nil {
+                refreshErrorMessage = nil
+            }
         } catch is CancellationError {
             return
         } catch LonghouseAPIError.notAuthenticated {
             guard isCurrentRoute(sessionId: sessionId, generation: requestGeneration) else { return }
-            if hasContent {
+            if hasContent || hasLoadedTranscript || !items.isEmpty || !submittedInputs.isEmpty {
                 refreshErrorMessage = "Session expired. Pull to refresh."
             } else {
                 errorMessage = "Session expired."
             }
         } catch {
             guard isCurrentRoute(sessionId: sessionId, generation: requestGeneration) else { return }
-            if hasContent {
+            if hasContent || hasLoadedTranscript || !items.isEmpty || !submittedInputs.isEmpty {
                 refreshErrorMessage = "Live update temporarily unavailable. Showing saved messages."
             } else {
                 errorMessage = "Couldn't load session. Pull to refresh."
@@ -439,10 +641,24 @@ final class SessionViewModel: ObservableObject {
             && !Task.isCancelled
     }
 
+    private func cancelPrimaryDetailLoad() {
+        primaryDetailRequestToken &+= 1
+        primaryDetailRefreshPending = false
+        primaryDetailTask?.cancel()
+        primaryDetailTask = nil
+    }
+
     private func loadPrimaryDetail(api: SessionWorkspaceClient, sessionId: String) {
+        // Compact detail is single-flight. A runtime/title wake arriving
+        // while the opening request is in flight should not cancel that
+        // request and pay a second handshake; one follow-up keeps the newest
+        // chrome state from being lost.
+        guard primaryDetailTask == nil else {
+            primaryDetailRefreshPending = true
+            return
+        }
         primaryDetailRequestToken &+= 1
         let requestToken = primaryDetailRequestToken
-        primaryDetailTask?.cancel()
         openWaterfall?.mark("detail_request_start")
         primaryDetailTask = Task { [weak self] in
             do {
@@ -451,10 +667,18 @@ final class SessionViewModel: ObservableObject {
                 await MainActor.run {
                     guard let self,
                           self.activeSessionId == sessionId,
-                          self.primaryDetailRequestToken == requestToken,
-                          !self.detailWasLoadedFromTail
+                          self.primaryDetailRequestToken == requestToken
                     else { return }
-                    self.detail = loaded
+                    guard self.shouldAcceptPrimaryDetail(loaded) else {
+                        self.openWaterfall?.mark("detail_discarded", "reason=older_primary")
+                        return
+                    }
+                    if self.detailWasLoadedFromTail, let existing = self.detail {
+                        self.detail = loaded.preservingOptionalEnrichment(from: existing)
+                    } else {
+                        self.detail = loaded
+                    }
+                    self.detailWasLoadedFromPrimary = true
                     self.openWaterfall?.mark(
                         "detail_loaded",
                         "title_chars=\(loaded.displayTitle.count)"
@@ -476,18 +700,77 @@ final class SessionViewModel: ObservableObject {
                       self.activeSessionId == sessionId,
                       self.primaryDetailRequestToken == requestToken
                 else { return }
+                let shouldFollowUp = self.primaryDetailRefreshPending
+                self.primaryDetailRefreshPending = false
                 self.primaryDetailTask = nil
+                if shouldFollowUp,
+                   !self.realtimePaused {
+                    self.loadPrimaryDetail(api: api, sessionId: sessionId)
+                }
             }
         }
     }
 
-    /// Fetch this session's worker transcripts in the background.
+    /// Fetch worker metadata only after the first transcript snapshot is
+    /// accepted. This is a secondary lane: it must never delay first paint,
+    /// and refreshes coalesce so newer worker metadata is not lost.
     private func loadSubagents(api: SessionWorkspaceClient, sessionId: String) {
-        Task { [weak self] in
-            let response = try? await api.sessionSubagents(id: sessionId)
-            await MainActor.run {
-                guard let self, self.activeSessionId == sessionId else { return }
-                self.subagents = response?.children ?? []
+        guard activeSessionId == sessionId,
+              !realtimePaused
+        else { return }
+        if subagentsTask != nil {
+            subagentsRefreshPending = true
+            return
+        }
+        subagentsRequestToken &+= 1
+        let requestToken = subagentsRequestToken
+        let generation = routeLoadGeneration
+        openWaterfall?.mark("subagents_request_start")
+        subagentsTask = Task { [weak self] in
+            do {
+                let response = try await api.sessionSubagents(id: sessionId)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self,
+                          self.activeSessionId == sessionId,
+                          self.routeLoadGeneration == generation,
+                          self.subagentsRequestToken == requestToken,
+                          !self.realtimePaused
+                    else { return }
+                    if self.subagents != response.children {
+                        self.subagents = response.children
+                        self.openWaterfall?.mark(
+                            "subagents_loaded",
+                            "count=\(response.children.count)"
+                        )
+                    } else {
+                        self.openWaterfall?.mark("subagents_unchanged")
+                    }
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.activeSessionId == sessionId,
+                          self.subagentsRequestToken == requestToken
+                    else { return }
+                    self.openWaterfall?.mark("subagents_failed")
+                }
+            }
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.subagentsRequestToken == requestToken
+                else { return }
+                self.subagentsTask = nil
+                let shouldFollowUp = self.subagentsRefreshPending
+                self.subagentsRefreshPending = false
+                if shouldFollowUp,
+                   self.activeSessionId == sessionId,
+                   self.routeLoadGeneration == generation,
+                   !self.realtimePaused {
+                    self.loadSubagents(api: api, sessionId: sessionId)
+                }
             }
         }
     }
@@ -674,10 +957,16 @@ final class SessionViewModel: ObservableObject {
     static func unreadReadThrough(
         facts: SessionStateFacts?,
         sceneIsActive: Bool,
-        transcriptFrameReady: Bool = true
+        transcriptFrameReady: Bool = true,
+        renderedReadThrough: String? = nil
     ) -> String? {
-        guard transcriptFrameReady, sceneIsActive, let facts, facts.unread else { return nil }
-        return facts.lastResultAt
+        guard transcriptFrameReady,
+              sceneIsActive,
+              let facts,
+              facts.unread,
+              let renderedReadThrough
+        else { return nil }
+        return renderedReadThrough
     }
 
     func acknowledgeUnreadIfNeeded(
@@ -688,7 +977,8 @@ final class SessionViewModel: ObservableObject {
         guard let readThrough = Self.unreadReadThrough(
             facts: detail?.stateFacts,
             sceneIsActive: sceneIsActive,
-            transcriptFrameReady: isTranscriptFrameReady
+            transcriptFrameReady: isTranscriptFrameReady,
+            renderedReadThrough: renderedTranscriptReadThrough
         ) else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
         try? await api.markSessionRead(id: sessionId, readThrough: readThrough)
@@ -768,43 +1058,181 @@ final class SessionViewModel: ObservableObject {
             webkitDiagnostics: nil
         )
     }
+    /// Tail/detail requests can finish out of order. A transcript watermark
+    /// must never move backward just because an older tail carried older
+    /// metadata; keep the greatest observed result timestamp.
+    private func retainedTranscriptReadThrough(_ incoming: String?) -> String? {
+        guard let incoming else { return transcriptReadThrough }
+        guard let current = transcriptReadThrough else { return incoming }
+        guard let incomingDate = LonghouseDateParser.parse(incoming),
+              let currentDate = LonghouseDateParser.parse(current)
+        else {
+            return incoming >= current ? incoming : current
+        }
+        return incomingDate >= currentDate ? incoming : current
+    }
+
+    /// A provider result timestamp is acknowledgement evidence only when the
+    /// same accepted workspace says its archive is current. During lagging or
+    /// unknown convergence the state facts may be newer than the rows in this
+    /// page; retaining the previous boundary is safer than falsely marking the
+    /// unseen result read.
+    private func acceptedTranscriptReadThrough(for session: SessionDetail) -> String? {
+        guard session.stateFacts.transcriptConvergence == "current" else {
+            return transcriptReadThrough
+        }
+        return retainedTranscriptReadThrough(session.stateFacts.lastResultAt)
+    }
+
+
+    private func markTranscriptNeedsReadThrough(_ readThrough: String?, force: Bool = false) {
+        transcriptReadThrough = readThrough
+        pendingTranscriptReadThrough = readThrough
+        guard force || renderedTranscriptReadThrough != readThrough else { return }
+        renderedTranscriptReadThrough = nil
+    }
 
     func prepareTranscriptRetry() {
-        guard hasLoadedTranscript else { return }
+        guard hasLoadedTranscript || !items.isEmpty || !submittedInputs.isEmpty else { return }
+        markTranscriptNeedsReadThrough(
+            transcriptReadThrough ?? pendingTranscriptReadThrough ?? renderedTranscriptReadThrough,
+            force: true
+        )
         isTranscriptFrameReady = false
         transcriptRendererErrorMessage = nil
         transcriptRenderRetryRevision &+= 1
     }
 
+    /// A frame receipt is scoped to this route/document, but a first valid
+    /// frame does not need to be the newest payload. The encoder can finish
+    /// payload A while payload B waits behind it; A is still usable UI.
+    /// Strict identity remains required for the rendered watermark so unread
+    /// acknowledgement never outruns the rows the user actually saw.
+    func recordTranscriptFrameRendered(_ receipt: WebTranscriptRenderReceipt) {
+        let isRouteReceipt =
+            receipt.contentRevision >= transcriptRevisionFloor
+                && receipt.contentRevision <= transcriptRevision
+                && receipt.retryRevision == transcriptRenderRetryRevision
+        guard isRouteReceipt else {
+            openWaterfall?.mark(
+                "transcript_frame_stale",
+                "receipt_revision=\(receipt.contentRevision) wanted=\(transcriptRevision) floor=\(transcriptRevisionFloor)"
+            )
+            return
+        }
+        let isCurrentReceipt =
+            receipt.contentRevision == transcriptRevision
+                && receipt.transcriptReadThrough == transcriptReadThrough
+        let wasReady = isTranscriptFrameReady
+        if !isCurrentReceipt {
+            // A stale payload can still be the first usable pixels for this
+            // document, but it must not resurrect a retry surface raised by
+            // the current payload.
+            guard transcriptRendererErrorMessage == nil else {
+                openWaterfall?.mark(
+                    "transcript_frame_visible_discarded",
+                    "receipt_revision=\(receipt.contentRevision) wanted=\(transcriptRevision)"
+                )
+                return
+            }
+            if !wasReady {
+                isTranscriptFrameReady = true
+                finishFirstTranscriptFrame()
+            }
+            // Do not advance the unread watermark: these pixels may not
+            // include the newest accepted transcript boundary.
+            openWaterfall?.mark(
+                "transcript_frame_visible",
+                "receipt_revision=\(receipt.contentRevision) wanted=\(transcriptRevision)"
+            )
+            return
+        }
+
+        if !wasReady {
+            isTranscriptFrameReady = true
+            transcriptRendererErrorMessage = nil
+        }
+        renderedTranscriptReadThrough = receipt.transcriptReadThrough
+        pendingTranscriptReadThrough = nil
+        guard !wasReady else { return }
+        finishFirstTranscriptFrame()
+    }
+
+    private func finishFirstTranscriptFrame() {
+        guard
+            let sessionId = activeSessionId,
+            let serverURL = activeServerURL,
+            let api = apiFactory(serverURL)
+        else { return }
+        if historyFillPendingFirstFrame {
+            historyFillPendingFirstFrame = false
+            Task { [weak self] in
+                await self?.fillHistoryForShortViewport(api: api, sessionId: sessionId)
+            }
+        } else {
+            scheduleOlderPrefetch(api: api, sessionId: sessionId)
+        }
+    }
+
+    func recordTranscriptFrameFailed(_ receipt: WebTranscriptRenderReceipt) {
+        let isRouteReceipt =
+            receipt.contentRevision >= transcriptRevisionFloor
+                && receipt.contentRevision <= transcriptRevision
+                && receipt.retryRevision == transcriptRenderRetryRevision
+        guard
+            activeSessionId != nil,
+            isRouteReceipt,
+            receipt.contentRevision == transcriptRevision,
+            receipt.transcriptReadThrough == transcriptReadThrough
+        else {
+            openWaterfall?.mark(
+                "transcript_frame_failure_stale",
+                "receipt_revision=\(receipt.contentRevision) wanted=\(transcriptRevision) floor=\(transcriptRevisionFloor)"
+            )
+            return
+        }
+        isTranscriptFrameReady = false
+        markTranscriptNeedsReadThrough(transcriptReadThrough, force: true)
+        transcriptRendererErrorMessage = "Transcript rendering was interrupted."
+    }
+
+
     func recordTranscriptLifecycle(_ stage: String) {
         openWaterfall?.mark(stage)
         switch stage {
         case "transcript_frame_rendered":
-            let wasReady = isTranscriptFrameReady
-            isTranscriptFrameReady = true
-            transcriptRendererErrorMessage = nil
-            guard !wasReady else { return }
-            guard
-                let sessionId = activeSessionId,
-                let serverURL = activeServerURL,
-                let api = apiFactory(serverURL)
-            else { return }
-            if historyFillPendingFirstFrame {
-                historyFillPendingFirstFrame = false
-                Task { [weak self] in
-                    await self?.fillHistoryForShortViewport(api: api, sessionId: sessionId)
-                }
-            } else {
-                scheduleOlderPrefetch(api: api, sessionId: sessionId)
-            }
+            // Readiness and watermark publication are owned by the
+            // revision-scoped receipt, not this unqualified lifecycle string.
+            break
         case "transcript_frame_failed":
-            transcriptRendererErrorMessage = "Transcript rendering was interrupted."
+            // The typed receipt owns failure visibility and rejects stale
+            // attempts. This lifecycle mark is timing-only.
+            break
+        case "webview_document_failed":
+            isTranscriptFrameReady = false
+            markTranscriptNeedsReadThrough(
+                transcriptReadThrough ?? pendingTranscriptReadThrough ?? renderedTranscriptReadThrough,
+                force: true
+            )
+            transcriptRendererErrorMessage = "Transcript document could not be loaded."
         case "webview_content_process_terminated":
             isTranscriptFrameReady = false
+            markTranscriptNeedsReadThrough(
+                transcriptReadThrough ?? pendingTranscriptReadThrough ?? renderedTranscriptReadThrough,
+                force: true
+            )
             transcriptRendererErrorMessage = nil
         default:
             break
         }
+    }
+    /// transcript's first ready frame. Keeping this outside the lifecycle
+    /// mutation lets the history prefetch arm without another main-actor task
+    /// competing for the same opening turn.
+    func transcriptFrameDidBecomeReady(sessionId: String, appState: AppState) {
+        guard isTranscriptFrameReady,
+              let api = apiFactory(appState.serverURL) else { return }
+        loadSubagents(api: api, sessionId: sessionId)
     }
 
     private func startVisiblePolling(sessionId: String, appState: AppState) {
@@ -960,6 +1388,7 @@ final class SessionViewModel: ObservableObject {
             openWaterfall?.mark("stream_replay_gap", "requested=\(gap.requested_seq) latest=\(gap.latest_seq)")
             if gap.session_id == sessionId {
                 lastPubsubSeq = gap.latest_seq > 0 ? gap.latest_seq : nil
+                lastWorkspaceRevisionFingerprint = nil
             }
             guard let api = apiFactory(appState.serverURL) else { return }
             requestRealtimeRefresh(api: api, sessionId: sessionId)
@@ -969,9 +1398,14 @@ final class SessionViewModel: ObservableObject {
             if let kind = ActivityPulseStore.classify(change) {
                 activity.record(kind)
             }
-            // Push wake -> refetch the compact tail and emit render beacon.
+            // Push wakes refresh compact metadata or the transcript tail,
+            // depending on whether the server says rows actually changed.
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
             let clockSkewMs = Int(clamping: await stream?.clockSkewMs() ?? 0)
+            guard activeSessionId == sessionId,
+                  !realtimePaused,
+                  !Task.isCancelled
+            else { return }
             pendingRealtimeTelemetry = PendingRealtimeTelemetry(
                 latestEventId: change.latest_event_id,
                 serverFanoutAtMs: change.server_fanout_at_ms,
@@ -998,10 +1432,17 @@ final class SessionViewModel: ObservableObject {
                 }
             }
             guard let api = apiFactory(appState.serverURL) else { return }
-            requestRealtimeRefresh(api: api, sessionId: sessionId)
+            switch change.change_kind {
+            case "runtime", "title_update", "read_update":
+                // These wakes change native chrome, not transcript rows.
+                // Refresh the compact detail lane and leave the expensive
+                // mobile-tail/timeline/WebKit path untouched.
+                loadPrimaryDetail(api: api, sessionId: sessionId)
+            default:
+                requestRealtimeRefresh(api: api, sessionId: sessionId)
+            }
         }
     }
-
     /// The SSE stream got a 401 and stopped its own retry loop. Refresh auth
     /// once, then restart the stream with the rotated cookies. A REST call
     /// drives `LonghouseAPI.data()`, whose built-in 401→/api/auth/refresh→retry
@@ -1049,22 +1490,42 @@ final class SessionViewModel: ObservableObject {
             realtimeRefreshPending = true
             return
         }
+        // Joining an older request is not enough: that request may have
+        // captured its snapshot before this wake. Force one coalesced
+        // post-request fetch so the invalidation cannot be lost.
+        if tailRefreshTask != nil {
+            realtimeRefreshPending = true
+        }
+        realtimeRefreshRequestToken &+= 1
+        let requestToken = realtimeRefreshRequestToken
         realtimeRefreshTask = Task { [weak self] in
             guard let self else { return }
             repeat {
                 self.realtimeRefreshPending = false
                 await self.refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
-            } while self.realtimeRefreshPending && self.activeSessionId == sessionId && !Task.isCancelled
-            self.realtimeRefreshTask = nil
+            } while self.realtimeRefreshPending
+                && self.activeSessionId == sessionId
+                && self.realtimeRefreshRequestToken == requestToken
+                && !Task.isCancelled
+            if self.realtimeRefreshRequestToken == requestToken {
+                self.realtimeRefreshTask = nil
+            }
         }
     }
 
     private func refreshTailAfterRealtimeWake(api: SessionWorkspaceClient, sessionId: String) async {
         guard activeSessionId == sessionId, !realtimePaused else { return }
         let generation = routeLoadGeneration
+        let joinedExistingTail = tailRefreshTask != nil
         do {
             try await refreshTail(api: api, sessionId: sessionId)
             guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return }
+            // A wake that joined a pre-existing request still needs one
+            // post-wake fetch: that request may have captured its snapshot
+            // before the invalidation arrived.
+            if joinedExistingTail {
+                realtimeRefreshPending = true
+            }
             realtimeRefreshFailureCount = 0
             realtimeRefreshRetryTask?.cancel()
             realtimeRefreshRetryTask = nil
@@ -1098,22 +1559,103 @@ final class SessionViewModel: ObservableObject {
     }
 
     private func applyRealtimeTranscriptPreview(_ preview: SessionTranscriptPreview, sessionId: String) {
-        guard activeSessionId == sessionId else { return }
-        let currentDetail = detail?.replacingTranscriptPreview(preview)
-        detail = currentDetail
-        items = TimelineBuilder.build(
-            items: projectionItemsWithTranscriptPreview(
-                lastWorkspaceProjectionItems,
-                durableEvents: lastWorkspaceEvents,
-                preview: currentDetail?.transcriptPreview
-            )
-        )
+        guard activeSessionId == sessionId, !realtimePaused else { return }
+        detail = detail?.replacingTranscriptPreview(preview)
+        queueCurrentPreviewBuild(sessionId: sessionId)
     }
 
+    private func queueCurrentPreviewBuild(sessionId: String) {
+        guard activeSessionId == sessionId, !realtimePaused else { return }
+        let currentPreview = detail?.transcriptPreview
+        let request = RealtimePreviewBuildRequest(
+            buildInput: projectionItemsWithTranscriptPreview(
+                lastWorkspaceProjectionItems,
+                durableEvents: lastWorkspaceEvents,
+                preview: currentPreview
+            ),
+            preview: currentPreview,
+            transcriptReadThrough: pendingTranscriptReadThrough ?? transcriptReadThrough,
+            buildRevision: timelineBuildRevision,
+            sourceRevision: transcriptInputRevision,
+            routeGeneration: routeLoadGeneration,
+            sessionId: sessionId
+        )
+        // Preview frames are frequent while a provider is speaking. Keep one
+        // detached build in flight and retain only the newest pending input;
+        // cancelling an awaiting wrapper cannot interrupt TimelineBuilder's
+        // synchronous work once it has entered the detached task.
+        if realtimePreviewBuildTask != nil {
+            pendingRealtimePreviewBuild = request
+        } else {
+            startRealtimePreviewBuild(request)
+        }
+    }
+
+    private func startRealtimePreviewBuild(_ request: RealtimePreviewBuildRequest) {
+        realtimePreviewBuildTask = Task { [weak self] in
+            let builtItems = await Task.detached(priority: .userInitiated) {
+                TimelineBuilder.build(items: request.buildInput)
+            }.value
+            guard let self else { return }
+            self.finishRealtimePreviewBuild(
+                request,
+                builtItems: builtItems,
+                shouldPublish: !Task.isCancelled
+            )
+        }
+    }
+
+    private func finishRealtimePreviewBuild(
+        _ request: RealtimePreviewBuildRequest,
+        builtItems: [TimelineItem],
+        shouldPublish: Bool
+    ) {
+        realtimePreviewBuildTask = nil
+        var pending = pendingRealtimePreviewBuild
+        pendingRealtimePreviewBuild = nil
+        var didPublish = false
+
+        let previewIsCurrent = detail?.transcriptPreview == request.preview
+        if shouldPublish,
+           activeSessionId == request.sessionId,
+           routeLoadGeneration == request.routeGeneration,
+           !realtimePaused,
+           timelineBuildRevision == request.buildRevision,
+           transcriptInputRevision == request.sourceRevision,
+           (previewIsCurrent || pending != nil) {
+            withAnimation(nil) {
+                items = builtItems
+                if transcriptRowsReconciled {
+                    transcriptRowsPublishedPreview = request.preview
+                }
+                // Publish the watermark only with the rows whose repair build
+                // carries it. Retain a newer boundary if another wake arrived
+                // while this detached build was running.
+                markTranscriptNeedsReadThrough(
+                    retainedTranscriptReadThrough(request.transcriptReadThrough)
+                )
+            }
+            didPublish = true
+        }
+
+        guard var pending,
+              activeSessionId == pending.sessionId,
+              !realtimePaused
+        else { return }
+        // Publishing the completed preview increments timelineBuildRevision
+        // through items.didSet. The queued preview is newer than that local
+        // publication, so carry the current revision forward instead of
+        // discarding the whole burst as stale.
+        if didPublish {
+            pending.buildRevision = timelineBuildRevision
+        }
+        startRealtimePreviewBuild(pending)
+    }
     func loadOlder(sessionId: String, appState: AppState) async {
         guard let api = apiFactory(appState.serverURL) else { return }
         await loadOlder(api: api, sessionId: sessionId)
     }
+
 
     /// WebKit measured the rendered transcript shorter than its viewport: a
     /// 50-event window grouped down to a few rows. Pull one older page; the
@@ -1124,7 +1666,11 @@ final class SessionViewModel: ObservableObject {
         await fillHistoryForShortViewport(api: api, sessionId: sessionId)
     }
 
-    private func fillHistoryForShortViewport(api: SessionWorkspaceClient, sessionId: String) async {
+    private func fillHistoryForShortViewport(
+        api: SessionWorkspaceClient,
+        sessionId: String,
+        allowObsoleteRetry: Bool = true
+    ) async {
         guard activeSessionId == sessionId else { return }
         guard isTranscriptFrameReady else {
             historyFillPendingFirstFrame = true
@@ -1137,51 +1683,109 @@ final class SessionViewModel: ObservableObject {
         guard !isLoadingOlder else { return }
         guard historyFillStalledAtLoadedCount != loadedProjectionItemCount else { return }
         let before = loadedProjectionItemCount
+        let generation = routeLoadGeneration
         openWaterfall?.mark("history_fill", "loaded=\(before) total=\(totalProjectionItemCount)")
-        if await loadOlder(api: api, sessionId: sessionId) == 0, loadedProjectionItemCount == before {
+        let added = await loadOlder(api: api, sessionId: sessionId)
+        if let added, added == 0, loadedProjectionItemCount == before {
             historyFillStalledAtLoadedCount = before
+        } else if added == nil, allowObsoleteRetry {
+            // A detached older-page build can become obsolete without
+            // changing the document height, so WebKit may never issue a
+            // second geometry callback. Give the current route one retry
+            // after the invalidating mutation has settled; the retry is
+            // deliberately one-shot so a network failure cannot spin.
+            Task { [weak self] in
+                await Task.yield()
+                guard let self,
+                      self.activeSessionId == sessionId,
+                      self.routeLoadGeneration == generation,
+                      !self.realtimePaused
+                else { return }
+                await self.fillHistoryForShortViewport(
+                    api: api,
+                    sessionId: sessionId,
+                    allowObsoleteRetry: false
+                )
+            }
         }
     }
 
-    /// Returns how many projection items the older page added; zero when
-    /// nothing was fetched, nothing was new, or the request failed.
+    /// Returns how many projection items the older page added. `nil` means
+    /// the request or detached build became obsolete; only a real zero means
+    /// the server returned no new history and may stall short-viewport fills.
     @discardableResult
-    private func loadOlder(api: SessionWorkspaceClient, sessionId: String) async -> Int {
-        guard activeSessionId == sessionId else { return 0 }
+    private func loadOlder(api: SessionWorkspaceClient, sessionId: String) async -> Int? {
+        guard activeSessionId == sessionId else { return nil }
         guard loadedProjectionItemCount < totalProjectionItemCount else { return 0 }
         guard !isLoadingOlder else {
             openWaterfall?.mark("older_skipped", "reason=in_flight loaded=\(loadedProjectionItemCount)")
-            return 0
+            return nil
+        }
+        let generation = routeLoadGeneration
+        let requestOffset = loadedProjectionItemCount
+        let requestCursor = tailNextCursor
+        let requestSnapshotEventId = tailSnapshotEventId
+        // The prefetch join suspends. Claim the lane before awaiting it so two
+        // WebKit geometry callbacks cannot both consume the same prefetched
+        // page and then issue duplicate older requests.
+        isLoadingOlder = true
+        defer { isLoadingOlder = false }
+        if let prefetchTask,
+           prefetchInFlightCursor == requestCursor,
+           prefetchInFlightSnapshotEventId == requestSnapshotEventId {
+            openWaterfall?.mark("older_joined", "loaded=\(loadedProjectionItemCount)")
+            await prefetchTask.value
+            guard isCurrentRoute(sessionId: sessionId, generation: generation),
+                  tailNextCursor == requestCursor,
+                  tailSnapshotEventId == requestSnapshotEventId
+            else { return nil }
         }
 
+        guard isCurrentRoute(sessionId: sessionId, generation: generation),
+              tailNextCursor == requestCursor,
+              tailSnapshotEventId == requestSnapshotEventId
+        else { return nil }
         if let prefetchedOlderTail,
            prefetchedOlderCursor == tailNextCursor,
            prefetchedOlderSnapshotEventId == tailSnapshotEventId {
             let before = loadedProjectionItemCount
-            let added = applyOlderTail(prefetchedOlderTail)
-            self.prefetchedOlderTail = nil
-            self.prefetchedOlderCursor = nil
-            self.prefetchedOlderSnapshotEventId = nil
+            let added = await applyOlderTail(prefetchedOlderTail, sessionId: sessionId)
+            if added != nil {
+                self.prefetchedOlderTail = nil
+                self.prefetchedOlderCursor = nil
+                self.prefetchedOlderSnapshotEventId = nil
+                isLoadingOlder = false
+                scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            }
             openWaterfall?.mark(
                 "older_applied",
-                "source=prefetch page_items=\(prefetchedOlderTail.projection.items.count) added=\(added) loaded=\(before)->\(loadedProjectionItemCount) total=\(totalProjectionItemCount)"
+                "source=prefetch page_items=\(prefetchedOlderTail.projection.items.count) added=\(added.map { String($0) } ?? "discarded") loaded=\(before)->\(loadedProjectionItemCount) total=\(totalProjectionItemCount)"
             )
-            scheduleOlderPrefetch(api: api, sessionId: sessionId)
             return added
         }
 
-        isLoadingOlder = true
-        defer { isLoadingOlder = false }
         do {
-            let before = loadedProjectionItemCount
-            let tail = try await fetchOlderTail(api: api, sessionId: sessionId, offset: loadedProjectionItemCount)
-            guard activeSessionId == sessionId else { return 0 }
-            let added = applyOlderTail(tail)
+            let before = requestOffset
+            let tail = try await fetchOlderTail(
+                api: api,
+                sessionId: sessionId,
+                offset: requestOffset,
+                snapshotEventId: requestSnapshotEventId,
+                cursor: requestCursor
+            )
+            guard isCurrentRoute(sessionId: sessionId, generation: generation),
+                  tailNextCursor == requestCursor,
+                  tailSnapshotEventId == requestSnapshotEventId
+            else { return nil }
+            let added = await applyOlderTail(tail, sessionId: sessionId)
             openWaterfall?.mark(
                 "older_applied",
-                "page_items=\(tail.projection.items.count) added=\(added) loaded=\(before)->\(loadedProjectionItemCount) total=\(totalProjectionItemCount) cursor=\(tail.projection.nextCursor != nil)"
+                "page_items=\(tail.projection.items.count) added=\(added.map { String($0) } ?? "discarded") loaded=\(before)->\(loadedProjectionItemCount) total=\(totalProjectionItemCount) cursor=\(tail.projection.nextCursor != nil)"
             )
-            scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            if added != nil {
+                isLoadingOlder = false
+                scheduleOlderPrefetch(api: api, sessionId: sessionId)
+            }
             return added
         } catch let LonghouseAPIError.structured(_, code, _) where code == "projection_drift" {
             openWaterfall?.mark("older_drift")
@@ -1190,8 +1794,9 @@ final class SessionViewModel: ObservableObject {
             // Older history is opportunistic; keep the visible tail stable.
             openWaterfall?.mark("older_failed", "error=\(error)")
         }
-        return 0
+        return nil
     }
+
 
     private func refreshTail(api: SessionWorkspaceClient, sessionId: String, allowFailure: Bool = false) async throws {
         guard activeSessionId == sessionId else { return }
@@ -1232,6 +1837,30 @@ final class SessionViewModel: ObservableObject {
             if !allowFailure { throw error }
         }
     }
+    private func shouldAcceptDetail(_ incoming: SessionDetail) -> Bool {
+        guard let incomingCommit = incoming.stateFacts.commitSeq else {
+            return detail?.stateFacts.commitSeq == nil
+        }
+        guard let existingCommit = detail?.stateFacts.commitSeq else {
+            return true
+        }
+        return incomingCommit >= existingCommit
+    }
+    private func shouldAcceptPrimaryDetail(_ incoming: SessionDetail) -> Bool {
+        // The tail carries transcript-owned enrichment and wins equal or
+        // unknown freshness. A compact detail may replace it only with a
+        // provably newer catalog commit.
+        guard detailWasLoadedFromTail else {
+            return shouldAcceptDetail(incoming)
+        }
+        guard let incomingCommit = incoming.stateFacts.commitSeq else {
+            return false
+        }
+        guard let existingCommit = detail?.stateFacts.commitSeq else {
+            return true
+        }
+        return incomingCommit > existingCommit
+    }
 
     private func performRefreshTail(
         api: SessionWorkspaceClient,
@@ -1261,57 +1890,152 @@ final class SessionViewModel: ObservableObject {
                 "request_finished",
                 "elapsed_ms=\(requestMs) events=\(tail.events.count) total=\(tail.projection.total)"
             )
-            detailWasLoadedFromTail = true
-            self.detail = tail.session
-            let events = tail.events
+            // Native metadata is the primary lane. Publish it as soon as the
+            // compact tail arrives; TimelineBuilder must never delay the
+            // title, runtime dock, or composer.
+            if shouldAcceptDetail(tail.session) {
+                detailWasLoadedFromTail = true
+                if let existing = detail {
+                    detail = tail.session.preservingOptionalEnrichment(from: existing)
+                } else {
+                    detail = tail.session
+                }
+                openWaterfall?.mark(
+                    "tail_detail_loaded",
+                    "title_chars=\(tail.session.displayTitle.count)"
+                )
+            } else {
+                openWaterfall?.mark(
+                    "detail_discarded",
+                    "reason=older_commit incoming=\(tail.session.stateFacts.commitSeq ?? -1) existing=\(detail?.stateFacts.commitSeq ?? -1)"
+                )
+            }
             let buildStartedAt = Date()
-            let mergedEvents = mergeRefreshedTail(events)
+            // Keep the tail result local while its renderable rows are built
+            // off-main. A preview or another timeline mutation may win during
+            // that suspension; the durable response still gets committed once,
+            // and the existing latest-only preview lane repairs native rows.
+            let previousTranscriptReadThrough = transcriptReadThrough
+            let previousWorkspaceRevisionFingerprint = lastWorkspaceRevisionFingerprint
+            let incomingWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint
+            let clearingBlockingLoadError = !hasLoadedTranscript
+            let acceptedTranscriptPreview = detail?.transcriptPreview
+            let acceptedTranscriptReadThrough = self.acceptedTranscriptReadThrough(for: tail.session)
+            let mergedEvents = mergeRefreshedTail(tail.events)
             let mergedProjectionItems = mergeRefreshedProjectionItems(
                 freshTailItems: tail.projection.items,
                 mergedEvents: mergedEvents
             )
-            self.lastWorkspaceEvents = mergedEvents
-            self.lastWorkspaceProjectionItems = mergedProjectionItems
-            // Counted in projection items: an older page can carry action or
-            // seam rows without events, and counting events would shrink the
-            // loaded window on every refresh and re-fetch pages already shown.
             let refreshedLoadedCount = min(
                 tail.projection.total,
                 max(0, max(tail.projection.total - tail.projection.pageOffset, mergedProjectionItems.count))
             )
-            self.loadedProjectionItemCount = refreshedLoadedCount
             let keepPrefetchedOlderTail = prefetchedOlderCursor == tail.projection.nextCursor
                 && prefetchedOlderSnapshotEventId == tail.snapshotEventId
-            self.totalProjectionItemCount = tail.projection.total
-            self.tailSnapshotEventId = tail.snapshotEventId
-            self.tailNextCursor = tail.projection.nextCursor
-            self.lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint
-            if !keepPrefetchedOlderTail {
-                self.prefetchedOlderTail = nil
-                self.prefetchedOlderCursor = nil
-                self.prefetchedOlderSnapshotEventId = nil
-            }
-            let builtItems = TimelineBuilder.build(
-                items: projectionItemsWithTranscriptPreview(
+            let shouldPublishTranscript =
+                !transcriptRowsReconciled
+                || incomingWorkspaceRevisionFingerprint == nil
+                || previousWorkspaceRevisionFingerprint != incomingWorkspaceRevisionFingerprint
+                || previousTranscriptReadThrough != acceptedTranscriptReadThrough
+                || transcriptRowsPublishedPreview != acceptedTranscriptPreview
+            let buildInput: [SessionProjectionItem]?
+            if shouldPublishTranscript {
+                buildInput = projectionItemsWithTranscriptPreview(
                     mergedProjectionItems,
                     durableEvents: mergedEvents,
-                    preview: tail.session.transcriptPreview
+                    preview: acceptedTranscriptPreview
                 )
-            )
-            // Batch both mutations so SwiftUI coalesces them into one render pass,
-            // preventing the one-frame duplicate where the durable event is visible
-            // but the optimistic submitted input hasn't been removed yet.
-            withAnimation(nil) {
-                reconcileSubmittedInputs(with: mergedEvents)
-                self.items = builtItems
-                self.hasLoadedTranscript = true
+            } else {
+                buildInput = nil
             }
+            let buildRevision = timelineBuildRevision
+            let sourceRevision = transcriptInputRevision
+            let builtItems: [TimelineItem]?
+            if let buildInput {
+                builtItems = await Task.detached(priority: .userInitiated) {
+                    TimelineBuilder.build(items: buildInput)
+                }.value
+            } else {
+                builtItems = nil
+            }
+            guard isCurrentRoute(sessionId: sessionId, generation: generation) else {
+                throw CancellationError()
+            }
+            let timelineInputsChanged = builtItems != nil && timelineBuildRevision != buildRevision
+            let durableInputsChanged = builtItems != nil && transcriptInputRevision != sourceRevision
+            let previewChanged = detail?.transcriptPreview != acceptedTranscriptPreview
+            let shouldApplyBuiltItems =
+                builtItems != nil
+                && !timelineInputsChanged
+                && !durableInputsChanged
+                && !previewChanged
+
+            // The primary detail request may have published a newer commit
+            // while the detached build was running. Never replace it with this
+            // older tail; repair the native preview through the bounded queue.
             let buildMs = Int(Date().timeIntervalSince(buildStartedAt) * 1000)
+            let needsPreviewRepair = shouldPublishTranscript && !shouldApplyBuiltItems
+
+            // Batch native/transcript state so SwiftUI sees one settled
+            // snapshot, while metadata already remains useful during the
+            // detached build above.
+            withAnimation(nil) {
+                lastWorkspaceEvents = mergedEvents
+                lastWorkspaceProjectionItems = mergedProjectionItems
+                if shouldPublishTranscript {
+                    transcriptInputRevision &+= 1
+                }
+                loadedProjectionItemCount = refreshedLoadedCount
+                totalProjectionItemCount = tail.projection.total
+                tailSnapshotEventId = tail.snapshotEventId
+                tailNextCursor = tail.projection.nextCursor
+                if let incomingWorkspaceRevisionFingerprint {
+                    lastWorkspaceRevisionFingerprint = incomingWorkspaceRevisionFingerprint
+                }
+                if !keepPrefetchedOlderTail {
+                    prefetchedOlderTail = nil
+                    prefetchedOlderCursor = nil
+                    prefetchedOlderSnapshotEventId = nil
+                }
+                reconcileSubmittedInputs(with: mergedEvents)
+                if shouldApplyBuiltItems, let builtItems {
+                    self.items = builtItems
+                    transcriptRowsPublishedPreview = acceptedTranscriptPreview
+                    // Rows and their unread boundary become visible as one
+                    // publish. A stale detached build must not expose its
+                    // newer watermark against the previous rows.
+                    markTranscriptNeedsReadThrough(acceptedTranscriptReadThrough)
+                } else if !shouldPublishTranscript {
+                    markTranscriptNeedsReadThrough(acceptedTranscriptReadThrough)
+                } else {
+                    pendingTranscriptReadThrough = retainedTranscriptReadThrough(
+                        acceptedTranscriptReadThrough
+                    )
+                }
+                transcriptRowsReconciled = true
+                self.hasLoadedTranscript = true
+                if clearingBlockingLoadError, errorMessage != nil {
+                    // A successful tail replaces a blocking cold-load error.
+                    // Do not clear send errors from populated data.
+                    self.errorMessage = nil
+                }
+            }
             openWaterfall?.mark(
-                "timeline_built",
-                "events=\(mergedEvents.count) items=\(builtItems.count) elapsed_ms=\(buildMs)"
+                shouldApplyBuiltItems
+                    ? (shouldPublishTranscript ? "timeline_built" : "timeline_unchanged")
+                    : "timeline_waiting_for_preview",
+                "events=\(mergedEvents.count) items=\(items.count) elapsed_ms=\(shouldPublishTranscript ? buildMs : 0)"
             )
-            saveCurrentCache()
+            // A same-fingerprint wake has no new durable rows to persist.
+            // Avoid re-encoding and rewriting the full snapshot on every
+            // stream/poll heartbeat; watermark changes still publish and
+            // take this path because they make the payload new.
+            if shouldPublishTranscript {
+                saveCurrentCache()
+            }
+            if needsPreviewRepair {
+                queueCurrentPreviewBuild(sessionId: sessionId)
+            }
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
         } catch {
             if isCurrentRoute(sessionId: sessionId, generation: generation) {
@@ -1389,6 +2113,7 @@ final class SessionViewModel: ObservableObject {
         let cursor = tailNextCursor
         let offset = loadedProjectionItemCount
         let snapshotEventId = tailSnapshotEventId
+        let generation = routeLoadGeneration
         let hasStoredPrefetch = prefetchedOlderCursor == cursor
             && prefetchedOlderSnapshotEventId == snapshotEventId
         let hasInFlightPrefetch = prefetchInFlightCursor == cursor
@@ -1413,9 +2138,16 @@ final class SessionViewModel: ObservableObject {
                 }
             }
             do {
-                let tail = try await self.fetchOlderTail(api: api, sessionId: sessionId, offset: offset)
+                let tail = try await self.fetchOlderTail(
+                    api: api,
+                    sessionId: sessionId,
+                    offset: offset,
+                    snapshotEventId: snapshotEventId,
+                    cursor: cursor
+                )
                 guard !Task.isCancelled,
                       self.activeSessionId == sessionId,
+                      self.routeLoadGeneration == generation,
                       self.tailNextCursor == cursor,
                       self.tailSnapshotEventId == snapshotEventId
                 else { return }
@@ -1425,7 +2157,9 @@ final class SessionViewModel: ObservableObject {
             } catch {
                 guard !Task.isCancelled,
                       self.activeSessionId == sessionId,
-                      self.tailNextCursor == cursor
+                      self.routeLoadGeneration == generation,
+                      self.tailNextCursor == cursor,
+                      self.tailSnapshotEventId == snapshotEventId
                 else { return }
                 self.prefetchedOlderTail = nil
                 self.prefetchedOlderCursor = nil
@@ -1434,46 +2168,85 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    private func fetchOlderTail(api: SessionWorkspaceClient, sessionId: String, offset: Int) async throws -> SessionMobileTailResponse {
+    private func fetchOlderTail(
+        api: SessionWorkspaceClient,
+        sessionId: String,
+        offset: Int,
+        snapshotEventId: String?,
+        cursor: String?
+    ) async throws -> SessionMobileTailResponse {
         try await api.sessionMobileTail(
             id: sessionId,
             limit: olderPageLimit,
             offset: offset,
             branchMode: "head",
-            snapshotEventId: tailSnapshotEventId,
-            cursor: tailNextCursor
+            snapshotEventId: snapshotEventId,
+            cursor: cursor
         )
     }
-
-    /// Returns how many projection items the page actually added.
+    /// Returns how many projection items the page actually added. `nil` means
+    /// that the page became obsolete while its rows were being built.
     @discardableResult
-    private func applyOlderTail(_ tail: SessionMobileTailResponse) -> Int {
+    private func applyOlderTail(
+        _ tail: SessionMobileTailResponse,
+        sessionId: String
+    ) async -> Int? {
+        guard activeSessionId == sessionId, !realtimePaused else { return nil }
+        let generation = routeLoadGeneration
+        let expectedCursor = tailNextCursor
+        let expectedSnapshotEventId = tailSnapshotEventId
+        let existingItemIds = Set(lastWorkspaceProjectionItems.map(\.id))
+        let olderProjectionItems = tail.projection.items.filter { !existingItemIds.contains($0.id) }
+        guard !olderProjectionItems.isEmpty else {
+            // An empty page is a stall signal, not permission for an older
+            // response to replace the cursor a newer tail already owns.
+            totalProjectionItemCount = max(totalProjectionItemCount, tail.projection.total)
+            lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint ?? lastWorkspaceRevisionFingerprint
+            return 0
+        }
+
+        let existingEventIds = Set(lastWorkspaceEvents.map(\.id))
+        let olderEvents = olderProjectionItems.compactMap(\.event).filter { !existingEventIds.contains($0.id) }
+        let combinedEvents = olderEvents + lastWorkspaceEvents
+        let combinedProjectionItems = olderProjectionItems + lastWorkspaceProjectionItems
+        let preview = detail?.transcriptPreview
+        let buildInput = projectionItemsWithTranscriptPreview(
+            combinedProjectionItems,
+            durableEvents: combinedEvents,
+            preview: preview
+        )
+        let buildRevision = timelineBuildRevision
+        let sourceRevision = transcriptInputRevision
+        let builtItems = await Task.detached(priority: .userInitiated) {
+            TimelineBuilder.build(items: buildInput)
+        }.value
+        guard isCurrentRoute(sessionId: sessionId, generation: generation),
+              tailNextCursor == expectedCursor,
+              tailSnapshotEventId == expectedSnapshotEventId,
+              timelineBuildRevision == buildRevision,
+              transcriptInputRevision == sourceRevision,
+              detail?.transcriptPreview == preview
+        else {
+            openWaterfall?.mark("older_build_discarded", "reason=newer_timeline_input")
+            return nil
+        }
+
         totalProjectionItemCount = tail.projection.total
         tailNextCursor = tail.projection.nextCursor
         lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint ?? lastWorkspaceRevisionFingerprint
-        let existingItemIds = Set(lastWorkspaceProjectionItems.map(\.id))
-        let olderProjectionItems = tail.projection.items.filter { !existingItemIds.contains($0.id) }
-        // Paging is by cursor; the loaded count is simply what has been
-        // prepended, not a second offset coordinate derived from the page.
         loadedProjectionItemCount = min(
             totalProjectionItemCount,
             loadedProjectionItemCount + olderProjectionItems.count
         )
-        if !olderProjectionItems.isEmpty {
-            let existingEventIds = Set(lastWorkspaceEvents.map(\.id))
-            let olderEvents = olderProjectionItems.compactMap(\.event).filter { !existingEventIds.contains($0.id) }
-            lastWorkspaceEvents = olderEvents + lastWorkspaceEvents
-            lastWorkspaceProjectionItems = olderProjectionItems + lastWorkspaceProjectionItems
-            items = TimelineBuilder.build(
-                items: projectionItemsWithTranscriptPreview(
-                    lastWorkspaceProjectionItems,
-                    durableEvents: lastWorkspaceEvents,
-                    preview: detail?.transcriptPreview
-                )
-            )
-            reconcileSubmittedInputs(with: lastWorkspaceEvents)
-            saveCurrentCache()
+        transcriptInputRevision &+= 1
+        lastWorkspaceEvents = combinedEvents
+        lastWorkspaceProjectionItems = combinedProjectionItems
+        items = builtItems
+        if transcriptRowsReconciled {
+            transcriptRowsPublishedPreview = preview
         }
+        reconcileSubmittedInputs(with: lastWorkspaceEvents)
+        saveCurrentCache()
         return olderProjectionItems.count
     }
 
@@ -1515,33 +2288,100 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    private func applySnapshot(_ restored: TranscriptSnapshotStore.Restored) {
+    private func adoptResumeMetadata(from snapshot: TranscriptSnapshot) {
+        if lastPubsubSeq == nil {
+            lastPubsubSeq = snapshot.lastPubsubSeq
+        }
+        if lastWorkspaceRevisionFingerprint == nil {
+            lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
+        }
+    }
+
+    private func applySnapshot(
+        _ restored: TranscriptSnapshotStore.Restored,
+        sessionId: String,
+        generation: Int
+    ) async -> Bool {
+        guard isCurrentRoute(sessionId: sessionId, generation: generation) else {
+            return false
+        }
+        guard !hasLoadedTranscript else {
+            adoptResumeMetadata(from: restored.snapshot)
+            openWaterfall?.mark("cache_discarded", "reason=tail_won")
+            return false
+        }
+
         let snapshot = restored.snapshot
-        detail = snapshot.detail
-        lastWorkspaceEvents = snapshot.events
         let projectionItems = snapshot.projectionItems ?? projectionItemsFromEvents(snapshot.events)
-        lastWorkspaceProjectionItems = projectionItems
-        loadedProjectionItemCount = snapshot.loadedProjectionItemCount
-        totalProjectionItemCount = snapshot.totalProjectionItemCount
-        tailSnapshotEventId = snapshot.tailSnapshotEventId
-        tailNextCursor = snapshot.tailNextCursor
-        lastPubsubSeq = snapshot.lastPubsubSeq
-        lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
-        prefetchedOlderTail = nil
-        prefetchedOlderCursor = nil
-        prefetchedOlderSnapshotEventId = nil
-        prefetchInFlightCursor = nil
-        prefetchInFlightSnapshotEventId = nil
-        prefetchInFlightToken = nil
-        items = TimelineBuilder.build(items: projectionItems)
-        hasLoadedTranscript = true
-        isInitialLoading = false
-        errorMessage = nil
-        refreshErrorMessage = nil
+        let buildRevision = timelineBuildRevision
+        let builtItems = await Task.detached(priority: .userInitiated) {
+            TimelineBuilder.build(items: projectionItems)
+        }.value
+
+        guard isCurrentRoute(sessionId: sessionId, generation: generation) else {
+            return false
+        }
+        guard !hasLoadedTranscript else {
+            // The tail can win while the cache rows are being built. Keep its
+            // state and only borrow resume metadata that it did not provide.
+            adoptResumeMetadata(from: snapshot)
+            openWaterfall?.mark("cache_discarded", "reason=tail_won")
+            return false
+        }
+        guard timelineBuildRevision == buildRevision else {
+            openWaterfall?.mark("cache_discarded", "reason=newer_timeline_input")
+            return false
+        }
+
+        let blockingLoadError = errorMessage
+        let shouldApplySnapshotDetail = !detailWasLoadedFromPrimary
+            && !detailWasLoadedFromTail
+        // The cache becomes visible in one commit. Nothing mutates the
+        // workspace/tail state before the detached build has passed the
+        // route, transcript, and revision fences above.
+        withAnimation(nil) {
+            if shouldApplySnapshotDetail {
+                detail = snapshot.detail
+                // A restored snapshot provides immediate chrome, but it does
+                // not outrank a fresh compact-detail response.
+            }
+            // The watermark is the exact transcript boundary represented by
+            // the cached rows. Older cache files have no safe boundary; keep
+            // that absence instead of deriving acknowledgment from metadata.
+            markTranscriptNeedsReadThrough(snapshot.transcriptReadThrough)
+            lastWorkspaceEvents = snapshot.events
+            lastWorkspaceProjectionItems = projectionItems
+            transcriptInputRevision &+= 1
+            loadedProjectionItemCount = snapshot.loadedProjectionItemCount
+            totalProjectionItemCount = snapshot.totalProjectionItemCount
+            tailSnapshotEventId = snapshot.tailSnapshotEventId
+            tailNextCursor = snapshot.tailNextCursor
+            adoptResumeMetadata(from: snapshot)
+            prefetchedOlderTail = nil
+            prefetchedOlderCursor = nil
+            prefetchedOlderSnapshotEventId = nil
+            prefetchInFlightCursor = nil
+            prefetchInFlightSnapshotEventId = nil
+            prefetchInFlightToken = nil
+            transcriptRowsReconciled = false
+            transcriptRowsPublishedPreview = nil
+            items = builtItems
+            hasLoadedTranscript = true
+            isInitialLoading = false
+            errorMessage = nil
+            if refreshErrorMessage == nil {
+                // The tail can fail before disk hydration finishes. Keep that
+                // failure visible as a non-blocking warning once saved
+                // content is on screen instead of silently presenting stale
+                // data as current.
+                refreshErrorMessage = blockingLoadError
+            }
+        }
         openWaterfall?.mark(
             "cache_applied",
             "tier=\(restored.tier.rawValue) events=\(snapshot.events.count) items=\(items.count)"
         )
+        return true
     }
 
     /// Background reconcile that never erases on-screen content. A failure
@@ -1569,7 +2409,6 @@ final class SessionViewModel: ObservableObject {
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
         }
     }
-
     private func saveCurrentCache() {
         guard let activeServerURL, let activeSessionId, let detail else { return }
         snapshotStore?.save(
@@ -1582,6 +2421,7 @@ final class SessionViewModel: ObservableObject {
                 loadedProjectionItemCount: loadedProjectionItemCount,
                 totalProjectionItemCount: totalProjectionItemCount,
                 tailSnapshotEventId: tailSnapshotEventId,
+                transcriptReadThrough: transcriptReadThrough,
                 tailNextCursor: tailNextCursor,
                 lastPubsubSeq: lastPubsubSeq,
                 workspaceRevisionFingerprint: lastWorkspaceRevisionFingerprint
@@ -1621,7 +2461,9 @@ final class SessionViewModel: ObservableObject {
             events: events,
             receipts: detail?.inputReceipts ?? []
         )
-        submittedInputs.removeAll { resolved.contains($0.id) }
+        if !resolved.isEmpty {
+            submittedInputs.removeAll { resolved.contains($0.id) }
+        }
         let userEvents = events.filter { $0.role == "user" && $0.isHeadBranch }
         let newestUserEvent = userEvents.last.map { "\($0.timestamp) origin=\($0.inputOrigin != nil) text_chars=\($0.contentText?.count ?? -1)" } ?? "none"
         let pendingSummary = submittedInputs

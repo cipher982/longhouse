@@ -72,7 +72,10 @@ struct SessionView: View {
             bottomChrome
                 .frame(maxWidth: .infinity)
         }
-        .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
+        // The principal toolbar item is the only title surface. An empty
+        // navigation title avoids UIKit briefly laying out a second, fully
+        // sized title during a NavigationStack push.
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -81,24 +84,18 @@ struct SessionView: View {
                     subtitle: viewModel.detail?.identitySubtitle ?? fallbackSubtitle
                 )
             }
+            // Keep one trailing toolbar item mounted for the entire push
+            // transition. Inserting/removing a toolbar item as detail and the
+            // transcript arrive makes UIKit animate a blurred placeholder
+            // over the destination title.
             ToolbarItem(placement: .topBarTrailing) {
-                if isSessionInteractionReady {
-                    overflowMenu
-                } else if viewModel.isInitialLoading || viewModel.detail != nil {
-                    Image(systemName: "ellipsis")
-                        .frame(width: 32, height: 32)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("Session actions unavailable until transcript is ready")
-                        .accessibilityIdentifier("session-navigation-loading")
-                }
+                overflowMenu
             }
         }
         .task(id: sessionId) {
-            // Navigation has already left the timeline, so starting one bounded
-            // WebContent process here cannot steal the timeline's first scroll.
-            // Overlap it with the tail request so existing transcripts and new
-            // Console sends both reuse a ready document.
-            WebTranscriptWebViewPool.prewarm()
+            // The timeline owns the warm spare. A session route must issue its
+            // primary request immediately; constructing WebKit here would
+            // consume the same main-actor slice before the first network byte.
             await viewModel.start(sessionId: sessionId, appState: appState)
             await viewModel.acknowledgeUnreadIfNeeded(
                 sessionId: sessionId,
@@ -143,6 +140,17 @@ struct SessionView: View {
         }
         .onChange(of: viewModel.isTranscriptFrameReady) { _, ready in
             guard ready, scenePhase == .active else { return }
+            viewModel.transcriptFrameDidBecomeReady(sessionId: sessionId, appState: appState)
+            Task {
+                await viewModel.acknowledgeUnreadIfNeeded(
+                    sessionId: sessionId,
+                    appState: appState,
+                    sceneIsActive: true
+                )
+            }
+        }
+        .onChange(of: viewModel.renderedTranscriptReadThrough) { previous, current in
+            guard current != previous, scenePhase == .active else { return }
             Task {
                 await viewModel.acknowledgeUnreadIfNeeded(
                     sessionId: sessionId,
@@ -218,11 +226,13 @@ struct SessionView: View {
 
     // One trailing glyph. The title keeps the bar; the once-per-session
     // actions (Lock Screen updates, link) live behind it.
-    @ViewBuilder
+    // Keep the toolbar slot mounted while the detail and transcript arrive.
+    // Conditional insertion/removal during a NavigationStack push produces
+    // the blurred ghost controls seen in the cold-open transition.
     private var overflowMenu: some View {
-        if let detail = viewModel.detail {
-            let isWatching = liveActivityManager.isWatching(sessionId: detail.id)
-            Menu {
+        Menu {
+            if let detail = viewModel.detail {
+                let isWatching = liveActivityManager.isWatching(sessionId: detail.id)
                 Button {
                     Task { await liveActivityManager.toggle(detail: detail, appState: appState) }
                 } label: {
@@ -233,27 +243,29 @@ struct SessionView: View {
                 }
                 .disabled(liveActivityManager.isBusy)
                 Divider()
-                Button {
-                    UIPasteboard.general.url = sessionWebURL
-                } label: {
-                    Label("Copy Link", systemImage: "link")
-                }
-                Button {
-                    if let url = sessionWebURL { openURL(url) }
-                } label: {
-                    Label("Open on Web", systemImage: "safari")
-                }
-            } label: {
-                if liveActivityManager.isBusy {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Label("Session actions", systemImage: "ellipsis")
-                        .labelStyle(.iconOnly)
-                }
             }
-            .accessibilityLabel("Session actions")
-            .accessibilityIdentifier("session-overflow-menu")
+            // These actions only need the route identity, so they remain
+            // useful while compact metadata and transcript rows are loading.
+            Button {
+                UIPasteboard.general.url = sessionWebURL
+            } label: {
+                Label("Copy Link", systemImage: "link")
+            }
+            Button {
+                if let url = sessionWebURL { openURL(url) }
+            } label: {
+                Label("Open on Web", systemImage: "safari")
+            }
+        } label: {
+            if liveActivityManager.isBusy {
+                ProgressView().controlSize(.small)
+            } else {
+                Label("Session actions", systemImage: "ellipsis")
+                    .labelStyle(.iconOnly)
+            }
         }
+        .accessibilityLabel("Session actions")
+        .accessibilityIdentifier("session-overflow-menu")
     }
 
     private var sessionWebURL: URL? {
@@ -294,19 +306,10 @@ struct SessionView: View {
     }
 
     private var isSessionInteractionReady: Bool {
-        guard viewModel.detail != nil,
-              !viewModel.isInitialLoading,
-              viewModel.hasLoadedTranscript
-        else { return false }
-
-        let hasTranscript = !viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty
-        guard hasTranscript else {
-            // A valid empty session uses the native empty state and does not
-            // mount WebKit, so it has no frame-render beacon to await.
-            return true
-        }
-        return viewModel.isTranscriptFrameReady
-            && viewModel.transcriptRendererErrorMessage == nil
+        // The compact detail lane owns native session chrome. It can paint the
+        // runtime dock, composer, and menu while the transcript tail/WebKit
+        // render continues independently.
+        viewModel.detail != nil
     }
 
     private var transcriptState: TranscriptDisplayState {
@@ -334,6 +337,7 @@ struct SessionView: View {
                     submittedInputs: viewModel.submittedInputs,
                     errorMessage: viewModel.errorMessage,
                     contentRevision: viewModel.transcriptRevision,
+                    transcriptReadThrough: viewModel.transcriptReadThrough,
                     retryRevision: viewModel.transcriptRenderRetryRevision,
                     sourceRevision: viewModel.benchmarkSourceRevision,
                     sourceOperation: viewModel.benchmarkSourceOperation,
@@ -356,17 +360,34 @@ struct SessionView: View {
                     onLifecycle: { stage in
                         viewModel.recordTranscriptLifecycle(stage)
                     },
-                    onOpenSubagent: onOpenSubagent
+                    onOpenSubagent: onOpenSubagent,
+                    onFrameFailed: { receipt in
+                        viewModel.recordTranscriptFrameFailed(receipt)
+                    },
+                    onFrameRendered: { receipt in
+                        viewModel.recordTranscriptFrameRendered(receipt)
+                    }
                 )
-                .accessibilityIdentifier("session-chat-transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Keep stale WebKit DOM out of VoiceOver and hit testing until
+                // its current document has acknowledged a frame. The native
+                // overlay is the honest loading/retry surface during this gap.
+                .accessibilityHidden(!viewModel.isTranscriptFrameReady)
+                .allowsHitTesting(viewModel.isTranscriptFrameReady)
+                .accessibilityIdentifier("session-chat-transcript")
             }
 
             TranscriptStateOverlay(
                 state: state,
                 onRetry: {
-                    viewModel.prepareTranscriptRetry()
-                    Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
+                    // Renderer recovery is independent from REST refresh.
+                    // The transcript stays mounted behind this surface, so
+                    // retrying a frame must not wait on a second network call.
+                    if viewModel.transcriptRendererErrorMessage != nil {
+                        viewModel.prepareTranscriptRetry()
+                    } else {
+                        Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
+                    }
                 }
             )
         }
@@ -673,7 +694,8 @@ struct SessionNavigationHeader: View {
                     .truncationMode(.tail)
             }
         }
-        .frame(maxWidth: 240)
+        .frame(maxWidth: 200)
+        .clipped()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             subtitle.map { "\(title), \($0)" } ?? title

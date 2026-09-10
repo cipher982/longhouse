@@ -18,6 +18,26 @@ struct SessionViewModelTests {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("lh-viewmodel-cache-\(UUID().uuidString)", isDirectory: true)
     }
+    private func recordCurrentTranscriptFrame(_ model: SessionViewModel) {
+        model.recordTranscriptFrameRendered(
+            WebTranscriptRenderReceipt(
+                contentRevision: model.transcriptRevision,
+                transcriptReadThrough: model.transcriptReadThrough,
+                payloadFingerprint: "test-frame",
+                latestItemId: model.items.last?.id
+            )
+        )
+    }
+    private func recordCurrentTranscriptFrameFailure(_ model: SessionViewModel) {
+        model.recordTranscriptFrameFailed(
+            WebTranscriptRenderReceipt(
+                contentRevision: model.transcriptRevision,
+                transcriptReadThrough: model.transcriptReadThrough,
+                payloadFingerprint: "test-frame",
+                latestItemId: model.items.last?.id
+            )
+        )
+    }
 
     @Test
     func startLoadsSessionWorkspace() async throws {
@@ -41,6 +61,44 @@ struct SessionViewModelTests {
         #expect(firstTailRequest?.offset == 0)
         #expect(firstTailRequest?.snapshotEventId == nil)
     }
+
+    @Test
+    func laggingArchiveDoesNotAdvanceTranscriptReadThrough() async throws {
+        let workspace = try makeWorkspace(
+            eventId: 10,
+            content: "Latest provider result",
+            lastResultAt: "2026-05-02T20:00:00Z",
+            transcriptConvergence: "lagging"
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+
+        #expect(model.transcriptReadThrough == nil)
+    }
+    @Test
+    func openingFetchesSubagentsOnlyAfterTranscriptFrame() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Load the workspace")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        #expect(await api.subagentRequestCount() == 0)
+
+        recordCurrentTranscriptFrame(model)
+        model.transcriptFrameDidBecomeReady(sessionId: "session-1", appState: appState)
+        await waitForCount("subagent request count", atLeast: 1) {
+            await api.subagentRequestCount()
+        }
+
+        #expect(await api.subagentRequestCount() == 1)
+    }
+
 
     @Test
     func coldStartPublishesPrimaryDetailBeforeTailCompletes() async throws {
@@ -71,6 +129,46 @@ struct SessionViewModelTests {
         #expect(model.items.map(\.id) == ["user:10"])
         #expect(model.isInitialLoading == false)
     }
+    @Test
+    func coldStartAttachesRealtimeOnlyOnceBeforeTailJoinCompletes() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Load the workspace")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        await api.pauseNextTailResponse(offset: 0)
+        let streamStarts = StreamStartCounter()
+
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, _, _ in
+                SessionWorkspaceStreamSource(
+                    start: {
+                        await streamStarts.record()
+                        return AsyncStream { _ in }
+                    },
+                    stop: {},
+                    clockSkewMs: { 0 }
+                )
+            },
+            enableRealtime: true,
+            snapshotStore: Self.isolatedSnapshotStore()
+        )
+        let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
+
+        await waitForDetailRequestCount(api, atLeast: 1)
+        await waitForTailRequestCount(api, atLeast: 1)
+        await waitForCount("early realtime attach", atLeast: 1) {
+            await streamStarts.value()
+        }
+
+        await api.resumePausedTailResponses()
+        await startTask.value
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(await streamStarts.value() == 1)
+        model.stop()
+    }
+
 
     @Test
     func tailDetailRemainsAuthoritativeWhenPrimaryDetailFinishesLate() async throws {
@@ -101,6 +199,45 @@ struct SessionViewModelTests {
         await startTask.value
 
         #expect(model.detail?.displayTitle == tailWorkspace.session.displayTitle)
+        #expect(model.items.map(\.id) == ["user:10"])
+    }
+
+    @Test
+    func equalCommitPrimaryCannotEraseTailEnrichment() async throws {
+        let tailWorkspace = try makeWorkspace(
+            eventId: 10,
+            content: "Tail transcript",
+            summaryTitle: "Tail title",
+            commitSeq: 7,
+            recapJSON: #"{"text":"Tail recap","at":"2026-05-02T20:00:00Z"}"#
+        )
+        let primaryWorkspace = try makeWorkspace(
+            eventId: 99,
+            content: "Primary metadata",
+            summaryTitle: "Primary title",
+            commitSeq: 7
+        )
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [tailWorkspace],
+            primaryDetail: primaryWorkspace.session
+        )
+        await api.pauseNextDetailResponse()
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
+
+        await waitForTailResponseCount(api, atLeast: 1)
+        await waitForCondition("tail enrichment", sourceLocation: #_sourceLocation) {
+            model.hasLoadedTranscript && model.detail?.recap?.text == "Tail recap"
+        }
+
+        await api.resumePausedDetailResponses()
+        await waitForDetailResponseCount(api, atLeast: 1)
+        await startTask.value
+
+        #expect(model.detail?.displayTitle == "Tail title")
+        #expect(model.detail?.recap?.text == "Tail recap")
         #expect(model.items.map(\.id) == ["user:10"])
     }
 
@@ -268,7 +405,7 @@ struct SessionViewModelTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        model.recordTranscriptLifecycle("transcript_frame_rendered")
+        recordCurrentTranscriptFrame(model)
         await waitForTailRequestCount(api, atLeast: 2)
         await model.reload(sessionId: "session-1", appState: appState)
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -310,7 +447,7 @@ struct SessionViewModelTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        model.recordTranscriptLifecycle("transcript_frame_rendered")
+        recordCurrentTranscriptFrame(model)
         await waitForTailRequestCount(api, atLeast: 2)
         model.handleMemoryWarning()
         await api.resumePausedTailResponses()
@@ -378,8 +515,9 @@ struct SessionViewModelTests {
 
         #expect(model.isInitialLoading == false)
         #expect(model.detail?.id == "session-1")
-        await waitForWorkspaceRequestCount(api, atLeast: 1)
-        #expect(model.items.map(\.id) == ["user:21"])
+        await waitForCondition("fresh cached-tail reconcile", sourceLocation: #_sourceLocation) {
+            model.items.map(\.id) == ["user:21"]
+        }
         #expect(await api.workspaceRequestCount() == 1)
     }
 
@@ -420,7 +558,7 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func cachedHookPlaceholderIsReplacedByStructuredPauseRequestOnRefresh() async throws {
+    func primaryDetailWinsBeforePausedTailAndTailReconcilesTranscript() async throws {
         let cachedPauseRequestJSON = """
         {
           "id": "pause-hook-placeholder",
@@ -510,13 +648,13 @@ struct SessionViewModelTests {
 
         await model.start(sessionId: "session-1", appState: appState)
         await waitForTailRequestCount(api, atLeast: 1)
-        #expect(model.detail?.activePauseRequest?.id == "pause-hook-placeholder")
-        #expect(model.detail?.activePauseRequest?.questions.first?.id == "terminal_answer")
+        #expect(model.detail?.activePauseRequest?.id == "pause-scope")
+        #expect(model.detail?.activePauseRequest?.questions.first?.id == "scope")
 
         await api.resumePausedTailResponses()
-        await waitForTailResponseCount(api, atLeast: 1)
-
-        #expect(model.items.map(\.id) == ["user:21"])
+        await waitForCondition("tail transcript", sourceLocation: #_sourceLocation) {
+            model.items.map(\.id) == ["user:21"]
+        }
         let request = try #require(model.detail?.activePauseRequest)
         #expect(request.id == "pause-scope")
         #expect(request.canRespond)
@@ -546,9 +684,9 @@ struct SessionViewModelTests {
         let secondAPI = FakeSessionWorkspaceClient(workspaces: [fresh])
         let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, snapshotStore: cache)
         await secondModel.start(sessionId: "session-1", appState: appState)
-
-        await waitForWorkspaceRequestCount(secondAPI, atLeast: 1)
-        #expect(secondModel.items.map(\.id) == ["user:1", "user:51", "user:52"])
+        await waitForCondition("preserved cached history reconcile", sourceLocation: #_sourceLocation) {
+            secondModel.items.map(\.id) == ["user:1", "user:51", "user:52"]
+        }
         #expect(await secondAPI.workspaceRequestCount() == 1)
     }
 
@@ -1075,7 +1213,7 @@ struct SessionViewModelTests {
         await model.fillHistoryForShortViewport(sessionId: "session-1", appState: appState)
         #expect(model.items.map(\.id) == ["user:51"])
 
-        model.recordTranscriptLifecycle("transcript_frame_rendered")
+        recordCurrentTranscriptFrame(model)
         #expect(model.isTranscriptFrameReady == true)
         await waitForTailRequestCount(api, atLeast: 2)
         #expect(model.items.map(\.id) == ["user:1", "user:51"])
@@ -1098,10 +1236,37 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
 
         await model.start(sessionId: "session-1", appState: appState)
-        model.recordTranscriptLifecycle("transcript_frame_failed")
+        recordCurrentTranscriptFrameFailure(model)
 
         #expect(model.isTranscriptFrameReady == false)
         #expect(model.transcriptRendererErrorMessage == "Transcript rendering was interrupted.")
+    }
+
+    @Test
+    func olderCurrentRouteFrameReleasesRestoringWithoutAcknowledgingNewerPayload() async throws {
+        let workspace = try makeWorkspace(eventId: 1, content: "Visible content")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let staleRevision = model.transcriptRevision
+        let staleWatermark = model.transcriptReadThrough
+        model.items.append(.user(makeEvent(id: 2, role: "user", content: "Newer row")))
+
+        model.recordTranscriptFrameRendered(
+            WebTranscriptRenderReceipt(
+                contentRevision: staleRevision,
+                transcriptReadThrough: staleWatermark,
+                retryRevision: model.transcriptRenderRetryRevision,
+                payloadFingerprint: "stale-frame",
+                latestItemId: "user:1"
+            )
+        )
+
+        #expect(model.isTranscriptFrameReady == true)
+        #expect(model.renderedTranscriptReadThrough == nil)
     }
 
     @Test
@@ -1113,7 +1278,7 @@ struct SessionViewModelTests {
         let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
 
         await model.start(sessionId: "session-1", appState: appState)
-        model.recordTranscriptLifecycle("transcript_frame_failed")
+        recordCurrentTranscriptFrameFailure(model)
         let previousRevision = model.transcriptRenderRetryRevision
 
         model.prepareTranscriptRetry()
@@ -1589,6 +1754,10 @@ struct SessionViewModelTests {
         total: Int = 1,
         pageOffset: Int = 0,
         inputReceiptsJSON: String? = nil,
+        lastResultAt: String? = nil,
+        lastResultOutcome: String? = nil,
+        transcriptConvergence: String = "current",
+        commitSeq: Int? = nil,
         recapJSON: String? = nil
     ) throws -> SessionWorkspaceResponse {
         let encodedSummaryTitle = try jsonString(summaryTitle)
@@ -1602,7 +1771,11 @@ struct SessionViewModelTests {
         let stateFactsJSON = try jsonValueString(
             makeSessionStateFacts(
                 activity: pauseRequestJSON == nil ? "quiescent" : "blocked",
-                pendingInteractionKind: pauseRequestJSON == nil ? nil : "structured_question"
+                pendingInteractionKind: pauseRequestJSON == nil ? nil : "structured_question",
+                lastResultAt: lastResultAt,
+                lastResultOutcome: lastResultOutcome,
+                transcriptConvergence: transcriptConvergence,
+                commitSeq: commitSeq
             )
         )
         let json = """
@@ -1880,6 +2053,18 @@ struct SessionViewModelTests {
     }
 }
 
+private actor StreamStartCounter {
+    private var starts = 0
+
+    func record() {
+        starts += 1
+    }
+
+    func value() -> Int {
+        starts
+    }
+}
+
 private enum FakeSendStep: Sendable {
     case response(SessionInputResponse)
     case requestFailed
@@ -1895,6 +2080,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         let content: String?
         let message: String?
     }
+    private var subagentRequests = 0
 
     private var workspaces: [SessionWorkspaceResponse]
     private let sendResponse: SessionInputResponse
@@ -1961,6 +2147,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
             return primaryDetails.removeFirst()
         }
         return primaryDetail ?? workspace.session
+    }
+    func sessionSubagents(id: String) async throws -> SessionSubagentsResponse {
+        subagentRequests += 1
+        return SessionSubagentsResponse(sessionId: id, children: [])
     }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
@@ -2142,6 +2332,9 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     }
     func detailRequestCount() -> Int {
         detailRequests.count
+    }
+    func subagentRequestCount() -> Int {
+        subagentRequests
     }
 
 

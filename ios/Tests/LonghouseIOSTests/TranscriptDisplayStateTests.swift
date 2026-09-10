@@ -18,6 +18,19 @@ struct TranscriptDisplayStateTests {
     }
 
     @Test
+    func optimisticContentWinsWhileInitialTailIsStillLoading() {
+        let state = TranscriptDisplayState.derive(
+            isInitialLoading: true,
+            hasContent: true,
+            errorMessage: nil,
+            refreshErrorMessage: nil,
+            rendererReady: false
+        )
+        #expect(state == .restoring)
+        #expect(state.showsTranscript == true)
+    }
+
+    @Test
     func contentWithHealthyRefreshIsContent() {
         let state = TranscriptDisplayState.derive(
             isInitialLoading: false,
@@ -43,7 +56,7 @@ struct TranscriptDisplayStateTests {
     }
 
     @Test
-    func rendererFailureRevealsContentWithRetryInsteadOfSpinning() {
+    func rendererFailureKeepsStaleDocumentCoveredByRetrySurface() {
         let state = TranscriptDisplayState.derive(
             isInitialLoading: false,
             hasContent: true,
@@ -52,7 +65,7 @@ struct TranscriptDisplayStateTests {
             rendererReady: false,
             rendererErrorMessage: "Transcript rendering was interrupted."
         )
-        #expect(state == .contentWithRefreshError("Transcript rendering was interrupted."))
+        #expect(state == .restoringWithError("Transcript rendering was interrupted."))
         #expect(state.showsTranscript == true)
     }
 

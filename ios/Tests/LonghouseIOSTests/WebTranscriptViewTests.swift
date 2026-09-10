@@ -26,11 +26,13 @@ final class WebTranscriptViewTests: XCTestCase {
         let initial = WebTranscriptView.ContentIdentity(
             serverURL: "https://example.longhouse.ai",
             revision: 7,
+            transcriptReadThrough: nil,
             retryRevision: 0
         )
         let retry = WebTranscriptView.ContentIdentity(
             serverURL: "https://example.longhouse.ai",
             revision: 7,
+            transcriptReadThrough: nil,
             retryRevision: 1
         )
 
@@ -61,6 +63,60 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertFalse(payload.payloadFingerprint.isEmpty)
         XCTAssertEqual(payload.rowCount, 2)
         XCTAssertEqual(payload.latestItemId, "ios-request-1")
+    }
+
+    func testPreparedPayloadForwardsSubagentsToToolRows() throws {
+        let call = SessionEvent(
+            id: 12,
+            role: "assistant",
+            contentText: nil,
+            interactionKind: nil,
+            toolName: "Task",
+            toolInputJSON: nil,
+            toolOutputText: nil,
+            toolCallId: "call-1",
+            toolCallState: nil,
+            timestamp: "2026-05-02T20:00:00Z",
+            inActiveContext: true,
+            isHeadBranch: true,
+            inputOrigin: nil
+        )
+        let child = SessionSubagent(
+            sessionId: "child-1",
+            provider: "claude",
+            parentToolCallId: "call-1",
+            runId: nil,
+            startedAt: "2026-05-02T20:00:01Z",
+            lastActivityAt: "2026-05-02T20:00:02Z",
+            endedAt: "2026-05-02T20:00:03Z",
+            userMessages: 1,
+            assistantMessages: 1,
+            toolCalls: 2,
+            title: "Worker",
+            firstUserMessagePreview: nil,
+            lastVisibleTextPreview: nil
+        )
+        let payload = WebTranscriptView.preparedPayload(
+            timelineItems: [
+                .tool(call: call, result: nil, pairing: .pending),
+                .activityGroup(calls: [
+                    ActivityCall(call: call, result: nil, pairing: .pending)
+                ]),
+            ],
+            subagents: [child],
+            submittedInputs: [],
+            errorMessage: nil
+        )
+
+        let json = try JSONSerialization.jsonObject(
+            with: Data(base64Encoded: payload.base64)!
+        ) as? [String: Any]
+        let rows = json?["items"] as? [[String: Any]]
+        let workers = rows?.first?["subagents"] as? [[String: Any]]
+        let groupedWorkers = rows?.dropFirst().first?["subagents"] as? [[String: Any]]
+        XCTAssertEqual(workers?.first?["sessionId"] as? String, "child-1")
+        XCTAssertEqual(workers?.first?["toolCalls"] as? Int, 2)
+        XCTAssertEqual(groupedWorkers?.first?["sessionId"] as? String, "child-1")
     }
 
     func testPayloadRendersProviderNotificationAsCompactStatusItem() {
