@@ -10,6 +10,7 @@ import pytest
 
 from zerg.qa import omp_helm_lifecycle
 from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.omp_console_producer import _PROFILE as CONSOLE_PROFILE
 from zerg.qa.omp_console_producer import ASSERTION_ID as CONSOLE_ASSERTION
 from zerg.qa.omp_console_producer import REGISTRATION as CONSOLE_REGISTRATION
@@ -35,9 +36,10 @@ from zerg.qa.omp_helm_lifecycle import _redacted_state_snapshot
 from zerg.qa.omp_helm_lifecycle import _register_native_source
 from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
 from zerg.qa.omp_helm_lifecycle import _runtime_convergence
+from zerg.qa.omp_helm_lifecycle import _served_control_identity
 from zerg.qa.omp_helm_lifecycle import _served_projection_evidence
+from zerg.qa.omp_helm_lifecycle import _wait_runtime_control_identity
 from zerg.qa.omp_helm_lifecycle import omp_helm_lifecycle_assertions
-from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
 from zerg.qa.provider_qualification import _PROFILES
 
@@ -275,10 +277,7 @@ def test_omp_native_model_evidence_rejects_stream_stdout_without_native_usage(tm
     )
     stdout_source = tmp_path / "provider-sources" / "stdout.jsonl"
     stdout_source.write_text(
-        json.dumps({"type": "assistant", "text": "stream-shaped output"})
-        + "\n"
-        + json.dumps({"type": "agent_end"})
-        + "\n",
+        json.dumps({"type": "assistant", "text": "stream-shaped output"}) + "\n" + json.dumps({"type": "agent_end"}) + "\n",
         encoding="utf-8",
     )
     (tmp_path / "console-continuation-receipt.json").unlink()
@@ -784,6 +783,61 @@ def test_omp_helm_zero_delta_flush_is_accepted_only_before_independent_marker_pr
     assert event["marker_occurrences"] == 1
     assert "session_id" not in event
     assert convergence["flush"]["events_shipped"] == 0
+
+
+def test_omp_served_control_identity_requires_exact_subject_and_actions() -> None:
+    diagnostic = {
+        "served_path": "canonical_session_detail",
+        "shadow": {
+            "fact_sources": {"control": {"subject_key": "connection:conn-1:lease-7"}},
+            "control": {
+                "actions": {
+                    "send_input": {"state": "available"},
+                    "terminate": {"state": "available"},
+                }
+            },
+        },
+    }
+
+    assert _served_control_identity(diagnostic, expected_subject_key="connection:conn-1:lease-7")
+    assert not _served_control_identity(diagnostic, expected_subject_key="connection:conn-2:lease-7")
+    diagnostic["shadow"]["control"]["actions"].pop("terminate")
+    assert not _served_control_identity(diagnostic, expected_subject_key="connection:conn-1:lease-7")
+
+
+def test_omp_wait_runtime_control_identity_retries_until_projection_matches(monkeypatch) -> None:
+    diagnostics = iter(
+        [
+            {"served_path": "canonical_session_detail", "shadow": {}},
+            {
+                "served_path": "canonical_session_detail",
+                "shadow": {
+                    "fact_sources": {"control": {"subject_key": "connection:conn-1:lease-7"}},
+                    "control": {
+                        "actions": {
+                            "send_input": {"state": "available"},
+                            "terminate": {"state": "available"},
+                        }
+                    },
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        "zerg.qa.omp_helm_lifecycle._runtime_get",
+        lambda *_args: next(diagnostics),
+    )
+
+    result = _wait_runtime_control_identity(
+        "https://runtime.example",
+        "token",
+        session_id="session-1",
+        state={"connection_id": "conn-1", "lease_generation": "lease-7"},
+        timeout=1,
+    )
+
+    assert result["session_id"] == "session-1"
+    assert result["expected_subject_key"] == "connection:conn-1:lease-7"
 
 
 def test_omp_runtime_convergence_does_not_prove_an_incomplete_events_page() -> None:

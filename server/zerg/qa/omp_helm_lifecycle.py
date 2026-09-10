@@ -491,6 +491,59 @@ def _runtime_convergence(
     return _wait(observe, timeout=timeout, description=f"Runtime Host convergence for OMP marker {marker}")
 
 
+def _served_control_identity(
+    diagnostic: dict[str, Any],
+    *,
+    expected_subject_key: str,
+) -> bool:
+    """Require the exact managed channel before exercising control."""
+    shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), dict) else {}
+    fact_sources = shadow.get("fact_sources") if isinstance(shadow.get("fact_sources"), dict) else {}
+    control_source = fact_sources.get("control") if isinstance(fact_sources.get("control"), dict) else {}
+    control = shadow.get("control") if isinstance(shadow.get("control"), dict) else {}
+    actions = control.get("actions") if isinstance(control.get("actions"), dict) else {}
+    return (
+        diagnostic.get("served_path") == "canonical_session_detail"
+        and control_source.get("subject_key") == expected_subject_key
+        and isinstance(actions.get("send_input"), dict)
+        and actions["send_input"].get("state") == "available"
+        and isinstance(actions.get("terminate"), dict)
+    )
+
+
+def _wait_runtime_control_identity(
+    url: str,
+    token: str,
+    *,
+    session_id: str,
+    state: dict[str, Any],
+    timeout: float = 90.0,
+) -> dict[str, Any]:
+    connection_id = str(state.get("connection_id") or "").strip()
+    lease_generation = str(state.get("lease_generation") or "").strip()
+    expected_subject_key = f"connection:{connection_id}:{lease_generation}"
+
+    def observe() -> dict[str, Any] | None:
+        diagnostic = _runtime_get(
+            url,
+            token,
+            f"/api/agents/sessions/{session_id}/state-diagnostics",
+        )
+        if not _served_control_identity(diagnostic, expected_subject_key=expected_subject_key):
+            return None
+        return {
+            "session_id": session_id,
+            "expected_subject_key": expected_subject_key,
+            "diagnostic": diagnostic,
+        }
+
+    return _wait(
+        observe,
+        timeout=timeout,
+        description="Runtime Host managed control identity",
+    )
+
+
 def _wait_state(
     home: Path,
     *,
@@ -1383,9 +1436,23 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             flush=initial_flush,
             native_source_path=str(current_session_file),
         )
+        initial_control_identity = _wait_runtime_control_identity(
+            str(args.api_url),
+            str(args.agents_token),
+            session_id=current_session_id,
+            state=current_state,
+        )
+        initial_convergence["control_identity"] = {
+            "session_id": initial_control_identity["session_id"],
+            "expected_subject_key": initial_control_identity["expected_subject_key"],
+        }
         runtime_convergence = {"initial": initial_convergence}
         observation["omp_transcript_flush_completed"] = initial_convergence.get("status") == "pass"
         observation["omp_runtime_transcript_converged"] = observation["omp_transcript_flush_completed"]
+        observation["runtime_control_identity"] = {
+            "session_id": initial_control_identity["session_id"],
+            "expected_subject_key": initial_control_identity["expected_subject_key"],
+        }
         observation["runtime_convergence"] = runtime_convergence
         old_state = dict(current_state)
         old_native_id = str(current_state.get("native_session_id") or "")
