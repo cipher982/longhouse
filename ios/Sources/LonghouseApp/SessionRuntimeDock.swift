@@ -245,15 +245,30 @@ struct SessionRuntimeDock: View {
         let state = ledger(asOf: now)
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                Image(systemName: statusGlyph(for: state))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(headlineColor(for: state))
-                    .accessibilityHidden(true)
+                Group {
+                    if state == .working && !reduceMotion && !UITestHooks.holdsAmbientMotion {
+                        // This means the provider still reports work, not that
+                        // new output arrived. Receipts have their own trace.
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(headlineColor(for: state))
+                            .accessibilityIdentifier("session-runtime-working")
+                    } else {
+                        Image(systemName: statusGlyph(for: state))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(headlineColor(for: state))
+                    }
+                }
+                .frame(width: 16, height: 16)
+                .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(headline(for: state))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(headlineColor(for: state))
                         .lineLimit(2)
+                    if state == .working && typeSize.isAccessibilitySize {
+                        elapsed(asOf: now, state: state)
+                    }
                     if let connectionLabel = connectionLabel(for: state) {
                         Text(connectionLabel)
                             .font(.caption2)
@@ -262,6 +277,10 @@ struct SessionRuntimeDock: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(1)
+                if state == .working && !typeSize.isAccessibilitySize {
+                    elapsed(asOf: now, state: state)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
                 ActivityStrip(
                     store: activity,
                     tone: tone(for: state),
@@ -388,7 +407,9 @@ struct SessionRuntimeDock: View {
                     .accessibilityIdentifier("session-runtime-tail")
             }
             if evidenceDisclosure {
-                elapsed(asOf: evidenceNow, state: state)
+                if state != .working {
+                    elapsed(asOf: evidenceNow, state: state)
+                }
                 capabilityChip
             }
         }

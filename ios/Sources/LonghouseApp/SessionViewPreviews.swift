@@ -400,6 +400,29 @@ private struct PreviewConnectionDrop: View {
     )
     .preferredColorScheme(.dark)
 }
+
+#Preview("Working · quiet tool · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "claude",
+            executing: true,
+            placeholder: "Steer this turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "Bash",
+                observedAt: isoDate(secondsAgo: 120),
+                validUntil: isoDate(secondsAgo: -480),
+                primaryKey: "executing",
+                primaryLabel: "Using Bash",
+                primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            )
+        ),
+        activity: ActivityPulseStore(),
+        transcript: ["The command is still running. No new output has arrived."]
+    )
+    .preferredColorScheme(.dark)
+}
 #Preview("Composer · sending · Dark") {
     SessionScreenPreview(
         detail: .mock(
