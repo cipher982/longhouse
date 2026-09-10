@@ -528,6 +528,7 @@ private struct PreviewConnectionDrop: View {
             pauseRequestJSON: approvalPreviewJSON()
         ),
         activity: seededActivity([(9.5, .toolStart)]),
+        draft: "Keep this draft while I review the request."
     )
     .preferredColorScheme(.dark)
 }

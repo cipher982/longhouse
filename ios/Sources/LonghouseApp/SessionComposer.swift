@@ -220,13 +220,14 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                 SessionAttentionFallbackCard(detail: detail)
             }
 
-            if detail.attachImagesEnabled && detail.activePauseRequest == nil {
+            if detail.attachImagesEnabled && (detail.activePauseRequest == nil || !attachmentIsEmpty) {
                 attachmentTray
             }
 
-            if detail.activePauseRequest == nil {
+            if detail.activePauseRequest == nil || focused || !text.isEmpty || !attachmentIsEmpty {
                 let hasContent = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachmentIsEmpty
                 let sendIsEnabled = detail.canSendLive
+                    && detail.activePauseRequest == nil
                     && hasContent
                     && !isSending
                     && !attachmentIsProcessing
@@ -263,10 +264,12 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                         }
                     }
                     .disabled(!sendIsEnabled)
-                    .accessibilityLabel(SessionComposerControlState.sendAccessibilityLabel(for: detail))
+                    .accessibilityLabel(detail.activePauseRequest == nil
+                        ? SessionComposerControlState.sendAccessibilityLabel(for: detail)
+                        : "Answer the pending request before sending")
                     .accessibilityIdentifier("session-chat-send")
                     .contextMenu {
-                        if SessionComposerControlState.showsSecondaryQueueAction(for: detail) && attachmentIsEmpty {
+                        if detail.activePauseRequest == nil && SessionComposerControlState.showsSecondaryQueueAction(for: detail) && attachmentIsEmpty {
                             Button {
                                 Task { await onSend("steer") }
                             } label: {
