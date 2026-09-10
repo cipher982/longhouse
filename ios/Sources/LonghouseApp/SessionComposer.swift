@@ -8,33 +8,38 @@ enum SessionComposerControlState {
         detail.activePauseRequest != nil || detail.canSendLive || detail.canDraftBeforeSendReady
     }
 
-    static func primaryIntent(for detail: SessionDetail) -> String {
+    static func primaryIntent(for detail: SessionDetail, asOf now: Date = Date()) -> String {
+        guard detail.isSessionExecuting, detail.stateFacts.activityEvidenceIsLive(asOf: now) else { return "auto" }
         if detail.defaultInputIntent != "auto" { return detail.defaultInputIntent }
-        guard detail.isSessionExecuting else { return "auto" }
         if detail.canSteerActiveTurn { return "steer" }
         if detail.canQueueNextInput { return "queue" }
         return "auto"
     }
 
-    static func attachmentInputEnabled(for detail: SessionDetail) -> Bool {
-        detail.attachImagesEnabled && primaryIntent(for: detail) == "auto"
+    static func attachmentInputEnabled(for detail: SessionDetail, asOf now: Date = Date()) -> Bool {
+        detail.attachImagesEnabled && primaryIntent(for: detail, asOf: now) == "auto"
     }
 
-    static func showsSecondaryQueueAction(for detail: SessionDetail) -> Bool {
-        detail.isSessionExecuting && detail.canSteerActiveTurn && detail.canQueueNextInput
+    static func showsSecondaryQueueAction(for detail: SessionDetail, asOf now: Date = Date()) -> Bool {
+        detail.isSessionExecuting && detail.stateFacts.activityEvidenceIsLive(asOf: now)
+            && detail.canSteerActiveTurn && detail.canQueueNextInput
     }
 
-    static func sendIcon(for detail: SessionDetail) -> String {
-        primaryIntent(for: detail) == "queue" ? "clock.arrow.circlepath" : "arrow.up"
+    static func sendIcon(for detail: SessionDetail, asOf now: Date = Date()) -> String {
+        primaryIntent(for: detail, asOf: now) == "queue" ? "clock.arrow.circlepath" : "arrow.up"
     }
 
-    static func sendAccessibilityLabel(for detail: SessionDetail) -> String {
+    static func sendAccessibilityLabel(for detail: SessionDetail, asOf now: Date = Date()) -> String {
         guard detail.canSendLive else { return detail.controlHealthMessage ?? "Send unavailable" }
-        switch primaryIntent(for: detail) {
+        switch primaryIntent(for: detail, asOf: now) {
         case "steer": return "Send update mid-turn"
         case "queue": return "Queue for next turn"
         default: return "Send reply"
         }
+    }
+
+    static func placeholder(for detail: SessionDetail, asOf now: Date) -> String {
+        detail.stateFacts.activityEvidenceIsLive(asOf: now) ? detail.composerPlaceholder : "Message"
     }
 }
 
@@ -90,6 +95,8 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     @Binding var text: String
     @FocusState.Binding var focused: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var evidenceNow = Date()
     let failedInputCount: Int
     let queuedInputCount: Int
     let lastSendOutcome: SessionInputOutcome?
@@ -109,7 +116,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         _ message: String?
     ) async -> Bool
     let onSend: (_ intent: String?) async -> Void
-    let actionMenu: ActionMenu
+    let actionMenu: (_ attachmentInputEnabled: Bool) -> ActionMenu
     let attachmentTray: AttachmentTray
 
     init(
@@ -135,7 +142,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
             _ message: String?
         ) async -> Bool,
         onSend: @escaping (_ intent: String?) async -> Void,
-        @ViewBuilder actionMenu: () -> ActionMenu,
+        @ViewBuilder actionMenu: @escaping (_ attachmentInputEnabled: Bool) -> ActionMenu,
         @ViewBuilder attachmentTray: () -> AttachmentTray
     ) {
         self.detail = detail
@@ -155,11 +162,12 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         self.pauseErrorMessage = pauseErrorMessage
         self.onPauseRespond = onPauseRespond
         self.onSend = onSend
-        self.actionMenu = actionMenu()
+        self.actionMenu = actionMenu
         self.attachmentTray = attachmentTray()
     }
 
     var body: some View {
+        let attachmentInputEnabled = SessionComposerControlState.attachmentInputEnabled(for: detail, asOf: evidenceNow)
         VStack(alignment: .leading, spacing: 6) {
             if failedInputCount > 0 {
                 Text(failedInputCount == 1
@@ -232,29 +240,41 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                     && !isSending
                     && !attachmentIsProcessing
                     && !isLoadingPickerItems
-                    && !(attachmentIsEmpty == false && SessionComposerControlState.primaryIntent(for: detail) != "auto")
+                    && !(attachmentIsEmpty == false && !attachmentInputEnabled)
                 if typeSize.isAccessibilitySize {
                     VStack(alignment: .leading, spacing: 6) {
                         draftEditor
                         HStack {
-                            actionMenu
+                            actionMenu(attachmentInputEnabled)
                             Spacer()
                             sendButton(enabled: sendIsEnabled)
                         }
                     }
                 } else {
                     HStack(alignment: .bottom, spacing: 8) {
-                        actionMenu
+                        actionMenu(attachmentInputEnabled)
                         draftEditor
                         sendButton(enabled: sendIsEnabled)
                     }
                 }
             }
         }
+        .task(id: detail.stateFacts.activityValidUntil) {
+            evidenceNow = Date()
+            guard let deadline = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) else { return }
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            }
+            if !Task.isCancelled { evidenceNow = Date() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { evidenceNow = Date() }
+        }
     }
 
     private var draftEditor: some View {
-        TextField(detail.composerPlaceholder, text: $text, axis: .vertical)
+        TextField(SessionComposerControlState.placeholder(for: detail, asOf: evidenceNow), text: $text, axis: .vertical)
             .lineLimit(1...(typeSize.isAccessibilitySize ? 3 : 6))
             .focused($focused)
             .autocorrectionDisabled(true)
@@ -273,7 +293,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                 ProgressView()
                     .frame(width: 30, height: 30)
             } else {
-                Image(systemName: SessionComposerControlState.sendIcon(for: detail))
+                Image(systemName: SessionComposerControlState.sendIcon(for: detail, asOf: evidenceNow))
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(enabled ? Color(.systemBackground) : Color(.systemGray))
                     .frame(width: 30, height: 30)
@@ -288,11 +308,11 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         .contentShape(Rectangle())
         .disabled(!enabled)
         .accessibilityLabel(detail.activePauseRequest == nil
-            ? SessionComposerControlState.sendAccessibilityLabel(for: detail)
+            ? SessionComposerControlState.sendAccessibilityLabel(for: detail, asOf: evidenceNow)
             : "Answer the pending request before sending")
         .accessibilityIdentifier("session-chat-send")
         .contextMenu {
-            if detail.activePauseRequest == nil && SessionComposerControlState.showsSecondaryQueueAction(for: detail) && attachmentIsEmpty {
+            if detail.activePauseRequest == nil && SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: evidenceNow) && attachmentIsEmpty {
                 Button {
                     Task { await onSend("steer") }
                 } label: {

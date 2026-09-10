@@ -299,11 +299,11 @@ private struct SessionScreenPreview: View {
                                 onDismissTurnEnded: {},
                                 onPauseRespond: { _, _, _, _ in false },
                                 onSend: { _ in },
-                                actionMenu: {
+                                actionMenu: { attachmentInputEnabled in
                                     SessionComposerActionMenu(
                                         detail: detail,
                                         attachmentSlotsLeft: ComposerAttachmentLimits.maxAttachments,
-                                        attachmentInputEnabled: SessionComposerControlState.attachmentInputEnabled(for: detail),
+                                        attachmentInputEnabled: attachmentInputEnabled,
                                         isProcessing: false,
                                         isSending: isSending,
                                         onAttach: {}

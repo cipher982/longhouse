@@ -432,7 +432,7 @@ struct SessionView: View {
                 )
             },
             onSend: { intent in await send(intent: intent) },
-            actionMenu: {
+            actionMenu: { attachmentInputEnabled in
                 SessionComposerActionMenu(
                     detail: detail,
                     attachmentSlotsLeft: attachmentStore.slotsLeft,

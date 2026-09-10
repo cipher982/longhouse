@@ -1240,7 +1240,8 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionDetailUsesServerOwnedComposerSemantics() throws {
+    @MainActor
+    func composerExpiresTurnActionsWithoutRevokingSend() throws {
         let json = """
         {
           "id": "session-composer",
@@ -1265,6 +1266,7 @@ struct SessionModelsTests {
             "reply_to_live_session_available": true,
             "can_queue_next_input": true,
             "can_steer_active_turn": true,
+            "attach_images": true,
             "display_label": "Live on this Mac",
             "display_detail": "Longhouse can send prompts into this live session.",
             "display_tone": "success",
@@ -1300,15 +1302,22 @@ struct SessionModelsTests {
         """.data(using: .utf8)!
 
         let data = try addingSessionStateFacts(
-            makeSessionStateFacts(activity: "executing"),
+            makeSessionStateFacts(activity: "executing", activityValidUntil: "2026-09-10T12:00:00Z"),
             to: json
         )
         let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
 
+        let deadline = try #require(LonghouseDateParser.parse("2026-09-10T12:00:00Z"))
+        let before = deadline.addingTimeInterval(-1)
+        let after = deadline.addingTimeInterval(1)
+        #expect(SessionComposerControlState.primaryIntent(for: detail, asOf: before) == "steer")
+        #expect(SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: before))
+        #expect(!SessionComposerControlState.attachmentInputEnabled(for: detail, asOf: before))
+
         #expect(detail.canSendLive)
-        #expect(detail.defaultInputIntent == "steer")
-        #expect(detail.composerPlaceholder == "Send a message to the live Codex session...")
-        #expect(detail.controlHealthMessage == nil)
+        #expect(SessionComposerControlState.primaryIntent(for: detail, asOf: after) == "auto")
+        #expect(!SessionComposerControlState.showsSecondaryQueueAction(for: detail, asOf: after))
+        #expect(SessionComposerControlState.attachmentInputEnabled(for: detail, asOf: after))
     }
 
     @Test
