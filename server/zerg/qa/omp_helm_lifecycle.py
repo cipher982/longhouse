@@ -896,8 +896,6 @@ def _launch_argv(
         str(args.provider_bin),
         "--url",
         str(args.api_url),
-        "--token",
-        str(args.agents_token),
         "--prompt",
         prompt,
     ]

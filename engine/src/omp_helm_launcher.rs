@@ -1059,7 +1059,9 @@ fn run_provider(
         crate::process_group::DEFAULT_GRACE,
     ));
     if !outcome.is_gone() {
-        eprintln!("Longhouse: OMP process group {pid} survived cleanup");
+        return Err(anyhow::anyhow!(
+            "OMP process group {pid} survived owned cleanup"
+        ));
     }
     let exit = status
         .map(|status| status.code().unwrap_or(128))

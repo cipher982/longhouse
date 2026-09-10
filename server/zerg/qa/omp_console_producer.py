@@ -193,12 +193,14 @@ def omp_native_model_evidence(
                 previous = usage.get(key, 0)
                 total = previous + value
                 usage[key] = round(total, 12) if isinstance(total, float) else total
-    native_model = selected_event.get("model")
-    if not isinstance(native_model, str) or not native_model.strip():
-        native_model = message.get("model")
-    if not isinstance(native_model, str) or not native_model.strip():
+    event_model = selected_event.get("model")
+    model_source = "provider_event"
+    if not isinstance(event_model, str) or not event_model.strip():
+        event_model = message.get("model")
+        model_source = "message"
+    if not isinstance(event_model, str) or not event_model.strip():
         return None
-    native_model = native_model.strip()
+    native_model = event_model.strip()
     message_model = message.get("model")
     if isinstance(message_model, str) and message_model.strip() and message_model.strip() != native_model:
         return None
@@ -220,7 +222,7 @@ def omp_native_model_evidence(
             "type": "message",
             "provider": message.get("provider"),
             "model": model,
-            "model_source": "provider_event" if native_model else "invocation",
+            "model_source": model_source,
             "usage": usage,
             "total_cost_usd": usage.get("cost.total"),
             "native_event_sha256": event_digest,
@@ -401,9 +403,18 @@ def _native_settlement(root: Path) -> dict[str, object]:
 def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
     settlement = observation.get("omp_settlement")
     settlement = settlement if isinstance(settlement, Mapping) else {}
+    model_evidence = observation.get("live_model_evidence")
+    model_evidence_ok = (
+        isinstance(model_evidence, Mapping)
+        and isinstance(model_evidence.get("model"), str)
+        and bool(model_evidence.get("model", "").strip())
+        and isinstance(model_evidence.get("source_artifacts"), list)
+        and bool(model_evidence.get("source_artifacts"))
+    )
     return {
         ASSERTION_ID: all(
             (
+                model_evidence_ok,
                 observation.get("runtime_host_turn_dispatch") is True,
                 observation.get("exact_session_thread_run_binding") is True,
                 observation.get("transcript_converged_exactly_once") is True,
@@ -463,6 +474,11 @@ def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
     )
     if model_evidence is not None:
         observation["live_model_evidence"] = model_evidence
+        result_event = model_evidence.get("result_event")
+        dispatch["native_model"] = model_evidence.get("model")
+        dispatch["native_provider"] = result_event.get("provider") if isinstance(result_event, Mapping) else None
+        dispatch["native_model_evidence"] = dict(result_event) if isinstance(result_event, Mapping) else None
+        lifecycle.write_json(root / "adapter-dispatch-receipt.json", dispatch)
     assertions = omp_console_assertions(observation)
     result = {
         "schema_version": 1,

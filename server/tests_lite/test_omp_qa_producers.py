@@ -353,6 +353,10 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
         "exact_session_thread_run_binding": True,
         "transcript_converged_exactly_once": True,
         "omp_continuation_context_recalled": True,
+        "live_model_evidence": {
+            "model": "openrouter/fixture-model",
+            "source_artifacts": [{"path": "provider-sources/native.raw"}],
+        },
         "omp_settlement": {
             "agent_end_terminal": True,
             "agent_end_evidence_shape": True,
