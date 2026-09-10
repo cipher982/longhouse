@@ -26,11 +26,13 @@ final class WebTranscriptViewTests: XCTestCase {
         let initial = WebTranscriptView.ContentIdentity(
             serverURL: "https://example.longhouse.ai",
             revision: 7,
+            transcriptReadThrough: nil,
             retryRevision: 0
         )
         let retry = WebTranscriptView.ContentIdentity(
             serverURL: "https://example.longhouse.ai",
             revision: 7,
+            transcriptReadThrough: nil,
             retryRevision: 1
         )
 

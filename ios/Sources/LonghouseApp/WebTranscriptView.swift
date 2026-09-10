@@ -54,6 +54,9 @@ struct WebTranscriptView: UIViewRepresentable {
     /// encodes and base64s the whole transcript, so the encode is gated on this
     /// rather than on the encoded bytes.
     let contentRevision: UInt64
+    /// The transcript watermark belonging to this payload, not merely the
+    /// currently visible session detail.
+    let transcriptReadThrough: String?
     /// Nonzero only when the native surface is retrying a failed frame
     /// acknowledgement for an otherwise unchanged transcript payload.
     let retryRevision: UInt64
@@ -67,6 +70,10 @@ struct WebTranscriptView: UIViewRepresentable {
     let onLifecycle: ((String) -> Void)?
     /// Tapping a worker row opens that child's transcript.
     let onOpenSubagent: ((String) -> Void)?
+    /// Fires when WebKit rejects the payload's frame acknowledgement.
+    let onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)?
+    /// Fires only after this payload's DOM frame was acknowledged by WebKit.
+    let onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)?
 
     init(
         serverURL: String,
@@ -75,6 +82,7 @@ struct WebTranscriptView: UIViewRepresentable {
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
         contentRevision: UInt64,
+        transcriptReadThrough: String? = nil,
         retryRevision: UInt64 = 0,
         sourceRevision: Int? = nil,
         sourceOperation: String? = nil,
@@ -82,7 +90,9 @@ struct WebTranscriptView: UIViewRepresentable {
         onNeedsMoreHistory: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
         onLifecycle: ((String) -> Void)? = nil,
-        onOpenSubagent: ((String) -> Void)? = nil
+        onOpenSubagent: ((String) -> Void)? = nil,
+        onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)? = nil,
+        onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)? = nil
     ) {
         self.serverURL = serverURL
         self.items = items
@@ -91,6 +101,7 @@ struct WebTranscriptView: UIViewRepresentable {
         self.submittedInputs = submittedInputs
         self.errorMessage = errorMessage
         self.contentRevision = contentRevision
+        self.transcriptReadThrough = transcriptReadThrough
         self.retryRevision = retryRevision
         self.sourceRevision = sourceRevision
         self.sourceOperation = sourceOperation
@@ -98,6 +109,8 @@ struct WebTranscriptView: UIViewRepresentable {
         self.onNeedsMoreHistory = onNeedsMoreHistory
         self.onDiagnostics = onDiagnostics
         self.onLifecycle = onLifecycle
+        self.onFrameFailed = onFrameFailed
+        self.onFrameRendered = onFrameRendered
     }
 
     func makeCoordinator() -> Coordinator {
@@ -110,8 +123,10 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         // One narrowly-scoped bridge: a session id, validated as a UUID before
         // it reaches navigation. Custom-scheme links stay inert on purpose (see
-        // decidePolicyFor), so transcript text still has no route out of here.
+        // `decidePolicyFor`), so transcript text still has no route out of here.
         context.coordinator.onOpenSubagent = onOpenSubagent
+        context.coordinator.onFrameFailed = onFrameFailed
+        context.coordinator.onFrameRendered = onFrameRendered
         let controller = webView.configuration.userContentController
         controller.removeScriptMessageHandler(forName: WebTranscriptView.bridgeName)
         controller.add(context.coordinator, name: WebTranscriptView.bridgeName)
@@ -166,27 +181,43 @@ struct WebTranscriptView: UIViewRepresentable {
     func updateUIView(_ webView: TranscriptWebView, context: Context) {
         context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
         context.coordinator.ensureDocumentServerURL(serverURL, on: webView)
+        let preparationInput = WebTranscriptPayloadInput(
+            serverURL: serverURL,
+            timelineItems: items,
+            subagents: subagents,
+            submittedInputs: submittedInputs,
+            errorMessage: errorMessage,
+            contentRevision: contentRevision,
+            transcriptReadThrough: transcriptReadThrough,
+            retryRevision: retryRevision,
+            sourceRevision: sourceRevision,
+            sourceOperation: sourceOperation
+        )
         context.coordinator.send(
             contentIdentity: ContentIdentity(
                 serverURL: serverURL,
                 revision: contentRevision,
+                transcriptReadThrough: transcriptReadThrough,
                 retryRevision: retryRevision
             ),
-            preparingPayload: preparedPayload,
+            preparationInput: preparationInput,
             to: webView,
             diagnosticsEnabled: WebTranscriptDiagnosticsFeature.isEnabled,
             onNearTop: onNearTop,
             onNeedsMoreHistory: onNeedsMoreHistory,
             onDiagnostics: onDiagnostics,
-            onLifecycle: onLifecycle
+            onLifecycle: onLifecycle,
+            onFrameFailed: onFrameFailed,
+            onFrameRendered: onFrameRendered
         )
     }
 
     /// What a prepared payload was built from. Two updates carrying the same
     /// identity would encode to the same bytes, so the second one skips the work.
-    struct ContentIdentity: Equatable {
+    struct ContentIdentity: Equatable, Sendable {
         let serverURL: String
         let revision: UInt64
+        let transcriptReadThrough: String?
         let retryRevision: UInt64
     }
 
@@ -230,9 +261,25 @@ struct WebTranscriptView: UIViewRepresentable {
             subagents: subagents,
             submittedInputs: submittedInputs,
             errorMessage: errorMessage,
+            contentRevision: contentRevision,
+            transcriptReadThrough: transcriptReadThrough,
+            retryRevision: retryRevision,
             sourceRevision: sourceRevision,
             sourceOperation: sourceOperation
         )
+    }
+
+    struct WebTranscriptPayloadInput: Sendable {
+        let serverURL: String?
+        let timelineItems: [TimelineItem]
+        let subagents: [SessionSubagent]
+        let submittedInputs: [SubmittedInput]
+        let errorMessage: String?
+        let contentRevision: UInt64
+        let transcriptReadThrough: String?
+        let retryRevision: UInt64
+        let sourceRevision: Int?
+        let sourceOperation: String?
     }
 
     nonisolated static func preparedPayload(
@@ -241,6 +288,9 @@ struct WebTranscriptView: UIViewRepresentable {
         subagents: [SessionSubagent] = [],
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
+        contentRevision: UInt64 = 0,
+        transcriptReadThrough: String? = nil,
+        retryRevision: UInt64 = 0,
         sourceRevision: Int? = nil,
         sourceOperation: String? = nil
     ) -> WebTranscriptPreparedPayload {
@@ -263,8 +313,28 @@ struct WebTranscriptView: UIViewRepresentable {
             latestItemId: payload.items.last?.id,
             payloadFingerprint: Self.payloadFingerprint(data),
             prepareDurationMs: Int(Date().timeIntervalSince(startedAt) * 1000),
+            contentRevision: contentRevision,
+            transcriptReadThrough: transcriptReadThrough,
+            retryRevision: retryRevision,
             sourceRevision: sourceRevision,
             sourceOperation: sourceOperation
+        )
+    }
+
+    nonisolated static func preparedPayload(
+        input: WebTranscriptPayloadInput
+    ) -> WebTranscriptPreparedPayload {
+        preparedPayload(
+            serverURL: input.serverURL,
+            timelineItems: input.timelineItems,
+            subagents: input.subagents,
+            submittedInputs: input.submittedInputs,
+            errorMessage: input.errorMessage,
+            contentRevision: input.contentRevision,
+            transcriptReadThrough: input.transcriptReadThrough,
+            retryRevision: input.retryRevision,
+            sourceRevision: input.sourceRevision,
+            sourceOperation: input.sourceOperation
         )
     }
 
@@ -909,6 +979,8 @@ struct WebTranscriptView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate, WKScriptMessageHandler {
         var onOpenSubagent: ((String) -> Void)?
+        var onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)?
+        var onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)?
 
         func userContentController(
             _ userContentController: WKUserContentController,
@@ -951,8 +1023,18 @@ struct WebTranscriptView: UIViewRepresentable {
         private var viewportReconcileGeneration = 0
         private var contentSizeObservation: NSKeyValueObservation?
         private var dragStartOffsetY: CGFloat?
+        /// Identity and input waiting behind the one active encoder. Keeping
+        /// only the newest request bounds CPU/memory during a realtime burst.
+        private struct PreparationRequest {
+            let identity: ContentIdentity
+            let input: WebTranscriptPayloadInput
+            let forceRender: Bool
+        }
+
         /// Identity of the transcript the most recent payload was prepared from.
         private var preparedIdentity: ContentIdentity?
+        private var preparationTask: Task<Void, Never>?
+        private var pendingPreparation: PreparationRequest?
         private var lastRetryRevision: UInt64 = 0
         private var pendingPayload: WebTranscriptPreparedPayload?
         private var inFlightPayload: WebTranscriptPreparedPayload?
@@ -971,6 +1053,13 @@ struct WebTranscriptView: UIViewRepresentable {
         private var documentServerURL: String?
         private var mediaAuthSignature: String?
         private var mediaAuthPrimedServerURL: String?
+        /// The latest navigation started by this coordinator. Delegate
+        /// callbacks from an older load must not tear down the new document.
+        private var activeNavigation: WKNavigation?
+        /// Invalidates JavaScript completions from a document that was
+        /// replaced or recycled. WebKit can deliver an old completion after a
+        /// new HTML document has already started on the same view.
+        private var documentGeneration: UInt64 = 0
         /// Armed by `loadDocument(serverURL:on:)` and consumed by the policy gate
         /// below: one navigation per load, and only the one this app started.
         private var awaitingDocumentNavigation = false
@@ -988,6 +1077,10 @@ struct WebTranscriptView: UIViewRepresentable {
             decidePolicyFor navigationAction: WKNavigationAction,
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
+            guard self.webView === webView else {
+                decisionHandler(.cancel)
+                return
+            }
             if awaitingDocumentNavigation, navigationAction.navigationType == .other {
                 awaitingDocumentNavigation = false
                 decisionHandler(.allow)
@@ -1010,6 +1103,7 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            guard self.webView === webView, acceptsNavigation(navigation) else { return }
             isLoaded = true
             awaitingDocumentNavigation = false
             Task { @MainActor in
@@ -1032,7 +1126,7 @@ struct WebTranscriptView: UIViewRepresentable {
             didFail navigation: WKNavigation!,
             withError error: Error
         ) {
-            documentLoadFailed(on: webView, error: error)
+            documentLoadFailed(on: webView, navigation: navigation, error: error)
         }
 
         func webView(
@@ -1040,10 +1134,25 @@ struct WebTranscriptView: UIViewRepresentable {
             didFailProvisionalNavigation navigation: WKNavigation!,
             withError error: Error
         ) {
-            documentLoadFailed(on: webView, error: error)
+            documentLoadFailed(on: webView, navigation: navigation, error: error)
         }
 
-        private func documentLoadFailed(on webView: WKWebView, error: Error) {
+        private func acceptsNavigation(_ navigation: WKNavigation?) -> Bool {
+            guard let expected = activeNavigation else { return true }
+            guard let navigation, navigation === expected else { return false }
+            activeNavigation = nil
+            return true
+        }
+        private func documentLoadFailed(
+            on webView: WKWebView,
+            navigation: WKNavigation?,
+            error: Error
+        ) {
+            guard self.webView === webView, acceptsNavigation(navigation) else { return }
+            let nsError = error as NSError
+            guard !(nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled) else {
+                return
+            }
             isLoaded = false
             awaitingDocumentNavigation = false
             pendingPayload = pendingPayload ?? inFlightPayload ?? lastRenderedPayload
@@ -1058,6 +1167,7 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            guard self.webView === webView else { return }
             Task { @MainActor in
                 self.onLifecycle?("webview_content_process_terminated")
             }
@@ -1079,7 +1189,8 @@ struct WebTranscriptView: UIViewRepresentable {
             documentServerURL = serverURL
             isLoaded = false
             awaitingDocumentNavigation = true
-            webView.loadHTMLString(
+            documentGeneration &+= 1
+            activeNavigation = webView.loadHTMLString(
                 WebTranscriptView.documentHTML,
                 baseURL: WebTranscriptView.documentBaseURL(serverURL)
             )
@@ -1088,10 +1199,15 @@ struct WebTranscriptView: UIViewRepresentable {
         func adoptDocument(serverURL: String, loaded: Bool) {
             documentServerURL = serverURL
             isLoaded = loaded
+            activeNavigation = nil
+            // The adopted spare's navigation belongs to the pool, so the
+            // coordinator cannot identify it by WKNavigation. A new document
+            // generation still fences every callback owned by this coordinator.
+            documentGeneration &+= 1
             // An unfinished spare's document load is the pool's, and this
-            // coordinator takes over as navigation delegate mid-flight — possibly
-            // before WebKit has asked anyone for a policy. Arm the gate so that
-            // decision still resolves to the document we are waiting on.
+            // coordinator takes over as navigation delegate mid-flight —
+            // possibly before WebKit has asked anyone for a policy. Arm the
+            // gate so that decision still resolves to the document we await.
             awaitingDocumentNavigation = !loaded
             // A recycled document keeps the previous session's stickiness;
             // `didFinish` will not fire again to reset it.
@@ -1276,18 +1392,23 @@ struct WebTranscriptView: UIViewRepresentable {
 
         func prepareForReuse() {
             preparedIdentity = nil
+            preparationTask?.cancel()
+            preparationTask = nil
+            pendingPreparation = nil
             lastRetryRevision = 0
             // Strands any deferred viewport write before the WebView is recycled.
             viewportReconcileGeneration &+= 1
+            documentGeneration &+= 1
+            activeNavigation = nil
             contentSizeObservation?.invalidate()
-            contentSizeObservation = nil
-            (webView as? TranscriptWebView)?.prepareForTranscriptReuse()
-            webView?.navigationDelegate = nil
-            webView?.scrollView.delegate = nil
             webView = nil
+            onOpenSubagent = nil
             onNearTop = nil
+            onNeedsMoreHistory = nil
             onDiagnostics = nil
             onLifecycle = nil
+            onFrameFailed = nil
+            onFrameRendered = nil
             pendingPayload = nil
             inFlightPayload = nil
             lastRenderedPayload = nil
@@ -1305,13 +1426,15 @@ struct WebTranscriptView: UIViewRepresentable {
         /// transcript behind it actually changed.
         func send(
             contentIdentity: ContentIdentity,
-            preparingPayload: () -> WebTranscriptPreparedPayload,
+            preparationInput: WebTranscriptView.WebTranscriptPayloadInput,
             to webView: WKWebView,
             diagnosticsEnabled: Bool,
             onNearTop: (() -> Void)?,
             onNeedsMoreHistory: (() -> Void)?,
             onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?,
-            onLifecycle: ((String) -> Void)?
+            onLifecycle: ((String) -> Void)?,
+            onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)?,
+            onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)?
         ) {
             self.webView = webView
             self.diagnosticsEnabled = diagnosticsEnabled
@@ -1319,20 +1442,70 @@ struct WebTranscriptView: UIViewRepresentable {
             self.onNeedsMoreHistory = onNeedsMoreHistory
             self.onDiagnostics = onDiagnostics
             self.onLifecycle = onLifecycle
+            self.onFrameFailed = onFrameFailed
+            self.onFrameRendered = onFrameRendered
             let forceRender = contentIdentity.retryRevision != lastRetryRevision
             lastRetryRevision = contentIdentity.retryRevision
             guard forceRender || contentIdentity != preparedIdentity else { return }
-            preparedIdentity = contentIdentity
-            send(
-                preparingPayload(),
-                to: webView,
-                diagnosticsEnabled: diagnosticsEnabled,
-                onNearTop: onNearTop,
-                onNeedsMoreHistory: onNeedsMoreHistory,
-                onDiagnostics: onDiagnostics,
-                onLifecycle: onLifecycle,
+            let request = PreparationRequest(
+                identity: contentIdentity,
+                input: preparationInput,
                 forceRender: forceRender
             )
+            preparedIdentity = contentIdentity
+            if preparationTask != nil {
+                let forceRender = request.forceRender || pendingPreparation?.forceRender == true
+                pendingPreparation = PreparationRequest(
+                    identity: request.identity,
+                    input: request.input,
+                    forceRender: forceRender
+                )
+                return
+            }
+            beginPreparation(request)
+        }
+
+        private func beginPreparation(_ request: PreparationRequest) {
+            preparationTask = Task { @MainActor [weak self] in
+                let payload = await Task.detached(priority: .userInitiated) {
+                    WebTranscriptView.preparedPayload(input: request.input)
+                }.value
+                guard !Task.isCancelled,
+                      let self
+                else { return }
+                self.preparationTask = nil
+                let pending = self.pendingPreparation
+                self.pendingPreparation = nil
+                guard let webView = self.webView else {
+                    // The representable can be dismantled while encoding is
+                    // finishing. Leave the request eligible for the next
+                    // mounted WebView rather than marking it prepared forever.
+                    self.preparedIdentity = nil
+                    self.pendingPreparation = pending
+                    return
+                }
+                // A newer request may have replaced this one while it was
+                // encoding. The completed payload is still useful: dispatch
+                // it as the first usable frame, then drain the newest request
+                // behind it. Dropping every completed older payload made a
+                // sustained stream look blank until the provider went quiet.
+                self.send(
+                    payload,
+                    to: webView,
+                    diagnosticsEnabled: self.diagnosticsEnabled,
+                    onNearTop: self.onNearTop,
+                    onNeedsMoreHistory: self.onNeedsMoreHistory,
+                    onDiagnostics: self.onDiagnostics,
+                    onLifecycle: self.onLifecycle,
+                    onFrameFailed: self.onFrameFailed,
+                    onFrameRendered: self.onFrameRendered,
+                    forceRender: request.forceRender
+                )
+                if let pending {
+                    self.beginPreparation(pending)
+                }
+                return
+            }
         }
 
         func send(
@@ -1343,6 +1516,8 @@ struct WebTranscriptView: UIViewRepresentable {
             onNeedsMoreHistory: (() -> Void)?,
             onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?,
             onLifecycle: ((String) -> Void)?,
+            onFrameFailed: ((WebTranscriptRenderReceipt) -> Void)?,
+            onFrameRendered: ((WebTranscriptRenderReceipt) -> Void)?,
             forceRender: Bool = false
         ) {
             self.webView = webView
@@ -1351,12 +1526,14 @@ struct WebTranscriptView: UIViewRepresentable {
             self.onNeedsMoreHistory = onNeedsMoreHistory
             self.onDiagnostics = onDiagnostics
             self.onLifecycle = onLifecycle
+            self.onFrameFailed = onFrameFailed
+            self.onFrameRendered = onFrameRendered
             if forceRender {
                 lastPayload = nil
                 lastDuplicatePayload = nil
-            } else if payload.base64 == lastPayload
-                || payload.base64 == inFlightPayload?.base64
-                || payload.base64 == pendingPayload?.base64 {
+            } else if payloadMatchesRendered(payload)
+                || payloadMatches(payload, inFlightPayload)
+                || payloadMatches(payload, pendingPayload) {
                 emitDuplicateDiagnosticsOnce(
                     payload: payload,
                     diagnosticsEnabled: diagnosticsEnabled,
@@ -1390,6 +1567,32 @@ struct WebTranscriptView: UIViewRepresentable {
             )
         }
 
+        private func payloadMatches(
+            _ lhs: WebTranscriptPreparedPayload,
+            _ rhs: WebTranscriptPreparedPayload?
+        ) -> Bool {
+            guard let rhs else { return false }
+            return lhs.base64 == rhs.base64
+                && lhs.contentRevision == rhs.contentRevision
+                && lhs.transcriptReadThrough == rhs.transcriptReadThrough
+                && lhs.retryRevision == rhs.retryRevision
+        }
+
+        private func renderReceipt(for payload: WebTranscriptPreparedPayload) -> WebTranscriptRenderReceipt {
+            WebTranscriptRenderReceipt(
+                contentRevision: payload.contentRevision,
+                transcriptReadThrough: payload.transcriptReadThrough,
+                retryRevision: payload.retryRevision,
+                payloadFingerprint: payload.payloadFingerprint,
+                latestItemId: payload.latestItemId
+            )
+        }
+
+        private func payloadMatchesRendered(_ payload: WebTranscriptPreparedPayload) -> Bool {
+            payloadMatches(payload, lastRenderedPayload)
+                && payload.base64 == lastPayload
+        }
+
         private func flushPendingPayload(
             to webView: WKWebView,
             diagnosticsEnabled: Bool = WebTranscriptDiagnosticsFeature.isEnabled,
@@ -1398,7 +1601,7 @@ struct WebTranscriptView: UIViewRepresentable {
             guard inFlightPayload == nil else { return }
             guard let payload = pendingPayload else { return }
             pendingPayload = nil
-            guard payload.base64 != lastPayload else {
+            guard !payloadMatchesRendered(payload) else {
                 emitDuplicateDiagnosticsOnce(
                     payload: payload,
                     diagnosticsEnabled: diagnosticsEnabled,
@@ -1415,24 +1618,27 @@ struct WebTranscriptView: UIViewRepresentable {
                 : "snapshot"
             inFlightPayload = payload
             let renderStartedAt = Date()
+            let documentGeneration = self.documentGeneration
             if shouldStickToBottom && !userScrollInProgress {
                 suppressNearTopUntil = renderStartedAt.addingTimeInterval(0.75)
             }
             webView.evaluateJavaScript(
                 "window.renderTranscript('\(payload.base64)', \(stick ? "true" : "false"), \(sequence), '\(renderMode)');"
             ) { [weak self] value, error in
-                guard let self else { return }
+                guard let self,
+                      self.webView === webView,
+                      self.documentGeneration == documentGeneration
+                else { return }
                 let renderDurationMs = Int(Date().timeIntervalSince(renderStartedAt) * 1000)
                 let synchronousMetrics = value.flatMap(WebTranscriptJavaScriptMetrics.init)
+                let receipt = self.renderReceipt(for: payload)
                 if error == nil {
                     self.lastPayload = payload.base64
                     self.lastRenderedPayload = payload
                 } else {
                     self.jsFailureCount += 1
-                    // The payload is gone: it was never stored as rendered and
-                    // is no longer in flight. Forget the memo so the next update
-                    // prepares it again instead of treating it as delivered.
-                    self.preparedIdentity = nil
+                    // Keep the identity: Renderer Retry increments its retry
+                    // nonce and explicitly forces this same payload again.
                 }
                 if stick, self.shouldStickToBottom, !self.userScrollInProgress {
                     self.suppressNearTopUntil = Date().addingTimeInterval(0.75)
@@ -1445,6 +1651,7 @@ struct WebTranscriptView: UIViewRepresentable {
                 )
                 guard error == nil else {
                     Task { @MainActor in
+                        self.onFrameFailed?(receipt)
                         self.onLifecycle?("transcript_frame_failed")
                     }
                     self.emitDiagnostics(
@@ -1460,18 +1667,32 @@ struct WebTranscriptView: UIViewRepresentable {
                     return
                 }
                 webView.callAsyncJavaScript(
-                    "return await window.waitForTranscriptFrame(sequence);",
+                    """
+                    return await Promise.race([
+                        window.waitForTranscriptFrame(sequence),
+                        new Promise((_, reject) => setTimeout(
+                            () => reject(new Error("transcript frame acknowledgement timed out")),
+                            3000
+                        ))
+                    ]);
+                    """,
                     arguments: ["sequence": sequence],
                     in: nil,
                     in: .page
                 ) { [weak self] frameResult in
-                    guard let self else { return }
+                    guard let self,
+                          self.webView === webView,
+                          self.documentGeneration == documentGeneration
+                    else { return }
+                    let renderDurationMs = Int(Date().timeIntervalSince(renderStartedAt) * 1000)
+                    let receipt = self.renderReceipt(for: payload)
                     let frameMetrics: WebTranscriptJavaScriptMetrics?
                     switch frameResult {
                     case .success(let value):
                         frameMetrics = WebTranscriptJavaScriptMetrics(value)
                     case .failure(let error):
                         Task { @MainActor in
+                            self.onFrameFailed?(receipt)
                             self.onLifecycle?("transcript_frame_failed")
                         }
                         self.emitDiagnostics(
@@ -1487,6 +1708,7 @@ struct WebTranscriptView: UIViewRepresentable {
                         return
                     }
                     Task { @MainActor in
+                        self.onFrameRendered?(receipt)
                         self.onLifecycle?("transcript_frame_rendered")
                     }
                     self.emitDiagnostics(
@@ -1612,15 +1834,66 @@ private struct WebTranscriptJavaScriptMetrics {
     }
 }
 
-struct WebTranscriptPreparedPayload {
+struct WebTranscriptPreparedPayload: Sendable {
     let base64: String
     let payloadByteSize: Int
     let rowCount: Int
     let latestItemId: String?
     let payloadFingerprint: String
     let prepareDurationMs: Int
+    let contentRevision: UInt64
+    let transcriptReadThrough: String?
+    let retryRevision: UInt64
     let sourceRevision: Int?
     let sourceOperation: String?
+
+    init(
+        base64: String,
+        payloadByteSize: Int,
+        rowCount: Int,
+        latestItemId: String?,
+        payloadFingerprint: String,
+        prepareDurationMs: Int,
+        contentRevision: UInt64,
+        transcriptReadThrough: String?,
+        retryRevision: UInt64 = 0,
+        sourceRevision: Int?,
+        sourceOperation: String?
+    ) {
+        self.base64 = base64
+        self.payloadByteSize = payloadByteSize
+        self.rowCount = rowCount
+        self.latestItemId = latestItemId
+        self.payloadFingerprint = payloadFingerprint
+        self.prepareDurationMs = prepareDurationMs
+        self.contentRevision = contentRevision
+        self.transcriptReadThrough = transcriptReadThrough
+        self.retryRevision = retryRevision
+        self.sourceRevision = sourceRevision
+        self.sourceOperation = sourceOperation
+    }
+}
+
+struct WebTranscriptRenderReceipt: Equatable, Sendable {
+    let contentRevision: UInt64
+    let transcriptReadThrough: String?
+    let retryRevision: UInt64
+    let payloadFingerprint: String
+    let latestItemId: String?
+
+    init(
+        contentRevision: UInt64,
+        transcriptReadThrough: String?,
+        retryRevision: UInt64 = 0,
+        payloadFingerprint: String,
+        latestItemId: String?
+    ) {
+        self.contentRevision = contentRevision
+        self.transcriptReadThrough = transcriptReadThrough
+        self.retryRevision = retryRevision
+        self.payloadFingerprint = payloadFingerprint
+        self.latestItemId = latestItemId
+    }
 }
 
 @MainActor
@@ -1639,17 +1912,38 @@ enum WebTranscriptWebViewPool {
         guard warmedWebView == nil else { return }
         let startedAt = Date()
         logger.info("webkit prewarm requested")
-        let delegate = WebTranscriptSpareDelegate(allowsDocumentLoad: true, onLoaded: {
-            // `documentLoaded` is published synchronously by the delegate;
-            // this callback is logging only and must not gate adoption.
-            logger.info("webkit prewarm loaded")
-        })
         let webView = configuredWebView()
+        let delegate = WebTranscriptSpareDelegate(
+            allowsDocumentLoad: true,
+            onLoaded: {
+                // `documentLoaded` is published synchronously by the delegate;
+                // this callback is logging only and must not gate adoption.
+                logger.info("webkit prewarm loaded")
+            },
+            onFailed: { [weak webView] in
+                Task { @MainActor in
+                    guard let webView, warmedWebView === webView else { return }
+                    webView.prepareForTranscriptReuse()
+                    webView.navigationDelegate = nil
+                    warmedWebView = nil
+                    spareDelegate = nil
+                    logger.info("webkit prewarm evicted after navigation failure")
+                }
+            }
+        )
         spareDelegate = delegate
         webView.navigationDelegate = delegate
         webView.loadHTMLString(WebTranscriptView.documentHTML, baseURL: nil)
         warmedWebView = webView
         logger.info("webkit prewarm started sync_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
+    }
+    static func discardWarmSpare() {
+        guard let webView = warmedWebView else { return }
+        webView.prepareForTranscriptReuse()
+        webView.navigationDelegate = nil
+        warmedWebView = nil
+        spareDelegate = nil
+        logger.info("webkit prewarm discarded for memory pressure")
     }
 
     static func takeOrCreate() -> PooledWebView {
@@ -1686,18 +1980,20 @@ enum WebTranscriptWebViewPool {
         let delegate = WebTranscriptSpareDelegate(
             allowsDocumentLoad: !documentIsLoaded,
             documentLoaded: documentIsLoaded,
-            onLoaded: documentIsLoaded ? nil : {
+            onLoaded: documentIsLoaded ? nil : { [weak webView] in
                 Task { @MainActor in
-                    guard warmedWebView === webView else { return }
+                    guard let webView, warmedWebView === webView else { return }
                     logger.info("webkit recycled load completed id=\(webView.transcriptInstanceID, privacy: .public)")
                 }
             },
-            onFailed: documentIsLoaded ? nil : {
+            onFailed: { [weak webView] in
                 Task { @MainActor in
-                    guard warmedWebView === webView else { return }
+                    guard let webView, warmedWebView === webView else { return }
+                    webView.prepareForTranscriptReuse()
+                    webView.navigationDelegate = nil
                     warmedWebView = nil
                     spareDelegate = nil
-                    logger.error("webkit recycled load failed id=\(webView.transcriptInstanceID, privacy: .public)")
+                    logger.error("webkit recycled spare evicted after load failure id=\(webView.transcriptInstanceID, privacy: .public)")
                 }
             }
         )
@@ -1765,6 +2061,9 @@ private final class WebTranscriptSpareDelegate: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        onFailed?()
+    }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         onFailed?()
     }
 }
@@ -2479,7 +2778,7 @@ private extension WebTranscriptView {
 
     window.waitForTranscriptFrame = async function(sequence) {
       const frame = transcriptFrames.get(sequence);
-      if (!frame) return {};
+      if (!frame) throw new Error(`missing transcript frame ${sequence}`);
       const metrics = await frame;
       transcriptFrames.delete(sequence);
       return metrics;

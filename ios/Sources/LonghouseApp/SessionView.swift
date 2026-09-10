@@ -72,7 +72,10 @@ struct SessionView: View {
             bottomChrome
                 .frame(maxWidth: .infinity)
         }
-        .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
+        // The principal toolbar item is the only title surface. An empty
+        // navigation title avoids UIKit briefly laying out a second, fully
+        // sized title during a NavigationStack push.
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -90,11 +93,9 @@ struct SessionView: View {
             }
         }
         .task(id: sessionId) {
-            // Build exactly one spare while the primary metadata/tail lanes
-            // run. When the transcript mounts it adopts this WebView; waiting
-            // until start() returns can create a real WebView and then an
-            // unused spare during the first-paint window.
-            WebTranscriptWebViewPool.prewarm()
+            // The timeline owns the warm spare. A session route must issue its
+            // primary request immediately; constructing WebKit here would
+            // consume the same main-actor slice before the first network byte.
             await viewModel.start(sessionId: sessionId, appState: appState)
             await viewModel.acknowledgeUnreadIfNeeded(
                 sessionId: sessionId,
@@ -242,16 +243,18 @@ struct SessionView: View {
                 }
                 .disabled(liveActivityManager.isBusy)
                 Divider()
-                Button {
-                    UIPasteboard.general.url = sessionWebURL
-                } label: {
-                    Label("Copy Link", systemImage: "link")
-                }
-                Button {
-                    if let url = sessionWebURL { openURL(url) }
-                } label: {
-                    Label("Open on Web", systemImage: "safari")
-                }
+            }
+            // These actions only need the route identity, so they remain
+            // useful while compact metadata and transcript rows are loading.
+            Button {
+                UIPasteboard.general.url = sessionWebURL
+            } label: {
+                Label("Copy Link", systemImage: "link")
+            }
+            Button {
+                if let url = sessionWebURL { openURL(url) }
+            } label: {
+                Label("Open on Web", systemImage: "safari")
             }
         } label: {
             if liveActivityManager.isBusy {
@@ -261,16 +264,8 @@ struct SessionView: View {
                     .labelStyle(.iconOnly)
             }
         }
-        .disabled(viewModel.detail == nil)
-        .opacity(viewModel.detail == nil ? 0.55 : 1)
-        .accessibilityLabel(
-            viewModel.detail == nil
-                ? "Session actions unavailable until session metadata is ready"
-                : "Session actions"
-        )
-        .accessibilityIdentifier(
-            viewModel.detail == nil ? "session-navigation-loading" : "session-overflow-menu"
-        )
+        .accessibilityLabel("Session actions")
+        .accessibilityIdentifier("session-overflow-menu")
     }
 
     private var sessionWebURL: URL? {
@@ -342,6 +337,7 @@ struct SessionView: View {
                     submittedInputs: viewModel.submittedInputs,
                     errorMessage: viewModel.errorMessage,
                     contentRevision: viewModel.transcriptRevision,
+                    transcriptReadThrough: viewModel.transcriptReadThrough,
                     retryRevision: viewModel.transcriptRenderRetryRevision,
                     sourceRevision: viewModel.benchmarkSourceRevision,
                     sourceOperation: viewModel.benchmarkSourceOperation,
@@ -364,22 +360,34 @@ struct SessionView: View {
                     onLifecycle: { stage in
                         viewModel.recordTranscriptLifecycle(stage)
                     },
-                    onOpenSubagent: onOpenSubagent
+                    onOpenSubagent: onOpenSubagent,
+                    onFrameFailed: { receipt in
+                        viewModel.recordTranscriptFrameFailed(receipt)
+                    },
+                    onFrameRendered: { receipt in
+                        viewModel.recordTranscriptFrameRendered(receipt)
+                    }
                 )
-                .accessibilityIdentifier("session-chat-transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Keep stale WebKit DOM out of VoiceOver and hit testing until
+                // its current document has acknowledged a frame. The native
+                // overlay is the honest loading/retry surface during this gap.
+                .accessibilityHidden(!viewModel.isTranscriptFrameReady)
+                .allowsHitTesting(viewModel.isTranscriptFrameReady)
+                .accessibilityIdentifier("session-chat-transcript")
             }
 
             TranscriptStateOverlay(
                 state: state,
                 onRetry: {
-                    // A REST refresh failure should not hide a transcript
-                    // that is already rendered. Only a renderer failure needs
-                    // to reset WebKit's frame-ready gate.
+                    // Renderer recovery is independent from REST refresh.
+                    // The transcript stays mounted behind this surface, so
+                    // retrying a frame must not wait on a second network call.
                     if viewModel.transcriptRendererErrorMessage != nil {
                         viewModel.prepareTranscriptRetry()
+                    } else {
+                        Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
                     }
-                    Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
                 }
             )
         }
@@ -686,7 +694,8 @@ struct SessionNavigationHeader: View {
                     .truncationMode(.tail)
             }
         }
-        .frame(maxWidth: 240)
+        .frame(maxWidth: 200)
+        .clipped()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             subtitle.map { "\(title), \($0)" } ?? title

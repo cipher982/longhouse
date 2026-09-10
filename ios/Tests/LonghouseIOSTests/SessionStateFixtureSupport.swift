@@ -23,6 +23,8 @@ func makeSessionStateFacts(
     unread: Bool = false,
     lastResultAt: String? = nil,
     lastResultOutcome: String? = nil,
+    transcriptConvergence: String = "current",
+    commitSeq: Int? = nil,
     activityValidUntil: String? = nil
 ) -> SessionStateFacts {
     let available = SessionStateAction(state: "available", reason: nil)
@@ -76,7 +78,7 @@ func makeSessionStateFacts(
         // resume can also branch unless a test says otherwise.
         branch: (branchAvailable ?? resumeAvailable) ? available : unavailable,
         pendingInteractionKind: pendingInteractionKind,
-        transcriptConvergence: "current",
+        transcriptConvergence: transcriptConvergence,
         primary: primary,
         // The server drops the access label entirely for an ended Helm run:
         // access and continuation are separate axes.
@@ -87,7 +89,7 @@ func makeSessionStateFacts(
             observedAt: nil
         ),
         transcript: nil,
-        commitSeq: nil
+        commitSeq: commitSeq
     )
 }
 

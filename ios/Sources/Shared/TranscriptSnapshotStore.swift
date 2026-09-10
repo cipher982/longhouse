@@ -182,7 +182,13 @@ struct TranscriptSnapshotStore: Sendable {
     /// oversized payloads are dropped rather than stored.
     func save(serverURL: String, sessionId: String, snapshot: TranscriptSnapshot) {
         let key = TranscriptSnapshot.cacheKey(serverURL: serverURL, sessionId: sessionId)
-        let generation = memory.store(snapshot, forKey: key, now: snapshot.savedAt)
+        let expectedGeneration = memory.invalidationGeneration()
+        guard let generation = memory.store(
+            snapshot,
+            forKey: key,
+            now: snapshot.savedAt,
+            expectedGeneration: expectedGeneration
+        ) else { return }
         let stored = StoredSnapshot(
             schemaVersion: Self.schemaVersion,
             serverURL: TranscriptSnapshot.normalizedServerURL(serverURL),
@@ -296,9 +302,17 @@ struct TranscriptSnapshotStore: Sendable {
         }
 
         @discardableResult
-        func store(_ snapshot: TranscriptSnapshot, forKey key: String, now: Date) -> UInt64 {
+        func store(
+            _ snapshot: TranscriptSnapshot,
+            forKey key: String,
+            now: Date,
+            expectedGeneration: UInt64? = nil
+        ) -> UInt64? {
             lock.lock()
             defer { lock.unlock() }
+            guard expectedGeneration == nil || expectedGeneration == invalidationVersion else {
+                return nil
+            }
             guard maxBytes > 0 else { return invalidationVersion }
             let estimatedBytes = snapshot.estimatedBytes
             remove(key)

@@ -11,6 +11,9 @@ struct TranscriptSnapshot: Codable, Sendable {
     var loadedProjectionItemCount: Int
     var totalProjectionItemCount: Int
     var tailSnapshotEventId: String?
+    /// Result watermark belonging to the transcript rows in this snapshot.
+    /// Do not derive it from newer navigation metadata on restore.
+    var transcriptReadThrough: String?
     /// Storage-v2 cursor for the page older than this tail. Without it a
     /// restored session's first older-page fetch goes out cursor-less and
     /// gets the latest window again. Optional so older caches still decode.
@@ -23,6 +26,20 @@ struct TranscriptSnapshot: Codable, Sendable {
     var workspaceRevisionFingerprint: String?
     var savedAt: Date
 
+    private enum CodingKeys: String, CodingKey {
+        case detail
+        case events
+        case projectionItems
+        case loadedProjectionItemCount
+        case totalProjectionItemCount
+        case tailSnapshotEventId
+        case transcriptReadThrough
+        case tailNextCursor
+        case lastPubsubSeq
+        case workspaceRevisionFingerprint
+        case savedAt
+    }
+
     init(
         detail: SessionDetail,
         events: [SessionEvent],
@@ -30,6 +47,7 @@ struct TranscriptSnapshot: Codable, Sendable {
         loadedProjectionItemCount: Int,
         totalProjectionItemCount: Int,
         tailSnapshotEventId: String?,
+        transcriptReadThrough: String? = nil,
         tailNextCursor: String? = nil,
         lastPubsubSeq: Int? = nil,
         workspaceRevisionFingerprint: String? = nil,
@@ -41,6 +59,7 @@ struct TranscriptSnapshot: Codable, Sendable {
         self.loadedProjectionItemCount = loadedProjectionItemCount
         self.totalProjectionItemCount = totalProjectionItemCount
         self.tailSnapshotEventId = tailSnapshotEventId
+        self.transcriptReadThrough = transcriptReadThrough
         self.tailNextCursor = tailNextCursor
         self.lastPubsubSeq = lastPubsubSeq
         self.workspaceRevisionFingerprint = workspaceRevisionFingerprint

@@ -318,10 +318,15 @@ private struct SessionScreenPreview: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 10)
             }
-            .navigationTitle(detail.displayTitle)
+            .navigationTitle("Session")
             .navigationBarTitleDisplayMode(.inline)
-            .modifier(PreviewSubtitle(subtitle: detail.identitySubtitle))
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    SessionNavigationHeader(
+                        title: detail.displayTitle,
+                        subtitle: detail.identitySubtitle
+                    )
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {} label: { Label("Lock Screen Updates", systemImage: "bell") }
@@ -816,7 +821,7 @@ private struct PreviewConnectionDrop: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 10)
         }
-        .navigationTitle("Meeting prep research")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {

@@ -16,6 +16,7 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
         static let diagnostics = "LONGHOUSE_WEBKIT_TRANSCRIPT_DIAGNOSTICS"
         static let probePath = "LONGHOUSE_UI_TEST_CHAT_PROBE_PATH"
+        static let mobileDetailDelayMs = "LONGHOUSE_UI_TEST_MOBILE_DETAIL_DELAY_MS"
         static let mobileTailDelayMs = "LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"
     }
 
@@ -108,20 +109,28 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         app.launchEnvironment[LaunchEnvironment.timelineOpenFixture] = "1"
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = "120"
         app.launchEnvironment[LaunchEnvironment.mobileTailDelayMs] = "30000"
+        app.launchEnvironment[LaunchEnvironment.mobileDetailDelayMs] = "1500"
         app.launchArguments += [LaunchArgument.appearanceOverride, "dark"]
         app.launch()
 
         let row = app.descendants(matching: .any)["timeline-open-session-1"]
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         row.tap()
+        let transitionScreenshot = XCTAttachment(screenshot: app.screenshot())
+        transitionScreenshot.name = "timeline-push-transition"
+        transitionScreenshot.lifetime = .keepAlways
+        add(transitionScreenshot)
 
         let title = app.descendants(matching: .any)["session-navigation-title"]
-        let loadingActions = app.descendants(matching: .any)["session-navigation-loading"].firstMatch
-        let loadingDock = app.descendants(matching: .any)["session-loading-dock"]
+        let actions = app.buttons["Session actions"]
+        let loadingTranscript = app.descendants(matching: .any)["session-transcript-loading"]
+        let primaryChrome = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
         XCTAssertTrue(title.waitForExistence(timeout: 8))
-        XCTAssertTrue(loadingActions.waitForExistence(timeout: 8))
-        XCTAssertTrue(loadingDock.waitForExistence(timeout: 8))
-        XCTAssertLessThan(title.frame.maxX, loadingActions.frame.minX)
+        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        XCTAssertTrue(loadingTranscript.waitForExistence(timeout: 8))
+        XCTAssertTrue(primaryChrome.waitForExistence(timeout: 8))
+        XCTAssertLessThanOrEqual(title.frame.width, 220)
+        XCTAssertLessThan(title.frame.maxX, actions.frame.minX)
 
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "timeline-push-loading-chrome"

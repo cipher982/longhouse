@@ -1247,34 +1247,24 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     func replacingTranscriptPreview(_ transcriptPreview: SessionTranscriptPreview?) -> SessionDetail {
-        SessionDetail(
-            id: id,
-            title: title,
-            provider: provider,
-            project: project,
-            cwd: cwd,
-            gitBranch: gitBranch,
-            summary: summary,
-            summaryTitle: summaryTitle,
-            presenceState: presenceState,
-            presenceTool: presenceTool,
-            userState: userState,
-            status: status,
-            lastActivityAt: lastActivityAt,
-            displayPhase: displayPhase,
-            activeTool: activeTool,
-            homeLabel: homeLabel,
-            originLabel: originLabel,
-            capabilities: capabilities,
-            runtimeDisplay: runtimeDisplay,
-            stateFacts: DefaultUnknownSessionStateFacts(wrappedValue: stateFacts),
-            transcriptPreview: transcriptPreview,
-            deviceId: deviceId,
-            inputReceipts: inputReceipts,
-            lastTurn: lastTurn,
-            recap: recap,
-            usageLatest: usageLatest
-        )
+        var copy = self
+        copy.transcriptPreview = transcriptPreview
+        return copy
+    }
+
+    /// Detail and tail endpoints share the session identity but may carry
+    /// different optional enrichments. A newer response can update state
+    /// without proving that an absent optional field means "delete" — retain
+    /// the already accepted enrichment in that case.
+    func preservingOptionalEnrichment(from previous: SessionDetail) -> SessionDetail {
+        var copy = self
+        copy.transcriptPreview = transcriptPreview ?? previous.transcriptPreview
+        copy.deviceId = deviceId ?? previous.deviceId
+        copy.inputReceipts = inputReceipts ?? previous.inputReceipts
+        copy.lastTurn = lastTurn ?? previous.lastTurn
+        copy.recap = recap ?? previous.recap
+        copy.usageLatest = usageLatest ?? previous.usageLatest
+        return copy
     }
 
     var withoutTranscriptPreview: SessionDetail {

@@ -18,6 +18,19 @@ struct TranscriptDisplayStateTests {
     }
 
     @Test
+    func optimisticContentWinsWhileInitialTailIsStillLoading() {
+        let state = TranscriptDisplayState.derive(
+            isInitialLoading: true,
+            hasContent: true,
+            errorMessage: nil,
+            refreshErrorMessage: nil,
+            rendererReady: false
+        )
+        #expect(state == .restoring)
+        #expect(state.showsTranscript == true)
+    }
+
+    @Test
     func contentWithHealthyRefreshIsContent() {
         let state = TranscriptDisplayState.derive(
             isInitialLoading: false,
