@@ -1559,6 +1559,10 @@ final class SessionViewModel: ObservableObject {
                 return false
             }
             scheduleRealtimeRefreshRetry(api: api, sessionId: sessionId)
+            // The failure owns the next attempt. Reporting the join here would
+            // force one alongside that retry, which is the double-count this
+            // rule exists to avoid.
+            return false
         }
         return joinedExistingTail
     }
