@@ -50,6 +50,8 @@ def _receipts(provider: str = "claude") -> tuple[dict, dict, dict, dict]:
         "provider_process_dead": True,
         "process_group_dead": True,
         "orphan_count": 0,
+        "process_stop_verified": True,
+        "source_retention_verified": True,
     }
     return dispatch, binding, interrupt, cleanup
 
@@ -63,6 +65,7 @@ def test_registration_covers_each_launch_provider_with_least_authority_credentia
     assert registration["provider_artifact_required"] is True
     assert registration["producer_revision"] == 12
     assert registration["credential_binding_ids"] == []
+    assert "console_continuation_receipt" in registration["required_artifacts"]
     for provider in lifecycle.PROVIDERS:
         assert registration["credential_binding_ids_by_provider"][provider] == [
             f"{provider}_provider_token",
@@ -143,6 +146,7 @@ def test_console_oracle_accepts_complete_independent_receipts():
         (1, "assistant_event_count", 2),
         (2, "status", "fail"),
         (3, "orphan_count", 1),
+        (3, "process_stop_verified", False),
     ],
 )
 def test_console_oracle_fails_closed_on_missing_binding_or_cleanup(receipt_index: int, field: str, value: object):
@@ -453,3 +457,91 @@ def test_archive_convergence_rejects_duplicate_markers_within_one_reply(monkeypa
 
     with pytest.raises(RuntimeError, match="exactly one occurrence"):
         lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
+
+
+@pytest.mark.parametrize("projected_id", ["longhouse-event-9", "pi-message-42"])
+def test_pi_continuation_linkage_accepts_native_projection_identity_relationships(tmp_path, projected_id):
+    marker = "PI_RESUME_MARKER"
+    native = tmp_path / "pi-session.jsonl"
+    native.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session", "id": "pi-session"}),
+                json.dumps(
+                    {
+                        "type": "message",
+                        "id": "pi-message-42",
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    native_evidence = lifecycle._pi_native_marker_evidence(native, marker)
+    linkage = lifecycle._pi_continuation_linkage(
+        native_evidence,
+        projected_id,
+        projected_marker_count=1,
+        same_session=True,
+        same_thread=True,
+        native_provider_thread_id="pi-session",
+        projected_provider_thread_id="pi-session",
+    )
+
+    assert native_evidence["native_message_id"] == "pi-message-42"
+    assert linkage["native_message_id_present"] is True
+    assert linkage["projected_assistant_event_id_present"] is True
+    assert linkage["native_and_projected_ids_bound"] is True
+    assert linkage["proven"] is True
+
+def test_pi_native_marker_evidence_stops_at_the_pre_interrupt_boundary(tmp_path):
+    marker = "PI_RESUME_MARKER"
+    native = tmp_path / "pi-session.jsonl"
+    native.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session", "id": "pi-session"}),
+                json.dumps({"type": "message", "id": "resume-before-interrupt", "message": {"role": "assistant", "content": marker}}),
+                json.dumps({"type": "message", "id": "post-interrupt", "message": {"role": "assistant", "content": marker}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    lines = native.read_bytes().splitlines(keepends=True)
+    boundary = len(lines[0]) + len(lines[1])
+
+    evidence = lifecycle._pi_native_marker_evidence(native, marker, maximum_source_offset=boundary)
+
+    assert evidence is not None
+    assert evidence["native_message_id"] == "resume-before-interrupt"
+
+
+def test_console_cleanup_cannot_pass_on_a_failure_path(monkeypatch):
+    monkeypatch.setattr(lifecycle, "_pid_dead", lambda _pid: True)
+    monkeypatch.setattr(lifecycle, "_process_group_dead", lambda _pgid: True)
+    claims = [{"pid": 1, "process_group_id": 1, "state": "terminal"}]
+    shipper = {"stopped": True, "process_dead": True, "process_group_dead": True}
+    inventory = {"retired": True, "active_run_count": 0}
+
+    passed = lifecycle._console_cleanup_receipt(
+        claims,
+        [{"retained": True, "path": "source.raw"}],
+        process_stop_wait_completed=True,
+        shipper_stop=shipper,
+        served_run_inventory=inventory,
+    )
+    failed = lifecycle._console_cleanup_receipt(
+        claims,
+        [{"retained": True, "path": "source.raw"}],
+        process_stop_wait_completed=True,
+        shipper_stop=shipper,
+        served_run_inventory=inventory,
+        run_failed=True,
+    )
+
+    assert passed["status"] == "pass"
+    assert failed["status"] == "fail"

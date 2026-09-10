@@ -1,0 +1,10 @@
+{"type":"title","v":1,"title":"Initial OMP title","source":"auto","updatedAt":"2026-09-09T00:00:00.000Z","pad":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+{"type":"session","version":3,"id":"omp-native-18-1-14","timestamp":"2026-09-09T00:00:00.000Z","cwd":"/tmp/omp","parentSession":"omp-parent-opaque"}
+{"type":"session_init","id":"omp-init-01","parentId":"omp-native-18-1-14","timestamp":"2026-09-09T00:00:00.100Z","role":"assistant"}
+{"type":"message","id":"omp-user-01","parentId":null,"timestamp":"2026-09-09T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"inspect the OMP source"}]}}
+{"type":"message","id":"omp-assistant-01","parentId":"omp-user-01","timestamp":"2026-09-09T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Read the native record"},{"type":"text","text":"I will inspect it"},{"type":"toolCall","id":"omp-call-01","name":"read","arguments":{"path":"/tmp/a.txt"}}],"provider":"openai","model":"gpt-5.2","usage":{"input":10,"output":4,"cacheRead":1,"cacheWrite":0,"totalTokens":15},"stopReason":"toolUse"}}
+{"type":"message","id":"omp-tool-01","parentId":"omp-assistant-01","timestamp":"2026-09-09T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"omp-call-01","toolName":"read","content":[{"type":"text","text":"file contents"}],"isError":false}}
+{"type":"title_change","id":"omp-title-01","parentId":"omp-tool-01","timestamp":"2026-09-09T00:00:04.000Z","title":"Updated OMP title"}
+{"type":"model_change","id":"omp-model-01","parentId":"omp-title-01","timestamp":"2026-09-09T00:00:04.500Z","role":"assistant","model":"gpt-5.2"}
+{"type":"reset_boundary","id":"omp-reset-01","parentId":"omp-model-01","timestamp":"2026-09-09T00:00:05.000Z","reason":"compaction"}
+{"type":"unknown_future_record","id":"omp-unknown-01","parentId":"omp-reset-01","timestamp":"2026-09-09T00:00:06.000Z","opaque":{"keep":"raw"}}

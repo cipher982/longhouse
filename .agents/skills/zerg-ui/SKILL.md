@@ -40,12 +40,18 @@ check finishes; a later build, review, or release is not a reason to keep QA ope
   globally when other windows or sessions may belong to David or another agent.
 - Close owned browser tabs and stop owned Runtime Hosts, engines, relays,
   log followers, and web servers. Do not use `make stop` against a shared stack.
+- Provider verification must use an isolated `HOME`/profile and disposable
+  session directory (or `--no-session`); remove any native session/archive
+  created by the check, not merely the app or simulator.
 - Remove disposable profiles, credentials, caches, and scratch build trees once
   no longer needed. Keep the selected screenshots and proof receipts, not the
   environment that produced them.
 
 Before handoff, verify no owned QA window, device, listener, or process remains.
 Retaining a running environment requires an explicit request from David.
+Every command that can outlive the shell is an owned resource. Record its PID/process group and launch command before starting it; run it under a cleanup trap or the repo's process supervisor, never as an untracked background child. This includes `make test-ios`, `xcodebuild`, `simlab`, `sim-deploy`, `sim-shot`, log followers, and local servers.
+
+If a check is interrupted, inspect and clean its exact process group before doing anything else. Do not start a replacement run while an older `xcodebuild` or app is still alive. At the end, check the exact owned process names/PIDs and `xcrun simctl list devices`; a green test is not a clean handoff. Stop the test process, app, and owned simulator/window in the same teardown path. Never leave an iOS verification window open for a later reviewer unless David explicitly asked to retain it.
 
 ## iOS
 

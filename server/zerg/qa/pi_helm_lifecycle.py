@@ -57,9 +57,9 @@ _VARIANTS = tuple(execution_variant_key(provider="pi", assertion_id=item, scenar
 
 REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -365,6 +365,19 @@ def _native_file_identity(path: Path) -> dict[str, Any]:
     }
 
 
+def _native_model(native: dict[str, Any]) -> str | None:
+    invocation_rows = native.get("invocation_rows") if isinstance(native.get("invocation_rows"), list) else []
+    for row in reversed(invocation_rows):
+        message = row.get("message") if isinstance(row, dict) else None
+        if isinstance(message, dict) and isinstance(message.get("model"), str) and message["model"].strip():
+            return message["model"].strip()
+        if isinstance(row, dict) and isinstance(row.get("model"), str) and row["model"].strip():
+            return row["model"].strip()
+    metadata = native.get("metadata") if isinstance(native.get("metadata"), dict) else {}
+    model = metadata.get("model")
+    return model.strip() if isinstance(model, str) and model.strip() else None
+
+
 def _native_receipt(
     native: dict[str, Any],
     *,
@@ -380,10 +393,16 @@ def _native_receipt(
         "provider": "pi",
         "provider_session_id": metadata.get("provider_session_id"),
         "native_header_provider_session_id": metadata.get("provider_session_id"),
+        "native_model": _native_model(native),
         "native_file": _native_file_identity(session_file),
         "row_count": native.get("rows"),
         "invocation_row_count": len(invocation_rows),
         "assistant_marker_rows": native.get("assistant_marker_rows"),
+        "user_marker_rows": native.get("user_marker_rows"),
+        "user_marker_occurrences": native.get("user_marker_occurrences"),
+        "follow_up_delivered": native.get("user_marker_rows") == 1,
+        "minimum_source_offset": native.get("minimum_source_offset", 0),
+        "source_end_offset": native.get("source_end_offset"),
         "taxonomy_source": taxonomy.get("source"),
     }
     if marker is not None:
@@ -426,6 +445,17 @@ def _control_receipt(
     return receipt
 
 
+def _nested_runtime_receipt(receipt: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    """Keep runtime binding evidence below the runtime receipt boundary."""
+    runtime = receipt.get("runtime") if isinstance(receipt.get("runtime"), dict) else {}
+    runtime = dict(runtime)
+    binding = runtime.get("binding") if isinstance(runtime.get("binding"), dict) else None
+    if binding is None:
+        binding = fallback or (receipt.get("binding") if isinstance(receipt.get("binding"), dict) else {})
+    runtime["binding"] = dict(binding)
+    return runtime
+
+
 def _write_scenario_receipts(root: Path, args: argparse.Namespace, observations: dict[str, Any], secrets: list[str]) -> None:
     provider_binary = {
         "schema_version": 1,
@@ -437,6 +467,14 @@ def _write_scenario_receipts(root: Path, args: argparse.Namespace, observations:
     }
     control_receipts = observations["control_receipts"]
     control_complete = all(receipt.get("accepted") is True for receipt in control_receipts.values())
+    reload_rebind = dict(observations["reload_rebind_receipt"])
+    reload_rebind["runtime"] = _nested_runtime_receipt(reload_rebind, observations.get("reload_binding") or {})
+    session_replacement = dict(observations["session_replacement_receipt"])
+    session_replacement["runtime"] = _nested_runtime_receipt(
+        session_replacement,
+        observations.get("replacement_binding") or {},
+    )
+    session_replacement.pop("binding", None)
     receipts: dict[str, dict[str, Any]] = {
         "provider-binary-receipt.json": provider_binary,
         "helm-registration-receipt.json": {
@@ -466,12 +504,12 @@ def _write_scenario_receipts(root: Path, args: argparse.Namespace, observations:
         "reload-rebind-receipt.json": {
             "schema_version": 1,
             "artifact_kind": "pi_helm_reload_rebind_receipt",
-            **observations["reload_rebind_receipt"],
+            **reload_rebind,
         },
         "session-replacement-receipt.json": {
             "schema_version": 1,
             "artifact_kind": "pi_helm_session_replacement_receipt",
-            **observations["session_replacement_receipt"],
+            **session_replacement,
         },
         "cold-resume-receipt.json": {
             "schema_version": 1,
@@ -595,13 +633,18 @@ def _wait_native_marker(
             return None
         invocation_rows = [row for row in rows if int(row.get("source_offset") or 0) >= minimum_source_offset]
         assistant = [row for row in invocation_rows if row.get("role") == "assistant" and marker in str(row.get("text") or "")]
+        user = [row for row in invocation_rows if row.get("role") == "user" and marker in str(row.get("text") or "")]
         return (
             {
                 "rows": len(rows),
                 "invocation_rows": invocation_rows,
+                "minimum_source_offset": minimum_source_offset,
+                "source_end_offset": metadata.get("source_end_offset"),
                 "metadata": metadata,
                 "taxonomy": taxonomy,
                 "assistant_marker_rows": len(assistant),
+                "user_marker_rows": len(user),
+                "user_marker_occurrences": sum(str(row.get("text") or "").count(marker) for row in user),
             }
             if assistant
             else None
@@ -689,7 +732,13 @@ def _wait_native_abort(
             message = row.get("message") if isinstance(row.get("message"), dict) else {}
             stop_reason = str(message.get("stop_reason") or "").strip().lower()
             if row.get("type") == "assistant" and stop_reason in {"aborted", "cancelled", "canceled"}:
-                return {"row": row, "metadata": metadata, "taxonomy": taxonomy}
+                return {
+                    "row": row,
+                    "rows": rows,
+                    "metadata": metadata,
+                    "taxonomy": taxonomy,
+                    "source_end_offset": metadata.get("source_end_offset"),
+                }
         return None
 
     return _wait(observe, timeout=timeout, description="native Pi aborted message")
@@ -851,7 +900,9 @@ def _retain_source(root: Path, source: Path, name: str, secrets: list[str]) -> d
         return {"source": str(source), "retained": False, "error": f"{type(exc).__name__}: {exc}"}
     for secret in secrets:
         if secret:
-            content = content.replace(secret.encode(), b"<redacted>")
+            secret_bytes = secret.encode()
+            replacement = (b"<redacted>" * ((len(secret_bytes) + 9) // 10))[: len(secret_bytes)]
+            content = content.replace(secret_bytes, replacement)
     max_bytes = 16 * 1024 * 1024
     truncated = len(content) > max_bytes
     if truncated:
@@ -860,7 +911,7 @@ def _retain_source(root: Path, source: Path, name: str, secrets: list[str]) -> d
     target.write_bytes(content)
     return {
         "source": str(source),
-        "path": str(target),
+        "path": target.relative_to(root).as_posix(),
         "retained": True,
         "truncated": truncated,
         "bytes": len(content),
@@ -881,24 +932,111 @@ def _redact_value(value: object, secrets: list[str]) -> object:
 
 
 def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]:
+    controls = observation.get("control_receipts") if isinstance(observation.get("control_receipts"), dict) else {}
+    follow_receipt = controls.get("follow_up") if isinstance(controls.get("follow_up"), dict) else {}
+    follow_native = follow_receipt.get("native") if isinstance(follow_receipt.get("native"), dict) else {}
+    follow_command = follow_receipt.get("command") if isinstance(follow_receipt.get("command"), dict) else {}
+    follow_submission = follow_receipt.get("runtime") if isinstance(follow_receipt.get("runtime"), dict) else {}
+    steer_receipt = controls.get("steer") if isinstance(controls.get("steer"), dict) else {}
+    steer_native = steer_receipt.get("native") if isinstance(steer_receipt.get("native"), dict) else {}
+    steer_runtime = steer_receipt.get("runtime") if isinstance(steer_receipt.get("runtime"), dict) else {}
+    steer_active_state = steer_runtime.get("active_state") if isinstance(steer_runtime.get("active_state"), dict) else {}
+    abort_receipt = controls.get("abort") if isinstance(controls.get("abort"), dict) else {}
+    abort_native = abort_receipt.get("native") if isinstance(abort_receipt.get("native"), dict) else {}
+    follow_marker = follow_native.get("marker")
+    context_evidence = (
+        (observation.get("cold_resume_receipt") or {}).get("context_evidence")
+        if isinstance(observation.get("cold_resume_receipt"), dict)
+        else None
+    )
+    context_evidence = context_evidence if isinstance(context_evidence, dict) else {}
+    context_phrase = context_evidence.get("phrase")
+    context_pre = context_evidence.get("pre_termination") if isinstance(context_evidence.get("pre_termination"), dict) else {}
+    context_native = context_evidence.get("post_resume_native") if isinstance(context_evidence.get("post_resume_native"), dict) else {}
+    context_runtime = context_evidence.get("post_resume_runtime") if isinstance(context_evidence.get("post_resume_runtime"), dict) else {}
+    context_binding = context_runtime.get("binding") if isinstance(context_runtime.get("binding"), dict) else {}
+    cleanup = observation.get("cleanup") if isinstance(observation.get("cleanup"), dict) else {}
+    cleanup_ok = (
+        cleanup.get("status") == "pass"
+        and cleanup.get("provider_process_dead") is True
+        and cleanup.get("process_group_dead") is True
+        and cleanup.get("orphan_count") == 0
+        and cleanup.get("shipper_stop_verified") is True
+        and cleanup.get("scratch_removed") is True
+        and cleanup.get("cleanup_errors", []) == []
+    )
     return {
         "pi_helm_launch_registration": observation.get("launch_registration") is True,
         "pi_helm_native_tool_taxonomy": observation.get("native_tool_taxonomy") is True,
         "pi_helm_send_idle": observation.get("send_idle") is True,
-        "pi_helm_steer_active": observation.get("steer_active") is True,
-        "pi_helm_follow_up_native": observation.get("follow_up_native") is True,
-        "pi_helm_abort_native": observation.get("abort_native") is True,
-        "pi_helm_terminate_owned": observation.get("terminate_owned") is True,
+        "pi_helm_steer_active": (
+            observation.get("steer_active") is True
+            and steer_receipt.get("accepted") is True
+            and steer_runtime.get("active_turn_observed") is True
+            and steer_active_state.get("phase") in {"running", "thinking"}
+            and steer_native.get("assistant_marker_rows") == 1
+        ),
+        "pi_helm_follow_up_native": (
+            observation.get("follow_up_native") is True
+            and follow_receipt.get("accepted") is True
+            and follow_command.get("method") == "POST"
+            and isinstance(follow_command.get("path"), str)
+            and follow_command["path"].startswith("/api/agents/sessions/")
+            and follow_command["path"].endswith("/send-live")
+            and isinstance(follow_marker, str)
+            and follow_command.get("text") == f"After this turn, reply with {follow_marker}."
+            and follow_native.get("user_marker_rows") == 1
+            and follow_native.get("user_marker_occurrences") == 1
+            and follow_native.get("follow_up_delivered") is True
+            and follow_submission.get("active_turn_observed") is True
+        ),
+        "pi_helm_abort_native": (
+            observation.get("abort_native") is True
+            and cleanup_ok
+            and abort_receipt.get("accepted") is True
+            and abort_native.get("observed") is True
+            and isinstance(abort_native.get("native_file"), dict)
+            and bool(abort_native["native_file"].get("retained_path"))
+            and isinstance(abort_native.get("aborted_row_id"), str)
+            and isinstance(abort_native.get("aborted_row_source_offset"), int)
+        ),
+        "pi_helm_terminate_owned": observation.get("terminate_owned") is True and cleanup_ok,
         "pi_helm_reload_rebind": observation.get("reload_rebind") is True,
         "pi_helm_session_replacement_rebind": (
             observation.get("session_replacement_rebind") is True
+            and (observation.get("replacement_binding") or {}).get("longhouse_session_id_before")
+            == (observation.get("replacement_binding") or {}).get("longhouse_session_id_after")
+            and (observation.get("replacement_binding") or {}).get("provider_session_id_before")
+            != (observation.get("replacement_binding") or {}).get("provider_session_id_after")
+            and isinstance((observation.get("replacement_binding") or {}).get("native_file_before"), dict)
+            and isinstance((observation.get("replacement_binding") or {}).get("native_file_after"), dict)
+            and (observation.get("replacement_binding") or {}).get("native_file_before", {}).get("path")
+            != (observation.get("replacement_binding") or {}).get("native_file_after", {}).get("path")
             and (observation.get("replacement_binding") or {}).get("native_file_present") is True
             and (observation.get("replacement_binding") or {}).get("provider_session_id")
             == (observation.get("replacement_binding") or {}).get("native_header_id")
             and (observation.get("replacement_runtime") or {}).get("binding", {}).get("one_session") is True
             and (observation.get("replacement_runtime") or {}).get("binding", {}).get("one_thread") is True
         ),
-        "pi_helm_cold_resume_exact_file": observation.get("cold_resume_exact_file") is True,
+        "pi_helm_cold_resume_exact_file": (
+            observation.get("cold_resume_exact_file") is True
+            and isinstance(context_phrase, str)
+            and bool(context_phrase)
+            and context_evidence.get("source") == "pre_termination_replacement_turn"
+            and context_pre.get("source") == "pre_termination_replacement_turn"
+            and context_phrase in str(context_pre.get("prompt") or "")
+            and context_pre.get("native_user_marker_rows") == 1
+            and context_pre.get("native_user_marker_occurrences") == 1
+            and context_native.get("marker") == context_phrase
+            and context_native.get("assistant_marker_rows") == 1
+            and context_native.get("user_marker_rows") == 0
+            and context_native.get("user_marker_occurrences") == 0
+            and context_evidence.get("resume_prompt")
+            and context_phrase not in str(context_evidence["resume_prompt"])
+            and context_runtime.get("marker") == context_phrase
+            and context_runtime.get("assistant_marker_count") == 1
+            and all(context_binding.get(field) is True for field in ("one_session", "one_thread", "provider_session_bound"))
+        ),
         "pi_helm_stale_owner_refused": observation.get("stale_owner_refused") is True,
     }
 
@@ -924,6 +1062,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     (provider_home / ".pi" / "agent" / "sessions").mkdir(mode=0o700, parents=True)
     proof_file = workspace / "pi-tool-proof.txt"
     proof_marker = f"PI_HELM_TOOL_{os.urandom(8).hex()}"
+    context_phrase = f"PI_HELM_CONTEXT_{os.urandom(8).hex()}"
     proof_file.write_text(proof_marker + "\n", encoding="utf-8")
     env = dict(os.environ)
     env.update(
@@ -1029,12 +1168,16 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             native,
             session_id=session_id,
             session_file=session_file,
+            marker=marker,
         )
         observations["native_taxonomy_receipt"] = {
             "session_id": session_id,
             "provider": "pi",
             "provider_session_id": native["metadata"].get("provider_session_id"),
+            "native_model": _native_model(native),
             "native_file": _native_file_identity(session_file),
+            "minimum_source_offset": native.get("minimum_source_offset", 0),
+            "source_end_offset": native.get("source_end_offset"),
             "taxonomy": native["taxonomy"],
             "status": "pass" if observations["native_tool_taxonomy"] else "fail",
         }
@@ -1145,12 +1288,9 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             )
         except RuntimeError:
             active_state = {}
-        steer_marker = f"PI_HELM_STEER_{os.urandom(8).hex()}"
-        steer_offset = session_file.stat().st_size
-        steer = _run_engine(args.engine, "steer", session_id, env, text=f"Change direction and finish with {steer_marker}.")
-        steer_native = _wait_native_marker(session_file, steer_marker, minimum_source_offset=steer_offset)
         follow_marker = f"PI_HELM_FOLLOW_{os.urandom(8).hex()}"
         follow_offset = session_file.stat().st_size
+        follow_submitted_while_active = active["accepted"] and bool(active_state) and active_state.get("phase") in {"running", "thinking"}
         follow = _send_live(
             str(args.api_url),
             str(args.agents_token),
@@ -1158,13 +1298,6 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             f"After this turn, reply with {follow_marker}.",
         )
         follow_native = _wait_native_marker(session_file, follow_marker, minimum_source_offset=follow_offset)
-        steer_runtime = _wait_runtime_convergence(
-            args.api_url,
-            args.agents_token,
-            session_id,
-            str(current_state.get("provider_session_id") or ""),
-            steer_marker,
-        )
         follow_runtime = _wait_runtime_convergence(
             args.api_url,
             args.agents_token,
@@ -1172,11 +1305,44 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             str(current_state.get("provider_session_id") or ""),
             follow_marker,
         )
+        steer_active = _run_engine(
+            args.engine,
+            "send",
+            session_id,
+            env,
+            text=f"Use the read tool repeatedly on {proof_file}, then reply with a new active turn marker.",
+        )
+        try:
+            steer_active_state = _wait_state(
+                home,
+                session_id=session_id,
+                predicate=lambda item: item.get("phase") in {"running", "thinking"},
+                timeout=10,
+            )
+        except RuntimeError:
+            steer_active_state = {}
+        steer_marker = f"PI_HELM_STEER_{os.urandom(8).hex()}"
+        steer_offset = session_file.stat().st_size
+        steer = _run_engine(args.engine, "steer", session_id, env, text=f"Change direction and finish with {steer_marker}.")
+        steer_native = _wait_native_marker(session_file, steer_marker, minimum_source_offset=steer_offset)
+        steer_runtime = _wait_runtime_convergence(
+            args.api_url,
+            args.agents_token,
+            session_id,
+            str(current_state.get("provider_session_id") or ""),
+            steer_marker,
+        )
         observations["runtime_steer"] = _runtime_receipt(
             steer_runtime,
             session_id=session_id,
             provider_session_id=str(current_state.get("provider_session_id") or ""),
             marker=steer_marker,
+        )
+        observations["runtime_steer"].update(
+            {
+                "active_turn_observed": bool(steer_active_state),
+                "active_state": _state_identity(steer_active_state),
+            }
         )
         observations["runtime_follow_up"] = _runtime_receipt(
             follow_runtime,
@@ -1185,8 +1351,8 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             marker=follow_marker,
         )
         observations["steer_active"] = (
-            active["accepted"]
-            and bool(active_state)
+            steer_active["accepted"]
+            and bool(steer_active_state)
             and steer["accepted"]
             and bool(steer_native["invocation_rows"])
             and steer_native["assistant_marker_rows"] == 1
@@ -1196,7 +1362,16 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and follow["accepted"]
             and bool(follow_native["invocation_rows"])
             and follow_native["assistant_marker_rows"] == 1
+            and follow_native["user_marker_rows"] == 1
+            and follow_native["user_marker_occurrences"] == 1
+            and follow_submitted_while_active
         )
+        observations["follow_up_submission"] = {
+            "active_turn_observed": follow_submitted_while_active,
+            "active_state": _state_identity(active_state),
+            "active_phase": active_state.get("phase"),
+            "active_run_id": active_state.get("run_id"),
+        }
         observations["control_receipts"] = {
             "send": _control_receipt(
                 "send",
@@ -1235,7 +1410,10 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 accepted=follow.get("accepted") is True,
                 result=follow,
                 native=_native_receipt(follow_native, session_id=session_id, session_file=session_file, marker=follow_marker),
-                runtime=observations["runtime_follow_up"],
+                runtime={
+                    **observations["runtime_follow_up"],
+                    **observations["follow_up_submission"],
+                },
             ),
         }
 
@@ -1327,6 +1505,9 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         }
         observations["reload_rebind"] = (
             observations["reload_rebind"] is True
+            and reloaded.get("session_id") == old_connection.get("session_id") == session_id
+            and bool(reloaded.get("lease_generation"))
+            and reloaded.get("lease_generation") != old_connection.get("lease_generation")
             and reload_send["accepted"]
             and reload_native["assistant_marker_rows"] == 1
             and reload_binding["one_session"]
@@ -1352,6 +1533,8 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         }
 
         replacement_before = str(reloaded.get("provider_session_id") or "")
+        replacement_native_file_before = _native_file_identity(session_file)
+        replacement_before_rows, replacement_before_metadata, _replacement_before_taxonomy = _native_snapshot(session_file)
         launch.submit_line("/new")
         replaced = _wait_state(
             home,
@@ -1360,7 +1543,9 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             timeout=30,
         )
         observations["session_replacement_rebind"] = (
-            bool(replaced.get("provider_session_id")) and replaced.get("provider_session_id") != replacement_before
+            replaced.get("session_id") == session_id
+            and bool(replaced.get("provider_session_id"))
+            and replaced.get("provider_session_id") != replacement_before
         )
         current_state = replaced
         session_file = Path(str(replaced["session_file"]))
@@ -1377,7 +1562,10 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         # Pi reserves the path at /new and materializes it on the first turn.
         replacement_offset = session_file.stat().st_size if session_file.is_file() else 0
         replacement_control_identity = _wait_runtime_control_identity(args.api_url, args.agents_token, session_id, replaced)
-        replacement_send = _send_live(args.api_url, args.agents_token, session_id, f"Reply with exactly {replacement_marker}.")
+        replacement_prompt = (
+            f"Remember this context phrase: {context_phrase}. Do not read any file for it. Then reply with exactly {replacement_marker}."
+        )
+        replacement_send = _send_live(args.api_url, args.agents_token, session_id, replacement_prompt)
         replacement_native = _wait_native_marker(
             session_file,
             replacement_marker,
@@ -1405,10 +1593,31 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             ),
         }
         observations["replacement_binding"] = {
+            "longhouse_session_id_before": reloaded.get("session_id"),
+            "longhouse_session_id_after": replaced.get("session_id"),
+            "provider_session_id_before": replacement_before,
+            "provider_session_id_after": replaced.get("provider_session_id"),
+            "native_file_before": replacement_native_file_before,
+            "native_file_after": _native_file_identity(session_file),
             "provider_session_id": replaced.get("provider_session_id"),
             "native_header_id": replacement_native["metadata"].get("provider_session_id"),
             "native_file_present": session_file.is_file(),
             "current_invocation_rows": len(replacement_native["invocation_rows"]),
+        }
+        observations["replacement_context"] = {
+            "phrase": context_phrase,
+            "source": "pre_termination_replacement_turn",
+            "session_id": session_id,
+            "provider_session_id": replaced.get("provider_session_id"),
+            "native_header_provider_session_id": replacement_native["metadata"].get("provider_session_id"),
+            "native_model": _native_model(replacement_native),
+            "native_file": _native_file_identity(session_file),
+            "minimum_source_offset": replacement_native.get("minimum_source_offset"),
+            "source_end_offset": replacement_native.get("source_end_offset"),
+            "prompt": replacement_prompt,
+            "native_user_marker_rows": replacement_native.get("user_marker_rows"),
+            "native_user_marker_occurrences": replacement_native.get("user_marker_occurrences"),
+            "native_marker": replacement_marker,
         }
         observations["session_replacement_receipt"] = {
             "status": "pass" if observations["session_replacement_rebind"] else "fail",
@@ -1424,6 +1633,25 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 session_file=session_file,
                 marker=replacement_marker,
             ),
+            "native_before": {
+                "provider": "pi",
+                "session_id": session_id,
+                "provider_session_id": replacement_before,
+                "native_header_provider_session_id": replacement_before,
+                "native_model": _native_model(
+                    {
+                        "rows": replacement_before_rows,
+                        "invocation_rows": replacement_before_rows,
+                        "metadata": replacement_before_metadata,
+                    }
+                ),
+                "native_file": replacement_native_file_before,
+                "source_end_offset": replacement_before_metadata.get("source_end_offset"),
+                "row_count": len(replacement_before_rows),
+                "invocation_row_count": len(replacement_before_rows),
+                "assistant_marker_rows": sum(row.get("role") == "assistant" for row in replacement_before_rows),
+                "minimum_source_offset": 0,
+            },
             "runtime": observations["replacement_runtime"],
             "binding": observations["replacement_binding"],
         }
@@ -1482,7 +1710,13 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                     "session_id": session_id,
                     "provider": "pi",
                     "provider_session_id": abort_native["metadata"].get("provider_session_id"),
+                    "native_header_provider_session_id": abort_native["metadata"].get("provider_session_id"),
+                    "native_model": _native_model(abort_native),
                     "native_file": _native_file_identity(session_file),
+                    "minimum_source_offset": abort_offset,
+                    "source_end_offset": abort_native.get("source_end_offset"),
+                    "aborted_row_id": abort_native["row"].get("entry_id"),
+                    "aborted_row_source_offset": abort_native["row"].get("source_offset"),
                     "stop_reason": (abort_native.get("row") or {}).get("message", {}).get("stop_reason")
                     if isinstance((abort_native.get("row") or {}).get("message"), dict)
                     else None,
@@ -1519,6 +1753,10 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             runtime={"owner_cleanup": observations["terminate_owner_wait"]},
         )
 
+        pre_resume_flush = shipper.flush("pi-helm-before-cold-resume")
+        if pre_resume_flush.get("status") != "pass":
+            raise RuntimeError("Pi Helm termination was not flushed before cold resume")
+
         resume_marker = f"PI_HELM_RESUME_{os.urandom(8).hex()}"
         resume_offset = session_file.stat().st_size
         terminated_run_id = terminate_state.get("run_id")
@@ -1554,7 +1792,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "--resume-session",
             session_id,
             "--prompt",
-            f"Use the read tool to read {proof_file}, then reply with exactly {resume_marker}.",
+            f"Without reading any files, reply with the context you remember followed by {resume_marker}.",
         ]
         resume = ProviderPtySession.start(
             argv=resume_command,
@@ -1581,6 +1819,11 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         observations["resumed_owner_state"] = _state_identity(resumed_state)
         resumed_file = Path(str(resumed_state.get("session_file") or session_file))
         resumed_native = _wait_native_marker(resumed_file, resume_marker, minimum_source_offset=resume_offset)
+        resumed_context_native = _wait_native_marker(
+            resumed_file,
+            context_phrase,
+            minimum_source_offset=resume_offset,
+        )
         resume_flush = shipper.flush("pi-helm-cold-resume")
         runtime_resume = _wait_runtime_convergence(
             args.api_url,
@@ -1588,6 +1831,13 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             session_id,
             str(resumed_state.get("provider_session_id") or ""),
             resume_marker,
+        )
+        runtime_resume_context = _wait_runtime_convergence(
+            args.api_url,
+            args.agents_token,
+            session_id,
+            str(resumed_state.get("provider_session_id") or ""),
+            context_phrase,
         )
         observations["runtime_resume"] = _runtime_receipt(
             runtime_resume,
@@ -1602,10 +1852,16 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and resumed_native["metadata"].get("provider_session_id") == resumed_state.get("provider_session_id")
             and bool(resumed_native["invocation_rows"])
             and resumed_native["assistant_marker_rows"] > 0
+            and resumed_context_native["assistant_marker_rows"] == 1
+            and resumed_context_native["user_marker_rows"] == 0
+            and resumed_context_native["user_marker_occurrences"] == 0
             and resume_flush.get("status") == "pass"
             and runtime_resume["binding"]["one_session"]
             and runtime_resume["binding"]["one_thread"]
             and runtime_resume["binding"]["provider_session_bound"]
+            and runtime_resume_context["binding"]["one_session"]
+            and runtime_resume_context["binding"]["one_thread"]
+            and runtime_resume_context["binding"]["provider_session_bound"]
         )
         resume_terminate = _run_engine(args.engine, "terminate", session_id, env)
         try:
@@ -1635,6 +1891,28 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "native_header_provider_session_id_after_resume": resumed_native["metadata"].get("provider_session_id"),
             "same_native_file": resumed_file.resolve() == session_file.resolve(),
             "same_native_header": resumed_native["metadata"].get("provider_session_id") == terminated_native_header_id,
+            "context_evidence": {
+                "phrase": context_phrase,
+                "source": "pre_termination_replacement_turn",
+                "resume_prompt": resume_command[-1],
+                "pre_termination": observations["replacement_context"],
+                "post_resume_native": _native_receipt(
+                    resumed_context_native,
+                    session_id=session_id,
+                    session_file=resumed_file,
+                    marker=context_phrase,
+                ),
+                "post_resume_runtime": _runtime_receipt(
+                    runtime_resume_context,
+                    session_id=session_id,
+                    provider_session_id=str(resumed_state.get("provider_session_id") or ""),
+                    marker=context_phrase,
+                ),
+            },
+            "termination_boundary": {
+                "pre_termination_source_end_offset": observations["replacement_context"].get("source_end_offset"),
+                "resume_source_offset": resume_offset,
+            },
             "post_resume_activity": {
                 "marker": resume_marker,
                 "native": _native_receipt(
@@ -1645,6 +1923,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 "runtime": observations["runtime_resume"],
                 "flush": resume_flush,
+                "pre_resume_flush": pre_resume_flush,
                 "resume_offset": resume_offset,
             },
         }
@@ -1690,6 +1969,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 observations["shipper_stop"] = shipper.stop()
             except Exception as exc:  # noqa: BLE001 - cleanup failure must remain visible
                 observations.setdefault("cleanup_errors", []).append(f"{type(exc).__name__}: {exc}")
+                observations["shipper_stop"] = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
         source_secrets = [value for name, value in env.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
         source_paths = {
             "terminal": root / "helm-terminal.raw",
@@ -1700,12 +1980,42 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         for name, source in source_paths.items():
             if source.is_file():
                 retained_sources.append(_retain_source(root, source, f"{name}.raw", source_secrets))
+        retained_by_source = {
+            str(Path(str(item["source"])).resolve()): str(item["path"])
+            for item in retained_sources
+            if item.get("retained") is True and isinstance(item.get("source"), str) and isinstance(item.get("path"), str)
+        }
+
+        def attach_retained_native_paths(value: object) -> None:
+            if isinstance(value, dict):
+                native_file = value.get("native_file")
+                if isinstance(native_file, dict) and isinstance(native_file.get("path"), str):
+                    retained_path = retained_by_source.get(str(Path(native_file["path"]).resolve()))
+                    if retained_path is not None:
+                        native_file["retained_path"] = retained_path
+                for child in value.values():
+                    attach_retained_native_paths(child)
+            elif isinstance(value, list):
+                for child in value:
+                    attach_retained_native_paths(child)
+
+        attach_retained_native_paths(observations)
+        if "cold_resume_receipt" in observations:
+            _write_scenario_receipts(root, args, observations, source_secrets)
         observations["retained_source_artifacts"] = retained_sources
         observations["cleanup"] = _cleanup_receipt(owned_processes)
+        shipper_stop = observations.get("shipper_stop") if isinstance(observations.get("shipper_stop"), dict) else {}
+        shipper_stop_ok = (
+            shipper_stop.get("stopped") is True
+            and shipper_stop.get("process_dead") is True
+            and shipper_stop.get("process_group_dead") is True
+        )
+        observations["cleanup"]["shipper_stop"] = shipper_stop
+        observations["cleanup"]["shipper_stop_verified"] = shipper_stop_ok
+        observations["cleanup"]["scratch_removed"] = False
         observations["process_provider_dead"] = observations["cleanup"]["provider_process_dead"]
         observations["process_group_dead"] = observations["cleanup"]["process_group_dead"]
         observations["no_orphan_provider_processes"] = observations["cleanup"]["no_orphan_provider_processes"]
-        _write_json(root / "cleanup-receipt.json", observations["cleanup"])
         if failure is not None:
             _write_json(
                 root / "failure-envelope.json",
@@ -1725,6 +2035,24 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             shutil.rmtree(isolation)
         except OSError as exc:
             observations.setdefault("cleanup_errors", []).append(f"{type(exc).__name__}: {exc}")
+        observations["scratch_removed"] = not isolation.exists()
+        if not observations["scratch_removed"]:
+            observations.setdefault("cleanup_errors", []).append("scratch isolation directory remains")
+        observations["cleanup"]["scratch_removed"] = observations["scratch_removed"]
+        cleanup_errors = observations.get("cleanup_errors") if isinstance(observations.get("cleanup_errors"), list) else []
+        observations["cleanup"]["cleanup_errors"] = list(cleanup_errors)
+        observations["cleanup"]["status"] = (
+            "pass"
+            if observations["cleanup"].get("status") == "pass"
+            and shipper_stop_ok
+            and observations["scratch_removed"] is True
+            and not cleanup_errors
+            else "fail"
+        )
+        if failure is None and observations["cleanup"]["status"] != "pass":
+            failure = RuntimeError("Pi Helm cleanup did not prove shipper stop and scratch removal")
+            observations["error"] = str(failure)
+        _write_json(root / "cleanup-receipt.json", observations["cleanup"])
     source_secrets = [value for name, value in env.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
     observations = _redact_value(observations, source_secrets)
     assertions = pi_helm_lifecycle_assertions(observations)

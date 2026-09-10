@@ -20,7 +20,11 @@ import pytest
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.services.local_health.process import _provider_for_cmdline
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import factory_provider_names
+from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
+from zerg.services.managed_provider_contracts import managed_transport_for_provider
+from zerg.services.managed_provider_contracts import provider_for_control_plane
 from zerg.services.session_turns import _managed_turn_control_planes
 
 
@@ -57,6 +61,8 @@ def test_managed_turn_control_planes_cover_every_contract_plane() -> None:
 
     planes = _managed_turn_control_planes()
     for contract in all_managed_provider_contracts():
+        if not contract.launch_local:
+            continue
         for plane in contract.control_planes:
             assert plane in planes, (
                 f"{contract.provider}'s control plane {plane} is missing from the managed-turn "
@@ -70,3 +76,13 @@ def test_managed_turn_control_planes_keep_the_legacy_transport_planes() -> None:
     planes = _managed_turn_control_planes()
     assert "opencode_process" in planes
     assert "antigravity_process" in planes
+    assert "omp_native_archive" not in planes
+
+
+def test_omp_managed_channel_is_helm_only_and_native_archive_is_not_authority() -> None:
+    transport = managed_transport_for_provider("omp")
+    assert transport is not None
+    assert transport.value == "omp_helm_channel"
+    assert control_plane_for_provider("omp") == "omp_helm_channel"
+    assert managed_transport_for_control_plane("omp_native_archive") is None
+    assert provider_for_control_plane("omp_native_archive") is None

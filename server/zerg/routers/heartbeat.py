@@ -196,7 +196,7 @@ class ActivityEvidenceIn(UTCBaseModel):
 class ControlEvidenceIn(UTCBaseModel):
     authority_class: Literal["provider_control"] | None = None
     # Managed launch identities, not process names, authorize these claims.
-    provider: Literal["codex", "claude", "opencode", "cursor", "antigravity", "pi"]
+    provider: Literal["codex", "claude", "opencode", "cursor", "antigravity", "pi", "omp"]
     session_id: str = Field(..., max_length=255)
     connection_id: str | None = Field(None, min_length=1, max_length=255)
     lease_generation: str | None = Field(None, min_length=1, max_length=255)
@@ -268,7 +268,7 @@ class ReadinessEvidenceIn(UTCBaseModel):
 
 class ContinuationEvidenceIn(UTCBaseModel):
     authority_class: Literal["retained_launch_contract"] | None = None
-    provider: Literal["codex", "claude", "cursor", "opencode", "pi"]
+    provider: Literal["codex", "claude", "cursor", "opencode", "pi", "omp"]
     session_id: str = Field(..., min_length=1, max_length=255)
     provider_session_id: str | None = Field(None, min_length=1, max_length=255)
     cwd: str | None = Field(None, min_length=1, max_length=1024)

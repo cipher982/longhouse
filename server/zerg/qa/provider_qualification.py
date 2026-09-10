@@ -22,6 +22,8 @@ from zerg.qa import codex_release_identity
 from zerg.qa import codex_tool_call_result
 from zerg.qa import conversation_reset_qualification
 from zerg.qa import cursor_release_identity
+from zerg.qa import omp_console_producer
+from zerg.qa import omp_helm_lifecycle
 from zerg.qa import opencode_release_identity
 from zerg.qa import opencode_server_qualification
 from zerg.qa import pi_qualification
@@ -43,6 +45,8 @@ _PROFILES = {
     ("opencode", opencode_release_identity.PROFILE): opencode_release_identity.run,
     ("opencode", opencode_server_qualification.PROFILE): opencode_server_qualification.run,
     ("pi", pi_qualification.PROFILE): pi_qualification.run,
+    ("omp", "omp_print_v1"): omp_console_producer.run,
+    ("omp", "omp_helm_v1"): omp_helm_lifecycle.run,
     **{
         (provider, profile): (
             lambda request_path, output_root, provider=provider: conversation_reset_qualification.run(provider, request_path, output_root)

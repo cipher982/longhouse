@@ -7,6 +7,7 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "codex": "Codex",
     "cursor": "Cursor",
     "gemini": "Antigravity",
+    "omp": "OMP",
     "openai": "OpenAI",
     "opencode": "OpenCode",
     "pi": "Pi",

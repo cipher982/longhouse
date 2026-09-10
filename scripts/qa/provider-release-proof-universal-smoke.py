@@ -52,6 +52,7 @@ FAKE_VERSION_BY_PROVIDER = {
     "antigravity": "agy 9.9.9",
     "cursor": "2026.07.23-e383d2b",
     "pi": "9.9.9",
+    "omp": "18.1.14",
 }
 FAKE_BINARY_BY_PROVIDER = {
     "claude": "claude",
@@ -60,6 +61,7 @@ FAKE_BINARY_BY_PROVIDER = {
     "antigravity": "agy",
     "cursor": "cursor-agent",
     "pi": "pi",
+    "omp": "omp",
 }
 
 

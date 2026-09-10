@@ -38,6 +38,7 @@ use crate::config::ShipperConfig;
 use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
 use crate::opencode_run::{start_opencode_run_turn, OpenCodeRunConfig, OPENCODE_RUN_ADAPTER};
+use crate::omp_print::{start_omp_print_turn, OmpPrintRunConfig, OMP_PRINT_ADAPTER};
 use crate::pi_print::{start_pi_print_turn, PiPrintRunConfig, PI_PRINT_ADAPTER};
 use crate::turn_claims::{
     default_registry as default_turn_claim_registry, process_start_time_for_pid, ClaimOutcome,
@@ -97,7 +98,7 @@ static MANAGED_PROVIDER_CONTRACTS: OnceLock<Value> = OnceLock::new();
 fn console_turn_provider_supported(provider: &str) -> bool {
     matches!(
         provider,
-        "codex" | "cursor" | "opencode" | "claude" | "pi" | "antigravity"
+        "codex" | "cursor" | "opencode" | "claude" | "pi" | "omp" | "antigravity"
     )
 }
 
@@ -692,6 +693,15 @@ pub fn spawn_control_channel(
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "Failed to reconcile Pi Console turn claims"),
         }
+        match crate::omp_print::recover_omp_print_turns(&config.machine_name, config.db_path.clone())
+            .await
+        {
+            Ok(count) if count > 0 => {
+                tracing::info!(count, "Recovered OMP Console turn monitors")
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "Failed to reconcile OMP Console turn claims"),
+        }
         match crate::antigravity_print::recover_antigravity_print_turns(
             &config.machine_name,
             config.db_path.clone(),
@@ -1061,6 +1071,12 @@ async fn execute_command(
                         .map_err(CommandError::command_failed)?;
                     PI_PRINT_ADAPTER
                 }
+                "omp" => {
+                    crate::omp_print::interrupt_omp_print_turn(&run_id, &session_id)
+                        .await
+                        .map_err(CommandError::command_failed)?;
+                    OMP_PRINT_ADAPTER
+                }
                 "antigravity" => {
                     crate::antigravity_print::interrupt_antigravity_print_turn(
                         &run_id,
@@ -1243,6 +1259,18 @@ async fn execute_command(
                     "status": summary.status,
                 }));
             }
+            if provider == "omp" {
+                let summary = crate::omp_helm_control::dispatch(
+                    &session_id,
+                    crate::omp_helm_control::CommandKind::Send,
+                    Some(&text),
+                    None,
+                    Some(payload.get("longhouse_control_grant").unwrap_or(&Value::Null)),
+                )
+                .await
+                .map_err(|error| CommandError { code: error.code().to_string(), message: error.message().to_string() })?;
+                return Ok(json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id,"status":summary.status}));
+            }
             let attachments = crate::codex_attachments::parse_attachments(&payload)
                 .map_err(CommandError::command_failed)?;
             validate_codex_bridge_attached(&session_id, None)
@@ -1341,6 +1369,18 @@ async fn execute_command(
                     "provider_session_id": summary.provider_session_id,
                 }));
             }
+            if provider == "omp" {
+                let summary = crate::omp_helm_control::dispatch(
+                    &session_id,
+                    crate::omp_helm_control::CommandKind::Abort,
+                    None,
+                    None,
+                    Some(payload.get("longhouse_control_grant").unwrap_or(&Value::Null)),
+                )
+                .await
+                .map_err(|error| CommandError { code: error.code().to_string(), message: error.message().to_string() })?;
+                return Ok(json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id}));
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             cmd_codex_bridge_interrupt(BridgeInterruptConfig {
@@ -1415,6 +1455,18 @@ async fn execute_command(
                     "provider_session_id": summary.provider_session_id,
                 }));
             }
+            if provider == "omp" {
+                let summary = crate::omp_helm_control::dispatch(
+                    &session_id,
+                    crate::omp_helm_control::CommandKind::Terminate,
+                    None,
+                    None,
+                    Some(payload.get("longhouse_control_grant").unwrap_or(&Value::Null)),
+                )
+                .await
+                .map_err(|error| CommandError { code: error.code().to_string(), message: error.message().to_string() })?;
+                return Ok(json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id}));
+            }
             Err(CommandError {
                 code: "unsupported_command".to_string(),
                 message: format!("{provider} terminate is not supported by this Machine Agent"),
@@ -1468,6 +1520,18 @@ async fn execute_command(
                     "transport": crate::pi_helm_control::PI_HELM_TRANSPORT,
                     "provider_session_id": summary.provider_session_id,
                 }));
+            }
+            if provider == "omp" {
+                let summary = crate::omp_helm_control::dispatch(
+                    &session_id,
+                    crate::omp_helm_control::CommandKind::Steer,
+                    Some(&text),
+                    None,
+                    Some(payload.get("longhouse_control_grant").unwrap_or(&Value::Null)),
+                )
+                .await
+                .map_err(|error| CommandError { code: error.code().to_string(), message: error.message().to_string() })?;
+                return Ok(json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id}));
             }
             if provider == "antigravity" {
                 return Err(CommandError {
@@ -1721,6 +1785,12 @@ async fn execute_turn_start(
             message: "Pi Console supports provider_local permission mode only".to_string(),
         });
     }
+    if provider == "omp" && permission_mode != "provider_local" {
+        return Err(CommandError {
+            code: "permission_mode_unsupported".to_string(),
+            message: "OMP Console supports provider_local permission mode only".to_string(),
+        });
+    }
     if provider == "claude" {
         crate::claude_print::require_claude_lifecycle_hook().map_err(|error| CommandError {
             code: "claude_lifecycle_hook_missing".to_string(),
@@ -1936,6 +2006,46 @@ async fn execute_turn_start(
                 "argv": summary.argv,
             })
         })
+    } else if provider == "omp" {
+        start_omp_print_turn(OmpPrintRunConfig {
+            session_id: session_id.to_string(),
+            thread_id: thread_id.clone(),
+            turn_id: turn_id.clone(),
+            run_id: run_id.clone(),
+            client_request_id: client_request_id.clone(),
+            cwd,
+            omp_bin: console_provider_binary_with_env("omp", &|name| std::env::var_os(name)),
+            prompt: message,
+            model: payload_optional_string(payload, "model"),
+            profile: payload_optional_string(payload, "profile"),
+            session_dir: payload_optional_string(payload, "session_dir").map(PathBuf::from),
+            resume_provider_thread_id: resume_provider_thread_id.clone(),
+            resume_session_file: payload_optional_string(payload, "resume_session_file")
+                .map(PathBuf::from),
+            permission_mode,
+            machine_name: config.machine_name.clone(),
+            local_db_path,
+        })
+        .await
+        .map(|summary| {
+            json!({
+                "session_id": summary.session_id,
+                "thread_id": thread_id,
+                "run_id": summary.run_id,
+                "provider": "omp",
+                "transport": OMP_PRINT_ADAPTER,
+                "provider_thread_id": summary.provider_thread_id,
+                "provider_session_id": summary.provider_thread_id,
+                "launch_id": summary.launch_id,
+                "pid": summary.pid,
+                "process_group_id": summary.process_group_id,
+                "stdout_path": summary.stdout_path,
+                "stderr_path": summary.stderr_path,
+                "session_dir": summary.session_dir,
+                "session_file": summary.session_file,
+                "argv": summary.argv,
+            })
+        })
     } else if provider == "antigravity" {
         // The Console path does not go through hooks, which is the point: agy
         // loads its hooks and never fires them under GEMINI_API_KEY auth, so a
@@ -2032,6 +2142,7 @@ async fn execute_turn_start(
                         | OPENCODE_RUN_ADAPTER
                         | CLAUDE_PRINT_ADAPTER
                         | PI_PRINT_ADAPTER
+                        | OMP_PRINT_ADAPTER
                         | ANTIGRAVITY_PRINT_ADAPTER,
                 )
             ) {
@@ -2923,6 +3034,12 @@ mod tests {
         ("pi", "steer", COMMAND_STEER_TEXT),
         ("pi", "interrupt", COMMAND_INTERRUPT),
         ("pi", "terminate", COMMAND_TERMINATE),
+        ("omp", "send", COMMAND_SEND_TEXT),
+        ("omp", "interrupt", COMMAND_INTERRUPT),
+        ("omp", "steer", COMMAND_STEER_TEXT),
+        ("omp", "terminate", COMMAND_TERMINATE),
+        ("omp", "turn_start", COMMAND_TURN_START),
+        ("omp", "turn_interrupt", COMMAND_TURN_INTERRUPT),
     ];
 
     fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {
@@ -3637,6 +3754,7 @@ mod tests {
         write_executable(&dir, "agy");
         write_executable(&dir, "cursor-agent");
         write_executable(&dir, "pi");
+        write_executable(&dir, "omp");
         let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None, true);
         let mut expected = vec![
             "archive.backlog_control".to_string(),

@@ -94,6 +94,12 @@ enum Commands {
         #[command(flatten)]
         launch: PiLaunchArgs,
     },
+    /// Launch a native Longhouse OMP Helm session.
+    #[command(args_conflicts_with_subcommands = true)]
+    Omp {
+        #[command(flatten)]
+        launch: OmpLaunchArgs,
+    },
     /// Launch or manage a native Longhouse OpenCode Helm session.
     #[command(args_conflicts_with_subcommands = true)]
     Opencode {
@@ -319,6 +325,28 @@ struct PiLaunchArgs {
     /// Resume an ended managed Pi session using its exact native JSONL file.
     #[arg(long)]
     resume_session: Option<String>,
+}
+
+#[derive(Args)]
+struct OmpLaunchArgs {
+    #[arg(long, default_value = ".")]
+    cwd: PathBuf,
+    #[arg(long)]
+    prompt: Option<String>,
+    #[arg(long)]
+    model: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
+    #[arg(long)]
+    session_dir: Option<PathBuf>,
+    #[arg(long)]
+    resume_session: Option<String>,
+    #[arg(long)]
+    omp_bin: Option<String>,
+    #[arg(long)]
+    url: Option<String>,
+    #[arg(long)]
+    token: Option<String>,
 }
 
 #[derive(Args)]
@@ -2563,6 +2591,28 @@ fn launch_managed_pi(args: PiLaunchArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn launch_managed_omp(args: OmpLaunchArgs) -> anyhow::Result<()> {
+    if !interactive_stdio() {
+        anyhow::bail!("longhouse omp Helm needs an interactive terminal. For headless launches use the Longhouse web/iOS Console.");
+    }
+    let (url, token, _) = resolve_codex_config(args.url.clone(), args.token.clone())?;
+    let mut command = Command::new(paired_engine_path()?);
+    command
+        .args(["omp-helm", "launch", "--cwd"])
+        .arg(args.cwd)
+        .env("LONGHOUSE_OMP_HELM_URL", &url)
+        .env("LONGHOUSE_OMP_HELM_TOKEN", &token);
+    if let Some(prompt) = args.prompt { command.arg("--prompt").arg(prompt); }
+    if let Some(model) = args.model { command.arg("--model").arg(model); }
+    if let Some(profile) = args.profile { command.arg("--profile").arg(profile); }
+    if let Some(session_dir) = args.session_dir { command.arg("--session-dir").arg(session_dir); }
+    if let Some(resume_session) = args.resume_session { command.arg("--resume-session").arg(resume_session); }
+    if let Some(omp_bin) = args.omp_bin { command.arg("--omp-bin").arg(omp_bin); }
+    let status = command.status().context("run native OMP Helm launcher")?;
+    if !status.success() { std::process::exit(status.code().unwrap_or(1)); }
+    Ok(())
+}
+
 fn launch_managed_codex(args: CodexLaunchArgs) -> anyhow::Result<()> {
     let cwd = std::fs::canonicalize(&args.cwd)
         .with_context(|| format!("resolve {}", args.cwd.display()))?;
@@ -4496,6 +4546,7 @@ fn main() -> anyhow::Result<()> {
                 None => launch_managed_pi(launch)?,
             }
         }
+        Commands::Omp { launch } => launch_managed_omp(launch)?,
         Commands::Opencode { command, launch } => match command {
             Some(OpencodeCommand::Attach(args)) => attach_managed_opencode(args)?,
             Some(OpencodeCommand::Stop(args)) => stop_opencode_bridge(&args.session_id, None)?,

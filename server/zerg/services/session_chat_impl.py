@@ -260,6 +260,11 @@ def _validate_managed_local_launch_response_contract(
             raise RuntimeError("Pi Helm launch response is missing native cold-resume command")
         return
 
+    if transport == ManagedSessionTransport.OMP_HELM_CHANNEL:
+        if "longhouse omp --resume-session" not in attach_command or sid not in attach_command:
+            raise RuntimeError("OMP Helm launch response is missing native cold-resume command")
+        return
+
     raise RuntimeError(f"Unsupported managed local launch response transport: {transport}")
 
 

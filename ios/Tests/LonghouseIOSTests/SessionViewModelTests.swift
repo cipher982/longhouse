@@ -41,6 +41,26 @@ struct SessionViewModelTests {
         #expect(firstTailRequest?.offset == 0)
         #expect(firstTailRequest?.snapshotEventId == nil)
     }
+    @Test
+    func openingFetchesSubagentsOnlyAfterTranscriptFrame() async throws {
+        let workspace = try makeWorkspace(eventId: 10, content: "Load the workspace")
+        let api = FakeSessionWorkspaceClient(workspaces: [workspace])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        #expect(await api.subagentRequestCount() == 0)
+
+        model.recordTranscriptLifecycle("transcript_frame_rendered")
+        model.transcriptFrameDidBecomeReady(sessionId: "session-1", appState: appState)
+        await waitForCount("subagent request count", atLeast: 1) {
+            await api.subagentRequestCount()
+        }
+
+        #expect(await api.subagentRequestCount() == 1)
+    }
+
 
     @Test
     func coldStartPublishesPrimaryDetailBeforeTailCompletes() async throws {
@@ -1895,6 +1915,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         let content: String?
         let message: String?
     }
+    private var subagentRequests = 0
 
     private var workspaces: [SessionWorkspaceResponse]
     private let sendResponse: SessionInputResponse
@@ -1961,6 +1982,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
             return primaryDetails.removeFirst()
         }
         return primaryDetail ?? workspace.session
+    }
+    func sessionSubagents(id: String) async throws -> SessionSubagentsResponse {
+        subagentRequests += 1
+        return SessionSubagentsResponse(sessionId: id, children: [])
     }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
@@ -2142,6 +2167,9 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     }
     func detailRequestCount() -> Int {
         detailRequests.count
+    }
+    func subagentRequestCount() -> Int {
+        subagentRequests
     }
 
 

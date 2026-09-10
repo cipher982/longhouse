@@ -7,6 +7,8 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
+use std::process::Child;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -32,6 +34,74 @@ pub fn terminal_state_for_exit(exit_code: i32) -> &'static str {
     } else {
         "process_gone"
     }
+}
+
+/// Terminal ownership shared by interactive managed launchers. The provider
+/// receives the foreground group and Drop restores the caller's attributes.
+#[cfg(unix)]
+pub struct ForegroundTerminal {
+    fd: libc::c_int,
+    parent_pgrp: libc::pid_t,
+    attributes: libc::termios,
+    old_sigttou: libc::sighandler_t,
+}
+
+#[cfg(unix)]
+impl ForegroundTerminal {
+    pub fn capture() -> anyhow::Result<Self> {
+        use std::os::unix::io::AsRawFd;
+        let fd = std::io::stdin().as_raw_fd();
+        let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
+        if unsafe { libc::tcgetattr(fd, attributes.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(Self {
+            fd,
+            parent_pgrp: unsafe { libc::tcgetpgrp(fd) },
+            attributes: unsafe { attributes.assume_init() },
+            old_sigttou: unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) },
+        })
+    }
+
+    pub fn give_to(&self, pgid: libc::pid_t) -> anyhow::Result<()> {
+        if self.parent_pgrp >= 0 && unsafe { libc::tcsetpgrp(self.fd, pgid) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        unsafe { libc::kill(-pgid, libc::SIGCONT) };
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ForegroundTerminal {
+    fn drop(&mut self) {
+        unsafe {
+            if self.parent_pgrp >= 0 {
+                libc::tcsetpgrp(self.fd, self.parent_pgrp);
+            }
+            libc::tcsetattr(self.fd, libc::TCSANOW, &self.attributes);
+            libc::signal(libc::SIGTTOU, self.old_sigttou);
+        }
+    }
+}
+
+/// Stop a process group that this launcher created, escalating only after a
+/// bounded grace period and reaping the direct child to avoid zombies.
+#[cfg(unix)]
+pub fn terminate_owned_group(child: &mut Child, pgid: libc::pid_t) {
+    unsafe {
+        libc::kill(-pgid, libc::SIGCONT);
+        libc::kill(-pgid, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    unsafe { libc::kill(-pgid, libc::SIGKILL) };
+    let _ = child.wait();
 }
 
 impl ManagedTerminalEvent<'_> {

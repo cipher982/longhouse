@@ -8,6 +8,21 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
 ## Rules
 - Always use Make targets. Never run pytest/bun/playwright directly.
 
+
+## Cleanup contract
+- A proof run is incomplete while its provider process, Longhouse session,
+  simulator/browser tab, scratch `HOME`, relay, or dev service is alive.
+- Create every test/QA session with an explicit hidden `launch_surface`; never
+  use a human-looking project/title and rely on naming to hide it.
+- Provider probes must use `--no-session` or an explicitly disposable
+  `--session-dir`; never let a verification command write to David's default
+  provider archive. If a protocol ignores that flag, record the exact native
+  session path and remove it in the same `finally` block.
+- In `finally`/cleanup, stop owned processes and services, close tabs/simulators,
+  remove scratch homes and generated fixtures, then re-read the session/process
+  inventory. Do not leave a verification transcript in David's user timeline.
+- Keep only durable source fixtures and the receipt required by the proof. Report
+  any intentionally retained artifact, owner, and cleanup command.
 ## Core Commands
 ```bash
 make test                # unit tests

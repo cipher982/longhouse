@@ -12,9 +12,8 @@ _REQUIRED_STRING_FIELDS = (
     "display_name",
     "marketing_name",
     "provider_cli_binary",
-    "managed_transport",
-    "control_plane",
 )
+_NULLABLE_STRING_FIELDS = ("managed_transport", "control_plane")
 _REQUIRED_BOOL_FIELDS = (
     "requires_longhouse_cli",
     "launch_local",
@@ -668,6 +667,9 @@ def _validated_contract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
             raise ValueError("managed provider contract provider entries must be objects")
         for field in _REQUIRED_STRING_FIELDS:
             _validate_string_field(item, field)
+        for field in _NULLABLE_STRING_FIELDS:
+            if item.get(field) is not None:
+                _validate_string_field(item, field)
         if "provider_cli_env" in item and item["provider_cli_env"] is not None:
             _validate_string_field(item, "provider_cli_env")
         for field in _REQUIRED_BOOL_FIELDS:

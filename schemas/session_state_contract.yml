@@ -83,6 +83,7 @@ providers:
   - antigravity
   - cursor
   - pi
+  - omp
 
 # Field contracts are deliberately representation-neutral. The Python
 # projector, OpenAPI DTO, TypeScript, Swift, and Rust fixture decoder all use

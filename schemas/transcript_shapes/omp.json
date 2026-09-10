@@ -1,0 +1,22 @@
+{
+  "provider": "omp",
+  "upstream": {
+    "package": "@oh-my-pi/pi-coding-agent",
+    "binary": "omp",
+    "version": "18.1.14",
+    "commit": "daf07999c2fee9b22edc7bf8fea1fb6272e0df5e"
+  },
+  "source": {
+    "root": "$XDG_DATA_HOME/omp/sessions",
+    "layout": "<encoded-cwd>/<timestamp>_<opaque-session-id>.jsonl",
+    "title_slot_bytes": 256,
+    "profile_root": "$XDG_DATA_HOME/omp/profiles/<profile>",
+    "blob_root": "$XDG_DATA_HOME/omp/blobs"
+  },
+  "taxonomy": {
+    "message": "omp_message",
+    "tool_call": "omp_tool_call",
+    "tool_result": "omp_tool_result",
+    "title": "session.title"
+  }
+}

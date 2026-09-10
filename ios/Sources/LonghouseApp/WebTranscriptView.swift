@@ -227,6 +227,7 @@ struct WebTranscriptView: UIViewRepresentable {
         Self.preparedPayload(
             serverURL: serverURL,
             timelineItems: items,
+            subagents: subagents,
             submittedInputs: submittedInputs,
             errorMessage: errorMessage,
             sourceRevision: sourceRevision,
@@ -237,6 +238,7 @@ struct WebTranscriptView: UIViewRepresentable {
     nonisolated static func preparedPayload(
         serverURL: String? = nil,
         timelineItems: [TimelineItem],
+        subagents: [SessionSubagent] = [],
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
         sourceRevision: Int? = nil,
@@ -248,6 +250,7 @@ struct WebTranscriptView: UIViewRepresentable {
             items: Self.payloadItems(
                 serverURL: serverURL,
                 timelineItems: timelineItems,
+                subagents: subagents,
                 submittedInputs: submittedInputs
             )
         )
@@ -415,9 +418,21 @@ struct WebTranscriptView: UIViewRepresentable {
         case .tool(let call, let result, _):
             return toolPayload(id: item.id, call: call, result: result, serverURL: serverURL, subagents: subagents)
         case .orphanTool(let event):
-            return toolPayload(id: item.id, call: event, result: event, orphan: true, serverURL: serverURL)
+            return toolPayload(
+                id: item.id,
+                call: event,
+                result: event,
+                orphan: true,
+                serverURL: serverURL,
+                subagents: subagents
+            )
         case .activityGroup(let calls):
-            return activityGroupPayload(id: item.id, calls: calls, serverURL: serverURL)
+            return activityGroupPayload(
+                id: item.id,
+                calls: calls,
+                serverURL: serverURL,
+                subagents: subagents
+            )
         }
     }
 
@@ -729,13 +744,32 @@ struct WebTranscriptView: UIViewRepresentable {
             media: nil
         )
     }
-
     private nonisolated static func activityGroupPayload(
         id: String,
         calls: [ActivityCall],
-        serverURL: String?
+        serverURL: String?,
+        subagents: [SessionSubagent]
     ) -> WebTranscriptPayloadItem {
         let summary = TimelineBuilder.activitySummary(for: calls)
+        var seenSubagentIds = Set<String>()
+        let spawned = calls
+            .flatMap { call in
+                Subagents.children(
+                    from: subagents,
+                    toolCallId: call.call.toolCallId,
+                    toolOutputText: call.result?.toolOutputText
+                )
+            }
+            .filter { seenSubagentIds.insert($0.sessionId).inserted }
+        let spawnedPayload = spawned.isEmpty
+            ? nil
+            : spawned.map {
+                WebTranscriptSubagent(
+                    sessionId: $0.sessionId,
+                    label: Subagents.label(for: $0),
+                    toolCalls: $0.toolCalls
+                )
+            }
 
         // Pass every call; WebKit renderer collapses to latest-N with an
         // interactive "Show N earlier" control (never permanent hide).
@@ -781,7 +815,9 @@ struct WebTranscriptView: UIViewRepresentable {
             output: nil,
             calls: childCalls,
             origin: nil,
-            media: nil
+            media: nil,
+            subagents: spawnedPayload,
+            subagentSummary: spawned.isEmpty ? nil : Subagents.summary(spawned)
         )
     }
 
@@ -934,6 +970,7 @@ struct WebTranscriptView: UIViewRepresentable {
         private var lastNearTopRequestAt = Date.distantPast
         private var documentServerURL: String?
         private var mediaAuthSignature: String?
+        private var mediaAuthPrimedServerURL: String?
         /// Armed by `loadDocument(serverURL:on:)` and consumed by the policy gate
         /// below: one navigation per load, and only the one this app started.
         private var awaitingDocumentNavigation = false
@@ -1045,7 +1082,21 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         func configureMediaAuth(serverURL: String, on webView: WKWebView) {
-            let cookies = SharedAuthStore.managedCookies(for: serverURL)
+            var cookies = URL(string: serverURL)
+                .flatMap { HTTPCookieStorage.shared.cookies(for: $0) }?
+                .filter { SharedAuthStore.managedCookieNames.contains($0.name) } ?? []
+            if cookies.isEmpty, mediaAuthPrimedServerURL != serverURL {
+                // The app normally primes the shared jar at auth time, but a
+                // pooled WebView can be the first surface after relaunch.
+                // Pay the Keychain read once per coordinator/server, not on
+                // every SwiftUI update.
+                mediaAuthPrimedServerURL = serverURL
+                let managedCookies = SharedAuthStore.managedCookies(for: serverURL)
+                for cookie in managedCookies {
+                    HTTPCookieStorage.shared.setCookie(cookie)
+                }
+                cookies = managedCookies
+            }
             let signature = cookies
                 .sorted { $0.name < $1.name }
                 .map { "\($0.name)=\($0.value)@\($0.domain)" }
@@ -1215,6 +1266,8 @@ struct WebTranscriptView: UIViewRepresentable {
             lastDuplicatePayload = nil
             userScrollInProgress = false
             dragStartOffsetY = nil
+            mediaAuthSignature = nil
+            mediaAuthPrimedServerURL = nil
             shouldStickToBottom = true
         }
 
@@ -1545,7 +1598,6 @@ enum WebTranscriptWebViewPool {
 
     private static let logger = Logger(subsystem: "ai.longhouse.ios", category: "WebTranscript")
     private static var warmedWebView: TranscriptWebView?
-    private static var warmedWebViewLoaded = false
     private static var spareDelegate: WebTranscriptSpareDelegate?
 
     static func prewarm() {
@@ -1553,26 +1605,27 @@ enum WebTranscriptWebViewPool {
         let startedAt = Date()
         logger.info("webkit prewarm requested")
         let delegate = WebTranscriptSpareDelegate(allowsDocumentLoad: true, onLoaded: {
-            Task { @MainActor in
-                warmedWebViewLoaded = true
-                logger.info("webkit prewarm loaded")
-            }
+            // `documentLoaded` is published synchronously by the delegate;
+            // this callback is logging only and must not gate adoption.
+            logger.info("webkit prewarm loaded")
         })
         let webView = configuredWebView()
         spareDelegate = delegate
         webView.navigationDelegate = delegate
         webView.loadHTMLString(WebTranscriptView.documentHTML, baseURL: nil)
         warmedWebView = webView
-        warmedWebViewLoaded = false
         logger.info("webkit prewarm started sync_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
     }
 
     static func takeOrCreate() -> PooledWebView {
         if let webView = warmedWebView {
+            let delegate = spareDelegate
             warmedWebView = nil
             spareDelegate = nil
-            let loaded = warmedWebViewLoaded
-            warmedWebViewLoaded = false
+            // `didFinish` can have fired while its callback was queued for the
+            // main actor. Read the delegate's synchronous publication, otherwise
+            // adoption waits for a callback that already happened.
+            let loaded = delegate?.documentLoaded == true
             logger.info(
                 "webkit prewarm reused id=\(webView.transcriptInstanceID, privacy: .public) loaded=\(loaded, privacy: .public)"
             )
@@ -1597,10 +1650,10 @@ enum WebTranscriptWebViewPool {
         // it completed before the next session adopts it.
         let delegate = WebTranscriptSpareDelegate(
             allowsDocumentLoad: !documentIsLoaded,
+            documentLoaded: documentIsLoaded,
             onLoaded: documentIsLoaded ? nil : {
                 Task { @MainActor in
                     guard warmedWebView === webView else { return }
-                    warmedWebViewLoaded = true
                     logger.info("webkit recycled load completed id=\(webView.transcriptInstanceID, privacy: .public)")
                 }
             },
@@ -1608,7 +1661,6 @@ enum WebTranscriptWebViewPool {
                 Task { @MainActor in
                     guard warmedWebView === webView else { return }
                     warmedWebView = nil
-                    warmedWebViewLoaded = false
                     spareDelegate = nil
                     logger.error("webkit recycled load failed id=\(webView.transcriptInstanceID, privacy: .public)")
                 }
@@ -1617,7 +1669,6 @@ enum WebTranscriptWebViewPool {
         spareDelegate = delegate
         webView.navigationDelegate = delegate
         warmedWebView = webView
-        warmedWebViewLoaded = documentIsLoaded
         logger.info(
             "webkit recycled id=\(webView.transcriptInstanceID, privacy: .public) loaded=\(documentIsLoaded, privacy: .public)"
         )
@@ -1642,9 +1693,16 @@ private final class WebTranscriptSpareDelegate: NSObject, WKNavigationDelegate {
     private let onLoaded: (() -> Void)?
     private let onFailed: (() -> Void)?
     private var allowsDocumentLoad: Bool
+    private(set) var documentLoaded: Bool
 
-    init(allowsDocumentLoad: Bool, onLoaded: (() -> Void)? = nil, onFailed: (() -> Void)? = nil) {
+    init(
+        allowsDocumentLoad: Bool,
+        documentLoaded: Bool = false,
+        onLoaded: (() -> Void)? = nil,
+        onFailed: (() -> Void)? = nil
+    ) {
         self.allowsDocumentLoad = allowsDocumentLoad
+        self.documentLoaded = documentLoaded
         self.onLoaded = onLoaded
         self.onFailed = onFailed
     }
@@ -1663,6 +1721,7 @@ private final class WebTranscriptSpareDelegate: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        documentLoaded = true
         onLoaded?()
     }
 
@@ -2715,8 +2774,21 @@ private extension WebTranscriptView {
         + '<span class="subagent-meta">' + String(child.toolCalls) + (child.toolCalls === 1 ? ' call' : ' calls') + '</span>'
         + '</button></li>'
       ).join('');
-      return '<details class="subagents"><summary>' + escapeHtml(item.subagentSummary || '')
+      return '<details class="subagents" data-subagent-key="' + escapeHtml(item.id) + '"><summary>' + escapeHtml(item.subagentSummary || '')
         + '</summary><ul class="subagent-list">' + rows + '</ul></details>';
+    }
+
+    function captureOpenSubagentKeys(root) {
+      return new Set(Array.from(root.querySelectorAll('details.subagents[data-subagent-key][open]'))
+        .map(node => node.getAttribute('data-subagent-key'))
+        .filter(Boolean));
+    }
+
+    function restoreOpenSubagentKeys(root, keys) {
+      if (!keys.size) return;
+      root.querySelectorAll('details.subagents[data-subagent-key]').forEach(node => {
+        if (keys.has(node.getAttribute('data-subagent-key'))) node.open = true;
+      });
     }
 
     /// Render diff lines as gutter-prefixed rows (R3). Mirrors EditDiffView.
@@ -2763,6 +2835,7 @@ private extension WebTranscriptView {
           </summary>
           <div class="details-body">${earlierControl}${latestHtml}</div>
         </details>
+        ${subagentNode(item)}
       `;
     }
 
@@ -3009,6 +3082,7 @@ private extension WebTranscriptView {
       const prepended = previousFirstId && newFirstId && previousFirstId !== newFirstId
         && currentItems.some(item => item.id === previousFirstId);
       const root = document.getElementById('root');
+      const openSubagentKeys = captureOpenSubagentKeys(root);
       let htmlMs;
       let domMs;
       if (renderMode === 'retained') {
@@ -3035,6 +3109,7 @@ private extension WebTranscriptView {
         attachExpandHandlers(root);
         domMs = performance.now() - domStartedAt;
       }
+      restoreOpenSubagentKeys(root, openSubagentKeys);
       if (wasAtBottom) scrollToBottom();
       else if (prepended) {
         const delta = document.documentElement.scrollHeight - previousScrollHeight;

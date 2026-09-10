@@ -12,14 +12,14 @@ from zerg.qa.provider_release_schedule import DEFAULT_SCHEDULE_PATH
 from zerg.qa.provider_release_schedule import ProviderReleaseScheduleError
 from zerg.qa.provider_release_schedule import build_store_staleness
 from zerg.qa.provider_release_schedule import load_provider_release_schedule
-from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.managed_provider_contracts import factory_provider_names
 
 
 def test_schedule_covers_the_contract_and_declares_private_live_token_ownership() -> None:
     schedule = load_provider_release_schedule()
 
-    assert {row.provider for row in schedule.providers} == managed_provider_names()
-    assert {entry["provider"] for entry in schedule.matrix()["include"]} == set(managed_provider_names())
+    assert {row.provider for row in schedule.providers} == set(factory_provider_names())
+    assert {entry["provider"] for entry in schedule.matrix()["include"]} == set(factory_provider_names())
     assert schedule.scheduled_evidence == "generated_fake_unconditional_full_column"
 
 

@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.managed_provider_contracts import factory_provider_names
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SCHEDULE_PATH = REPO_ROOT / "config" / "provider-release-schedule.yml"
@@ -83,7 +83,9 @@ def load_provider_release_schedule(path: Path = DEFAULT_SCHEDULE_PATH) -> Provid
     names = [row.provider for row in rows]
     if len(names) != len(set(names)):
         raise ProviderReleaseScheduleError("provider release schedule has duplicate providers")
-    expected = managed_provider_names()
+    # Shadow-only maintenance providers have no release/factory acquisition
+    # lane. Keep this schedule scoped to launch-tier providers.
+    expected = frozenset(factory_provider_names())
     if set(names) != expected:
         raise ProviderReleaseScheduleError(
             f"provider release schedule drifted from managed contract: "

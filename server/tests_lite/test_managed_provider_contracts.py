@@ -23,6 +23,7 @@ from zerg.services.managed_provider_contracts import all_managed_provider_contra
 from zerg.services.managed_provider_contracts import contract_for_control_plane
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
+from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.managed_provider_contracts import machine_control_capability_for_command
 from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
 from zerg.services.managed_provider_contracts import managed_provider_names
@@ -72,8 +73,23 @@ def _manifest_item(provider: str = "test") -> dict:
 
 
 def test_managed_provider_contract_matrix_covers_launch_scope_providers():
-    assert managed_provider_names() == frozenset({"codex", "claude", "opencode", "antigravity", "cursor", "pi"})
+    assert managed_provider_names() == frozenset({"codex", "claude", "opencode", "antigravity", "cursor", "pi", "omp"})
     assert {contract.provider for contract in all_managed_provider_contracts()} == managed_provider_names()
+
+
+def test_omp_helm_contract_declares_the_native_managed_transport():
+    omp = contract_for_provider("omp")
+
+    assert omp is not None
+    assert omp.support_tier == "launch"
+    assert omp.requires_longhouse_cli is False
+    assert omp.release_channel.coordinate.endswith("daf07999c2fee9b22edc7bf8fea1fb6272e0df5e")
+    assert omp.release_channel.platform_artifacts["darwin-aarch64"] == "omp-darwin-arm64"
+    assert omp.operation_evidence_for("answer_pause")["disposition"] == "not_implemented"
+    assert omp.managed_transport == ManagedSessionTransport.OMP_HELM_CHANNEL
+    assert omp.control_plane == "omp_helm_channel"
+    assert omp.control_planes == ("omp_helm_channel",)
+    assert ManagedSessionTransport.for_provider("omp") == ManagedSessionTransport.OMP_HELM_CHANNEL
 
 
 def test_managed_provider_contract_manifest_is_generated_from_schema():
@@ -135,7 +151,7 @@ def test_generated_runtime_manifest_does_not_require_repository_sources(monkeypa
 
     validated = validate_generated_contract_manifest(payload)
 
-    assert len(validated["providers"]) == 6
+    assert len(validated["providers"]) == 7
 
 
 def test_generated_runtime_manifest_rejects_invalid_embedded_digest():
@@ -160,6 +176,7 @@ def test_startup_coordination_context_support_is_explicit():
         "antigravity": False,
         "cursor": False,
         "pi": False,
+        "omp": False,
     }
 
 
@@ -646,6 +663,7 @@ def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():
         "antigravity": "agy",
         "cursor": "cursor-agent",
         "pi": "pi",
+        "omp": "omp",
     }
     assert PROVIDER_CLI_ENV_BY_PROVIDER == {
         "codex": "LONGHOUSE_CODEX_BIN",
@@ -654,6 +672,7 @@ def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():
         "antigravity": "LONGHOUSE_ANTIGRAVITY_BIN",
         "cursor": "LONGHOUSE_CURSOR_BIN",
         "pi": "LONGHOUSE_PI_BIN",
+        "omp": "LONGHOUSE_OMP_BIN",
     }
 
 
@@ -723,6 +742,7 @@ def test_every_contract_provider_resolves_a_harness_adapter() -> None:
     from zerg.qa.universal_agent_harness import ADAPTER_CLASS_BY_PROVIDER
     from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
     from zerg.qa.universal_agent_harness import provider_configs
+    from zerg.services.managed_provider_contracts import all_managed_provider_contracts
     from zerg.services.managed_provider_contracts import factory_provider_names
 
     # Phase 3's extracted providers only register when their
@@ -732,7 +752,14 @@ def test_every_contract_provider_resolves_a_harness_adapter() -> None:
     # this test's result depends on pytest's collection order (whether some
     # other test already called adapter_registry() first).
     load_all()
-    expected = factory_provider_names(include_maintenance=True)
+    contracts = {contract.provider: contract for contract in all_managed_provider_contracts()}
+    expected = tuple(
+        sorted(
+            provider
+            for provider in factory_provider_names(include_maintenance=True)
+            if contracts[provider].launch_local
+        )
+    )
     assert SUPPORTED_PROVIDERS == expected
     missing_adapters = [provider for provider in expected if provider not in ADAPTER_CLASS_BY_PROVIDER]
     assert missing_adapters == []

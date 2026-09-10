@@ -18,9 +18,9 @@ SCENARIO_ID = "pi_console_tool_lifecycle"
 ASSERTION_ID = "pi_console_tool_enabled"
 REGISTRATION = ProducerRegistration(
     producer_id="pi.console_tool.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -45,6 +45,9 @@ REGISTRATION = ProducerRegistration(
         "provider_response_binding_receipt",
         "native_tool_receipt",
         "transcript_flush_receipt",
+        "console_boundary_receipt",
+        "interrupt_contract_receipt",
+        "console_continuation_receipt",
         "cleanup_receipt",
     ),
     required_cleanup=("provider_process_dead", "process_group_dead", "no_orphan_provider_processes"),

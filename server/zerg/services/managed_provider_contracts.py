@@ -79,8 +79,8 @@ class ManagedProviderContract:
     provider: str
     display_name: str
     marketing_name: str
-    managed_transport: ManagedSessionTransport
-    control_plane: str
+    managed_transport: ManagedSessionTransport | None
+    control_plane: str | None
     release_channel: ProviderReleaseChannel
     control_plane_aliases: tuple[str, ...] = ()
     adapter_digest: str = ""
@@ -137,7 +137,7 @@ class ManagedProviderContract:
 
     @property
     def control_planes(self) -> tuple[str, ...]:
-        return (self.control_plane, *self.control_plane_aliases)
+        return tuple(plane for plane in (self.control_plane, *self.control_plane_aliases) if plane is not None)
 
     @property
     def connection_capabilities(self) -> dict[str, int]:
@@ -244,8 +244,8 @@ def managed_provider_contract_from_item(item: dict[str, object]) -> ManagedProvi
         provider=str(item["provider"]),
         display_name=str(item["display_name"]),
         marketing_name=str(item["marketing_name"]),
-        managed_transport=ManagedSessionTransport(str(item["managed_transport"])),
-        control_plane=str(item["control_plane"]),
+        managed_transport=(ManagedSessionTransport(str(item["managed_transport"])) if item.get("managed_transport") else None),
+        control_plane=(str(item["control_plane"]) if item.get("control_plane") else None),
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
         adapter_digest=str(item.get("adapter_digest") or ""),
         adapter_sources=tuple(str(value) for value in item.get("adapter_sources") or ()),
@@ -424,7 +424,7 @@ def contract_for_control_plane(control_plane: str | None) -> ManagedProviderCont
     return _BY_CONTROL_PLANE.get(str(control_plane or "").strip())
 
 
-def managed_transport_for_provider(provider: str | None) -> ManagedSessionTransport:
+def managed_transport_for_provider(provider: str | None) -> ManagedSessionTransport | None:
     return require_contract_for_provider(provider).managed_transport
 
 
@@ -436,7 +436,7 @@ def managed_transport_for_control_plane(control_plane: str | None) -> ManagedSes
     return contract.managed_transport if contract is not None else None
 
 
-def control_plane_for_provider(provider: str | None) -> str:
+def control_plane_for_provider(provider: str | None) -> str | None:
     return require_contract_for_provider(provider).control_plane
 
 
@@ -489,7 +489,10 @@ def steer_control_planes() -> frozenset[str]:
 
 
 def trusted_non_runner_control_planes() -> frozenset[str]:
-    return frozenset(control_plane for contract in _CONTRACTS for control_plane in contract.control_planes)
+    # Archive-only transports are provider metadata, not trusted managed-turn
+    # authority. OMP's native archive is separate from its managed Helm channel;
+    # the latter is included because OMP can launch a managed local owner.
+    return frozenset(control_plane for contract in _CONTRACTS if contract.launch_local for control_plane in contract.control_planes)
 
 
 def machine_control_capability_for_command(provider: str | None, command_type: str | None) -> str | None:

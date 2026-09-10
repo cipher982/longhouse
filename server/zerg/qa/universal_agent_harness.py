@@ -36,6 +36,7 @@ from zerg.qa.provider_evidence_measurement import measure_evidence_package
 from zerg.qa.provider_resume_factory import SCENARIOS as PROVIDER_RESUME_SCENARIOS
 from zerg.qa.provider_resume_factory import run_provider_resume_scenario
 from zerg.qa.repo_root import default_repo_root
+from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
@@ -198,10 +199,10 @@ def _project_managed_transport(db: Any, session: Any) -> str | None:
 
 SCHEMA_VERSION = 1
 ARTIFACT_KIND = "universal_agent_harness_run"
-# Derived from the managed-provider contract, never hand-maintained. Maintenance-tier
-# providers stay in the harness because ingest, archive, and transcript scenarios keep
-# running for them; control-proof exclusion is expressed per operation, not per lane.
-SUPPORTED_PROVIDERS = factory_provider_names(include_maintenance=True)
+# Derived from the managed-provider contract, never hand-maintained. Shadow-only
+# maintenance providers keep ingest/archive authority but have no execution adapter.
+_CONTRACTS = {contract.provider: contract for contract in all_managed_provider_contracts()}
+SUPPORTED_PROVIDERS = tuple(provider for provider in factory_provider_names(include_maintenance=True) if _CONTRACTS[provider].launch_local)
 SCENARIOS = (
     "probe_identity",
     "adapter_conformance",
@@ -1158,7 +1159,6 @@ class UniversalProviderAdapter:
             payload["failure_code"] = "adapter_conformance_failed"
             payload["message"] = "Provider adapter no longer conforms to the universal harness contract."
         package.write_json("assertions/adapter-conformance.json", payload)
-        package.write_json("assertions/adapter_conformance.json", payload)
         return payload
 
     def action_result(
@@ -1210,6 +1210,15 @@ class UniversalProviderAdapter:
     def run_prompt(self, package: EvidencePackage, prompt: str) -> dict[str, Any]:
         package.write_text("input/prompt.txt", prompt)
         if not self.config.safe_run_prompt_once:
+            self._write_message_exchange(
+                package,
+                prompt=prompt,
+                scenario="run_prompt_once",
+                operation="run_once",
+                canary="universal_run_prompt_once",
+                level="hermetic",
+                source="universal harness provider-neutral prompt projection; does not prove live model output",
+            )
             payload = self._unsupported_payload(
                 "run_prompt_once",
                 "run_prompt_once_not_safe_no_token",
@@ -3852,7 +3861,7 @@ def _contract_snapshot(provider: str) -> dict[str, Any] | None:
         return None
     return {
         "provider": contract.provider,
-        "managed_transport": contract.managed_transport.value,
+        "managed_transport": contract.managed_transport.value if contract.managed_transport else None,
         "control_plane": contract.control_plane,
         "control_planes": list(contract.control_planes),
         "machine_control_supports": list(contract.machine_control_supports),

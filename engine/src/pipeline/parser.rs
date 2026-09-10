@@ -249,12 +249,13 @@ struct RawLine {
     #[serde(default, deserialize_with = "deserialize_release_version")]
     version: Option<String>,
     provider: Option<String>,
-    #[serde(rename = "modelId")]
+    #[serde(rename = "modelId", alias = "model")]
     model_id: Option<String>,
     #[serde(rename = "thinkingLevel")]
     thinking_level: Option<String>,
     label: Option<String>,
     name: Option<String>,
+    title: Option<String>,
     #[serde(rename = "tokensBefore")]
     tokens_before: Option<u64>,
     #[serde(rename = "isSidechain")]
@@ -396,6 +397,13 @@ struct ScannedPiSessionHeader {
     session_id: String,
     cwd: Option<String>,
     timestamp: Option<String>,
+    parent_session: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeFlavor {
+    Pi,
+    Omp,
 }
 
 #[derive(Debug, Default)]
@@ -676,6 +684,27 @@ struct ContentItem {
 /// Returns events, the last good byte offset (excluding partial lines),
 /// and session metadata.
 pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
+    parse_session_file_with_provider(path, offset, None)
+}
+
+/// Parse a source with an explicit provider authority. OMP must take this path
+/// so records that resemble Pi's native JSONL still receive OMP identity and
+/// taxonomy rather than silently becoming Pi events.
+pub fn parse_session_file_with_provider(
+    path: &Path,
+    offset: u64,
+    provider: Option<&str>,
+) -> Result<ParseResult> {
+    let native_flavor = match provider.map(|value| value.to_ascii_lowercase()).as_deref() {
+        Some("omp") => Some(NativeFlavor::Omp),
+        Some("pi") => Some(NativeFlavor::Pi),
+        _ => None,
+    };
+    if native_flavor == Some(NativeFlavor::Omp) {
+        // Do not let an incomplete OMP file acquire a filename-derived
+        // Longhouse identity. The shipper repeats this fence before enqueueing.
+        crate::omp_session::read_session_header(path)?;
+    }
     let is_gemini = path
         .extension()
         .and_then(|e| e.to_str())
@@ -690,7 +719,11 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
 
     // Ensure session_id is a valid UUID. Non-UUID stems (e.g. "agent-a51c878")
     // get a deterministic UUID v5 derived from the full file path.
-    let mut session_id = if let Some(antigravity_id) = antigravity_session_id_from_path(path) {
+    let mut session_id = if native_flavor == Some(NativeFlavor::Omp) {
+        crate::omp_session::deterministic_session_id(
+            &crate::omp_session::read_session_header(path)?.native_id,
+        )
+    } else if let Some(antigravity_id) = antigravity_session_id_from_path(path) {
         antigravity_id
     } else if Uuid::parse_str(&raw_stem).is_ok() {
         raw_stem
@@ -706,9 +739,14 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     } else {
         None
     };
-    let scanned_pi_header = scan_pi_session_header(path);
+    let scanned_pi_header = match native_flavor {
+        Some(NativeFlavor::Omp) => scan_omp_session_header(path),
+        _ => scan_pi_session_header(path),
+    };
     if let Some(scanned) = scanned_pi_header.as_ref() {
-        if Uuid::parse_str(&scanned.session_id).is_ok() {
+        if native_flavor == Some(NativeFlavor::Omp) {
+            session_id = crate::omp_session::deterministic_session_id(&scanned.session_id);
+        } else if Uuid::parse_str(&scanned.session_id).is_ok() {
             session_id = scanned.session_id.clone();
         }
     } else if let Some(scanned) = scanned_session_meta.as_ref() {
@@ -752,9 +790,9 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     let cursor_order_anchor = cursor_timestamps.map(|(started_at, _)| started_at);
     // JSONL: choose strategy based on file size
     let mut result = if file_size > MMAP_THRESHOLD {
-        parse_mmap(path, offset, &session_id, cursor_order_anchor)?
+        parse_mmap(path, offset, &session_id, cursor_order_anchor, native_flavor)?
     } else {
-        parse_buffered(path, offset, &session_id, cursor_order_anchor)?
+        parse_buffered(path, offset, &session_id, cursor_order_anchor, native_flavor)?
     };
     if let Some((started_at, last_activity_at)) = cursor_timestamps {
         result.metadata.started_at = Some(
@@ -786,7 +824,12 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
         if result.metadata.started_at.is_none() {
             result.metadata.started_at = scanned.timestamp.as_deref().and_then(parse_timestamp);
         }
-        if Uuid::parse_str(&scanned.session_id).is_ok() {
+        if result.metadata.parent_provider_session_id.is_none()
+            && native_flavor == Some(NativeFlavor::Omp)
+        {
+            result.metadata.parent_provider_session_id = scanned.parent_session.clone();
+        }
+        if native_flavor != Some(NativeFlavor::Omp) && Uuid::parse_str(&scanned.session_id).is_ok() {
             result.metadata.session_id = scanned.session_id.clone();
         }
     }
@@ -1043,9 +1086,20 @@ fn scan_pi_session_header(path: &Path) -> Option<ScannedPiSessionHeader> {
                 .get("timestamp")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            parent_session: None,
         });
     }
     None
+}
+
+fn scan_omp_session_header(path: &Path) -> Option<ScannedPiSessionHeader> {
+    let header = crate::omp_session::read_session_header(path).ok()?;
+    Some(ScannedPiSessionHeader {
+        session_id: header.native_id,
+        cwd: Some(header.cwd),
+        timestamp: header.timestamp,
+        parent_session: header.parent_session,
+    })
 }
 
 fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
@@ -1558,6 +1612,7 @@ fn parse_mmap(
     offset: u64,
     session_id: &str,
     cursor_order_anchor: Option<DateTime<Utc>>,
+    native_flavor: Option<NativeFlavor>,
 ) -> Result<ParseResult> {
     let file =
         std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
@@ -1646,6 +1701,14 @@ fn parse_mmap(
             Ok(v) => v,
             Err(e) => {
                 tracing::debug!(offset = line_offset, error = %e, "Failed to parse JSON line");
+                if native_flavor == Some(NativeFlavor::Omp) {
+                    push_omp_malformed_event(
+                        session_id,
+                        line_offset,
+                        &redacted_line,
+                        &mut events,
+                    );
+                }
                 // Still advance — the line is complete, just malformed
                 last_good_offset = after_line;
                 continue;
@@ -1655,7 +1718,7 @@ fn parse_mmap(
         last_good_offset = after_line;
 
         // Collect metadata
-        collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts);
+        collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts, native_flavor);
 
         extract_events(
             &obj,
@@ -1666,6 +1729,7 @@ fn parse_mmap(
             &mut antigravity_pending,
             &mut codex_pending,
             cursor_order_anchor,
+            native_flavor,
         );
         extract_provider_facts(
             &obj,
@@ -1673,6 +1737,7 @@ fn parse_mmap(
             line_offset,
             &mut provider_facts,
             &mut codex_facts,
+            native_flavor,
         );
     }
 
@@ -1704,6 +1769,7 @@ fn parse_buffered(
     offset: u64,
     session_id: &str,
     cursor_order_anchor: Option<DateTime<Utc>>,
+    native_flavor: Option<NativeFlavor>,
 ) -> Result<ParseResult> {
     let mut file =
         std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
@@ -1781,11 +1847,19 @@ fn parse_buffered(
             Ok(v) => v,
             Err(e) => {
                 tracing::debug!(offset = line_offset, error = %e, "Failed to parse JSON line");
+                if native_flavor == Some(NativeFlavor::Omp) {
+                    push_omp_malformed_event(
+                        session_id,
+                        line_offset,
+                        &redacted_line,
+                        &mut events,
+                    );
+                }
                 continue;
             }
         };
 
-        collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts);
+        collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts, native_flavor);
 
         extract_events(
             &obj,
@@ -1796,6 +1870,7 @@ fn parse_buffered(
             &mut antigravity_pending,
             &mut codex_pending,
             cursor_order_anchor,
+            native_flavor,
         );
         extract_provider_facts(
             &obj,
@@ -1803,6 +1878,7 @@ fn parse_buffered(
             line_offset,
             &mut provider_facts,
             &mut codex_facts,
+            native_flavor,
         );
     }
 
@@ -1878,6 +1954,7 @@ fn collect_metadata(
     meta: &mut SessionMetadata,
     min_ts: &mut Option<DateTime<Utc>>,
     max_ts: &mut Option<DateTime<Utc>>,
+    native_flavor: Option<NativeFlavor>,
 ) {
     // Pi's first line is the only durable provider-thread identity. Keep it
     // separate from Longhouse's session UUID while still using it to replace
@@ -1887,8 +1964,13 @@ fn collect_metadata(
             if meta.provider_session_id.is_none() {
                 meta.provider_session_id = Some(id.to_string());
             }
-            if meta.session_id.is_empty() && Uuid::parse_str(id).is_ok() {
-                meta.session_id = id.to_string();
+            if meta.session_id.is_empty() {
+                if native_flavor == Some(NativeFlavor::Omp) {
+                    // OMP ids are opaque provider identifiers. The Longhouse
+                    // UUID is assigned once by the source-aware entrypoint.
+                } else if Uuid::parse_str(id).is_ok() {
+                    meta.session_id = id.to_string();
+                }
             }
         }
         if meta.cwd.is_none() {
@@ -2195,8 +2277,15 @@ fn extract_provider_facts(
     line_offset: u64,
     facts: &mut Vec<ParsedProviderFact>,
     codex: &mut CodexFactState,
+    native_flavor: Option<NativeFlavor>,
 ) {
-    if is_pi_line(obj) {
+    if native_flavor == Some(NativeFlavor::Omp) {
+        if is_omp_line(obj) {
+            extract_omp_provider_facts(obj, line_offset, facts);
+        }
+        return;
+    }
+    if is_native_line(obj, native_flavor) {
         extract_pi_provider_facts(obj, line_offset, facts);
         return;
     }
@@ -2423,6 +2512,40 @@ fn is_pi_line(obj: &RawLine) -> bool {
             | "session_info",
         ) => true,
         _ => false,
+    }
+}
+
+fn is_omp_line(obj: &RawLine) -> bool {
+    matches!(
+        obj.r#type.as_deref(),
+        Some(
+            "title"
+                | "session"
+                | "message"
+                | "model_change"
+                | "thinking_level_change"
+                | "service_tier_change"
+                | "compaction"
+                | "branch_summary"
+                | "custom"
+                | "custom_message"
+                | "label"
+                | "session_info"
+                | "title_change"
+                | "reset_boundary"
+                | "session_init"
+                | "mode_change"
+                | "ttsr_injection"
+                | "credential_pin"
+        )
+    )
+}
+
+fn is_native_line(obj: &RawLine, native_flavor: Option<NativeFlavor>) -> bool {
+    match native_flavor {
+        Some(NativeFlavor::Omp) => is_omp_line(obj),
+        Some(NativeFlavor::Pi) => is_pi_line(obj),
+        None => is_pi_line(obj),
     }
 }
 
@@ -2947,6 +3070,152 @@ fn extract_pi_events(
     }
 }
 
+fn extract_omp_events(
+    obj: &RawLine,
+    session_id: &str,
+    line_offset: u64,
+    raw_line: &str,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let start = events.len();
+    let known = is_omp_line(obj);
+    if known {
+        // OMP shares the proven content-block projection with Pi, but its event
+        // namespace remains distinct for downstream taxonomy and diagnostics.
+        extract_pi_events(obj, session_id, line_offset, raw_line, events);
+    }
+    if events.len() == start {
+        let event_type = obj.r#type.as_deref();
+        let is_valid_header = match event_type {
+            Some("session") => obj
+                .id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty())
+                && obj
+                    .cwd
+                    .as_deref()
+                    .is_some_and(|cwd| !cwd.trim().is_empty()),
+            Some("title") => obj
+                .title
+                .as_deref()
+                .is_some_and(|title| !title.trim().is_empty()),
+            _ => false,
+        };
+        let lifecycle_record = matches!(
+            event_type,
+            Some("title_change")
+                | Some("reset_boundary")
+                | Some("session_init")
+                | Some("mode_change")
+                | Some("service_tier_change")
+                | Some("ttsr_injection")
+                | Some("credential_pin")
+        );
+        if is_valid_header {
+            // Session and title headers are represented by metadata/provider
+            // facts. Their source lines remain archived verbatim.
+        } else if lifecycle_record {
+            push_omp_record_event(obj, session_id, line_offset, raw_line, false, events);
+        } else {
+            push_omp_record_event(
+                obj,
+                session_id,
+                line_offset,
+                raw_line,
+                true,
+                events,
+            );
+        }
+    }
+    for event in &mut events[start..] {
+        if let Some(pi_type) = event.raw_type.strip_prefix("pi_") {
+            event.raw_type = format!("omp_{pi_type}");
+        }
+        if let Some(pi_id) = event.uuid.strip_prefix("pi-offset-") {
+            event.uuid = format!("omp-offset-{pi_id}");
+        }
+    }
+}
+
+fn omp_type_token(event_type: Option<&str>) -> String {
+    let token = event_type.unwrap_or("record");
+    let token: String = token
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let token = token.trim_matches('_');
+    if token.is_empty() {
+        "record".to_string()
+    } else {
+        bounded_text(token, 64)
+    }
+}
+
+fn push_omp_record_event(
+    obj: &RawLine,
+    session_id: &str,
+    line_offset: u64,
+    raw_line: &str,
+    unknown: bool,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let token = omp_type_token(obj.r#type.as_deref());
+    let raw_type = if unknown {
+        format!("omp_unknown_{token}")
+    } else {
+        format!("omp_{token}")
+    };
+    events.push(ParsedEvent {
+        uuid: obj
+            .id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("omp-offset-{line_offset}")),
+        parent_uuid: obj.parent_id.clone(),
+        session_id: session_id.to_string(),
+        timestamp: pi_timestamp(obj),
+        role: Role::System,
+        content_text: None,
+        tool_name: None,
+        tool_input_json: None,
+        tool_output_text: None,
+        tool_call_id: None,
+        source_offset: line_offset,
+        raw_type,
+        raw_line: Some(raw_line.to_string()),
+    });
+}
+
+fn push_omp_malformed_event(
+    session_id: &str,
+    line_offset: u64,
+    raw_line: &str,
+    events: &mut Vec<ParsedEvent>,
+) {
+    events.push(ParsedEvent {
+        uuid: format!("omp-offset-{line_offset}"),
+        parent_uuid: None,
+        session_id: session_id.to_string(),
+        timestamp: Utc::now(),
+        role: Role::System,
+        content_text: None,
+        tool_name: None,
+        tool_input_json: None,
+        tool_output_text: None,
+        tool_call_id: None,
+        source_offset: line_offset,
+        raw_type: "omp_unknown_malformed".to_string(),
+        raw_line: Some(raw_line.to_string()),
+    });
+}
+
 fn extract_pi_provider_facts(obj: &RawLine, line_offset: u64, facts: &mut Vec<ParsedProviderFact>) {
     let at = pi_timestamp(obj);
     let mut push = |kind: &str, payload: Value| {
@@ -3019,6 +3288,31 @@ fn extract_pi_provider_facts(obj: &RawLine, line_offset: u64, facts: &mut Vec<Pa
     }
 }
 
+fn extract_omp_provider_facts(obj: &RawLine, line_offset: u64, facts: &mut Vec<ParsedProviderFact>) {
+    let start = facts.len();
+    if matches!(obj.r#type.as_deref(), Some("title") | Some("title_change")) {
+        if let Some(title) = obj.title.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            facts.push(ParsedProviderFact {
+                kind: "session.title".to_string(),
+                at: if obj.r#type.as_deref() == Some("title") {
+                    DateTime::<Utc>::UNIX_EPOCH
+                } else {
+                    pi_timestamp(obj)
+                },
+                source_offset: line_offset,
+                payload: json!({"title": bounded_text(title, 255), "provider": "omp"}),
+            });
+        }
+        return;
+    }
+    extract_pi_provider_facts(obj, line_offset, facts);
+    for fact in &mut facts[start..] {
+        if let Value::Object(payload) = &mut fact.payload {
+            payload.insert("provider".to_string(), Value::String("omp".to_string()));
+        }
+    }
+}
+
 fn extract_events(
     obj: &RawLine,
     session_id: &str,
@@ -3028,8 +3322,16 @@ fn extract_events(
     antigravity_pending: &mut AntigravityPending,
     codex_pending: &mut CodexPending,
     cursor_order_anchor: Option<DateTime<Utc>>,
+    native_flavor: Option<NativeFlavor>,
 ) {
     let event_type = obj.r#type.as_deref().unwrap_or("");
+
+    // Provider authority is decided by discovery, not by shape. OMP records
+    // must never be reclassified as Antigravity, Cursor, Claude, or Codex.
+    if native_flavor == Some(NativeFlavor::Omp) {
+        extract_omp_events(obj, session_id, line_offset, raw_line, events);
+        return;
+    }
 
     if is_antigravity_line(obj) {
         extract_antigravity_events(
@@ -3043,8 +3345,12 @@ fn extract_events(
         return;
     }
 
-    if is_pi_line(obj) {
-        extract_pi_events(obj, session_id, line_offset, raw_line, events);
+    if is_native_line(obj, native_flavor) {
+        if native_flavor == Some(NativeFlavor::Omp) {
+            extract_omp_events(obj, session_id, line_offset, raw_line, events);
+        } else {
+            extract_pi_events(obj, session_id, line_offset, raw_line, events);
+        }
         return;
     }
 
@@ -5173,6 +5479,104 @@ mod tests {
             messages[1].content_text.as_deref(),
             Some("LH_SERVED_pi")
         );
+    }
+
+    #[test]
+    fn omp_dispatch_keeps_opaque_identity_and_omp_taxonomy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native.jsonl");
+        std::fs::write(
+            &path,
+            include_str!("../../tests/fixtures/golden/omp/native.jsonl"),
+        )
+        .unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+        assert_eq!(
+            result.metadata.provider_session_id.as_deref(),
+            Some("omp-native-18-1-14")
+        );
+        assert_ne!(
+            result.metadata.session_id,
+            "omp-native-18-1-14"
+        );
+        assert_eq!(
+            result.metadata.session_id,
+            crate::omp_session::deterministic_session_id("omp-native-18-1-14")
+        );
+        assert!(Uuid::parse_str(&result.metadata.session_id).is_ok());
+        assert!(result.events.iter().any(|event| event.raw_type == "omp_tool_call"));
+        assert!(result.events.iter().any(|event| event.raw_type == "omp_tool_result"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "omp_unknown_unknown_future_record"));
+        assert!(result.events.iter().all(|event| !event.raw_type.starts_with("pi_")));
+        assert!(result
+            .events
+            .iter()
+            .all(|event| !event.raw_type.starts_with("antigravity_")
+                && !event.raw_type.starts_with("claude_")
+                && !event.raw_type.starts_with("cursor_")
+                && !event.raw_type.starts_with("codex_")));
+        assert_eq!(result.metadata.forked_from_session_id, None);
+        assert_eq!(
+            result.metadata.parent_provider_session_id.as_deref(),
+            Some("omp-parent-opaque")
+        );
+        assert!(result
+            .source_lines
+            .iter()
+            .any(|line| line.raw_line.contains("omp-parent-opaque")));
+        let title = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "session.title")
+            .unwrap();
+        assert_eq!(title.payload["provider"], "omp");
+        assert!(result.provider_facts.iter().any(|fact| {
+            fact.kind == "session.title" && fact.payload["title"] == "Updated OMP title"
+        }));
+        assert!(result.events.iter().any(|event| event.raw_type == "omp_model_change"));
+        assert_eq!(result.source_lines.len(), 10);
+    }
+
+    #[test]
+    fn omp_unknown_and_malformed_records_never_leave_the_omp_lane() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("adversarial.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"title\",\"title\":\"OMP\"}\n",
+                "{\"type\":\"session\",\"id\":\"opaque\",\"cwd\":\"/tmp/omp\"}\n",
+                "{\"type\":\"assistant\",\"role\":\"user\",\"timestamp\":\"2026-09-09T00:00:00Z\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"must stay raw\"}]}}\n",
+                "{\"type\":\"title_change\",\"title\":\"next\"}\n",
+                "{\"type\":\"mode_change\"}\n",
+                "not-json\n",
+            ),
+        )
+        .unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+        let raw_types: Vec<&str> = result.events.iter().map(|event| event.raw_type.as_str()).collect();
+        assert!(raw_types.contains(&"omp_unknown_assistant"));
+        assert!(raw_types.contains(&"omp_title_change"));
+        assert!(raw_types.contains(&"omp_mode_change"));
+        assert!(raw_types.contains(&"omp_unknown_malformed"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.uuid.starts_with("omp-offset-")));
+        assert!(result
+            .events
+            .iter()
+            .all(|event| !event.uuid.starts_with("pi-offset-")
+                && !event.raw_type.starts_with("cursor_")
+                && !event.raw_type.starts_with("claude_")
+                && !event.raw_type.starts_with("codex_")
+                && !event.raw_type.starts_with("antigravity_")));
+        assert!(result.source_lines.iter().any(|line| line.raw_line == "not-json"));
     }
 
     #[test]

@@ -579,8 +579,7 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "opencode_run_stream"
     )
-    pi_live = _is_pi_print_stream_event(event)
-    return codex_live or cursor_live or opencode_live or pi_live
+    return codex_live or cursor_live or opencode_live or _is_pi_print_stream_event(event) or _is_omp_print_stream_event(event)
 
 
 def _is_pi_print_stream_event(event: RuntimeEventIngest) -> bool:
@@ -590,6 +589,16 @@ def _is_pi_print_stream_event(event: RuntimeEventIngest) -> bool:
         and (event.source or "").strip().lower() == "pi_print"
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "pi_print_stream"
+    )
+
+
+def _is_omp_print_stream_event(event: RuntimeEventIngest) -> bool:
+    payload = event.payload or {}
+    return (
+        (event.provider or "").strip().lower() == "omp"
+        and (event.source or "").strip().lower() == "omp_print"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") == "omp_print_stream"
     )
 
 
@@ -654,18 +663,17 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
 
     updated_runtime_keys: list[str] = []
     for event in events:
-        pi_print_stream = _is_pi_print_stream_event(event)
+        overlay_stream = _is_pi_print_stream_event(event) or _is_omp_print_stream_event(event)
         preview_candidate = live_preview_candidate_from_runtime_event(
             event,
             observation_id=f"live:{event.source}:{event.dedupe_key}",
         )
         if preview_candidate is not None:
             upsert_live_session_live_preview(db, preview_candidate)
-        if pi_print_stream:
-            # Pi's print stream is a transcript overlay. Its activity and
-            # terminal lifecycle arrive as separate runtime signals; reducing
-            # this envelope as progress would manufacture phase state from UI
-            # text and make the overlay look like durable runtime evidence.
+        if overlay_stream:
+            # Provider print streams are transcript overlays. Their activity
+            # and terminal lifecycle arrive separately; reducing their text as
+            # runtime phase evidence would fabricate provider state.
             outcome = "stored_live_overlay"
         else:
             outcome = _apply_runtime_event(

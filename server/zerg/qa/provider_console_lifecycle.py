@@ -42,7 +42,7 @@ from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
-INTERRUPT_SUPPORTED = frozenset({"claude", "opencode", "cursor", "pi"})
+INTERRUPT_SUPPORTED = frozenset({"claude", "opencode", "cursor", "pi", "omp"})
 INTERRUPT_UNSUPPORTED = frozenset({"codex"})
 ASSERTION_ID = "console_adapter_release_contract_preserved"
 SUPPORTED_VARIANT = "interrupt_supported"
@@ -64,6 +64,7 @@ PROVIDER_BIN_ENV = {
     "opencode": "LONGHOUSE_OPENCODE_BIN",
     "cursor": "LONGHOUSE_CURSOR_BIN",
     "pi": "LONGHOUSE_PI_BIN",
+    "omp": "LONGHOUSE_OMP_BIN",
 }
 ADAPTERS = {
     "codex": "codex_exec",
@@ -71,14 +72,16 @@ ADAPTERS = {
     "opencode": "opencode_run",
     "cursor": "cursor_print",
     "pi": "pi_print",
+    "omp": "omp_print",
 }
-CAN_RESUME = frozenset({"codex", "claude", "opencode", "cursor", "pi"})
+CAN_RESUME = frozenset({"codex", "claude", "opencode", "cursor", "pi", "omp"})
 _VERSION_PATTERNS = {
     "codex": re.compile(r"^codex-cli (?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
     "claude": re.compile(r"^(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?) \(Claude Code\)$"),
     "opencode": re.compile(r"^(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
     "cursor": re.compile(r"^(?P<version>\d{4}\.\d{2}\.\d{2}(?:-[0-9A-Za-z.-]+)?)$"),
     "pi": re.compile(r"^(?P<version>\d+\.\d+\.\d+)$"),
+    "omp": re.compile(r"^(?P<version>\d+\.\d+\.\d+)$"),
 }
 
 REGISTRATION = ProducerRegistration(
@@ -109,6 +112,7 @@ REGISTRATION = ProducerRegistration(
         "console_boundary_receipt",
         "provider_response_binding_receipt",
         "interrupt_contract_receipt",
+        "console_continuation_receipt",
         "cleanup_receipt",
     ),
     required_artifacts_by_scenario={
@@ -173,6 +177,10 @@ def _provider_environment(provider: str, args: argparse.Namespace, home: Path) -
     if provider == "pi":
         environment["PI_CODING_AGENT_DIR"] = str(home / ".pi")
         environment["LONGHOUSE_PI_QUALIFICATION_MODEL"] = args.model
+    if provider == "omp":
+        environment["XDG_DATA_HOME"] = str(home / ".local" / "share")
+        environment["LONGHOUSE_OMP_DATA_DIR"] = str(home / ".local" / "share" / "omp")
+        environment["LONGHOUSE_OMP_SESSION_DIR"] = str(home / ".local" / "share" / "omp" / "sessions")
     environment.setdefault("CLAUDE_CONFIG_DIR", str(home / ".claude"))
     environment.setdefault("CURSOR_HOME", str(home / ".cursor"))
     return environment
@@ -463,6 +471,18 @@ def _assistant_output_texts(provider: str, content: str) -> list[str]:
                 )
             elif isinstance(blocks, str):
                 texts.append(blocks)
+        elif provider == "omp" and event.get("type") == "message_end":
+            message = event.get("message")
+            if isinstance(message, Mapping) and message.get("role") == "assistant":
+                blocks = message.get("content")
+                if isinstance(blocks, list):
+                    texts.extend(
+                        str(block["text"])
+                        for block in blocks
+                        if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
+                    )
+                elif isinstance(blocks, str):
+                    texts.append(blocks)
     return texts
 
 
@@ -560,6 +580,88 @@ def _pi_tool_evidence(claim: Mapping[str, object], marker: str) -> dict[str, obj
     )
 
 
+def _pi_native_marker_evidence(
+    path: Path,
+    marker: str,
+    *,
+    minimum_source_offset: int = 0,
+    maximum_source_offset: int | None = None,
+) -> dict[str, object] | None:
+    """Return the native JSONL message id for one assistant marker."""
+    rows, provider_session_id, _metadata = pi_transcript_rows(path)
+    matches = [
+        row
+        for row in rows
+        if row.get("type") == "assistant"
+        and int(row.get("source_offset") or 0) >= minimum_source_offset
+        and (maximum_source_offset is None or int(row.get("source_offset") or 0) < maximum_source_offset)
+        and str(row.get("text") or "").count(marker) == 1
+    ]
+    if len(matches) != 1 or not isinstance(matches[0].get("entry_id"), str) or not matches[0]["entry_id"]:
+        return None
+    row = matches[0]
+    return {
+        "native_message_id": row["entry_id"],
+        "provider_session_id": provider_session_id,
+        "source_offset": row.get("source_offset"),
+        "marker_count": str(row.get("text") or "").count(marker),
+    }
+
+
+def _pi_continuation_linkage(
+    native: Mapping[str, object] | None,
+    projected_assistant_event_id: object,
+    *,
+    projected_marker_count: int,
+    same_session: bool,
+    same_thread: bool,
+    native_provider_thread_id: object,
+    projected_provider_thread_id: object,
+) -> dict[str, object]:
+    native_message_id = native.get("native_message_id") if isinstance(native, Mapping) else None
+    native_marker_count = native.get("marker_count") if isinstance(native, Mapping) else None
+    native_provider_session_id = native.get("provider_session_id") if isinstance(native, Mapping) else None
+    native_session_matches_provider_thread = native_provider_session_id == native_provider_thread_id
+    native_and_projected_ids_equal = (
+        isinstance(native_message_id, str)
+        and bool(native_message_id)
+        and projected_assistant_event_id is not None
+        and native_message_id == projected_assistant_event_id
+    )
+    native_and_projected_ids_distinct = (
+        isinstance(native_message_id, str)
+        and bool(native_message_id)
+        and projected_assistant_event_id is not None
+        and native_message_id != projected_assistant_event_id
+    )
+    native_and_projected_ids_bound = native_and_projected_ids_equal or native_and_projected_ids_distinct
+    return {
+        "native_message_id_present": isinstance(native_message_id, str) and bool(native_message_id),
+        "projected_assistant_event_id_present": projected_assistant_event_id is not None,
+        "native_marker_count": native_marker_count,
+        "projected_marker_count": projected_marker_count,
+        "same_session": same_session,
+        "same_thread": same_thread,
+        "same_provider_thread": native_provider_thread_id == projected_provider_thread_id,
+        "native_session_matches_provider_thread": native_session_matches_provider_thread,
+        "native_and_projected_ids_equal": native_and_projected_ids_equal,
+        "native_and_projected_ids_distinct": native_and_projected_ids_distinct,
+        "native_and_projected_ids_bound": native_and_projected_ids_bound,
+        "proven": (
+            isinstance(native_message_id, str)
+            and bool(native_message_id)
+            and projected_assistant_event_id is not None
+            and native_marker_count == 1
+            and projected_marker_count == 1
+            and same_session
+            and same_thread
+            and native_provider_thread_id == projected_provider_thread_id
+            and native_session_matches_provider_thread
+            and native_and_projected_ids_bound
+        ),
+    }
+
+
 def _pi_native_tool_observation(path: Path, marker: str) -> dict[str, object]:
     """Extract one native Pi tool pair and its following marker response."""
 
@@ -583,13 +685,24 @@ def _pi_native_tool_observation(path: Path, marker: str) -> dict[str, object]:
     calls: dict[str, dict[str, object]] = {}
     results: dict[str, dict[str, object]] = {}
     marker_responses: list[dict[str, object]] = []
+    native_models: list[str] = []
+    native_providers: list[str] = []
     for row in rows:
+        message = row.get("message") if isinstance(row.get("message"), Mapping) else {}
+        model = message.get("model") if isinstance(message, Mapping) else None
+        if isinstance(model, str) and model.strip():
+            native_models.append(model.strip())
+        provider_name = message.get("provider") if isinstance(message, Mapping) else None
+        if isinstance(provider_name, str) and provider_name.strip():
+            native_providers.append(provider_name.strip())
+        if isinstance(row.get("model"), str) and row["model"].strip():
+            native_models.append(str(row["model"]).strip())
         if row.get("type") == "assistant":
             text = str(row.get("text") or "")
             if marker and marker in text:
                 marker_responses.append(
                     {
-                        "native_event_id": row.get("entry_id"),
+                        "native_message_id": row.get("entry_id"),
                         "source_offset": row.get("source_offset"),
                         "marker_count": text.count(marker),
                     }
@@ -605,20 +718,20 @@ def _pi_native_tool_observation(path: Path, marker: str) -> dict[str, object]:
                     "id": call_id,
                     "name": tool.get("name"),
                     "arguments": tool.get("arguments"),
-                    "native_event_id": row.get("entry_id"),
+                    "native_message_id": row.get("entry_id"),
                     "source_offset": row.get("source_offset"),
                 }
         elif row.get("type") == "tool_result" and row.get("tool_call_id"):
             call_id = str(row["tool_call_id"])
-            native_event_id = row.get("entry_id")
-            message = raw_messages.get(str(native_event_id))
+            native_message_id = row.get("entry_id")
+            message = raw_messages.get(str(native_message_id))
             results[call_id] = {
-                "id": native_event_id,
+                "id": native_message_id,
                 "tool_call_id": call_id,
                 "name": row.get("tool_name"),
                 "result": message.get("content") if isinstance(message, Mapping) and "content" in message else row.get("text"),
                 "is_error": row.get("is_error"),
-                "native_event_id": native_event_id,
+                "native_message_id": native_message_id,
                 "source_offset": row.get("source_offset"),
             }
 
@@ -650,6 +763,8 @@ def _pi_native_tool_observation(path: Path, marker: str) -> dict[str, object]:
 
     return {
         "provider_session_id": provider_session_id,
+        "native_model": native_models[-1] if native_models else metadata.get("model"),
+        "native_provider": native_providers[-1] if native_providers else None,
         "header_present": metadata.get("has_header") is True,
         "calls": calls,
         "results": results,
@@ -668,6 +783,8 @@ def _pi_native_tool_receipt(
     binary_receipt: Mapping[str, object],
     cleanup: Mapping[str, object],
     marker: str,
+    native_retained_path: str | None = None,
+    provider_response_retained_path: str | None = None,
 ) -> dict[str, object]:
     """Bind retained native call/result evidence to the live Console turn."""
 
@@ -686,6 +803,7 @@ def _pi_native_tool_receipt(
             "source_kind": binding.get("provider_response_source_kind"),
             "source_sha256": binding.get("provider_response_source_sha256"),
             "retained_source_path": str(provider_response_source) if provider_response_source is not None else None,
+            "retained_path": provider_response_retained_path,
             "bound_assistant_event_id": binding.get("bound_assistant_event_id"),
             "bound_assistant_event_origin": binding.get("bound_assistant_event_origin"),
         },
@@ -701,6 +819,7 @@ def _pi_native_tool_receipt(
         try:
             receipt["native_source"] = {
                 "path": str(native_source),
+                "retained_path": native_retained_path,
                 "sha256": _sha256_file(native_source),
                 "kind": "provider_native_session_jsonl",
             }
@@ -716,7 +835,8 @@ def _pi_native_tool_receipt(
         receipt["tool_result"] = result
         provider_response = receipt["provider_response"]
         if isinstance(provider_response, dict):
-            provider_response["native_event_id"] = response.get("native_event_id")
+            provider_response["native_message_id"] = response.get("native_message_id")
+            provider_response["projected_assistant_event_id"] = binding.get("bound_assistant_event_id")
             provider_response["native_marker_count"] = response.get("marker_count")
     else:
         receipt["tool_call"] = None
@@ -727,6 +847,7 @@ def _pi_native_tool_receipt(
     provider_response = receipt["provider_response"]
     if isinstance(provider_response, dict):
         provider_response["native_source_path"] = str(native_source) if native_source is not None else None
+        provider_response["native_retained_path"] = native_retained_path
         provider_response["native_provider_session_id"] = provider_session_id
     native_session_matches = (
         isinstance(provider_session_id, str)
@@ -747,6 +868,18 @@ def _pi_native_tool_receipt(
     if not inspection_ok:
         failures.append("live_pi_tool_inspection_incomplete")
     provider_response_marker_count = binding.get("provider_response_marker_count")
+    native_projected_linkage = (
+        isinstance(provider_response, dict)
+        and isinstance(provider_response.get("native_message_id"), str)
+        and bool(provider_response.get("native_message_id"))
+        and provider_response.get("projected_assistant_event_id") == binding.get("bound_assistant_event_id")
+        and provider_response.get("native_message_id") != provider_response.get("projected_assistant_event_id")
+        and isinstance(pair, tuple)
+        and len(pair) == 3
+        and pair[2].get("marker_count") == 1
+    )
+    if not native_projected_linkage:
+        failures.append("native_projected_assistant_linkage_missing")
     provider_response_ok = (
         binding.get("status") == "pass"
         and binding.get("marker") == marker
@@ -766,6 +899,7 @@ def _pi_native_tool_receipt(
         and cleanup.get("provider_process_dead") is True
         and cleanup.get("process_group_dead") is True
         and cleanup.get("orphan_count") == 0
+        and cleanup.get("process_stop_verified") is True
     )
     if not cleanup_ok:
         failures.append("cleanup_failed")
@@ -776,11 +910,22 @@ def _pi_native_tool_receipt(
         failures.append("provider_response_runtime_identity_mismatch")
 
     receipt["provider_session_id"] = provider_session_id
+    receipt["native_model"] = native.get("native_model")
+    receipt["native_provider"] = native.get("native_provider")
     receipt["linkage"] = {
         "live_inspection_confirmed": inspection_ok,
         "native_session_matches_provider_thread": native_session_matches,
         "native_response_follows_tool_result": isinstance(pair, tuple) and len(pair) == 3,
         "provider_response_bound": provider_response_ok,
+        "native_projected_assistant_linkage": native_projected_linkage,
+        "native_message_id_preserved": bool(
+            isinstance(provider_response.get("native_message_id"), str) if isinstance(provider_response, dict) else False
+        ),
+        "projected_assistant_event_id_preserved": (
+            isinstance(provider_response.get("projected_assistant_event_id"), (str, int))
+            and not isinstance(provider_response.get("projected_assistant_event_id"), bool)
+            and provider_response.get("projected_assistant_event_id") == binding.get("bound_assistant_event_id")
+        ),
         "runtime_identity_matches": runtime_identity_ok,
         "cleanup_pass": cleanup_ok,
     }
@@ -851,6 +996,104 @@ def _wait_owned_processes_dead(claims: list[dict[str, Any]], timeout: float = 15
             return True
         time.sleep(0.1)
     return all(_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id")) for claim in claims)
+
+
+def _console_cleanup_receipt(
+    claims: list[dict[str, Any]],
+    retained_sources: list[dict[str, object]],
+    *,
+    process_stop_wait_completed: bool | None = None,
+    shipper_stop: Mapping[str, object] | None = None,
+    served_run_inventory: Mapping[str, object] | None = None,
+    run_failed: bool = False,
+) -> dict[str, object]:
+    provider_process_dead = bool(claims) and all(_pid_dead(claim.get("pid")) for claim in claims)
+    process_group_dead = bool(claims) and all(_process_group_dead(claim.get("process_group_id")) for claim in claims)
+    orphan_count = sum(not (_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id"))) for claim in claims)
+    process_stop_verified = provider_process_dead and process_group_dead and orphan_count == 0 and process_stop_wait_completed is not False
+    source_retention_verified = bool(retained_sources) and all(
+        item.get("retained") is True and isinstance(item.get("path"), str) and bool(item["path"]) for item in retained_sources
+    )
+    shipper_stop_verified = (
+        isinstance(shipper_stop, Mapping)
+        and shipper_stop.get("stopped") is True
+        and shipper_stop.get("process_dead") is True
+        and shipper_stop.get("process_group_dead") is True
+    )
+    served_run_retired = (
+        isinstance(served_run_inventory, Mapping)
+        and served_run_inventory.get("retired") is True
+        and served_run_inventory.get("active_run_count") == 0
+    )
+    cleanup_pass = not run_failed and process_stop_verified and shipper_stop_verified and served_run_retired
+    return {
+        "status": "pass" if cleanup_pass else "fail",
+        "provider_process_dead": provider_process_dead,
+        "process_group_dead": process_group_dead,
+        "orphan_count": orphan_count,
+        "process_stop_verified": process_stop_verified,
+        "process_stop": {
+            "verified": process_stop_verified,
+            "provider_process_dead": provider_process_dead,
+            "process_group_dead": process_group_dead,
+            "orphan_count": orphan_count,
+            "owned_process_count": len(claims),
+            "wait_completed": process_stop_wait_completed,
+        },
+        "source_retention_verified": source_retention_verified,
+        "source_retention": {
+            "verified": source_retention_verified,
+            "source_count": len(retained_sources),
+            "retained_source_count": sum(item.get("retained") is True for item in retained_sources),
+            "sources": retained_sources,
+        },
+        "shipper_stop": dict(shipper_stop) if isinstance(shipper_stop, Mapping) else None,
+        "shipper_stop_verified": shipper_stop_verified,
+        "served_run_inventory": dict(served_run_inventory) if isinstance(served_run_inventory, Mapping) else None,
+        "served_run_retired": served_run_retired,
+        "run_failed": run_failed,
+    }
+
+
+def _served_run_inventory_evidence(
+    api_url: str,
+    token: str,
+    session_id: str,
+    claims: list[dict[str, Any]],
+) -> dict[str, object]:
+    """Prove the served run inventory retired the provider execution owner."""
+
+    terminal_claims = [claim for claim in claims if claim.get("state") == "terminal"]
+    try:
+        diagnostic = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/state-diagnostics")
+    except Exception as exc:  # noqa: BLE001 - cleanup evidence must fail closed
+        return {
+            "retired": False,
+            "active_run_count": None,
+            "session_id": session_id,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), Mapping) else {}
+    run = shadow.get("run") if isinstance(shadow, Mapping) and isinstance(shadow.get("run"), Mapping) else {}
+    activity = shadow.get("activity") if isinstance(shadow, Mapping) and isinstance(shadow.get("activity"), Mapping) else {}
+    terminal_state = str(run.get("lifecycle") or run.get("state") or "").lower()
+    activity_state = str(activity.get("state") or "").lower()
+    retired = (
+        len(terminal_claims) == len(claims)
+        and bool(claims)
+        and diagnostic.get("served_path") == "canonical_session_detail"
+        and terminal_state in {"completed", "failed", "cancelled", "terminal", "stopped"}
+        and activity_state in {"", "quiescent", "idle", "finished"}
+    )
+    return {
+        "retired": retired,
+        "active_run_count": 0 if retired else sum(claim.get("state") != "terminal" for claim in claims),
+        "session_id": session_id,
+        "served_path": diagnostic.get("served_path"),
+        "terminal_state": terminal_state or None,
+        "activity_state": activity_state or None,
+        "run_ids": [claim.get("run_id") for claim in claims],
+    }
 
 
 def _force_cleanup(claims: list[dict[str, Any]]) -> None:
@@ -1008,7 +1251,7 @@ def _retain_claim_sources(
             retained.append(
                 {
                     "source": raw_path,
-                    "path": str(target),
+                    "path": target.relative_to(root).as_posix(),
                     "retained": True,
                     "truncated": truncated,
                     "bytes": len(content),
@@ -1071,6 +1314,7 @@ def _observation_from_receipts(
             and cleanup.get("provider_process_dead") is True
             and cleanup.get("process_group_dead") is True
             and cleanup.get("orphan_count") == 0
+            and cleanup.get("process_stop_verified") is True
         ),
     }
 
@@ -1140,7 +1384,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     args.api_url = api_url
     args.agents_token = token
     claims: list[dict[str, Any]] = []
+    retained_sources: list[dict[str, object]] = []
     shipper: TranscriptShipper | None = None
+    session_id: str | None = None
     cleanup_written = False
     try:
         shipper = start_transcript_shipper(
@@ -1164,9 +1410,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         session_id = str(created["session_id"])
         thread_id = str(created["thread_id"])
         marker = f"LH_{provider.upper()}_CONSOLE_{uuid4().hex}"
+        context_marker = f"LH_{provider.upper()}_CONTEXT_{uuid4().hex}"
         message = f"Reply with exactly {marker} and nothing else."
         if provider == "pi":
-            message = f"Use the read tool to read {workspace / 'pi-console-proof.txt'}, then reply with exactly {marker} and nothing else."
+            message = (
+                f"Remember this context phrase: {context_marker}. Use the read tool to read "
+                f"{workspace / 'pi-console-proof.txt'}, then reply with exactly {marker} and nothing else."
+            )
         request_id = f"console-release-{uuid4()}"
         first = _start_turn(
             api_url=api_url,
@@ -1215,6 +1465,18 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         )
         provider_response_evidence = _claim_output_evidence(provider, first_claim, marker)
         pi_tool_evidence = _pi_tool_evidence(first_claim, pi_tool_marker) if provider == "pi" else None
+        first_native_source_path: Path | None = None
+        first_native_source_size: int | None = None
+        second_native_source_size: int | None = None
+        if provider == "pi":
+            raw_first_native_source = first_claim.get("source_path")
+            if not isinstance(raw_first_native_source, str) or not raw_first_native_source:
+                raise RuntimeError("first Console Pi turn has no retained native source boundary")
+            first_native_source_path = Path(raw_first_native_source)
+            first_native_source_size = len(first_native_source_path.read_bytes())
+        first_native_response = _pi_native_marker_evidence(first_native_source_path, marker) if provider == "pi" else None
+        if provider == "pi" and first_native_response is None:
+            raise RuntimeError("first Console Pi turn has no unique native assistant marker message")
         dispatch = {
             "status": "pass",
             "provider": provider,
@@ -1230,6 +1492,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "provider_thread_id": first_claim.get("provider_thread_id"),
             "qualification_model": args.model,
             "native_model": _native_model(provider, args.model),
+            "native_provider": "openrouter" if provider == "pi" else None,
             "qualification_model_bound": True,
             "argv": (first_claim.get("result") or {}).get("argv"),
         }
@@ -1292,6 +1555,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         if provider in CAN_RESUME:
             resume_marker = f"LH_{provider.upper()}_RESUME_{uuid4().hex}"
             resume_message = f"Reply with exactly {resume_marker} and nothing else."
+            if provider == "pi":
+                resume_message = f"Reply with the context phrase you remember, followed by exactly {resume_marker} and nothing else."
             resume_request_id = f"console-resume-{uuid4()}"
             resume = _start_turn(
                 api_url=api_url,
@@ -1314,14 +1579,101 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 turn_id=str(resume["turn_id"]),
                 run_id=str(resume["run_id"]),
             )
-            _wait_exact_assistant_marker(api_url, token, session_id, resume_marker)
+            resume_events = _wait_exact_assistant_marker(api_url, token, session_id, resume_marker)
+            resume_native_response: dict[str, object] | None = None
+            if provider == "pi":
+                raw_resume_source = resume_claim.get("source_path") or resume_claim.get("stdout_path")
+                if not isinstance(raw_resume_source, str) or not first_native_source_size:
+                    raise RuntimeError("second Console Pi turn has no native source boundary")
+                resume_native_response = _pi_native_marker_evidence(
+                    Path(raw_resume_source),
+                    resume_marker,
+                    minimum_source_offset=first_native_source_size,
+                )
+                if resume_native_response is None:
+                    raise RuntimeError("second Console Pi turn has no unique native assistant marker message")
+            resume_context_marker_count = event_text(resume_events[0]).count(context_marker) if provider == "pi" and resume_events else None
+            if provider == "pi" and resume_context_marker_count != 1:
+                raise RuntimeError("second Console turn did not recall the seeded first-turn context")
             if first_claim.get("provider_thread_id") is None or resume_claim.get("provider_thread_id") != first_claim.get(
                 "provider_thread_id"
             ):
                 raise RuntimeError("second Console turn did not preserve the native provider thread")
+            continuation_linkage = (
+                _pi_continuation_linkage(
+                    resume_native_response,
+                    resume_events[0].get("id") if resume_events else None,
+                    projected_marker_count=event_text(resume_events[0]).count(resume_marker) if resume_events else 0,
+                    same_session=resume_claim.get("session_id") == session_id,
+                    same_thread=resume_claim.get("thread_id") == thread_id,
+                    native_provider_thread_id=resume_claim.get("provider_thread_id"),
+                    projected_provider_thread_id=first_claim.get("provider_thread_id"),
+                )
+                if provider == "pi"
+                else None
+            )
+            if provider == "pi" and continuation_linkage is not None and continuation_linkage.get("proven") is not True:
+                raise RuntimeError("Console Pi continuation did not prove native/projected assistant linkage")
+            if provider == "pi":
+                second_native_source_size = len(Path(raw_resume_source).read_bytes())
+                if second_native_source_size <= first_native_source_size:
+                    raise RuntimeError("second Console Pi turn has no complete native source boundary")
+                resume_native_response = _pi_native_marker_evidence(
+                    Path(raw_resume_source),
+                    resume_marker,
+                    minimum_source_offset=first_native_source_size,
+                    maximum_source_offset=second_native_source_size,
+                )
+                if resume_native_response is None:
+                    raise RuntimeError("second Console Pi marker escaped its pre-interrupt native boundary")
             dispatch["resume_run_id"] = resume.get("run_id")
             dispatch["native_thread_resumed"] = True
             write_json(root / "adapter-dispatch-receipt.json", dispatch)
+            continuation_receipt = {
+                "status": "pass",
+                "provider": provider,
+                "session_id": session_id,
+                "thread_id": thread_id,
+                "first_process": {
+                    "pid": first_claim.get("pid"),
+                    "process_group_id": first_claim.get("process_group_id"),
+                    "run_id": first_claim.get("run_id"),
+                    "turn_id": first_claim.get("turn_id"),
+                    "provider_thread_id": first_claim.get("provider_thread_id"),
+                },
+                "second_process": {
+                    "pid": resume_claim.get("pid"),
+                    "process_group_id": resume_claim.get("process_group_id"),
+                    "run_id": resume_claim.get("run_id"),
+                    "turn_id": resume_claim.get("turn_id"),
+                    "provider_thread_id": resume_claim.get("provider_thread_id"),
+                },
+                "context": {
+                    "seed_marker": context_marker,
+                    "first_prompt": message,
+                    "first_prompt_digest": _sha256_bytes(message.encode()),
+                    "prompt": resume_message,
+                    "prompt_digest": _sha256_bytes(resume_message.encode()),
+                    "marker": resume_marker,
+                },
+                "response": {
+                    "projected_assistant_event_id": resume_events[0].get("id") if resume_events else None,
+                    "native_message_id": resume_native_response.get("native_message_id") if resume_native_response else None,
+                    "marker_count": event_text(resume_events[0]).count(resume_marker) if resume_events else 0,
+                    "context_marker_count": resume_context_marker_count,
+                    "event_count": len(resume_events),
+                    "linkage": continuation_linkage,
+                    "native_source_end_offset_before_interrupt": second_native_source_size,
+                    "native_source_start_offset_before_resume": first_native_source_size,
+                },
+                "same_session": resume_claim.get("session_id") == session_id,
+                "same_thread": resume_claim.get("thread_id") == thread_id,
+                "new_run": resume_claim.get("run_id") != first_claim.get("run_id"),
+                "native_thread_resumed": resume_claim.get("provider_thread_id") == first_claim.get("provider_thread_id"),
+            }
+            if not continuation_receipt["new_run"]:
+                raise RuntimeError("Console Pi continuation reused the first run identity")
+            write_json(root / "console-continuation-receipt.json", continuation_receipt)
 
         interrupt_marker = f"LH_{provider.upper()}_INTERRUPT_{uuid4().hex}"
         interrupt_message = f"Use the shell tool to run `sleep 8`, then reply with exactly {interrupt_marker} and nothing else."
@@ -1387,15 +1739,68 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 turn_id=str(post["turn_id"]),
                 run_id=str(post["run_id"]),
             )
-            _wait_exact_assistant_marker(api_url, token, session_id, post_marker)
+            post_events = _wait_exact_assistant_marker(api_url, token, session_id, post_marker)
+            post_completed = (post_claim.get("result") or {}).get("terminal_state") == "run_completed"
             interrupt_receipt = {
-                "status": "pass" if interrupted.get("interrupt_dispatched") is True and cancelled and process_dead else "fail",
+                "status": "pass"
+                if interrupted.get("interrupt_dispatched") is True and cancelled and process_dead and post_completed
+                else "fail",
                 "expectation": "supported",
                 "interrupt_dispatched": interrupted.get("interrupt_dispatched") is True,
                 "active_run_cancelled": cancelled,
                 "provider_process_dead": process_dead,
-                "post_interrupt_turn_completed": (post_claim.get("result") or {}).get("terminal_state") == "run_completed",
+                "post_interrupt_turn_completed": post_completed,
+                "interrupt_request_id": interrupt_request_id,
+                "active_run": {
+                    "provider": provider,
+                    "session_id": active_claim.get("session_id"),
+                    "thread_id": active_claim.get("thread_id"),
+                    "run_id": active_claim.get("run_id"),
+                    "turn_id": active_claim.get("turn_id"),
+                    "provider_thread_id": active_claim.get("provider_thread_id"),
+                },
+                "active_terminal": {
+                    "claim_state": terminal.get("state"),
+                    "terminal_state": (terminal.get("result") or {}).get("terminal_state"),
+                    "pid": active_claim.get("pid"),
+                    "process_group_id": active_claim.get("process_group_id"),
+                },
+                "cancellation_claim": {
+                    "claim_state": terminal.get("state"),
+                    "run_id": terminal.get("run_id"),
+                    "turn_id": terminal.get("turn_id"),
+                    "terminal_state": (terminal.get("result") or {}).get("terminal_state"),
+                },
+                "post_interrupt_run": {
+                    "provider": provider,
+                    "session_id": post_claim.get("session_id"),
+                    "thread_id": post_claim.get("thread_id"),
+                    "run_id": post_claim.get("run_id"),
+                    "turn_id": post_claim.get("turn_id"),
+                    "provider_thread_id": post_claim.get("provider_thread_id"),
+                    "terminal_state": (post_claim.get("result") or {}).get("terminal_state"),
+                    "marker": post_marker,
+                    "marker_observed": len(post_events) == 1 and event_text(post_events[0]).count(post_marker) == 1,
+                },
             }
+            interrupt_run_id = active_claim.get("run_id")
+            post_interrupt_run_id = post_claim.get("run_id")
+            if not (
+                isinstance(interrupt_run_id, str)
+                and interrupt_run_id
+                and isinstance(post_interrupt_run_id, str)
+                and post_interrupt_run_id
+                and len(
+                    {
+                        str(first_claim.get("run_id")),
+                        str(resume_claim.get("run_id")),
+                        interrupt_run_id,
+                        post_interrupt_run_id,
+                    }
+                )
+                == 4
+            ):
+                raise RuntimeError("Console Pi lifecycle reused a first, resume, interrupt, or post-interrupt run identity")
         else:
             refused = False
             try:
@@ -1457,20 +1862,26 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         write_json(root / "interrupt-contract-receipt.json", interrupt_receipt)
 
         naturally_dead = _wait_owned_processes_dead(claims)
-        cleanup = {
-            "status": "pass" if naturally_dead else "fail",
-            "provider_process_dead": all(_pid_dead(claim.get("pid")) for claim in claims),
-            "process_group_dead": all(_process_group_dead(claim.get("process_group_id")) for claim in claims),
-            "orphan_count": sum(
-                not (_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id"))) for claim in claims
-            ),
-        }
-        write_json(root / "cleanup-receipt.json", cleanup)
         retained_sources = _retain_claim_sources(root, claims, environment)
+        shipper_stop = shipper.stop() if shipper is not None else {}
+        served_run_inventory = _served_run_inventory_evidence(api_url, token, session_id, claims)
+        cleanup = _console_cleanup_receipt(
+            claims,
+            retained_sources,
+            process_stop_wait_completed=naturally_dead,
+            shipper_stop=shipper_stop,
+            served_run_inventory=served_run_inventory,
+        )
+        write_json(root / "cleanup-receipt.json", cleanup)
         native_tool_receipt: dict[str, object] | None = None
         if provider == "pi":
             retained_by_source = {
-                str(item["source"]): Path(str(item["path"]))
+                str(item["source"]): root / Path(str(item["path"]))
+                for item in retained_sources
+                if item.get("retained") is True and isinstance(item.get("source"), str) and isinstance(item.get("path"), str)
+            }
+            retained_path_by_source = {
+                str(item["source"]): str(item["path"])
                 for item in retained_sources
                 if item.get("retained") is True and isinstance(item.get("source"), str) and isinstance(item.get("path"), str)
             }
@@ -1487,8 +1898,74 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 binary_receipt=binary_receipt,
                 cleanup=cleanup,
                 marker=marker,
+                native_retained_path=retained_path_by_source.get(raw_native_source) if isinstance(raw_native_source, str) else None,
+                provider_response_retained_path=retained_path_by_source.get(raw_response_source)
+                if isinstance(raw_response_source, str)
+                else None,
             )
             write_json(root / "native-tool-receipt.json", native_tool_receipt)
+            if continuation_receipt is not None:
+                raw_first_source = str(first_native_source_path) if first_native_source_path is not None else None
+                raw_second_source = resume_claim.get("source_path") or resume_claim.get("stdout_path")
+                second_retained = retained_path_by_source.get(str(raw_second_source)) if isinstance(raw_second_source, str) else None
+                if (
+                    second_retained is None
+                    or not isinstance(raw_second_source, str)
+                    or raw_first_source != raw_second_source
+                    or first_native_source_size is None
+                ):
+                    raise RuntimeError("Console Pi continuation does not share one bounded native source")
+                second_payload = Path(str(raw_second_source)).read_bytes()
+                second_end_offset = second_native_source_size or len(second_payload)
+                if first_native_source_size >= second_end_offset or second_end_offset > len(second_payload):
+                    raise RuntimeError("Console Pi continuation did not append to the retained native source")
+                first_retained = retained_path_by_source.get(raw_first_source)
+                if first_retained is None:
+                    raise RuntimeError("first Console turn has no retained provider source")
+                continuation_receipt["first_turn_evidence"] = {
+                    "source_kind": "source_path",
+                    "retained_path": first_retained,
+                    "retained_source_path": raw_first_source,
+                    # Both turn windows address one retained native history;
+                    # the digest identifies the retained bytes, while offsets
+                    # identify each turn within that immutable source.
+                    "source_sha256": _sha256_bytes(second_payload),
+                    "source_start_offset": 0,
+                    "source_end_offset": first_native_source_size,
+                    "session_id": session_id,
+                    "thread_id": thread_id,
+                    "run_id": first_claim.get("run_id"),
+                    "provider_thread_id": first_claim.get("provider_thread_id"),
+                    "projected_assistant_event_id": first_events[0].get("id"),
+                    "native_message_id": first_native_response.get("native_message_id") if first_native_response else None,
+                }
+                continuation_receipt["second_turn_evidence"] = {
+                    "source_kind": "source_path" if resume_claim.get("source_path") else "stdout_path",
+                    "retained_path": second_retained,
+                    "retained_source_path": raw_second_source,
+                    "source_sha256": _sha256_bytes(second_payload),
+                    "source_start_offset": first_native_source_size,
+                    "source_start_offset_before_resume": first_native_source_size,
+                    "source_end_offset": second_end_offset,
+                    "source_end_offset_before_interrupt": second_end_offset,
+                    "session_id": session_id,
+                    "thread_id": thread_id,
+                    "run_id": resume_claim.get("run_id"),
+                    "provider_thread_id": resume_claim.get("provider_thread_id"),
+                    "projected_assistant_event_id": resume_events[0].get("id"),
+                    "native_message_id": resume_native_response.get("native_message_id") if resume_native_response else None,
+                    "assistant_excerpt": event_text(resume_events[0])[:1024],
+                    "marker_count": event_text(resume_events[0]).count(resume_marker),
+                    "context_marker_count": resume_context_marker_count,
+                    "linkage": continuation_receipt["response"]["linkage"],
+                }
+                continuation_receipt["native_source_end_offset_before_interrupt"] = second_end_offset
+                continuation_receipt["interrupt_boundary"] = {
+                    "source_path": str(raw_second_source),
+                    "source_end_offset": second_end_offset,
+                    "captured_before_interrupt": True,
+                }
+                write_json(root / "console-continuation-receipt.json", continuation_receipt)
         cleanup_written = True
         observation = _observation_from_receipts(
             dispatch=dispatch,
@@ -1536,25 +2013,31 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "assertions": {ASSERTION_ID: assertion},
             "provider_binary": binary_receipt,
             "observation": observation,
-            "artifact_manifest": _artifact_manifest_after_shipper_stopped(root, shipper),
+            "artifact_manifest": artifact_manifest(root),
         }
     finally:
         if not cleanup_written:
             _retain_failure_claim_diagnostics(root, claims, environment)
         _force_cleanup(claims)
+        shipper_stop: Mapping[str, object] | None = None
         if shipper is not None:
-            shipper.stop()
+            shipper_stop = shipper.stop()
         if not cleanup_written:
-            _retain_claim_sources(root, claims, environment)
+            retained_sources = _retain_claim_sources(root, claims, environment)
         if not cleanup_written:
-            cleanup = {
-                "status": "fail",
-                "provider_process_dead": all(_pid_dead(claim.get("pid")) for claim in claims),
-                "process_group_dead": all(_process_group_dead(claim.get("process_group_id")) for claim in claims),
-                "orphan_count": sum(
-                    not (_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id"))) for claim in claims
-                ),
-            }
+            served_run_inventory = (
+                _served_run_inventory_evidence(api_url, token, session_id, claims)
+                if session_id is not None
+                else {"retired": False, "active_run_count": None, "error": "session_id_unavailable"}
+            )
+            cleanup = _console_cleanup_receipt(
+                claims,
+                retained_sources,
+                process_stop_wait_completed=_wait_owned_processes_dead(claims),
+                shipper_stop=shipper_stop,
+                served_run_inventory=served_run_inventory,
+                run_failed=True,
+            )
             write_json(root / "cleanup-receipt.json", cleanup)
 
 

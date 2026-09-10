@@ -17,7 +17,14 @@ from zerg.services.provisional_events import build_provisional_cursor
 from zerg.services.provisional_events import build_provisional_key
 from zerg.utils.time import normalize_utc
 
-LIVE_PREVIEW_SOURCES = {"codex_bridge_live", "codex_console_live", "cursor_print", "opencode_run", "pi_print"}
+LIVE_PREVIEW_SOURCES = {
+    "codex_bridge_live",
+    "codex_console_live",
+    "cursor_print",
+    "opencode_run",
+    "pi_print",
+    "omp_print",
+}
 
 
 @dataclass(frozen=True)
@@ -49,7 +56,7 @@ def live_preview_candidate_from_runtime_event(
     if event.session_id is None:
         return None
     provider = (event.provider or "").strip().lower()
-    if provider not in {"codex", "cursor", "opencode", "pi"}:
+    if provider not in {"codex", "cursor", "opencode", "pi", "omp"}:
         return None
     source = (event.source or "").strip()
     if source.lower() not in LIVE_PREVIEW_SOURCES:
@@ -63,6 +70,8 @@ def live_preview_candidate_from_runtime_event(
         return _opencode_run_preview_candidate(event, payload, observation_id=observation_id)
     if provider == "pi" and source.lower() == "pi_print" and progress_kind == "pi_print_stream":
         return _pi_print_preview_candidate(event, payload, observation_id=observation_id)
+    if provider == "omp" and source.lower() == "omp_print" and progress_kind == "omp_print_stream":
+        return _omp_print_preview_candidate(event, payload, observation_id=observation_id)
     if progress_kind not in {"bridge_live_transcript_delta", "console_live_tool_item"}:
         return None
 
@@ -100,7 +109,66 @@ def live_preview_candidate_from_runtime_event(
         tool_input_json={"command": command} if is_tool else None,
         tool_output_text=output if is_tool and output else None,
         tool_call_id=item_id if is_tool else None,
-        tool_call_state=(_tool_call_state(payload.get("status"), completed=bool(payload.get("completed"))) if is_tool else None),
+        tool_call_state=(
+            _tool_call_state(
+                payload.get("status"),
+                completed=bool(payload.get("completed")),
+            )
+            if is_tool
+            else None
+        ),
+    )
+
+
+def _omp_print_preview_candidate(
+    event: Any,
+    payload: dict[str, Any],
+    *,
+    observation_id: str,
+) -> LivePreviewCandidate | None:
+    raw = payload.get("event")
+    if not isinstance(raw, dict) or event.session_id is None:
+        return None
+    raw_type = str(raw.get("type") or "").strip()
+    message = raw.get("message")
+    role = message.get("role") if isinstance(message, dict) else None
+    text = str(payload.get("live_text") or "").strip()
+    if not text and role == "assistant" and isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list):
+            text = "".join(
+                str(block.get("text") or "") for block in content if isinstance(block, dict) and block.get("type") == "text"
+            ).strip()
+    if not text:
+        return None
+    thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
+    turn_id = _optional_str(payload.get("turn_id"))
+    message_index = _optional_str(payload.get("assistant_message_index"))
+    turn_key = build_provisional_key(
+        source="omp_print",
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_id=_item_scoped_turn_id(turn_id, message_index),
+    )
+    stop_reason = _optional_str(message.get("stopReason")) if isinstance(message, dict) else None
+    terminal = (
+        stop_reason in {"stop", "length"} or raw_type == "agent_end" and (raw.get("isTerminal") is True or raw.get("willContinue") is False)
+    )
+    observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    seq = _coerce_seq(payload.get("seq"))
+    return LivePreviewCandidate(
+        session_id=event.session_id,
+        thread_id=thread_id,
+        turn_key=turn_key,
+        seq=seq,
+        preview_text=text,
+        provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
+        provisional_complete=terminal,
+        preview_observed_at=observed_at,
+        source="omp_print",
+        last_observation_id=observation_id,
     )
 
 

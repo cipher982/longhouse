@@ -6,7 +6,8 @@
     "opencode",
     "antigravity",
     "cursor",
-    "pi"
+    "pi",
+    "omp"
   ],
   "build_provenances": [
     "generated_fake",
@@ -19,8 +20,8 @@
     "weekly_cron",
     "manual"
   ],
-  "never_run_count": 53,
-  "runs_count": 19,
+  "never_run_count": 62,
+  "runs_count": 22,
   "cells": [
     {
       "provider": "antigravity",
@@ -265,7 +266,9 @@
         "resume_failure_cleanup",
         "resume_unsupported"
       ],
-      "credential_requirement": [],
+      "credential_requirement": [
+        "LONGHOUSE_AGY_LIVE"
+      ],
       "assertion_status": [
         {
           "assertion_id": "unsupported_resume_is_typed_and_side_effect_free",
@@ -670,9 +673,9 @@
         "resume_unsupported"
       ],
       "credential_requirement": [
-        "ANTHROPIC_API_KEY",
-        "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE",
-        "LONGHOUSE_ENGINE_BIN"
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "LONGHOUSE_CLAUDE_LIVE",
+        "LONGHOUSE_CLAUDE_QUALIFICATION_MODEL"
       ],
       "assertion_status": [
         {
@@ -2094,6 +2097,255 @@
       "assertion_status": []
     },
     {
+      "provider": "omp",
+      "build_provenance": "generated_fake",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "generated_fake",
+      "trigger": "push",
+      "status": "runs",
+      "reason": "push-CI harness smoke (validate-provider-cli-canaries), plus the codex coordination proof job if applicable",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "adapter_conformance",
+        "action_matrix",
+        "control_surface",
+        "old_new_release_diff"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "generated_fake",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "generated_fake",
+      "trigger": "weekly_cron",
+      "status": "runs",
+      "reason": "weekly full-column smoke (provider-release-weekly.yml, DEFAULT_SCENARIOS)",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "baseline_compare",
+        "old_new_release_diff",
+        "full_action_suite",
+        "parse_ingest_project",
+        "interaction_semantics",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "console_thread_fork",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
+      ],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "observed_install",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "every capability-proof assertion declared for omp is already satisfiable by an automated trigger",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "observed_install",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "observed_install",
+      "trigger": "release_poll",
+      "status": "never_run",
+      "reason": "the release lane only runs against staged upstream releases",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "observed_install",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "staged_release",
+      "trigger": "manual",
+      "status": "never_run",
+      "reason": "manual qualification requires an explicit observed provider install",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "staged_release",
+      "trigger": "push",
+      "status": "never_run",
+      "reason": "push CI only runs against generated fake binaries",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "staged_release",
+      "trigger": "release_poll",
+      "status": "runs",
+      "reason": "deployed release-lane profiles for omp",
+      "qualification_profile": "omp_print_v1",
+      "qualification_profiles": [
+        "omp_print_v1"
+      ],
+      "scenario_ids": [
+        "omp_console_lifecycle"
+      ],
+      "harness_scenarios": [
+        "probe_identity",
+        "adapter_conformance",
+        "collect_raw_evidence",
+        "action_matrix",
+        "control_surface",
+        "baseline_compare",
+        "old_new_release_diff",
+        "full_action_suite",
+        "parse_ingest_project",
+        "interaction_semantics",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+        "managed_session_e2e",
+        "helm_cold_resume",
+        "helm_live_reattach",
+        "console_thread_continue",
+        "console_thread_fork",
+        "resume_identity_continuity",
+        "resume_attempt_idempotency",
+        "resume_single_owner",
+        "resume_input_safety",
+        "resume_failure_cleanup",
+        "resume_unsupported"
+      ],
+      "credential_requirement": [
+        "OPENROUTER_API_KEY",
+        "LONGHOUSE_OMP_LIVE",
+        "LONGHOUSE_OMP_QUALIFICATION_MODEL"
+      ],
+      "assertion_status": [
+        {
+          "assertion_id": "omp_console_turn_settled_and_bound",
+          "variant": null,
+          "scenario_id": "omp_console_lifecycle",
+          "minimum_scenario_revision": 1,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        }
+      ]
+    },
+    {
+      "provider": "omp",
+      "build_provenance": "staged_release",
+      "trigger": "weekly_cron",
+      "status": "never_run",
+      "reason": "the weekly matrix only runs against generated fake binaries (scheduled_evidence: generated_fake_unconditional_full_column)",
+      "qualification_profile": null,
+      "qualification_profiles": [],
+      "scenario_ids": [],
+      "harness_scenarios": [],
+      "credential_requirement": [],
+      "assertion_status": []
+    },
+    {
       "provider": "opencode",
       "build_provenance": "generated_fake",
       "trigger": "manual",
@@ -2444,7 +2696,9 @@
         "resume_unsupported"
       ],
       "credential_requirement": [
-        "OPENROUTER_API_KEY"
+        "OPENROUTER_API_KEY",
+        "LONGHOUSE_OPENCODE_LIVE",
+        "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL"
       ],
       "assertion_status": [
         {

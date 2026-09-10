@@ -869,6 +869,86 @@ def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(li
     assert _leases() == []
 
 
+def test_heartbeat_admits_omp_evidence_and_omp_process_exit_authority():
+    from zerg.routers.heartbeat import HeartbeatIn
+
+    session_id = str(uuid4())
+    run_id = str(uuid4())
+    connection_id = str(uuid4())
+    generation = str(uuid4())
+    observed_at = "2026-05-08T12:00:00Z"
+    payload = HeartbeatIn.model_validate(
+        {
+            "machine_evidence": {
+                "schema_version": 3,
+                "observed_at": observed_at,
+                "run": [
+                    {
+                        "authority_class": "exact_process_exit",
+                        "provider": "omp",
+                        "session_id": session_id,
+                        "run_id": run_id,
+                        "state": "ended",
+                        "end_reason": "process_gone",
+                        "process_role": "provider",
+                        "pid": 4242,
+                        "process_start_time": "Thu May  8 11:59:00 2026",
+                        "boot_id": "macos:1777970400:0",
+                        "source": "omp_helm_scan",
+                        "observed_at": observed_at,
+                    }
+                ],
+                "control": [
+                    {
+                        "authority_class": "provider_control",
+                        "provider": "omp",
+                        "session_id": session_id,
+                        "run_id": run_id,
+                        "provider_session_id": "omp-native",
+                        "connection_id": connection_id,
+                        "lease_generation": generation,
+                        "ownership": "managed",
+                        "state": "attached",
+                        "lease_ttl_ms": 900000,
+                        "granted_operations": ["send_input"],
+                        "source": "omp_helm_scan",
+                        "observed_at": observed_at,
+                    }
+                ],
+                "continuation": [
+                    {
+                        "authority_class": "retained_launch_contract",
+                        "provider": "omp",
+                        "session_id": session_id,
+                        "provider_session_id": "omp-native",
+                        "cwd": "/tmp/omp",
+                        "contract_state": "valid",
+                        "observed_at": observed_at,
+                        "valid_until": "2026-05-08T12:20:00Z",
+                        "source": "managed_resume_contract_scan",
+                        "raw_locator": "omp/" + session_id,
+                    }
+                ],
+                "process_snapshot_scopes": [
+                    {
+                        "scope": "managed_state_files",
+                        "complete": True,
+                        "captured_at": observed_at,
+                        "machine_boot_id": "macos:1777970400:0",
+                        "source": "managed_provider_scan",
+                    }
+                ],
+            }
+        }
+    )
+
+    evidence = payload.machine_evidence
+    assert evidence is not None
+    assert evidence.control[0].provider == "omp"
+    assert evidence.continuation[0].provider == "omp"
+    assert evidence.run[0].source == "omp_helm_scan"
+
+
 def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(live_catalog, live_catalog_client):
     headers = _headers(live_catalog)
     invalid_evidence = []

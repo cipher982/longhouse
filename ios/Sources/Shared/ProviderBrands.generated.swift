@@ -52,6 +52,7 @@ public enum ProviderBrands {
         case "zai": return zai
         case "z.ai": return zai
         case "pi": return pi
+        case "omp": return omp
         default: return defaultConfig
         }
     }
@@ -163,6 +164,21 @@ public enum ProviderBrands {
         displayName: "Pi",
         marketingName: "Pi Agent",
         brand: Color(red: 0.658824, green: 0.333333, blue: 0.968627, opacity: 1),
+        glyphStyle: "original",
+        markColor: nil,
+        chipFillType: "brand_alpha",
+        chipFillAlpha: 0.16,
+        chipFillColor: nil,
+        chipStrokeType: "brand_alpha",
+        chipStrokeAlpha: 0.22,
+        chipStrokeColor: nil,
+        chipStrokeWidth: 0.5,
+        cornerRadiusFactor: 0.28,
+    )
+    static let omp = ProviderBrandConfig(
+        displayName: "OMP",
+        marketingName: "Oh My Pi",
+        brand: Color(red: 0.976471, green: 0.45098, blue: 0.0862745, opacity: 1),
         glyphStyle: "original",
         markColor: nil,
         chipFillType: "brand_alpha",

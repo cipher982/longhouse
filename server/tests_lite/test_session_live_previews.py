@@ -125,6 +125,81 @@ def _pi_event(
         dedupe_key=dedupe_key or f"pi:stream:{session_id}:{seq}:{item_id}",
         payload=payload,
     )
+def _omp_event(
+    *,
+    session_id,
+    occurred_at: datetime,
+    seq: int,
+    raw_event: dict,
+    live_text: str | None = None,
+    assistant_message_index: int = 1,
+    dedupe_key: str | None = None,
+) -> RuntimeEventIngest:
+    payload = {
+        "progress_kind": "omp_print_stream",
+        "thread_id": "omp-thread-1",
+        "turn_id": "omp-turn-1",
+        "seq": seq,
+        "assistant_message_index": assistant_message_index,
+        "event": raw_event,
+    }
+    if live_text is not None:
+        payload["live_text"] = live_text
+    return RuntimeEventIngest(
+        runtime_key=f"omp:{session_id}",
+        session_id=session_id,
+        provider="omp",
+        device_id="cinder",
+        source="omp_print",
+        kind="progress_signal",
+        occurred_at=occurred_at,
+        dedupe_key=dedupe_key or f"omp:stream:{session_id}:{seq}",
+        payload=payload,
+    )
+
+
+def test_omp_print_stream_projects_partial_and_settled_assistant_message(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "omp_print_stream.db")
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="omp")
+        partial = _omp_event(
+            session_id=session.id,
+            occurred_at=now,
+            seq=1,
+            live_text="partial answer",
+            raw_event={
+                "type": "message_update",
+                "assistantMessageEvent": {"type": "text_delta", "delta": "partial answer"},
+            },
+        )
+        settled = _omp_event(
+            session_id=session.id,
+            occurred_at=now + timedelta(milliseconds=10),
+            seq=2,
+            live_text="final answer",
+            raw_event={
+                "type": "message_end",
+                "message": {
+                    "id": "omp-assistant-1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "final answer"}],
+                    "stopReason": "stop",
+                },
+            },
+        )
+
+        assert ingest_runtime_events(db, [partial, settled]).accepted == 2
+        db.commit()
+        row = db.get(SessionLivePreview, session.id)
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert row is not None
+    assert row.source == "omp_print"
+    assert row.turn_key == f"omp_print:{session.id}:omp-thread-1:omp-turn-1#1"
+    assert preview.text == "final answer"
+    assert preview.provisional_complete is True
 
 
 def test_runtime_ingest_materializes_latest_live_preview_projection(tmp_path):

@@ -14555,11 +14555,11 @@ def _bind_control_evidence_identities(connection, facts, *, device_id: str) -> d
         if current_adapter == adapter_connection_id and current_generation == lease_generation:
             counts["matched"] += 1
             continue
-        if (current_adapter or current_generation) and (
-            str(value.get("provider") or "").strip().lower() != "pi"
-            or current_adapter == adapter_connection_id
-            or current_generation == lease_generation
-        ):
+        provider_name = str(value.get("provider") or "").strip().lower()
+        safe_rebind = (provider_name == "pi" and current_adapter != adapter_connection_id and current_generation != lease_generation) or (
+            provider_name == "omp" and current_generation != lease_generation
+        )
+        if (current_adapter or current_generation) and not safe_rebind:
             counts["mismatched"] += 1
             continue
         target = (str(session_id), str(run_id), str(value.get("provider") or "").strip().lower(), contract.control_plane)

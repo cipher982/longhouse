@@ -13,9 +13,10 @@ import Foundation
 /// This is a *derived* cache. The Runtime Host is authoritative; any snapshot
 /// can be discarded and rebuilt from `/api/.../mobile-tail`.
 ///
-/// Reads are synchronous (a dictionary lookup, or one small file on a cold
-/// open). Disk writes are dispatched to a private serial queue so persistence
-/// never blocks the UI.
+/// Memory reads are synchronous and bounded; cold disk reads and JSON decoding
+/// use `loadAsync` so relaunch hydration does not block the route's main actor.
+/// Disk writes are dispatched to a private serial queue so persistence never
+/// blocks the UI.
 struct TranscriptSnapshotStore: Sendable {
     /// Bump when the on-disk shape changes; mismatched files are ignored and
     /// pruned so a stale schema can never crash decode or render.
@@ -102,23 +103,62 @@ struct TranscriptSnapshotStore: Sendable {
         if let warm = memory.snapshot(forKey: key, now: now) {
             return Restored(snapshot: warm, tier: .memory)
         }
+        return loadFromDisk(serverURL: serverURL, sessionId: sessionId, now: now)
+    }
+
+    /// Memory hits stay synchronous; only a cold disk read and JSON decode
+    /// leave the caller's actor.
+    func loadAsync(serverURL: String, sessionId: String, now: Date = Date()) async -> Restored? {
+        let key = TranscriptSnapshot.cacheKey(serverURL: serverURL, sessionId: sessionId)
+        if let warm = memory.snapshot(forKey: key, now: now) {
+            return Restored(snapshot: warm, tier: .memory)
+        }
+        return await Task.detached(priority: .userInitiated) {
+            self.loadFromDisk(serverURL: serverURL, sessionId: sessionId, now: now)
+        }.value
+    }
+
+    private func loadFromDisk(
+        serverURL: String,
+        sessionId: String,
+        now: Date
+    ) -> Restored? {
+        // Reads and pruning share the same serial lane as atomic writes. A
+        // stale validation cannot delete a newer snapshot written meanwhile.
+        io.sync {
+            loadFromDiskSerialized(serverURL: serverURL, sessionId: sessionId, now: now)
+        }
+    }
+
+    private func loadFromDiskSerialized(
+        serverURL: String,
+        sessionId: String,
+        now: Date
+    ) -> Restored? {
         let url = fileURL(serverURL: serverURL, sessionId: sessionId)
         guard let data = try? Data(contentsOf: url) else { return nil }
         guard let stored = try? Self.decoder.decode(StoredSnapshot.self, from: data) else {
             // Corrupt or old-schema file: drop it so it never trips us again.
-            removeFile(at: url)
+            try? FileManager.default.removeItem(at: url)
             return nil
         }
         guard stored.schemaVersion == Self.schemaVersion else {
-            removeFile(at: url)
+            try? FileManager.default.removeItem(at: url)
             return nil
         }
         guard now.timeIntervalSince(stored.transcript.savedAt) <= ttl else {
-            removeFile(at: url)
+            try? FileManager.default.removeItem(at: url)
             return nil
         }
-        // A relaunch pays for the decode once; the next reopen comes from RAM.
-        memory.store(stored.transcript, forKey: key, now: now)
+        let key = TranscriptSnapshot.cacheKey(serverURL: serverURL, sessionId: sessionId)
+        // A save may have warmed RAM after the initial fast-path check but
+        // before this serialized disk read completed. Never hand the caller
+        // an older disk snapshot in that race.
+        if let warm = memory.snapshot(forKey: key, now: now),
+           warm.savedAt > stored.transcript.savedAt {
+            return Restored(snapshot: warm, tier: .memory)
+        }
+        memory.storeIfNewer(stored.transcript, forKey: key, now: now)
         return Restored(snapshot: stored.transcript, tier: .disk)
     }
 
@@ -248,6 +288,25 @@ struct TranscriptSnapshotStore: Sendable {
             }
         }
 
+        func storeIfNewer(_ snapshot: TranscriptSnapshot, forKey key: String, now: Date) {
+            guard maxBytes > 0 else { return }
+            let estimatedBytes = snapshot.estimatedBytes
+            lock.lock()
+            defer { lock.unlock() }
+            if let existing = entries[key],
+               existing.snapshot.savedAt >= snapshot.savedAt {
+                return
+            }
+            remove(key)
+            guard estimatedBytes <= maxBytes else { return }
+            entries[key] = Entry(snapshot: snapshot, estimatedBytes: estimatedBytes, lastAccessedAt: now)
+            totalBytes += estimatedBytes
+            while totalBytes > maxBytes,
+                  let victim = entries.min(by: { $0.value.lastAccessedAt < $1.value.lastAccessedAt })?.key {
+                remove(victim)
+            }
+        }
+
         func remove(forKey key: String) {
             lock.lock()
             defer { lock.unlock() }
@@ -319,9 +378,6 @@ struct TranscriptSnapshotStore: Sendable {
         }
     }
 
-    private func removeFile(at url: URL) {
-        io.async { try? FileManager.default.removeItem(at: url) }
-    }
 
     private static func excludeFromBackup(_ url: URL) {
         var values = URLResourceValues()

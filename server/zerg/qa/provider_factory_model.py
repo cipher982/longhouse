@@ -116,6 +116,7 @@ FULL_COLUMN_RELEASE_PROFILES = frozenset(
         "cursor_observed_install_v1",
         "cursor_observed_install_grok_v1",
         "pi_print_v1",
+        "omp_print_v1",
     }
 )
 
@@ -132,7 +133,7 @@ class Trigger(StrEnum):
 DIRECT_RESUME_PRODUCERS: tuple[ProducerRegistration, ...] = (CODEX_NATIVE_RESUME_PRODUCER,)
 
 
-ALL_PROVIDERS = ("codex", "claude", "opencode", "antigravity", "cursor", "pi")
+ALL_PROVIDERS = ("codex", "claude", "opencode", "antigravity", "cursor", "pi", "omp")
 
 # The release lane's actual deployed profiles per provider. Codex deliberately
 # has two profiles: the tool-result lane owns the complete universal column,
@@ -145,6 +146,7 @@ DEPLOYED_RELEASE_LANE_PROFILES: dict[str, tuple[str, ...]] = {
     "antigravity": ("antigravity_hook_inbox_v1",),
     "cursor": ("cursor_observed_install_v1", "cursor_observed_install_grok_v1"),
     "pi": ("pi_print_v1",),
+    "omp": ("omp_print_v1",),
 }
 DEPLOYED_RELEASE_LANE_PROFILE: dict[str, str] = {provider: profiles[0] for provider, profiles in DEPLOYED_RELEASE_LANE_PROFILES.items()}
 
@@ -194,6 +196,8 @@ PRODUCER_MODULES: tuple[str, ...] = (
     "zerg.qa.opencode_turn_boundary_quiescent",
     "zerg.qa.pi_console_tool_producer",
     "zerg.qa.pi_helm_lifecycle",
+    "zerg.qa.omp_console_producer",
+    "zerg.qa.omp_helm_lifecycle",
     "zerg.qa.product_console_lifecycle",
     "zerg.qa.provider_console_lifecycle",
     "zerg.qa.provider_generic_resume",
@@ -275,11 +279,13 @@ CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
     "codex_tool_call_result_v1": ("CODEX_API_KEY",),
     "codex_release_identity_v1": ("CODEX_API_KEY",),
     "codex_helm_interrupt_v1": ("CODEX_AGENTS_TOKEN", "CODEX_API_KEY", "CODEX_API_URL", "LONGHOUSE_ENGINE_BIN"),
-    "claude_real_print_v1": ("ANTHROPIC_API_KEY", "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE", "LONGHOUSE_ENGINE_BIN"),
-    "opencode_server_contract_v1": ("OPENROUTER_API_KEY",),
+    "claude_real_print_v1": ("CLAUDE_CODE_OAUTH_TOKEN", "LONGHOUSE_CLAUDE_LIVE", "LONGHOUSE_CLAUDE_QUALIFICATION_MODEL"),
+    "opencode_server_contract_v1": ("OPENROUTER_API_KEY", "LONGHOUSE_OPENCODE_LIVE", "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL"),
+    "antigravity_hook_inbox_v1": ("LONGHOUSE_AGY_LIVE",),
     "cursor_observed_install_v1": ("CURSOR_API_KEY", "CURSOR_MODEL", "LONGHOUSE_CLI_BIN", "LONGHOUSE_ENGINE_BIN"),
     "cursor_observed_install_grok_v1": ("CURSOR_API_KEY", "CURSOR_MODEL", "LONGHOUSE_CLI_BIN", "LONGHOUSE_ENGINE_BIN"),
     "pi_print_v1": ("OPENROUTER_API_KEY", "LONGHOUSE_PI_LIVE", "LONGHOUSE_PI_QUALIFICATION_MODEL"),
+    "omp_print_v1": ("OPENROUTER_API_KEY", "LONGHOUSE_OMP_LIVE", "LONGHOUSE_OMP_QUALIFICATION_MODEL"),
 }
 
 

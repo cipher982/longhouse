@@ -133,6 +133,22 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     cornerRadiusFactor: 0.28,
     aliases: [],
   },
+  "omp": {
+    displayName: "OMP",
+    marketingName: "Oh My Pi",
+    brand: "#F97316",
+    glyphStyle: "original",
+    markColor: null,
+    chipFillType: "brand_alpha",
+    chipFillAlpha: 0.16,
+    chipFillColor: null,
+    chipStrokeType: "brand_alpha",
+    chipStrokeAlpha: 0.22,
+    chipStrokeColor: null,
+    chipStrokeWidth: 0.5,
+    cornerRadiusFactor: 0.28,
+    aliases: [],
+  },
 };
 
 const PROVIDER_ALIASES: Record<string, string> = {
@@ -152,6 +168,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "zai": "Z.ai",
   "z.ai": "Z.ai",
   "pi": "Pi",
+  "omp": "OMP",
 };
 
 const DEFAULT_CONFIG: ProviderBrandConfig = {

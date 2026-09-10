@@ -260,15 +260,14 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
 
 def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
     if (
-        (event.provider or "").strip().lower() == "pi"
-        and (event.source or "").strip().lower() == "pi_print"
-        and (event.payload or {}).get("progress_kind") == "pi_print_stream"
+        (event.provider or "").strip().lower() in {"pi", "omp"}
+        and (event.source or "").strip().lower() in {"pi_print", "omp_print"}
+        and (event.payload or {}).get("progress_kind") in {"pi_print_stream", "omp_print_stream"}
     ):
         return preview_payload_from_runtime_event(
             event,
             observation_id=f"runtime:{event.source}:{event.dedupe_key}",
         )
-
     payload = event.payload or {}
     is_tool = payload.get("progress_kind") == "console_live_tool_item"
     command = str(payload.get("command") or "").strip()

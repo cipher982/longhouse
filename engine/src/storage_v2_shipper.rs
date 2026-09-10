@@ -228,6 +228,52 @@ fn prepare_next_envelope_with_limit(
             }
         }
     }
+    if provider.eq_ignore_ascii_case("omp") {
+        let claims = crate::turn_claims::default_registry()?.list_all()?;
+        match crate::omp_session::bind_discovered_source(conn, &canonical_path, &claims)? {
+            crate::omp_session::SourceOwnership::Managed(session_id) => {
+                if durable_session_id
+                    .as_deref()
+                    .is_some_and(|override_id| override_id != session_id)
+                {
+                    anyhow::bail!(
+                        "OMP source ownership conflicts with the managed session override"
+                    );
+                }
+                durable_session_id = Some(session_id);
+            }
+            crate::omp_session::SourceOwnership::Pending => {
+                if let Some(session_id) = durable_session_id.as_deref() {
+                    let Ok(native_id) = crate::omp_session::read_session_header(&canonical_path)
+                    else {
+                        return Ok(None);
+                    };
+                    crate::omp_session::bind_source_for_thread(
+                        conn,
+                        &canonical_path,
+                        session_id,
+                        &native_id.native_id,
+                    )?;
+                } else {
+                    return Ok(None);
+                }
+            }
+            crate::omp_session::SourceOwnership::Unclaimed => {
+                if let Some(session_id) = durable_session_id.as_deref() {
+                    let Ok(native_id) = crate::omp_session::read_session_header(&canonical_path)
+                    else {
+                        return Ok(None);
+                    };
+                    crate::omp_session::bind_source_for_thread(
+                        conn,
+                        &canonical_path,
+                        session_id,
+                        &native_id.native_id,
+                    )?;
+                }
+            }
+        }
+    }
     // Read the binding together with the thread it was made for. A binding that
     // names this transcript's own thread was written deliberately for it; one
     // that names something else was inherited, and cannot be trusted to say who
@@ -344,7 +390,9 @@ fn prepare_next_envelope_with_limit(
     }
     let session_id_override = durable_session_id.as_deref();
     let legacy_offset = validated_legacy_offset(conn, &path_text, &canonical_path)?;
-    let source_revision = if provider.eq_ignore_ascii_case("antigravity")
+    let source_revision = if provider.eq_ignore_ascii_case("omp") {
+        omp_title_slot_revision(path)?
+    } else if provider.eq_ignore_ascii_case("antigravity")
         || is_cursor_agent_transcript_path(provider, path)
     {
         Some(hash_file(path)?)
@@ -389,7 +437,8 @@ fn prepare_next_envelope_with_limit(
     else {
         return Ok(None);
     };
-    let mut parse_result = parser::parse_session_file(path, position)?;
+    let mut parse_result =
+        parser::parse_session_file_with_provider(path, position, Some(provider))?;
     if is_cursor_agent_transcript_path(provider, path)
         && parse_result.metadata.started_at.is_none()
         && parse_result.events.is_empty()
@@ -1579,7 +1628,11 @@ fn reconcile_cross_provider_session_binding(
     {
         return Ok(false);
     }
-    let parsed = parser::parse_session_file(Path::new(&pending.source_path), 0)?;
+    let parsed = parser::parse_session_file_with_provider(
+        Path::new(&pending.source_path),
+        0,
+        Some(&envelope.provider),
+    )?;
     let corrected_session_id = canonical_session_id(parsed.metadata.session_id.clone());
     let corrected_uuid = Uuid::parse_str(&corrected_session_id)
         .context("provider transcript session id is not a UUID")?;
@@ -4624,6 +4677,10 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(hex_hash(Sha256::digest(bytes).into()))
 }
 
+fn omp_title_slot_revision(path: &Path) -> Result<Option<String>> {
+    crate::omp_session::title_slot_revision(path)
+}
+
 /// Cursor's agent transcript JSONL is a live provider-owned projection rather
 /// than an append-only file. Cursor may rewrite an existing line while a turn
 /// is still in flight, so a byte offset that was valid for the previous file
@@ -4692,6 +4749,92 @@ mod tests {
         assert_eq!(after.envelope.range_start, 0);
         assert_eq!(after.envelope.session.cwd.as_deref(), Some("/tmp/proj"));
         assert_eq!(after.envelope.session.project.as_deref(), Some("proj"));
+    }
+
+    #[test]
+    fn omp_shipper_title_slot_rewrite_opens_revision_epoch() {
+        const TITLE_SLOT_BYTES: usize = 256;
+        fn source(title: &str) -> Vec<u8> {
+            let mut title_line = serde_json::json!({"type": "title", "title": title})
+                .to_string()
+                .into_bytes();
+            title_line.resize(TITLE_SLOT_BYTES - 1, b' ');
+            title_line.push(b'\n');
+            title_line.extend_from_slice(
+                b"{\"type\":\"session\",\"id\":\"omp-title-test\",\"cwd\":\"/tmp/omp\"}\n",
+            );
+            title_line.extend_from_slice(
+                b"{\"type\":\"message\",\"id\":\"omp-message\",\"timestamp\":\"2026-09-09T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
+            );
+            title_line
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("omp-title.jsonl");
+        fs::write(&path, source("title-a")).unwrap();
+        let first_bytes = fs::read(&path).unwrap();
+        assert_eq!(
+            first_bytes.iter().position(|byte| *byte == b'\n'),
+            Some(TITLE_SLOT_BYTES - 1)
+        );
+        let first_revision = omp_title_slot_revision(&path).unwrap().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let first = prepare_next_envelope(&mut conn, &capabilities(), &path, "omp", None)
+            .unwrap()
+            .expect("initial OMP source should be shippable");
+        acknowledge_prepared(&mut conn, &first);
+
+        fs::write(&path, source("title-b")).unwrap();
+        let second_revision = omp_title_slot_revision(&path).unwrap().unwrap();
+        assert_ne!(first_revision, second_revision);
+        let second = prepare_next_envelope(&mut conn, &capabilities(), &path, "omp", None)
+            .unwrap()
+            .expect("same-size OMP title rewrite should be shippable");
+        let second_resolution =
+            source_epoch::resolution_for_epoch(&conn, second.source_epoch).unwrap();
+
+        assert_ne!(first.source_epoch, second.source_epoch);
+        assert_eq!(
+            first.envelope.session_id, second.envelope.session_id,
+            "title rewrites keep the OMP native identity on the same Longhouse session"
+        );
+        assert_eq!(
+            second_resolution.start_reason,
+            crate::state::source_epoch::EpochStartReason::RevisionChange
+        );
+        assert_eq!(
+            second_resolution.predecessor_epoch,
+            Some(first.source_epoch)
+        );
+    }
+
+    #[test]
+    fn omp_partial_header_is_fenced_before_shadow_source_epoch_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reserved.jsonl");
+        fs::write(&path, b"{\"type\":\"title\",\"v\":1,\"title\":\"early\"}\n").unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let managed_session_id = "018f0c3a-7b2d-7f10-8a11-123456789abe";
+
+        assert!(prepare_next_envelope(
+            &mut conn,
+            &capabilities(),
+            &path,
+            "omp",
+            Some(managed_session_id),
+        )
+        .unwrap()
+        .is_none());
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM source_epoch_registry", [], |row| row
+                .get::<_, i64>(
+                0
+            ),)
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

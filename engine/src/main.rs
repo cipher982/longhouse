@@ -49,6 +49,7 @@ mod managed_launch_payload;
 mod managed_opencode_scan;
 mod managed_phase_contract;
 mod managed_pi_helm_scan;
+mod managed_omp_helm_scan;
 mod managed_process_janitor;
 mod managed_resume_scan;
 mod managed_scan;
@@ -56,10 +57,14 @@ mod managed_terminal;
 mod media_redaction;
 mod media_upload;
 mod observability;
+mod omp_session;
+mod omp_helm_control;
+mod omp_helm_launcher;
 mod opencode_bridge;
 mod opencode_control;
 mod opencode_db;
 mod opencode_run;
+mod omp_print;
 mod outbox;
 mod permission_gate;
 mod pi_helm_control;
@@ -654,6 +659,11 @@ enum Commands {
         #[command(subcommand)]
         command: PiHelmCommands,
     },
+    /// Launch and control a stock interactive OMP session through a private local channel.
+    OmpHelm {
+        #[command(subcommand)]
+        command: OmpHelmCommands,
+    },
     /// Native Cursor transcript/binding evidence hook.
     CursorLifecycleHook {
         #[arg(default_value = "unknown")]
@@ -1027,6 +1037,63 @@ enum PiHelmCommands {
         state_root: Option<PathBuf>,
     },
     /// Terminate the owned Pi execution and its process group.
+    Terminate {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum OmpHelmCommands {
+    /// Launch the stock OMP TUI in the invoking terminal.
+    Launch {
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        #[arg(long)]
+        prompt: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        session_dir: Option<PathBuf>,
+        #[arg(long)]
+        resume_session: Option<String>,
+        #[arg(long)]
+        omp_bin: Option<String>,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Send input to the native OMP session, using its native follow-up queue while busy.
+    Send {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+    /// Steer the active native OMP turn.
+    Steer {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+    /// Abort the active native OMP turn.
+    Abort {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+    /// Terminate the owned OMP execution.
     Terminate {
         #[arg(long)]
         session_id: String,
@@ -1428,6 +1495,13 @@ fn command_name(command: &Commands) -> &'static str {
             PiHelmCommands::Steer { .. } => "pi-helm-steer",
             PiHelmCommands::Abort { .. } => "pi-helm-abort",
             PiHelmCommands::Terminate { .. } => "pi-helm-terminate",
+        },
+        Commands::OmpHelm { command } => match command {
+            OmpHelmCommands::Launch { .. } => "omp-helm-launch",
+            OmpHelmCommands::Send { .. } => "omp-helm-send",
+            OmpHelmCommands::Steer { .. } => "omp-helm-steer",
+            OmpHelmCommands::Abort { .. } => "omp-helm-abort",
+            OmpHelmCommands::Terminate { .. } => "omp-helm-terminate",
         },
     }
 }
@@ -2280,6 +2354,31 @@ fn main() -> anyhow::Result<()> {
                         None,
                     ))
                     .map_err(|error| anyhow::anyhow!(error))?;
+                    println!("{{\"ok\":true}}");
+                }
+            }
+        }
+        Commands::OmpHelm { command } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            match command {
+                OmpHelmCommands::Launch { cwd, prompt, model, profile, session_dir, resume_session, omp_bin, url, token } => {
+                    let exit = omp_helm_launcher::launch(omp_helm_launcher::LaunchConfig { cwd, prompt, model, profile, session_dir, resume_session, omp_bin, url, token })?;
+                    if exit != 0 { std::process::exit(exit); }
+                }
+                OmpHelmCommands::Send { session_id, text, state_root } => {
+                    let summary = rt.block_on(omp_helm_control::dispatch(&session_id, omp_helm_control::CommandKind::Send, Some(&text), state_root.as_deref(), None)).map_err(|error| anyhow::anyhow!(error))?;
+                    println!("{}", serde_json::to_string_pretty(&json!({"ok": true, "native_session_id": summary.native_session_id, "status": summary.status}))?);
+                }
+                OmpHelmCommands::Steer { session_id, text, state_root } => {
+                    let summary = rt.block_on(omp_helm_control::dispatch(&session_id, omp_helm_control::CommandKind::Steer, Some(&text), state_root.as_deref(), None)).map_err(|error| anyhow::anyhow!(error))?;
+                    println!("{}", serde_json::to_string_pretty(&json!({"ok": true, "native_session_id": summary.native_session_id, "status": summary.status}))?);
+                }
+                OmpHelmCommands::Abort { session_id, state_root } => {
+                    rt.block_on(omp_helm_control::dispatch(&session_id, omp_helm_control::CommandKind::Abort, None, state_root.as_deref(), None)).map_err(|error| anyhow::anyhow!(error))?;
+                    println!("{{\"ok\":true}}");
+                }
+                OmpHelmCommands::Terminate { session_id, state_root } => {
+                    rt.block_on(omp_helm_control::dispatch(&session_id, omp_helm_control::CommandKind::Terminate, None, state_root.as_deref(), None)).map_err(|error| anyhow::anyhow!(error))?;
                     println!("{{\"ok\":true}}");
                 }
             }

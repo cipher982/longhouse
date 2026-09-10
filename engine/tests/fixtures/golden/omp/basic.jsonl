@@ -1,0 +1,4 @@
+{"type":"title","v":1,"title":"OMP fixture","updatedAt":"2026-09-09T00:00:00.000Z","pad":""}
+{"type":"session","version":3,"id":"omp-basic-18-1-14","timestamp":"2026-09-09T00:00:00.000Z","cwd":"/tmp/omp"}
+{"type":"message","id":"user-omp","parentId":null,"timestamp":"2026-09-09T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly OMP_GOLDEN."}]}}
+{"type":"message","id":"assistant-omp","parentId":"user-omp","timestamp":"2026-09-09T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"OMP_GOLDEN"}]}}

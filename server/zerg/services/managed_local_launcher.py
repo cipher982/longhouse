@@ -26,12 +26,14 @@ from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.live_catalog_launch import normalize_console_provider_config
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_transport import build_managed_local_attach_command
-from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_launch_provenance import sanitize_launch_provenance
 
-_VALID_PROVIDERS = managed_provider_names()
+# Shadow-only maintenance providers have archive authority but no managed launch
+# entrypoint. Keep this launcher scoped to the launch-tier provider surface.
+_VALID_PROVIDERS = frozenset(factory_provider_names())
 _MANAGED_LOCAL_NAME_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 _MANAGED_LOCAL_NAME_MAX = 64
 
@@ -54,7 +56,7 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # would say the same thing twice and hide which rule is load-bearing.
 #
 # Pi likewise requires its observed launch-scoped channel before control is ready.
-_HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor", "pi"})
+_HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor", "pi", "omp"})
 
 
 def managed_provider_has_lease_observer(provider: str | None) -> bool:
@@ -279,11 +281,16 @@ def build_managed_local_launch_plan(
     project = _derive_project(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
     contract = require_contract_for_provider(provider)
+    if contract.managed_transport is None or contract.control_plane is None:
+        raise ManagedLocalLaunchError(
+            f"Provider '{provider}' has no managed-local transport in the current phase",
+            status_code=400,
+        )
     managed_session_name = _build_managed_session_name(display_name, fallback=f"{provider}-{plan_session_id.hex[:8]}")
     requested_permission_mode = str(params.permission_mode).strip()
     permission_mode = requested_permission_mode if requested_permission_mode in {"bypass", "provider_local", "remote_approve"} else "bypass"
     provider_config = params.provider_config
-    if provider == "pi":
+    if provider in {"pi", "omp"}:
         try:
             provider_config = normalize_console_provider_config(provider, provider_config)
         except ValueError as exc:

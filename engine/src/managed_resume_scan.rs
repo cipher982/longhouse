@@ -26,13 +26,14 @@ pub struct ResumeContractObservation {
 /// Retained provider contracts are machine evidence, not provider transcript
 /// state. The daemon watches these directories so a contract created or
 /// removed after startup triggers a fresh evidence projection.
-pub fn resume_contract_dirs(longhouse_home: &Path) -> [PathBuf; 5] {
+pub fn resume_contract_dirs(longhouse_home: &Path) -> [PathBuf; 6] {
     [
         longhouse_home.join("managed-local/contracts/codex"),
         longhouse_home.join("managed-local/contracts/claude"),
         longhouse_home.join("managed-local/cursor-helm/binding-probes"),
         longhouse_home.join("managed-local/opencode/bridge/sessions"),
         longhouse_home.join("managed-local/pi-helm"),
+        longhouse_home.join("managed-local/omp-helm"),
     ]
 }
 
@@ -41,12 +42,13 @@ pub fn scan_resume_contracts(
     now: DateTime<Utc>,
 ) -> Vec<ResumeContractObservation> {
     let mut observations = Vec::new();
-    let validators: [(&str, Validator); 5] = [
+    let validators: [(&str, Validator); 6] = [
         ("codex", validate_codex),
         ("claude", validate_claude),
         ("cursor", validate_cursor),
         ("opencode", validate_opencode),
         ("pi", validate_pi),
+        ("omp", validate_omp),
     ];
     for ((provider, validate), dir) in validators
         .into_iter()
@@ -216,6 +218,35 @@ fn validate_pi(
     if actual != provider_session_id {
         return Err("provider_state_missing");
     }
+    Ok((provider_session_id, cwd))
+}
+fn validate_omp(
+    _path: &Path,
+    session_id: &str,
+    value: &Value,
+) -> Result<(String, String), &'static str> {
+    if value.get("schema_version").and_then(Value::as_u64) != Some(1)
+        || value.get("provider").and_then(Value::as_str) != Some("omp")
+        || value.get("session_id").and_then(Value::as_str) != Some(session_id)
+        || !matches!(
+            value.get("status").and_then(Value::as_str),
+            Some("ready" | "degraded" | "stopped")
+        )
+    {
+        return Err("contract_invalid");
+    }
+    let cwd = valid_directory(value.get("cwd"))?;
+    valid_file(value.get("provider_binary"))?;
+    crate::omp_helm_launcher::resolve_binary(None).map_err(|_| "provider_incompatible")?;
+    let provider_session_id =
+        nonempty(value.get("native_session_id")).ok_or("provider_state_missing")?;
+    let session_file = nonempty(value.get("session_file")).ok_or("provider_state_missing")?;
+    crate::omp_session::verify_exact_session_file(
+        Path::new(&session_file),
+        &provider_session_id,
+        Some(&cwd),
+    )
+    .map_err(|_| "provider_state_missing")?;
     Ok((provider_session_id, cwd))
 }
 

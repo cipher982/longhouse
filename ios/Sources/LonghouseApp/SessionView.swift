@@ -81,23 +81,19 @@ struct SessionView: View {
                     subtitle: viewModel.detail?.identitySubtitle ?? fallbackSubtitle
                 )
             }
+            // Keep one trailing toolbar item mounted for the entire push
+            // transition. Inserting/removing a toolbar item as detail and the
+            // transcript arrive makes UIKit animate a blurred placeholder
+            // over the destination title.
             ToolbarItem(placement: .topBarTrailing) {
-                if isSessionInteractionReady {
-                    overflowMenu
-                } else if viewModel.isInitialLoading || viewModel.detail != nil {
-                    Image(systemName: "ellipsis")
-                        .frame(width: 32, height: 32)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("Session actions unavailable until transcript is ready")
-                        .accessibilityIdentifier("session-navigation-loading")
-                }
+                overflowMenu
             }
         }
         .task(id: sessionId) {
-            // Navigation has already left the timeline, so starting one bounded
-            // WebContent process here cannot steal the timeline's first scroll.
-            // Overlap it with the tail request so existing transcripts and new
-            // Console sends both reuse a ready document.
+            // Build exactly one spare while the primary metadata/tail lanes
+            // run. When the transcript mounts it adopts this WebView; waiting
+            // until start() returns can create a real WebView and then an
+            // unused spare during the first-paint window.
             WebTranscriptWebViewPool.prewarm()
             await viewModel.start(sessionId: sessionId, appState: appState)
             await viewModel.acknowledgeUnreadIfNeeded(
@@ -143,6 +139,17 @@ struct SessionView: View {
         }
         .onChange(of: viewModel.isTranscriptFrameReady) { _, ready in
             guard ready, scenePhase == .active else { return }
+            viewModel.transcriptFrameDidBecomeReady(sessionId: sessionId, appState: appState)
+            Task {
+                await viewModel.acknowledgeUnreadIfNeeded(
+                    sessionId: sessionId,
+                    appState: appState,
+                    sceneIsActive: true
+                )
+            }
+        }
+        .onChange(of: viewModel.renderedTranscriptReadThrough) { previous, current in
+            guard current != previous, scenePhase == .active else { return }
             Task {
                 await viewModel.acknowledgeUnreadIfNeeded(
                     sessionId: sessionId,
@@ -218,11 +225,13 @@ struct SessionView: View {
 
     // One trailing glyph. The title keeps the bar; the once-per-session
     // actions (Lock Screen updates, link) live behind it.
-    @ViewBuilder
+    // Keep the toolbar slot mounted while the detail and transcript arrive.
+    // Conditional insertion/removal during a NavigationStack push produces
+    // the blurred ghost controls seen in the cold-open transition.
     private var overflowMenu: some View {
-        if let detail = viewModel.detail {
-            let isWatching = liveActivityManager.isWatching(sessionId: detail.id)
-            Menu {
+        Menu {
+            if let detail = viewModel.detail {
+                let isWatching = liveActivityManager.isWatching(sessionId: detail.id)
                 Button {
                     Task { await liveActivityManager.toggle(detail: detail, appState: appState) }
                 } label: {
@@ -243,17 +252,25 @@ struct SessionView: View {
                 } label: {
                     Label("Open on Web", systemImage: "safari")
                 }
-            } label: {
-                if liveActivityManager.isBusy {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Label("Session actions", systemImage: "ellipsis")
-                        .labelStyle(.iconOnly)
-                }
             }
-            .accessibilityLabel("Session actions")
-            .accessibilityIdentifier("session-overflow-menu")
+        } label: {
+            if liveActivityManager.isBusy {
+                ProgressView().controlSize(.small)
+            } else {
+                Label("Session actions", systemImage: "ellipsis")
+                    .labelStyle(.iconOnly)
+            }
         }
+        .disabled(!isSessionInteractionReady)
+        .opacity(isSessionInteractionReady ? 1 : 0.55)
+        .accessibilityLabel(
+            isSessionInteractionReady
+                ? "Session actions"
+                : "Session actions unavailable until transcript is ready"
+        )
+        .accessibilityIdentifier(
+            isSessionInteractionReady ? "session-overflow-menu" : "session-navigation-loading"
+        )
     }
 
     private var sessionWebURL: URL? {
@@ -294,19 +311,13 @@ struct SessionView: View {
     }
 
     private var isSessionInteractionReady: Bool {
-        guard viewModel.detail != nil,
-              !viewModel.isInitialLoading,
-              viewModel.hasLoadedTranscript
-        else { return false }
-
-        let hasTranscript = !viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty
-        guard hasTranscript else {
-            // A valid empty session uses the native empty state and does not
-            // mount WebKit, so it has no frame-render beacon to await.
-            return true
-        }
-        return viewModel.isTranscriptFrameReady
-            && viewModel.transcriptRendererErrorMessage == nil
+        // Native chrome is a separate lane from WebKit. Once detail and a
+        // successful tail exist, keep the composer/runtime controls mounted
+        // through first-frame restoration, refresh errors, and renderer
+        // retries instead of making their identity depend on a JS callback.
+        viewModel.detail != nil
+            && !viewModel.isInitialLoading
+            && viewModel.hasLoadedTranscript
     }
 
     private var transcriptState: TranscriptDisplayState {
@@ -365,7 +376,12 @@ struct SessionView: View {
             TranscriptStateOverlay(
                 state: state,
                 onRetry: {
-                    viewModel.prepareTranscriptRetry()
+                    // A REST refresh failure should not hide a transcript
+                    // that is already rendered. Only a renderer failure needs
+                    // to reset WebKit's frame-ready gate.
+                    if viewModel.transcriptRendererErrorMessage != nil {
+                        viewModel.prepareTranscriptRetry()
+                    }
                     Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
                 }
             )

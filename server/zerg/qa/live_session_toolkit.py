@@ -668,6 +668,8 @@ def _provision_transcript_roots(home: Path, environment: dict[str, str]) -> None
         # JSONL mirror to a newly discovered store on restart.
         home / ".cursor" / "projects",
         home / ".longhouse" / "agent" / "cursor-acp-source",
+        home / ".local" / "share" / "omp",
+        home / ".local" / "share" / "omp" / "sessions",
     ]
     configured_claude_dir = str(environment.get("CLAUDE_CONFIG_DIR") or "").strip()
     roots.append(Path(configured_claude_dir) / "projects" if configured_claude_dir else home / ".claude" / "projects")

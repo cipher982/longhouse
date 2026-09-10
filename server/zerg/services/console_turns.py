@@ -84,7 +84,8 @@ async def _persist_native_binding_result(catalog, *, turn: dict[str, object], re
     before that outbox event reaches catalogd.
     """
 
-    if str(turn.get("provider") or "").strip().lower() != "pi":
+    provider = str(turn.get("provider") or "").strip().lower()
+    if provider not in {"pi", "omp"}:
         return
     result = response_message.get("result")
     if not isinstance(result, dict):
@@ -97,11 +98,11 @@ async def _persist_native_binding_result(catalog, *, turn: dict[str, object], re
 
     occurred_at = datetime.now(timezone.utc)
     event = RuntimeEventIngest(
-        runtime_key=f"pi:{turn['session_id']}",
+        runtime_key=f"{provider}:{turn['session_id']}",
         session_id=UUID(str(turn["session_id"])),
         thread_id=UUID(str(turn["thread_id"])),
         run_id=UUID(str(turn["run_id"])),
-        provider="pi",
+        provider=provider,
         device_id=str(turn.get("device_id") or "").strip() or None,
         source="console_turn_start",
         kind="binding_signal",

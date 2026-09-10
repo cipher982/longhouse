@@ -82,7 +82,7 @@ providers:
   permission_prompt_surface: true
   external_event_channel: null
   pause_tool_name: "requestUserInput"
-  harness_safe_no_token_prompt: true
+  harness_safe_no_token_prompt: false
   harness_safe_managed_session_scenarios: [launch_managed_session, send_receive]
   harness_real_managed_session_e2e: true
   launch_local: true
@@ -1901,7 +1901,7 @@ providers:
         id: pi_helm_launch_registration
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 2
+        minimum_scenario_revision: 3
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - <<: *pi_helm_lifecycle_assertion
@@ -1945,7 +1945,7 @@ providers:
       - id: pi_console_tool_enabled
         scenario_id: pi_console_tool_lifecycle
         oracle_source: server/zerg/qa/pi_console_tool_producer.py
-        minimum_scenario_revision: 2
+        minimum_scenario_revision: 3
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
   can_resume: true
@@ -2065,3 +2065,183 @@ providers:
       fixture: engine/tests/fixtures/golden/pi/native.jsonl
       canary: pi_transcript_signals
       trigger: turn_end
+- provider: omp
+  display_name: OMP
+  marketing_name: Oh My Pi
+  provider_cli_binary: omp
+  provider_cli_env: LONGHOUSE_OMP_BIN
+  auth_probe:
+    disposition: policy_disabled
+    reason: "OMP owns its native profile credentials; Longhouse does not probe or replace them"
+  requires_longhouse_cli: false
+  managed_transport: omp_helm_channel
+  console_adapter: omp_print
+  control_plane: omp_helm_channel
+  control_plane_aliases: []
+  adapter_sources:
+  - engine/src/omp_session.rs
+  - engine/src/discovery.rs
+  - engine/src/pipeline/parser.rs
+  - engine/src/storage_v2_shipper.rs
+  - engine/src/omp_helm_launcher.rs
+  - engine/src/omp_helm_control.rs
+  - engine/assets/longhouse-omp-helm.ts
+  - engine/src/omp_print.rs
+  - server/zerg/qa/provider_adapters/omp.py
+  - server/zerg/qa/omp_console_producer.py
+  - server/zerg/qa/omp_helm_lifecycle.py
+  wire_families: [omp_jsonl]
+  observation_sources: [native_archive]
+  normalization_ruleset: omp
+  presentation_ruleset: shared_tool_presentation
+  proof_profiles:
+    pull_request: hermetic
+    release_candidate: staged_release
+    continuous: privacy_safe_live_replay
+  support_tier: launch
+  interaction_probes:
+  - probe_id: omp_shadow_archive
+    surface: shadow
+    input_sequence: ["observe an existing OMP JSONL source"]
+    acknowledgement_oracle: omp_native_archive_discovered_once
+    native_sources: [native_archive]
+    raw_markers: ["type", "session"]
+    raw_output_markers: ["message"]
+    expected_interaction_kind: provider_notification
+    expected_title_eligibility: true
+    expected_model_turn: false
+    changes_provider_state: false
+    source_surface: provider_file
+    state_mutation_scope: none
+    evidence_class: hermetic
+    disposition: implemented
+    canary: engine/tests/fixtures/golden/omp/native.jsonl
+  - probe_id: omp_console_turn
+    surface: console
+    input_sequence: ["omp --mode json --session-dir <session-dir> --resume <exact-session-file> -p <prompt>"]
+    acknowledgement_oracle: omp_console_turn_settled_and_bound
+    native_sources: [native_archive]
+    raw_markers: ["type", "session", "stopReason", "isTerminal", "willContinue"]
+    raw_output_markers: ["message", "agent_end"]
+    expected_interaction_kind: durable_user_message
+    expected_title_eligibility: false
+    expected_model_turn: true
+    changes_provider_state: true
+    source_surface: console
+    state_mutation_scope: conversation_identity
+    evidence_class: live_token
+    disposition: implemented
+    canary: engine/src/omp_print.rs
+  release_channel:
+    channel: github_releases
+    coordinate: "can1357/oh-my-pi@daf07999c2fee9b22edc7bf8fea1fb6272e0df5e"
+    version_discovery: stable_github_releases
+    verification: sha256_asset_digest_and_version
+    platform_artifacts:
+      linux-x86_64: omp-linux-x64
+      linux-aarch64: omp-linux-arm64
+      darwin-x86_64: omp-darwin-x64
+      darwin-aarch64: omp-darwin-arm64
+      windows-x86_64: omp-windows-x64.exe
+      windows-aarch64: omp-windows-arm64.exe
+  permission_prompt_surface: false
+  external_event_channel: null
+  pause_tool_name: "omp_pause_request"
+  harness_safe_no_token_prompt: false
+  harness_safe_managed_session_scenarios: []
+  harness_real_managed_session_e2e: false
+  launch_local: true
+  run_once: false
+  reattach: true
+  send_input: true
+  interrupt: true
+  steer_active_turn: true
+  answer_pause: false
+  terminate: true
+  tail_output: true
+  runtime_phase: true
+  transcript_binding: true
+  startup_coordination_context: false
+  can_resume: true
+  turn_start: true
+  fork_thread: false
+  live_proof: false
+  machine_control_supports: [omp.send, omp.interrupt, omp.steer, omp.terminate, omp.turn_start, omp.turn_interrupt]
+  operation_evidence:
+    launch_local: {level: live_no_token, source: "OMP 18.1.14 native Helm launcher and PTY fixture", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    run_once: {level: none, source: "Console routes through session.turn.start, not the legacy run_once command", disposition: policy_disabled, reason: "OMP Console has one turn-scoped path through session.turn.start.", routed_to: turn_start}
+    reattach: {level: hermetic, source: "OMP exact-file resume validation and owner lock tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    send_input: {level: hermetic, source: "OMP extension command routing tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    interrupt: {level: hermetic, source: "OMP extension abort routing and owned teardown tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    steer_active_turn: {level: hermetic, source: "OMP extension steer routing tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    answer_pause: {level: none, source: "OMP provider-local Console approval surface", disposition: not_implemented, reason: "OMP does not expose a proven remote approval transport", owner_action: "Add an OMP remote approval canary before exposing answer_pause", blocker: none}
+    terminate: {level: hermetic, source: "OMP owned process-group cleanup tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    tail_output: {level: source_review, source: "OMP native JSONL Shadow source", disposition: implemented, blocker: none}
+    runtime_phase: {level: hermetic, source: "OMP extension lifecycle reducer tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    transcript_binding: {level: source_review, source: "Opaque OMP source identity and source epochs", disposition: implemented, blocker: none}
+    turn_start: {level: source_review, source: "stock OMP JSON print with exact native continuation; omp_console_lifecycle", disposition: implemented, blocker: budget}
+    fork_thread: {level: none, source: "OMP Phase 1 Shadow-only contract", disposition: not_implemented, owner_action: "Add OMP native child acquisition in Phase 2", blocker: none}
+  capabilities:
+    session.launch.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.omp.launch_helm
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: []
+      required_assertions:
+      - &omp_helm_lifecycle_assertion
+        id: omp_helm_launch_registration
+        scenario_id: omp_helm_lifecycle
+        oracle_source: server/zerg/qa/omp_helm_lifecycle.py
+        minimum_scenario_revision: 3
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - <<: *omp_helm_lifecycle_assertion
+        id: omp_helm_send_idle
+      - <<: *omp_helm_lifecycle_assertion
+        id: omp_helm_steer_active
+      - <<: *omp_helm_lifecycle_assertion
+        id: omp_helm_abort_native
+      - <<: *omp_helm_lifecycle_assertion
+        id: omp_helm_terminate_owned
+      - <<: *omp_helm_lifecycle_assertion
+        id: omp_helm_native_replacement_bound
+    session.resume.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.omp.resume_helm
+      action_gate: strict
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - <<: *omp_helm_lifecycle_assertion
+        id: omp_helm_cold_resume_exact_file
+      - <<: *omp_helm_lifecycle_assertion
+        id: omp_helm_stale_owner_refused
+    session.turn.start:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.omp.turn_start
+      action_gate: strict
+      contexts:
+        modes: [console]
+      runtime_prerequisites: [session_context]
+      required_assertions:
+      - id: omp_console_turn_settled_and_bound
+        scenario_id: omp_console_lifecycle
+        oracle_source: server/zerg/qa/omp_console_producer.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+  transcript_signals:
+    turn.duration: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: turn_end, owner_action: "Survey OMP turn duration in Phase 2"}
+    session.recap: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: idle_after_turn, owner_action: "Survey OMP recaps in Phase 2"}
+    session.title: {disposition: implemented, raw_source: title/title_change, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: none_reliable}
+    turn.usage: {disposition: implemented, raw_source: message/message.usage, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: turn_end}
+    turn.api_error: {disposition: implemented, raw_source: message/message.errorMessage+message.stopReason, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: none_reliable}
+    context.compaction: {disposition: implemented, raw_source: reset_boundary, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: slash_compact}
+    input.queue: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: send_while_working, owner_action: "Add OMP managed queue authority in Phase 2"}
+    turn.thinking: {disposition: implemented, raw_source: message/message.content.thinking, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: turn_end}

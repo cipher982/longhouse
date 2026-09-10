@@ -104,7 +104,7 @@ def build_slow_turn_item_response(item: ManagedCompletedTurnSummary) -> SlowTurn
         project=item.session.project,
         device_id=item.session.device_id,
         device_name=item.session.device_name,
-        managed_transport=(contract.managed_transport.value if contract is not None else None),
+        managed_transport=(contract.managed_transport.value if contract is not None and contract.managed_transport is not None else None),
         state=item.turn.state,
         terminal_phase=item.turn.terminal_phase,
         error_code=item.turn.error_code,

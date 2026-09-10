@@ -299,6 +299,37 @@ struct TranscriptSnapshotStoreTests {
         #expect(loaded?.tier == .memory)
         #expect(loaded?.snapshot.events.map(\.id) == ["1"])
     }
+    @Test
+    func diskHitPromotesToMemoryForOfflineReopen() throws {
+        let dir = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let writer = makeStore(directory: dir, memoryMaxBytes: 0)
+        writer.save(
+            serverURL: "https://example.longhouse.ai",
+            sessionId: "session-1",
+            snapshot: TranscriptSnapshot(
+                detail: makeDetail(),
+                events: [makeEvent(id: 1, content: "disk")],
+                loadedProjectionItemCount: 1,
+                totalProjectionItemCount: 1,
+                tailSnapshotEventId: "1"
+            )
+        )
+        writer.waitForPendingWrites()
+
+        let reader = makeStore(directory: dir, memoryMaxBytes: 4 * 1024 * 1024)
+        #expect(
+            reader.load(serverURL: "https://example.longhouse.ai", sessionId: "session-1")?.tier == .disk
+        )
+        for file in try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            try FileManager.default.removeItem(at: file)
+        }
+
+        let warm = reader.load(serverURL: "https://example.longhouse.ai", sessionId: "session-1")
+        #expect(warm?.tier == .memory)
+        #expect(warm?.snapshot.events.map(\.id) == ["1"])
+    }
+
 
     @Test
     func evictsOldestBeyondFileCap() throws {

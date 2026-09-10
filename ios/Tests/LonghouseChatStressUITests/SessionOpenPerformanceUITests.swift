@@ -102,6 +102,34 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         )
     }
 
+    func testTimelinePushKeepsLoadingChromeBounded() throws {
+
+        let app = XCUIApplication()
+        app.launchEnvironment[LaunchEnvironment.timelineOpenFixture] = "1"
+        app.launchEnvironment[LaunchEnvironment.chatEventCount] = "120"
+        app.launchEnvironment[LaunchEnvironment.mobileTailDelayMs] = "30000"
+        app.launchArguments += [LaunchArgument.appearanceOverride, "dark"]
+        app.launch()
+
+        let row = app.descendants(matching: .any)["timeline-open-session-1"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+
+        let title = app.descendants(matching: .any)["session-navigation-title"]
+        let loadingActions = app.descendants(matching: .any)["session-navigation-loading"].firstMatch
+        let loadingDock = app.descendants(matching: .any)["session-loading-dock"]
+        XCTAssertTrue(title.waitForExistence(timeout: 8))
+        XCTAssertTrue(loadingActions.waitForExistence(timeout: 8))
+        XCTAssertTrue(loadingDock.waitForExistence(timeout: 8))
+        XCTAssertLessThan(title.frame.maxX, loadingActions.frame.minX)
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "timeline-push-loading-chrome"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+
     func testComposerFocusRemainsResponsiveDuringStreaming() {
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("longhouse-composer-profile-\(UUID().uuidString)", isDirectory: true)

@@ -46,6 +46,7 @@ _PROVIDER_ONBOARDING_LABELS = {
     "opencode": "OpenCode",
     "antigravity": "Antigravity",
     "pi": "Pi",
+    "omp": "Oh My Pi",
 }
 _PROVIDER_ONBOARDING_DOCS = {
     "claude": "https://docs.anthropic.com/en/docs/claude-code/overview",
@@ -54,6 +55,7 @@ _PROVIDER_ONBOARDING_DOCS = {
     "opencode": "https://opencode.ai",
     "antigravity": "https://antigravity.google/product/antigravity-cli",
     "pi": "https://github.com/earendil-works/pi",
+    "omp": "https://github.com/can1357/oh-my-pi",
 }
 
 

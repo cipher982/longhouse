@@ -78,7 +78,7 @@ def _collect_provider_contracts() -> dict[str, Any]:
                 "next": evidence.get("next"),
             }
         providers[contract.provider] = {
-            "managed_transport": contract.managed_transport.value,
+            "managed_transport": contract.managed_transport.value if contract.managed_transport else None,
             "control_plane": contract.control_plane,
             "control_plane_aliases": list(contract.control_plane_aliases),
             "machine_control_supports": list(contract.machine_control_supports),

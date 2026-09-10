@@ -19,6 +19,8 @@ pub enum ManagedProvider {
     Codex,
     /// `cursor`
     Cursor,
+    /// `omp`
+    Omp,
     /// `opencode`
     Opencode,
     /// `pi`
@@ -33,6 +35,7 @@ impl ManagedProvider {
             ManagedProvider::Claude => "claude",
             ManagedProvider::Codex => "codex",
             ManagedProvider::Cursor => "cursor",
+            ManagedProvider::Omp => "omp",
             ManagedProvider::Opencode => "opencode",
             ManagedProvider::Pi => "pi",
         }
@@ -45,6 +48,7 @@ pub const ALL_MANAGED_PROVIDERS: &[ManagedProvider] = &[
     ManagedProvider::Claude,
     ManagedProvider::Codex,
     ManagedProvider::Cursor,
+    ManagedProvider::Omp,
     ManagedProvider::Opencode,
     ManagedProvider::Pi,
 ];
@@ -74,6 +78,11 @@ pub const NEVER_INHERITED_KEYS: &[&str] = &[
     "LONGHOUSE_PI_HELM_CHANNEL_PATH",
     "LONGHOUSE_PI_HELM_CHANNEL_TOKEN",
     "LONGHOUSE_PI_HELM_INITIAL_PROMPT",
+    "LONGHOUSE_OMP_HELM_TOKEN",
+    "LONGHOUSE_OMP_HELM_URL",
+    "LONGHOUSE_OMP_HELM_CHANNEL_PATH",
+    "LONGHOUSE_OMP_HELM_CHANNEL_TOKEN",
+    "LONGHOUSE_OMP_HELM_INITIAL_PROMPT",
     "LONGHOUSE_PERMISSION_HOOK_ENABLED",
     "LONGHOUSE_LAUNCH_ACTOR",
     "LONGHOUSE_LAUNCH_SURFACE",

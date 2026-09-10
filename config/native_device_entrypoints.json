@@ -85,6 +85,18 @@
       "notes": "Runs the user-installed Pi CLI through the native control path."
     },
     {
+      "id": "omp-managed",
+      "status": "available",
+      "native_target_command": "longhouse omp",
+      "providers": [
+        "omp"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Runs the user-installed Oh My Pi CLI through the native Helm extension channel; Console turns use the stock omp JSON stream adapter."
+    },
+    {
       "id": "cursor-managed",
       "status": "available",
       "native_target_command": "longhouse cursor",

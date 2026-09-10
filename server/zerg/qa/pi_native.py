@@ -18,9 +18,15 @@ PI_SHADOW_TAXONOMY = {
     "message/user/text": "transcript:user",
     "message/user/image+text": "transcript:user_with_image",
     "message/assistant/text": "transcript:assistant",
+    "message/assistant/text+thinking": "transcript:assistant_reasoning",
+    "message/assistant/text+toolCall": "transcript:assistant_tool",
+    "message/assistant/thinking+toolCall": "transcript:assistant_tool",
+    "message/assistant/toolCall": "transcript:assistant_tool",
     "message/assistant/text+thinking+toolCall": "transcript:assistant_tool",
     "message/toolResult": "provider_tool:result",
+    "message/toolResult/text": "provider_tool:result",
     "message/toolResult/image": "provider_tool:result_image",
+    "message/toolResult/image+text": "provider_tool:result_image",
     "model_change": "state:model",
     "thinking_level_change": "state:thinking_level",
     "compaction": "signal:context.compaction",
@@ -100,18 +106,63 @@ def pi_native_shadow_taxonomy(
             unmapped[shape] = count
         else:
             classes[classification] = classes.get(classification, 0) + count
-    calls = {str(row.get("tool_call_id")) for row in rows if row.get("type") == "assistant" and row.get("tool_call_id")}
-    results = {str(row.get("tool_call_id")) for row in rows if row.get("type") == "tool_result" and row.get("tool_call_id")}
+    calls: list[tuple[str, Any, int, Any]] = []
+    for index, row in enumerate(rows):
+        if row.get("type") != "assistant":
+            continue
+        native_tools = row.get("tool_calls")
+        if isinstance(native_tools, list):
+            for tool in native_tools:
+                if isinstance(tool, Mapping) and tool.get("id"):
+                    calls.append((str(tool["id"]), tool.get("name"), index, tool.get("arguments")))
+        elif row.get("tool_call_id"):
+            calls.append((str(row["tool_call_id"]), row.get("tool_name"), index, row.get("tool_input_json")))
+    results = [
+        (str(row.get("tool_call_id")), row.get("tool_name"), index)
+        for index, row in enumerate(rows)
+        if row.get("type") == "tool_result" and row.get("tool_call_id")
+    ]
+    available_results = list(results)
+    paired: list[str] = []
+    pair_facts: list[dict[str, Any]] = []
+    for call_id, call_name, call_index, call_arguments in calls:
+        matching = [
+            result
+            for result in available_results
+            if result[0] == call_id and result[2] > call_index and (call_name is None or result[1] is None or result[1] == call_name)
+        ]
+        if len(matching) != 1:
+            continue
+        result_id, result_name, result_index = matching[0]
+        available_results.remove(matching[0])
+        paired.append(call_id)
+        result_row = rows[result_index]
+        if result_row.get("entry_id") and result_row.get("content") is not None:
+            pair_facts.append(
+                {
+                    "call_id": call_id,
+                    "call_name": call_name,
+                    "call_arguments": call_arguments,
+                    "result_id": result_row.get("entry_id"),
+                    "result_tool_call_id": result_row.get("tool_call_id"),
+                    "result_name": result_name,
+                    "result": result_row.get("content"),
+                }
+            )
+    call_ids = {call_id for call_id, _name, _index, _arguments in calls}
+    result_ids = {result_id for result_id, _name, _index in results}
+    paired_call_ids = {call_id for call_id in paired}
     return {
         "source": "pi_native_session_jsonl",
         "native_shapes": shapes,
         "shadow_classes": classes,
         "unmapped_shapes": unmapped,
-        "tool_call_ids": sorted(calls),
-        "tool_result_ids": sorted(results),
-        "tool_pairs": sorted(calls & results),
-        "tool_calls_without_results": sorted(calls - results),
-        "tool_results_without_calls": sorted(results - calls),
+        "tool_call_ids": sorted(call_ids),
+        "tool_result_ids": sorted(result_ids),
+        "tool_pairs": paired,
+        "tool_calls_without_results": sorted(call_ids - paired_call_ids),
+        "tool_results_without_calls": sorted(result_ids - paired_call_ids),
+        "tool_pair_facts": pair_facts,
         "header_present": bool(metadata.get("has_header")),
         "provider_session_id": metadata.get("provider_session_id"),
     }
@@ -149,6 +200,7 @@ def pi_transcript_rows(transcript: Path) -> tuple[list[dict[str, Any]], str | No
     header_id: str | None = None
     metadata: dict[str, Any] = {
         "lines": 0,
+        "source_end_offset": 0,
         "model": None,
         "has_header": False,
         "taxonomy": {},
@@ -161,6 +213,8 @@ def pi_transcript_rows(transcript: Path) -> tuple[list[dict[str, Any]], str | No
         lines = transcript.read_bytes().splitlines(keepends=True)
     except OSError as exc:
         return rows, None, {**metadata, "error": f"{type(exc).__name__}: {exc}"}
+
+    metadata["source_end_offset"] = sum(len(raw_line) for raw_line in lines)
 
     source_offset = 0
     for raw_line in lines:
@@ -227,11 +281,14 @@ def pi_transcript_rows(transcript: Path) -> tuple[list[dict[str, Any]], str | No
                 row["tool_call_id"] = message.get("toolCallId")
                 row["tool_name"] = message.get("toolName")
                 row["is_error"] = message.get("isError")
+                row["content"] = message.get("content")
                 row["text"] = _pi_content_text(message.get("content"))
             else:
                 row["type"] = "provider_message"
             if tools:
                 row["tool_calls"] = tools
+                row["tool_call_ids"] = [tool.get("id") for tool in tools if tool.get("id")]
+                row["tool_call_count"] = len(tools)
                 row["tool_name"] = tools[0].get("name")
                 row["tool_call_id"] = tools[0].get("id")
                 row["tool_input_json"] = tools[0].get("arguments")

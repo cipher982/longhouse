@@ -33,16 +33,16 @@ logger = logging.getLogger(__name__)
 def normalize_console_permission_mode(provider: str, value: object) -> str:
     normalized_provider = str(provider or "").strip().lower()
     normalized = str(value or "").strip().lower()
-    if normalized_provider == "pi":
+    if normalized_provider in {"pi", "omp"}:
         if normalized in {"remote_approve", "remote_human"}:
-            raise ValueError("Pi Console does not support remote approval; use provider_local")
+            raise ValueError(f"{normalized_provider.upper()} Console does not support remote approval; use provider_local")
         return "provider_local"
     return normalized or "bypass"
 
 
 def normalize_console_provider_config(provider: str, provider_config: dict[str, object] | None) -> dict[str, object]:
     config = dict(provider_config or {})
-    if str(provider or "").strip().lower() != "pi":
+    if str(provider or "").strip().lower() not in {"pi", "omp"}:
         return config
     config["permission_mode"] = normalize_console_permission_mode(provider, config.get("permission_mode"))
     return config
@@ -292,6 +292,8 @@ def attach_live_catalog_control(
         db.flush()
 
     contract = require_contract_for_provider(provider)
+    if contract.control_plane is None:
+        raise ValueError(f"Provider '{provider}' has no managed control plane")
     connection = (
         db.query(LiveSessionConnection)
         .filter(

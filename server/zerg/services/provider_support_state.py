@@ -101,7 +101,7 @@ def collect_provider_support_state(
         providers[provider] = {
             "provider": provider,
             "state": provider_state,
-            "managed_transport": contract.managed_transport.value,
+            "managed_transport": contract.managed_transport.value if contract.managed_transport else None,
             "control_plane": contract.control_plane,
             "cli": {
                 "state": _cli_state(cli_info),

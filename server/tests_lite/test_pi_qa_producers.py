@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,10 +9,14 @@ from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa.pi_console_tool_producer import REGISTRATION as PI_CONSOLE_REGISTRATION
 from zerg.qa.pi_console_tool_producer import pi_console_tool_assertions
 from zerg.qa.pi_helm_lifecycle import _cleanup_receipt
+from zerg.qa.pi_helm_lifecycle import _write_scenario_receipts
+from zerg.qa.pi_helm_lifecycle import _native_snapshot
 from zerg.qa.pi_helm_lifecycle import _redact_value
 from zerg.qa.pi_helm_lifecycle import _state_identity
+from zerg.qa.pi_helm_lifecycle import pi_helm_lifecycle_assertions
 from zerg.qa.pi_native import pi_native_model_evidence
 from zerg.qa.pi_native import pi_native_shadow_taxonomy
+from zerg.qa.pi_native import pi_transcript_rows
 
 
 def test_helm_retained_evidence_excludes_live_channel_authority() -> None:
@@ -60,6 +65,30 @@ def test_pi_native_taxonomy_pairs_native_tool_call_and_result() -> None:
     assert taxonomy["tool_results_without_calls"] == []
 
 
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [
+            {"type": "tool_result", "role": "toolresult", "tool_call_id": "call-1", "tool_name": "read"},
+            {"type": "assistant", "role": "assistant", "tool_call_id": "call-1", "tool_name": "read"},
+        ],
+        [
+            {"type": "assistant", "role": "assistant", "tool_call_id": "call-1", "tool_name": "read"},
+            {"type": "tool_result", "role": "toolresult", "tool_call_id": "call-1", "tool_name": "write"},
+        ],
+    ],
+)
+def test_pi_native_taxonomy_rejects_reordered_or_mismatched_tool_pairs(rows) -> None:
+    taxonomy = pi_native_shadow_taxonomy(
+        rows,
+        {"native_shapes": {}, "has_header": True, "provider_session_id": "session-1"},
+    )
+
+    assert taxonomy["tool_pairs"] == []
+    assert taxonomy["tool_calls_without_results"] == ["call-1"]
+    assert taxonomy["tool_results_without_calls"] == ["call-1"]
+
+
 def test_pi_console_tool_oracle_requires_complete_generic_lifecycle() -> None:
     assert pi_console_tool_assertions({"pi_tool_enabled": True})["pi_console_tool_enabled"] is False
 
@@ -87,6 +116,7 @@ def _write_native_tool_session(path, *, result_call_id: str | None = "call-1", i
             "id": "assistant-tool-1",
             "message": {
                 "role": "assistant",
+                "model": "fixture-model",
                 "content": [{"type": "toolCall", "id": "call-1", "name": "read", "arguments": {"path": "proof.txt"}}],
                 "stopReason": "toolUse",
             },
@@ -145,7 +175,14 @@ def _native_tool_receipt_inputs(native_source):
             "bound_assistant_event_origin": "durable",
         },
         "binary_receipt": {"provider": "pi", "path": "/opt/pi", "sha256": "sha256:" + "c" * 64, "version": "0.85.1"},
-        "cleanup": {"status": "pass", "provider_process_dead": True, "process_group_dead": True, "orphan_count": 0},
+        "cleanup": {
+            "status": "pass",
+            "provider_process_dead": True,
+            "process_group_dead": True,
+            "orphan_count": 0,
+            "process_stop_verified": True,
+            "source_retention_verified": True,
+        },
         "marker": "LH_MARKER",
     }
 
@@ -154,24 +191,34 @@ def test_pi_native_tool_receipt_binds_actual_call_result_session_and_response(tm
     native_source = tmp_path / "native.jsonl"
     _write_native_tool_session(native_source)
 
-    receipt = lifecycle._pi_native_tool_receipt(**_native_tool_receipt_inputs(native_source))
+    receipt = lifecycle._pi_native_tool_receipt(
+        **_native_tool_receipt_inputs(native_source),
+        native_retained_path="native.jsonl",
+        provider_response_retained_path="native.jsonl",
+    )
 
     assert receipt["status"] == "pass"
     assert receipt["provider_session_id"] == "native-session-1"
+    assert receipt["native_model"] == "fixture-model"
     assert receipt["tool_call"]["id"] == "call-1"
     assert receipt["tool_call"]["name"] == "read"
     assert receipt["tool_call"]["arguments"] == {"path": "proof.txt"}
-    assert receipt["tool_call"]["native_event_id"] == "assistant-tool-1"
+    assert receipt["tool_call"]["native_message_id"] == "assistant-tool-1"
     assert receipt["tool_result"]["id"] == "tool-result-1"
     assert receipt["tool_result"]["tool_call_id"] == "call-1"
     assert receipt["tool_result"]["result"] == [{"type": "text", "text": "PI_CONSOLE_PROOF"}]
-    assert receipt["provider_response"]["native_event_id"] == "assistant-final-1"
+    assert receipt["provider_response"]["native_message_id"] == "assistant-final-1"
     assert receipt["provider_response"]["retained_source_path"] == str(native_source)
+    assert receipt["provider_response"]["retained_path"] == "native.jsonl"
+    assert receipt["native_source"]["retained_path"] == "native.jsonl"
     assert receipt["linkage"] == {
         "live_inspection_confirmed": True,
         "native_session_matches_provider_thread": True,
         "native_response_follows_tool_result": True,
         "provider_response_bound": True,
+        "native_projected_assistant_linkage": True,
+        "native_message_id_preserved": True,
+        "projected_assistant_event_id_preserved": True,
         "runtime_identity_matches": True,
         "cleanup_pass": True,
     }
@@ -194,8 +241,8 @@ def test_pi_native_tool_receipt_rejects_missing_or_mismatched_native_pair(tmp_pa
 def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
     registration = PI_CONSOLE_REGISTRATION.to_dict()
 
-    assert registration["producer_revision"] == 2
-    assert registration["scenario_revision"] == 2
+    assert registration["producer_revision"] == 3
+    assert registration["scenario_revision"] == 3
     assert "native_tool_receipt" in registration["required_artifacts"]
 
 
@@ -209,6 +256,273 @@ def test_pi_helm_cleanup_oracle_does_not_accept_missing_process_identity() -> No
     assert receipt["status"] == "fail"
     assert receipt["provider_process_dead"] is False
     assert receipt["no_orphan_provider_processes"] is False
+
+
+def test_pi_native_snapshot_contract_keeps_metadata_and_taxonomy_distinct(tmp_path) -> None:
+    native = tmp_path / "session.jsonl"
+    native.write_text(
+        '{"type":"session","id":"native-session"}\n'
+        '{"type":"message","id":"reply","message":{"role":"assistant","model":"fixture-model","content":"reply"}}\n',
+        encoding="utf-8",
+    )
+
+    rows, metadata, taxonomy = _native_snapshot(native)
+
+    assert rows
+    assert metadata["provider_session_id"] == "native-session"
+    assert metadata["source_end_offset"] == native.stat().st_size
+    assert taxonomy["provider_session_id"] == "native-session"
+    assert taxonomy["source"] == "pi_native_session_jsonl"
+
+
+def test_pi_native_parser_and_taxonomy_account_for_every_tool_call_in_one_message(tmp_path) -> None:
+    native = tmp_path / "multi-tool.jsonl"
+    events = [
+        {"type": "session", "id": "native-session"},
+        {
+            "type": "message",
+            "id": "assistant-tools",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "toolCall", "id": "call-read", "name": "read", "arguments": {"path": "a"}},
+                    {"type": "toolCall", "id": "call-write", "name": "write", "arguments": {"path": "b"}},
+                ],
+            },
+        },
+        {
+            "type": "message",
+            "id": "result-read",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "call-read",
+                "toolName": "read",
+                "content": [{"type": "text", "text": "read result"}],
+            },
+        },
+        {
+            "type": "message",
+            "id": "result-write",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "call-write",
+                "toolName": "write",
+                "content": [{"type": "text", "text": "write result"}],
+            },
+        },
+    ]
+    native.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+    rows, _session_id, metadata = pi_transcript_rows(native)
+    taxonomy = pi_native_shadow_taxonomy(rows, metadata)
+
+    assistant = next(row for row in rows if row.get("type") == "assistant")
+    assert assistant["tool_call_ids"] == ["call-read", "call-write"]
+    assert assistant["tool_call_count"] == 2
+    assert taxonomy["tool_call_ids"] == ["call-read", "call-write"]
+    assert taxonomy["tool_result_ids"] == ["call-read", "call-write"]
+    assert taxonomy["tool_pairs"] == ["call-read", "call-write"]
+    assert taxonomy["tool_calls_without_results"] == []
+    assert taxonomy["tool_results_without_calls"] == []
+    assert taxonomy["shadow_classes"]["transcript:assistant_tool"] == 1
+    assert taxonomy["shadow_classes"]["provider_tool:result"] == 2
+    assert [fact["call_arguments"] for fact in taxonomy["tool_pair_facts"]] == [{"path": "a"}, {"path": "b"}]
+
+
+def test_pi_native_thinking_plus_text_fixture_preserves_both_blocks(tmp_path) -> None:
+    native = tmp_path / "thinking-text.jsonl"
+    native.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session", "id": "native-session"}),
+                json.dumps(
+                    {
+                        "type": "message",
+                        "id": "assistant-thinking-text",
+                        "message": {
+                            "role": "assistant",
+                            "model": "fixture-model",
+                            "provider": "fixture-provider",
+                            "content": [
+                                {"type": "thinking", "thinking": "reason first"},
+                                {"type": "text", "text": "final answer"},
+                            ],
+                            "stopReason": "stop",
+                            "usage": {"output": 1},
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows, _session_id, metadata = pi_transcript_rows(native)
+    taxonomy = pi_native_shadow_taxonomy(rows, metadata)
+    assistant = next(row for row in rows if row.get("type") == "assistant")
+
+    assert assistant["text"] == "final answer"
+    assert assistant["thinking"] == ["reason first"]
+    assert metadata["native_shapes"]["message/assistant/text+thinking"] == 1
+    assert taxonomy["shadow_classes"]["transcript:assistant_reasoning"] == 1
+
+
+def test_pi_helm_receipts_round_trip_runtime_binding_nesting(tmp_path) -> None:
+    args = SimpleNamespace(provider_version="0.85.1", provider_bin="/opt/pi")
+    binding = {"one_session": True, "one_thread": True, "provider_session_bound": True}
+    observations = {
+        "provider_binary_sha256": "sha256:" + "a" * 64,
+        "helm_registration_receipt": {"status": "pass"},
+        "native_session_receipt": {"native_file": {"present": True}},
+        "native_taxonomy_receipt": {"status": "pass"},
+        "control_receipts": {"send": {"accepted": True}},
+        "reload_rebind_receipt": {
+            "status": "pass",
+            "runtime": {"binding": binding, "served_controls": True},
+        },
+        "session_replacement_receipt": {
+            "status": "pass",
+            "binding": {"legacy_top_level": True},
+            "runtime": {"served_controls": True},
+        },
+        "replacement_binding": binding,
+        "cold_resume_receipt": {"status": "pass"},
+        "stale_owner_receipt": {"status": "pass"},
+    }
+
+    _write_scenario_receipts(tmp_path, args, observations, [])
+
+    reload_receipt = json.loads((tmp_path / "reload-rebind-receipt.json").read_text(encoding="utf-8"))
+    replacement_receipt = json.loads((tmp_path / "session-replacement-receipt.json").read_text(encoding="utf-8"))
+    assert reload_receipt["runtime"]["binding"] == binding
+    assert replacement_receipt["runtime"]["binding"] == binding
+    assert "binding" not in replacement_receipt
+
+
+def test_pi_helm_observation_booleans_cannot_override_failed_cleanup() -> None:
+    observation = {
+        "abort_native": True,
+        "terminate_owned": True,
+        "cleanup": {
+            "status": "fail",
+            "provider_process_dead": True,
+            "process_group_dead": True,
+            "orphan_count": 1,
+        },
+    }
+
+    assertions = pi_helm_lifecycle_assertions(observation)
+
+    assert assertions["pi_helm_abort_native"] is False
+    assert assertions["pi_helm_terminate_owned"] is False
+
+
+def test_pi_helm_cleanup_stop_and_scratch_failures_block_admission() -> None:
+    observation = {
+        "abort_native": True,
+        "terminate_owned": True,
+        "cleanup": {
+            "status": "pass",
+            "provider_process_dead": True,
+            "process_group_dead": True,
+            "orphan_count": 0,
+            "shipper_stop_verified": False,
+            "scratch_removed": False,
+            "cleanup_errors": ["shipper stop failed"],
+        },
+    }
+
+    assertions = pi_helm_lifecycle_assertions(observation)
+
+    assert assertions["pi_helm_abort_native"] is False
+    assert assertions["pi_helm_terminate_owned"] is False
+
+
+def test_pi_helm_steer_oracle_requires_active_state_before_native_control() -> None:
+    observation = {
+        "steer_active": True,
+        "control_receipts": {
+            "steer": {
+                "accepted": True,
+                "native": {"assistant_marker_rows": 1},
+                "runtime": {
+                    "active_turn_observed": False,
+                    "active_state": {"phase": "idle"},
+                },
+            }
+        },
+    }
+
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_steer_active"] is False
+    observation["control_receipts"]["steer"]["runtime"] = {
+        "active_turn_observed": True,
+        "active_state": {"phase": "running"},
+    }
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_steer_active"] is True
+
+
+def test_pi_helm_follow_up_oracle_requires_active_native_input_delivery() -> None:
+    observation = {
+        "follow_up_native": True,
+        "control_receipts": {
+            "follow_up": {
+                "accepted": True,
+                "command": {
+                    "method": "POST",
+                    "text": "After this turn, reply with PI_HELM_FOLLOW_fixture.",
+                },
+                "native": {
+                    "marker": "PI_HELM_FOLLOW_fixture",
+                    "user_marker_rows": 1,
+                    "user_marker_occurrences": 1,
+                    "follow_up_delivered": True,
+                },
+                "runtime": {"active_turn_observed": True},
+            }
+        },
+    }
+
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False
+    observation["control_receipts"]["follow_up"]["command"]["path"] = "/api/agents/sessions/session/send-live"
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is True
+
+    observation["control_receipts"]["follow_up"]["native"]["user_marker_rows"] = 0
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_follow_up_native"] is False
+
+
+def test_pi_helm_cold_resume_oracle_requires_remembered_context_evidence() -> None:
+    observation = {
+        "cold_resume_exact_file": True,
+        "cold_resume_receipt": {
+            "context_evidence": {
+                "phrase": "PI_HELM_CONTEXT_fixture",
+                "source": "pre_termination_replacement_turn",
+                "resume_prompt": "Reply with the context you remember followed by PI_HELM_RESUME_fixture.",
+                "pre_termination": {
+                        "source": "pre_termination_replacement_turn",
+                        "prompt": "Remember PI_HELM_CONTEXT_fixture.",
+                        "native_user_marker_rows": 1,
+                        "native_user_marker_occurrences": 1,
+                },
+                "post_resume_native": {
+                    "marker": "PI_HELM_CONTEXT_fixture",
+                    "assistant_marker_rows": 1,
+                    "user_marker_rows": 0,
+                    "user_marker_occurrences": 0,
+                },
+                "post_resume_runtime": {
+                    "marker": "PI_HELM_CONTEXT_fixture",
+                    "assistant_marker_count": 1,
+                    "binding": {"one_session": True, "one_thread": True, "provider_session_bound": True},
+                },
+            }
+        },
+    }
+
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_cold_resume_exact_file"] is True
+    observation["cold_resume_receipt"]["context_evidence"]["source"] = "proof_file"
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_cold_resume_exact_file"] is False
 
 
 def test_pi_accounting_includes_tool_rounds_but_never_hides_a_failed_tail(tmp_path) -> None:

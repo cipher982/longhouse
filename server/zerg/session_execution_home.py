@@ -33,6 +33,7 @@ class ManagedSessionTransport(str, Enum):
     CURSOR_HELM = "cursor_helm"
     PI_PRINT = "pi_print"
     PI_HELM_CHANNEL = "pi_helm_channel"
+    OMP_HELM_CHANNEL = "omp_helm_channel"
 
     @staticmethod
     def for_provider(
@@ -40,7 +41,7 @@ class ManagedSessionTransport(str, Enum):
         *,
         machine_name: str | None = None,
         native_claude_channels_available: bool | None = None,
-    ) -> "ManagedSessionTransport":
+    ) -> "ManagedSessionTransport | None":
         del machine_name, native_claude_channels_available
         from zerg.services.managed_provider_contracts import managed_transport_for_provider
 

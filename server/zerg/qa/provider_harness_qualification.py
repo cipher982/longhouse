@@ -216,7 +216,7 @@ def _build_provider_build_ref(request: dict[str, Any], provider_bin: Path, *, ou
         source_root = provider_bin.parent.parent
         entrypoint_relative = "bin/codex"
         codex_helm_interrupt._package_identity(str(source_root), provider_bin)  # noqa: SLF001
-    elif provider in {"claude", "opencode", "antigravity"} and granularity == "single_asset":
+    elif provider in {"claude", "opencode", "antigravity", "omp"} and granularity == "single_asset":
         source_root = provider_bin.parent
         entrypoint_relative = provider_bin.name
         if tuple(path.name for path in source_root.iterdir()) != (provider_bin.name,):

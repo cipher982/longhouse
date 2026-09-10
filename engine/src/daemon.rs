@@ -35,6 +35,7 @@ use crate::managed_antigravity_scan;
 use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
 use crate::managed_cursor_helm_scan;
+use crate::managed_omp_helm_scan;
 use crate::managed_opencode_scan;
 use crate::managed_pi_helm_scan;
 use crate::managed_resume_scan;
@@ -384,6 +385,7 @@ struct ManagedObservationScanResult {
     opencode_observations: Vec<managed_opencode_scan::OpenCodeServerObservation>,
     cursor_observations: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
     pi_observations: Vec<managed_pi_helm_scan::PiHelmObservation>,
+    omp_observations: Vec<managed_omp_helm_scan::OmpHelmObservation>,
     /// Managed provider processes whose session is gone. Identified in the
     /// blocking scan, reaped by the async consumer.
     orphan_processes: Vec<crate::managed_process_janitor::OrphanProcess>,
@@ -394,6 +396,7 @@ struct ManagedObservationScanResult {
     opencode_elapsed_ms: u64,
     cursor_elapsed_ms: u64,
     pi_elapsed_ms: u64,
+    omp_elapsed_ms: u64,
     retained_stale_rows: usize,
     elapsed_ms: u64,
 }
@@ -406,6 +409,7 @@ struct ManagedObservationSnapshot {
     opencode: Vec<managed_opencode_scan::OpenCodeServerObservation>,
     cursor: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
     pi: Vec<managed_pi_helm_scan::PiHelmObservation>,
+    omp: Vec<managed_omp_helm_scan::OmpHelmObservation>,
 }
 
 struct ProjectionBuildInput {
@@ -444,6 +448,7 @@ impl ManagedObservationSnapshot {
             opencode: result.opencode_observations.clone(),
             cursor: result.cursor_observations.clone(),
             pi: result.pi_observations.clone(),
+            omp: result.omp_observations.clone(),
         }
     }
 
@@ -454,6 +459,7 @@ impl ManagedObservationSnapshot {
             || self.opencode.iter().any(|row| row.state_file == path)
             || self.cursor.iter().any(|row| row.state_file == path)
             || self.pi.iter().any(|row| row.state_file == path)
+            || self.omp.iter().any(|row| row.state_file == path)
     }
 
     fn projection_equivalent(&self, other: &Self) -> bool {
@@ -478,6 +484,9 @@ impl ManagedObservationSnapshot {
                 row.updated_at.clear();
             }
             for row in &mut snapshot.pi {
+                row.updated_at.clear();
+            }
+            for row in &mut snapshot.omp {
                 row.updated_at.clear();
             }
         }
@@ -524,6 +533,12 @@ impl ManagedObservationSnapshot {
                 .filter(|row| row.live || row.run_id.is_some())
                 .cloned()
                 .collect(),
+            omp: self
+                .omp
+                .iter()
+                .filter(|row| row.live || row.run_id.is_some())
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -536,6 +551,7 @@ fn managed_provider_state_dirs() -> Vec<PathBuf> {
         managed_opencode_scan::default_opencode_server_state_dir(),
         managed_cursor_helm_scan::default_cursor_helm_state_dir(),
         managed_pi_helm_scan::default_pi_helm_state_dir(),
+        managed_omp_helm_scan::default_omp_helm_state_dir(),
     ]
     .into_iter()
     .flatten()
@@ -2587,7 +2603,7 @@ fn maybe_start_projection_build(
         let result = crate::state::db::open_connection(&db_path)
             .map_err(|error| error.to_string())
             .map(|conn| {
-                let mut projection = build_local_status_projection(
+                let mut projection = build_local_status_projection_with_omp(
                     &conn,
                     &parse_tracker,
                     &ship_stats,
@@ -2600,6 +2616,7 @@ fn maybe_start_projection_build(
                     &managed.opencode,
                     &managed.cursor,
                     &managed.pi,
+                    &managed.omp,
                     &unmanaged,
                     managed_snapshot_complete,
                     unmanaged_snapshot_complete,
@@ -2608,6 +2625,11 @@ fn maybe_start_projection_build(
                     archive_repair_mode,
                     &mut session_snapshot_state,
                 );
+                projection.payload.managed_sessions.sort_by(|left, right| {
+                    left.provider
+                        .cmp(&right.provider)
+                        .then_with(|| left.session_id.cmp(&right.session_id))
+                });
                 projection.set_last_reconciled_at(last_full_reconciled_at);
                 (projection, session_snapshot_state)
             });
@@ -2635,6 +2657,53 @@ fn build_local_status_projection(
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
     pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
+    unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
+    managed_snapshot_complete: bool,
+    unmanaged_snapshot_complete: bool,
+    limiter_snapshot: Option<crate::scheduler::LimiterSnapshot>,
+    scheduler_snapshot: Option<crate::scheduler::SchedulerSnapshot>,
+    archive_repair_mode: ArchiveRepairMode,
+    session_snapshot_state: &mut SessionSnapshotState,
+) -> heartbeat::StatusFileProjection {
+    build_local_status_projection_with_omp(
+        conn,
+        parse_tracker,
+        ship_stats,
+        is_offline,
+        last_ship_at,
+        machine_id,
+        observations,
+        antigravity_observations,
+        claude_observations,
+        opencode_observations,
+        cursor_observations,
+        pi_observations,
+        &[],
+        unmanaged_session_bindings,
+        managed_snapshot_complete,
+        unmanaged_snapshot_complete,
+        limiter_snapshot,
+        scheduler_snapshot,
+        archive_repair_mode,
+        session_snapshot_state,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_local_status_projection_with_omp(
+    conn: &rusqlite::Connection,
+    parse_tracker: &RecentIssueTracker,
+    ship_stats: &RecentShipStatsTracker,
+    is_offline: bool,
+    last_ship_at: &Option<String>,
+    machine_id: &str,
+    observations: &[managed_bridge_scan::CodexBridgeObservation],
+    antigravity_observations: &[managed_antigravity_scan::AntigravityHookObservation],
+    claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
+    opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
+    cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
+    pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
+    omp_observations: &[managed_omp_helm_scan::OmpHelmObservation],
     unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
     managed_snapshot_complete: bool,
     unmanaged_snapshot_complete: bool,
@@ -2710,19 +2779,27 @@ fn build_local_status_projection(
             pi_observations,
             now,
         ));
+    payload
+        .managed_sessions
+        .extend(heartbeat::leases_from_omp_helm_observations(
+            machine_id,
+            omp_observations,
+            now,
+        ));
     payload.managed_sessions.sort_by(|a, b| {
         a.provider
             .cmp(&b.provider)
             .then_with(|| a.session_id.cmp(&b.session_id))
     });
     payload.unmanaged_session_bindings =
-        heartbeat::filter_unmanaged_bindings_owned_by_managed_observations(
+        heartbeat::filter_unmanaged_bindings_owned_by_managed_observations_with_omp(
             unmanaged_session_bindings.to_vec(),
             observations,
             claude_observations,
             opencode_observations,
             cursor_observations,
             pi_observations,
+            omp_observations,
         );
     // Compute the fresh activity ledger once and feed the raw rows into the
     // typed evidence envelope. Activity facts remain independent of control
@@ -2743,19 +2820,17 @@ fn build_local_status_projection(
                 )
             }
         };
-    // Persist this cycle's session -> run bindings before building evidence, so
-    // a session whose provider state file has already been torn down can still
-    // attach its closing phase to the run it belonged to.
-    let run_windows = record_and_read_run_bindings(
+    let run_windows = record_and_read_run_bindings_with_omp(
         conn,
         observations,
         claude_observations,
         opencode_observations,
         cursor_observations,
         pi_observations,
+        omp_observations,
         now,
     );
-    payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations(
+    payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations_with_omp(
         machine_id,
         observations,
         antigravity_observations,
@@ -2763,6 +2838,7 @@ fn build_local_status_projection(
         opencode_observations,
         cursor_observations,
         pi_observations,
+        omp_observations,
         unmanaged_session_bindings,
         &phase_ledger,
         &run_windows,
@@ -2772,7 +2848,7 @@ fn build_local_status_projection(
         None,
         current_evidence_rotation(),
     ));
-    payload.sessions = heartbeat::resolved_sessions_from_observations(
+    payload.sessions = heartbeat::resolved_sessions_from_observations_with_omp(
         &payload.managed_sessions,
         &payload.unmanaged_session_bindings,
         observations,
@@ -2780,6 +2856,7 @@ fn build_local_status_projection(
         opencode_observations,
         cursor_observations,
         pi_observations,
+        omp_observations,
     );
     heartbeat::apply_machine_boot_identity(&mut payload.sessions);
     heartbeat::apply_local_titles(conn, &mut payload.sessions);
@@ -2787,12 +2864,6 @@ fn build_local_status_projection(
     heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
 }
 
-/// Upsert every live observation's run window, then return the retained index
-/// (including sessions whose observation has already disappeared).
-///
-/// `run_started_at` comes from the observation, never from scan wall time. A
-/// window that starts at `now` would drift later than the phases that belong to
-/// it, which is exactly the misbinding the window exists to prevent.
 fn record_and_read_run_bindings(
     conn: &rusqlite::Connection,
     codex_observations: &[managed_bridge_scan::CodexBridgeObservation],
@@ -2800,6 +2871,28 @@ fn record_and_read_run_bindings(
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
     pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
+    now: chrono::DateTime<chrono::Utc>,
+) -> crate::state::session_run_binding::RunWindowIndex {
+    record_and_read_run_bindings_with_omp(
+        conn,
+        codex_observations,
+        claude_observations,
+        opencode_observations,
+        cursor_observations,
+        pi_observations,
+        &[],
+        now,
+    )
+}
+
+fn record_and_read_run_bindings_with_omp(
+    conn: &rusqlite::Connection,
+    codex_observations: &[managed_bridge_scan::CodexBridgeObservation],
+    claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
+    opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
+    cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
+    pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
+    omp_observations: &[managed_omp_helm_scan::OmpHelmObservation],
     now: chrono::DateTime<chrono::Utc>,
 ) -> crate::state::session_run_binding::RunWindowIndex {
     use crate::state::session_run_binding::{
@@ -2850,6 +2943,14 @@ fn record_and_read_run_bindings(
         .chain(pi_observations.iter().map(|obs| {
             (
                 "pi",
+                obs.session_id.as_str(),
+                obs.run_id.as_deref(),
+                Some(obs.started_at.as_str()),
+            )
+        }))
+        .chain(omp_observations.iter().map(|obs| {
+            (
+                "omp",
                 obs.session_id.as_str(),
                 obs.run_id.as_deref(),
                 Some(obs.started_at.as_str()),
@@ -3690,6 +3791,17 @@ fn maybe_start_managed_observation_scan(
             retain_existing_observations(&mut pi_observations, &previous.pi, |observation| {
                 &observation.state_file
             });
+        let omp_started = Instant::now();
+        let mut omp_observations = if full_reconciliation {
+            managed_omp_helm_scan::default_omp_helm_state_dir()
+                .map(|state_dir| managed_omp_helm_scan::collect_observations_from_processes(&state_dir, &process_facts))
+                .unwrap_or_default()
+        } else {
+            let paths = previous.omp.iter().map(|row| row.state_file.clone()).collect::<Vec<_>>();
+            managed_omp_helm_scan::collect_observations_from_paths(&paths, &process_facts)
+        };
+        let retained_omp = retain_existing_observations(&mut omp_observations, &previous.omp, |observation| &observation.state_file);
+        let omp_elapsed_ms = omp_started.elapsed().as_millis() as u64;
         // Sweep contracts left behind by teardown paths that exited early or
         // by abrupt process death. Provider-neutral: Codex and Claude leak
         // these for different reasons.
@@ -3755,6 +3867,7 @@ fn maybe_start_managed_observation_scan(
                     .extend(opencode_observations.iter().map(|o| o.session_id.clone()));
                 observed_sessions.extend(cursor_observations.iter().map(|o| o.session_id.clone()));
                 observed_sessions.extend(pi_observations.iter().map(|o| o.session_id.clone()));
+                observed_sessions.extend(omp_observations.iter().map(|o| o.session_id.clone()));
                 observed_sessions.extend(
                     antigravity_observations
                         .iter()
@@ -3799,6 +3912,7 @@ fn maybe_start_managed_observation_scan(
             opencode_observations,
             cursor_observations,
             pi_observations,
+            omp_observations,
             process_inventory_ms,
             codex_elapsed_ms,
             antigravity_elapsed_ms,
@@ -3806,12 +3920,14 @@ fn maybe_start_managed_observation_scan(
             opencode_elapsed_ms,
             cursor_elapsed_ms,
             pi_elapsed_ms,
+            omp_elapsed_ms,
             retained_stale_rows: retained_codex.len()
                 + retained_antigravity.len()
                 + retained_claude.len()
                 + retained_opencode.len()
                 + retained_cursor.len()
-                + retained_pi.len(),
+                + retained_pi.len()
+                + retained_omp.len(),
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });

@@ -134,6 +134,18 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
             required_commands=("longhouse", "pi"),
         )
 
+    if transport == ManagedSessionTransport.OMP_HELM_CHANNEL.value:
+        omp_args = ["--resume-session", shlex.quote(session_id)]
+        cwd = str(getattr(session, "cwd", "") or "").strip()
+        if cwd:
+            omp_args.extend(["--cwd", shlex.quote(cwd)])
+        return _build_longhouse_cli_shell_command(
+            command_group="omp",
+            subcommand=None,
+            args=tuple(omp_args),
+            required_commands=("longhouse", "omp"),
+        )
+
     if transport in (
         ManagedSessionTransport.ANTIGRAVITY_PROCESS.value,
         ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX.value,

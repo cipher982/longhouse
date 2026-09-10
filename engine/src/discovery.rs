@@ -4,7 +4,7 @@
 //! Replaces the Claude-only `bench::discover_session_files()`.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -59,6 +59,18 @@ pub fn configured_provider_roots() -> Vec<ProviderConfig> {
             }
         }
     }
+    for root in crate::omp_session::configured_session_roots(&cwd) {
+        if !providers
+            .iter()
+            .any(|provider| provider.name == "omp" && provider.root == root)
+        {
+            providers.push(ProviderConfig {
+                name: "omp",
+                root,
+                extension: "jsonl",
+            });
+        }
+    }
     providers
 }
 
@@ -84,6 +96,7 @@ pub fn canonical_provider_name(provider: &str) -> Option<&'static str> {
         "antigravity" | "gemini" => Some("antigravity"),
         "opencode" => Some("opencode"),
         "pi" => Some("pi"),
+        "omp" => Some("omp"),
         "cursor" => Some("cursor"),
         "cursor_acp" => Some("cursor_acp"),
         _ => None,
@@ -244,9 +257,33 @@ pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> Discov
     }
 
     files.sort_by(|a, b| b.2.cmp(&a.2));
+    let mut omp_sources_by_native_id: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    for (path, provider, _) in &files {
+        if *provider == "omp" {
+            if let Ok(header) = crate::omp_session::read_session_header(path) {
+                omp_sources_by_native_id
+                    .entry(header.native_id)
+                    .or_default()
+                    .push(path.clone());
+            }
+        }
+    }
+    let ambiguous_omp_paths: BTreeSet<PathBuf> = omp_sources_by_native_id
+        .values()
+        .filter(|paths| paths.iter().collect::<BTreeSet<_>>().len() > 1)
+        .flatten()
+        .cloned()
+        .collect();
+    let mut seen = BTreeSet::new();
     let files = files
         .into_iter()
-        .map(|(path, provider, _)| (path, provider))
+        .filter_map(|(path, provider, _)| {
+            if provider == "omp" && ambiguous_omp_paths.contains(&path) {
+                return None;
+            }
+            seen.insert((path.clone(), provider))
+                .then_some((path, provider))
+        })
         .collect::<Vec<_>>();
     let providers = inventory.into_values().collect::<Vec<_>>();
     let source_count = providers.iter().map(|item| item.source_count).sum();
@@ -340,6 +377,35 @@ pub(crate) fn canonical_transcript_hint<'a>(provider: &str, path: &'a Path) -> C
         Cow::Borrowed(path)
     }
 }
+fn omp_native_id_conflict(path: &Path, providers: &[ProviderConfig]) -> bool {
+    let Ok(header) = crate::omp_session::read_session_header(path) else {
+        return false;
+    };
+    let candidate = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    providers
+        .iter()
+        .filter(|provider| provider.name == "omp")
+        .flat_map(|provider| {
+            WalkDir::new(&provider.root)
+                .max_depth(DISCOVERY_MAX_DEPTH)
+                .into_iter()
+                .filter_map(Result::ok)
+                .map(|entry| entry.path().to_path_buf())
+        })
+        .filter(|other| {
+            other != path
+                && other.canonicalize().unwrap_or_else(|_| other.clone()) != candidate
+        })
+        .filter(|other| {
+            providers
+                .iter()
+                .find(|provider| provider.name == "omp" && other.starts_with(&provider.root))
+                .is_some_and(|provider| is_provider_session_file(provider, other))
+        })
+        .filter_map(|other| crate::omp_session::read_session_header(&other).ok())
+        .any(|other| other.native_id == header.native_id)
+}
+
 
 pub fn session_path_for_watcher_event(
     path: &std::path::Path,
@@ -352,6 +418,14 @@ pub fn session_path_for_watcher_event(
         if provider.name == "opencode" {
             if let Some(db_path) = opencode_database_path_for_event(path) {
                 return Some((db_path, provider.name));
+            }
+            continue;
+        }
+        if provider.name == "omp" {
+            if is_provider_session_file(provider, path)
+                && !omp_native_id_conflict(path, providers)
+            {
+                return Some((path.to_path_buf(), provider.name));
             }
             continue;
         }
@@ -419,6 +493,9 @@ fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
         // pi-console store are append-only JSONL sources. Keep this predicate
         // deliberately filename-agnostic: Pi permits explicit session paths.
         return path.extension().and_then(|value| value.to_str()) == Some("jsonl");
+    }
+    if provider.name == "omp" {
+        return crate::omp_session::is_session_path(&provider.root, path);
     }
     let extension_matches = path
         .extension()
@@ -706,6 +783,191 @@ mod tests {
             .all(|provider| canonical_provider_name(provider.name) == Some(provider.name)));
         assert_eq!(canonical_provider_name("gemini"), Some("antigravity"));
         assert_eq!(canonical_provider_name("unknown"), None);
+    }
+
+    #[test]
+    fn omp_candidate_is_profile_aware_and_only_accepts_its_cwd_bucket() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        let xdg_data = home.path().join("xdg-data");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(xdg_data.join("omp/sessions")).unwrap();
+        std::fs::create_dir_all(xdg_data.join("omp/profiles/work/sessions")).unwrap();
+        std::fs::create_dir_all(xdg_data.join("omp/profiles/other/sessions")).unwrap();
+        let _home =
+            temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+                temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
+                    temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
+                        temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
+                            temp_env::with_var("PI_PROFILE", Some("pi-profile"), || {
+                                temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                                    let roots = crate::omp_session::configured_session_roots(&cwd);
+                                    assert!(roots
+                                        .contains(&xdg_data.join("omp/profiles/work/sessions")));
+                                    assert!(roots
+                                        .contains(&xdg_data.join("omp/profiles/other/sessions")));
+                                    assert!(roots.contains(&std::path::PathBuf::from(
+                                        "/pi/config/profiles/work/agent/sessions",
+                                    )));
+                                    assert!(!roots.iter().any(|root| root.starts_with("/pi/agent")));
+                                })
+                            })
+                        })
+                    })
+                })
+            });
+        let root = xdg_data.join("omp/profiles/work/sessions");
+        std::fs::create_dir_all(root.join("-tmp-workspace")).unwrap();
+        std::fs::create_dir_all(root.join("other").join("nested")).unwrap();
+        let valid = root.join("-tmp-workspace").join("session.jsonl");
+        let wrong_bucket = root.join("other").join("nested").join("session.jsonl");
+        std::fs::write(
+            &valid,
+            b"{\"type\":\"session\",\"id\":\"native-valid\",\"cwd\":\"/tmp/workspace\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &wrong_bucket,
+            b"{\"type\":\"session\",\"id\":\"native-wrong\",\"cwd\":\"/tmp/other\"}\n",
+        )
+        .unwrap();
+        assert!(crate::omp_session::is_session_path(&root, &valid));
+        assert!(!crate::omp_session::is_session_path(&root, &wrong_bucket));
+    }
+
+    #[test]
+    fn omp_owned_session_override_is_additive_and_ignores_profile() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let _home = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+            temp_env::with_var("XDG_DATA_HOME", None::<&str>, || {
+                temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                    temp_env::with_var("LONGHOUSE_OMP_SESSION_DIR", Some("omp-sessions"), || {
+                        let roots = crate::omp_session::configured_session_roots(&cwd);
+                        assert!(roots.contains(&cwd.join("omp-sessions")));
+                         assert!(!roots.contains(&home.path().join(".local/share/omp/sessions")));
+                        assert!(roots.contains(&home.path().join(".omp/agent/sessions")));
+                    })
+                })
+            })
+        });
+    }
+
+    #[test]
+    fn omp_default_profile_uses_upstream_xdg_sessions_layout() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        let xdg_data = home.path().join("xdg-data");
+        std::fs::create_dir_all(xdg_data.join("omp")).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+            temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
+                temp_env::with_var("OMP_PROFILE", None::<&str>, || {
+                    temp_env::with_var("LONGHOUSE_OMP_DATA_DIR", None::<&str>, || {
+                        temp_env::with_var("LONGHOUSE_OMP_CONFIG_DIR", None::<&str>, || {
+                            crate::omp_session::configured_session_roots(&cwd)
+                        })
+                    })
+                })
+            })
+        });
+
+        assert!(roots.contains(&xdg_data.join("omp/sessions")));
+    }
+
+    #[test]
+    fn non_omp_symlink_behavior_remains_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("claude");
+        fs::create_dir_all(&root).unwrap();
+        let real = root.join("real.jsonl");
+        let link = root.join("link.jsonl");
+        fs::write(&real, b"{}\n").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let provider = ProviderConfig {
+            name: "claude",
+            root,
+            extension: "jsonl",
+        };
+        #[cfg(unix)]
+        assert_eq!(discover_all_files(&[provider]).len(), 2);
+    }
+    #[test]
+    fn pi_native_source_is_discovered_once_without_managed_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("pi/agent/sessions");
+        let bucket = root.join("--tmp-project--");
+        std::fs::create_dir_all(&bucket).unwrap();
+        let source = bucket.join("2026-09-07T00-00-00-000Z_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl");
+        std::fs::write(
+            &source,
+            concat!(
+                "{\"type\":\"session\",\"version\":3,\"id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"cwd\":\"/tmp/project\"}\n",
+                "{\"type\":\"message\",\"id\":\"user-1\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"shadow source\"}]}}\n"
+            ),
+        )
+        .unwrap();
+        let provider = ProviderConfig {
+            name: "pi",
+            root,
+            extension: "jsonl",
+        };
+
+        assert_eq!(discover_all_files(&[provider]), vec![(source, "pi")]);
+    }
+
+
+    #[test]
+    fn omp_native_source_is_discovered_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("xdg/omp/sessions");
+        let bucket = root.join("-tmp-workspace");
+        std::fs::create_dir_all(&bucket).unwrap();
+        std::fs::write(
+            bucket.join("session.jsonl"),
+            b"{\"type\":\"session\",\"id\":\"opaque\",\"cwd\":\"/tmp/workspace\"}\n",
+        )
+        .unwrap();
+        let provider = ProviderConfig {
+            name: "omp",
+            root,
+            extension: "jsonl",
+        };
+        assert_eq!(
+            discover_all_files(&[provider]),
+            vec![(bucket.join("session.jsonl"), "omp")]
+        );
+    }
+
+    #[test]
+    fn omp_duplicate_native_ids_are_refused_instead_of_merged() {
+        let dir = tempfile::tempdir().unwrap();
+        let first_root = dir.path().join("first/sessions");
+        let second_root = dir.path().join("second/sessions");
+        let first_bucket = first_root.join("--workspace--");
+        let second_bucket = second_root.join("--workspace--");
+        std::fs::create_dir_all(&first_bucket).unwrap();
+        std::fs::create_dir_all(&second_bucket).unwrap();
+        let record = b"{\"type\":\"session\",\"id\":\"same-native\",\"cwd\":\"/workspace\"}\n";
+        std::fs::write(first_bucket.join("first.jsonl"), record).unwrap();
+        std::fs::write(second_bucket.join("second.jsonl"), record).unwrap();
+        let providers = vec![
+            ProviderConfig {
+                name: "omp",
+                root: first_root,
+                extension: "jsonl",
+            },
+            ProviderConfig {
+                name: "omp",
+                root: second_root,
+                extension: "jsonl",
+            },
+        ];
+        assert!(discover_all_files(&providers).is_empty());
     }
 
     #[test]

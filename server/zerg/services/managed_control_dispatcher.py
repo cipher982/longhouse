@@ -82,7 +82,7 @@ def _session_uses_engine_control(
     transport = ""
     if not isinstance(session, AgentSession):
         transport = str(getattr(session, "managed_transport", "") or "").strip()
-    if transport and transport != contract.managed_transport.value:
+    if transport and (contract.managed_transport is None or transport != contract.managed_transport.value):
         return False
     capability = machine_control_capability_for_command(provider, command_type)
     device_id = _session_device_id(session)

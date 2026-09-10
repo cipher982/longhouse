@@ -5,6 +5,7 @@ import importlib.util
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -60,6 +61,8 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
         "cursor": _write_exe(tmp_path / "bin" / "cursor-agent", "2026.07.23-e383d2b"),
         # pi --version is bare semver.
         "pi": _write_exe(tmp_path / "bin" / "pi", "9.9.9"),
+        # omp --version is bare semver.
+        "omp": _write_exe(tmp_path / "bin" / "omp", "18.1.14"),
     }
 
 
@@ -595,6 +598,7 @@ EXPECTED_ADAPTER_CLASS_BY_PROVIDER = {
     "antigravity": "AntigravityHarnessAdapter",
     "cursor": "CursorHarnessAdapter",
     "pi": "PiHarnessAdapter",
+    "omp": "OmpHarnessAdapter",
 }
 
 
@@ -1026,6 +1030,9 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
             # Pi declares no permission-prompt surface (permission_prompt_surface
             # false), so the action matrix honestly reports a gap rather than a
             # blocked-but-supported surface.
+            assert actions["permission_prompt"]["status"] == "unsupported_gap"
+            assert actions["permission_prompt"]["failure_code"] == "permission_prompt_unsupported"
+        elif result["provider"] == "omp":
             assert actions["permission_prompt"]["status"] == "unsupported_gap"
             assert actions["permission_prompt"]["failure_code"] == "permission_prompt_unsupported"
         else:
@@ -1566,8 +1573,9 @@ def test_codex_run_prompt_once_writes_safe_projection(tmp_path: Path) -> None:
     )
 
     result = payload["results"][0]
-    assert payload["verdict"] == "green"
-    assert result["status"] == "pass"
+    assert payload["verdict"] == "yellow"
+    assert result["status"] == "unsupported_gap"
+    assert result["failure_code"] == "run_prompt_once_not_safe_no_token"
     evidence_root = Path(result["evidence_root"])
     assert (evidence_root / "input" / "prompt.txt").read_text(encoding="utf-8") == "hello"
     assert (evidence_root / "assertions" / "run_prompt.json").is_file()
@@ -2747,6 +2755,8 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
             # No Longhouse pull-based permission gate for pi yet; supported
             # surface, no wired canary -> blocked.
             assert permission["status"] == "blocked"
+        elif provider == "omp":
+            assert permission["status"] == "blocked"
         else:
             assert permission["status"] == "pass"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "pass"
@@ -3866,7 +3876,7 @@ def test_scenario_runner_does_not_branch_on_provider_names() -> None:
     )
 
     for provider in uah.SUPPORTED_PROVIDERS:
-        assert provider not in sources
+        assert re.search(rf"(?<![A-Za-z0-9_]){re.escape(provider)}(?![A-Za-z0-9_])", sources) is None
 
 
 @pytest.mark.parametrize(
@@ -4062,6 +4072,7 @@ def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_p
 
     by_key = {(item["provider"], item["scenario"]): item for item in payload["results"]}
     expected_gaps = {
+        ("codex", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
         ("claude", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
         ("claude", "send_receive"): "send_receive_not_safe_no_token",
         ("opencode", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
@@ -4078,6 +4089,9 @@ def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_p
         ("pi", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
         ("pi", "send_receive"): "send_receive_not_safe_no_token",
         ("pi", "launch_managed_session"): "managed_session_not_safe_no_token",
+        ("omp", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
+        ("omp", "send_receive"): "send_receive_not_safe_no_token",
+        ("omp", "launch_managed_session"): "managed_session_not_safe_no_token",
     }
     for provider in uah.SUPPORTED_PROVIDERS:
         for scenario in scenarios:
@@ -4092,7 +4106,7 @@ def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_p
             assert evidence_root.is_dir()
 
         run_prompt = by_key[(provider, "run_prompt_once")]
-        if provider == "codex":
+        if provider == "codex" and (provider, "run_prompt_once") not in expected_gaps:
             assert run_prompt["data"]["operation_evidence"]["run_once"]["status"] == "pass"
             assert Path(run_prompt["data"]["raw_events_path"]).is_file()
         else:

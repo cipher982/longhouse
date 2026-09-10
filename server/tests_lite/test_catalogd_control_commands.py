@@ -263,7 +263,7 @@ async def test_catalogd_control_prepare_rejects_unbound_legacy_identity(daemon_p
     assert prepared["reason"] == "identity_unbound"
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor", "omp"])
 def test_canonical_control_prepare_allows_only_bound_matching_grant(monkeypatch, daemon_paths, provider):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
@@ -295,7 +295,7 @@ def test_canonical_control_prepare_allows_only_bound_matching_grant(monkeypatch,
     engine.dispose()
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "opencode", "cursor", "omp"])
 def test_canonical_control_prepare_ignores_transcript_ended_at(monkeypatch, daemon_paths, provider):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
