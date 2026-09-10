@@ -65,12 +65,19 @@ final class RunBreadcrumb {
     /// not recorded, which is why it runs first in the launch task.
     func begin(scene: String) async {
         guard marker == nil else { return }
-        let url = runMarkerURL()
-        fileURL = url
-        let build = (try? BuildIdentityLoader.loadFromMainBundle().get())?.qualifiedVersion
-        let previous = await Task.detached(priority: .utility) {
-            url.flatMap(readRunMarker)
+        // All of the launch-side I/O — resolving the directory, reading the
+        // previous marker, loading the build identity — happens off the main
+        // actor. This runs first in the launch task, on the path the user waits
+        // on, so none of it belongs there.
+        let (url, previous, build) = await Task.detached(priority: .utility) {
+            let url = runMarkerURL()
+            return (
+                url,
+                url.flatMap(readRunMarker),
+                (try? BuildIdentityLoader.loadFromMainBundle().get())?.qualifiedVersion
+            )
         }.value
+        fileURL = url
         previousRun = previous.flatMap { previous in
             previous.clean ? nil : PreviousRun(
                 stage: previous.stage,
