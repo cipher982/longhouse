@@ -1174,6 +1174,8 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
     assert all(omp_helm_lifecycle_assertions(observation).values())
     observation["runtime_control_identity"]["replacement"]["control_subject_key"] = "connection:wrong:lease-2"
     assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
+    observation["runtime_control_identity"] = {}
+    assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
     observation["abort_evidence"]["terminal"] = False
     assert omp_helm_lifecycle_assertions(observation)["omp_helm_abort_native"] is False
 
