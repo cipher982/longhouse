@@ -9,6 +9,7 @@ from typing import Any
 from zerg.qa.universal_agent_harness import EvidencePackage
 from zerg.qa.universal_agent_harness import UniversalProviderAdapter
 from zerg.qa.universal_agent_harness import register_adapter
+from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 
 @register_adapter("omp")
@@ -23,10 +24,7 @@ class OmpHarnessAdapter(UniversalProviderAdapter):
             return result
 
         def is_terminal_agent_end(row: dict[str, Any]) -> bool:
-            is_terminal = row.get("isTerminal")
-            if isinstance(is_terminal, bool):
-                return is_terminal
-            return row.get("willContinue") is False
+            return omp_agent_end_is_terminal(row)
 
         headers = [row for row in rows if isinstance(row, dict) and row.get("type") == "session" and row.get("id")]
         agent_ends = [row for row in rows if isinstance(row, dict) and row.get("type") == "agent_end"]

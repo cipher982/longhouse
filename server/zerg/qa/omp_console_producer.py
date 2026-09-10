@@ -23,6 +23,7 @@ from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
+from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 SCENARIO_ID = "omp_console_lifecycle"
 ASSERTION_ID = "omp_console_turn_settled_and_bound"
@@ -30,9 +31,9 @@ SUPPORTED_VARIANT = lifecycle.SUPPORTED_VARIANT
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.console_lifecycle.v1",
-    producer_revision=5,
+    producer_revision=6,
     scenario_id=SCENARIO_ID,
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -133,7 +134,7 @@ def _successful_assistant_event(event: Mapping[str, Any]) -> bool:
         return False
     native_model = event.get("model")
     if not isinstance(native_model, str) or not native_model.strip():
-        message_model = message.get("model")
+        message_model = message.get("modelId") or message.get("model")
         if not isinstance(message_model, str) or not message_model.strip():
             return False
     return True
@@ -205,7 +206,7 @@ def omp_native_model_evidence(
     event_model = selected_event.get("model")
     model_source = "provider_event"
     if not isinstance(event_model, str) or not event_model.strip():
-        event_model = message.get("model")
+        event_model = message.get("modelId") or message.get("model")
         model_source = "message"
     if not isinstance(event_model, str) or not event_model.strip():
         return None
@@ -263,10 +264,7 @@ def _exact_session_retirement(receipt: Mapping[str, Any] | None, session_id: str
 
 
 def _is_terminal_agent_end(event: Mapping[str, Any]) -> bool:
-    is_terminal = event.get("isTerminal")
-    if isinstance(is_terminal, bool):
-        return is_terminal
-    return event.get("willContinue") is False
+    return omp_agent_end_is_terminal(event)
 
 
 def _native_settlement(root: Path) -> dict[str, object]:
@@ -376,13 +374,7 @@ def _native_settlement(root: Path) -> dict[str, object]:
     linked_tool_call_ids = sorted(tool_call_ids & tool_result_ids)
     return {
         "status": (
-            "pass"
-            if provider_response_terminal
-            and provider_response_terminal_shape
-            and provider_response_source_bound
-            and stream_drained
-            and native_archive_bound
-            else "fail"
+            "pass" if provider_response_terminal and provider_response_source_bound and stream_drained and native_archive_bound else "fail"
         ),
         "agent_end_terminal": provider_response_terminal,
         "agent_end_evidence_shape": provider_response_terminal_shape,
@@ -429,7 +421,6 @@ def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]
                 observation.get("exact_session_thread_run_binding") is True,
                 observation.get("transcript_converged_exactly_once") is True,
                 settlement.get("agent_end_terminal") is True,
-                settlement.get("agent_end_evidence_shape") is True,
                 settlement.get("provider_response_source_bound") is True,
                 settlement.get("provider_response_source_kind") == "stdout_path",
                 settlement.get("stream_drained") is True,

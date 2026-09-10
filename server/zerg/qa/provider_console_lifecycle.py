@@ -41,6 +41,7 @@ from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
+from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
 INTERRUPT_SUPPORTED = frozenset({"claude", "opencode", "cursor", "pi", "omp"})
@@ -86,7 +87,7 @@ _VERSION_PATTERNS = {
     "opencode": re.compile(r"^(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
     "cursor": re.compile(r"^(?P<version>\d{4}\.\d{2}\.\d{2}(?:-[0-9A-Za-z.-]+)?)$"),
     "pi": re.compile(r"^(?P<version>\d+\.\d+\.\d+)$"),
-    "omp": re.compile(r"^(?P<version>\d+\.\d+\.\d+)$"),
+    "omp": re.compile(r"^omp/(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
 }
 
 REGISTRATION = ProducerRegistration(
@@ -1092,10 +1093,17 @@ def _retained_post_interrupt_output_evidence(
             output_text = "\n".join(_assistant_output_texts(provider, json.dumps(event, sort_keys=True)))
             if output_text.count(marker) == 1:
                 marker_indices.append(index)
-            is_terminal = event.get("isTerminal")
-            if not isinstance(is_terminal, bool):
-                is_terminal = event.get("willContinue") is False
-            if event.get("type") == "agent_end" and is_terminal is True:
+            if event.get("type") == "agent_end":
+                is_terminal = (
+                    omp_agent_end_is_terminal(event)
+                    if provider == "omp"
+                    else event.get("isTerminal")
+                    if isinstance(event.get("isTerminal"), bool)
+                    else event.get("willContinue") is False
+                )
+            else:
+                is_terminal = False
+            if is_terminal is True:
                 terminal_indices.append(index)
         return {
             "valid": len(marker_indices) == 1 and bool(terminal_indices) and any(index > marker_indices[0] for index in terminal_indices),

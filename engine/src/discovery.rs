@@ -256,7 +256,18 @@ pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> Discov
         }
     }
 
-    files.sort_by(|a, b| b.2.cmp(&a.2));
+    let mut providers_by_physical_path: BTreeMap<PathBuf, BTreeSet<&'static str>> = BTreeMap::new();
+    for (path, provider, _) in &files {
+        providers_by_physical_path
+            .entry(path.canonicalize().unwrap_or_else(|_| path.clone()))
+            .or_default()
+            .insert(*provider);
+    }
+    let ambiguous_provider_paths: BTreeSet<PathBuf> = providers_by_physical_path
+        .iter()
+        .filter(|(_, providers)| providers.contains("pi") && providers.contains("omp"))
+        .map(|(path, _)| path.clone())
+        .collect();
     let mut omp_sources_by_native_id: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for (path, provider, _) in &files {
         if *provider == "omp" {
@@ -277,8 +288,12 @@ pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> Discov
     let mut seen = BTreeSet::new();
     let files = files
         .into_iter()
-        .filter_map(|(path, provider, _)| {
-            if provider == "omp" && ambiguous_omp_paths.contains(&path) {
+        .filter_map(|(path, provider, _modified)| {
+            let physical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if ambiguous_provider_paths.contains(&physical_path)
+                || ambiguous_provider_path(&path, providers)
+                || (provider == "omp" && ambiguous_omp_paths.contains(&path))
+            {
                 return None;
             }
             seen.insert((path.clone(), provider))
@@ -333,6 +348,43 @@ fn system_time_ms(value: SystemTime) -> i64 {
         .unwrap_or(0)
 }
 
+fn canonical_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn provider_matches_path(provider: &ProviderConfig, path: &Path) -> bool {
+    if path.starts_with(&provider.root) && is_provider_session_file(provider, path) {
+        return true;
+    }
+    let physical = canonical_path(path);
+    let root = canonical_path(&provider.root);
+    if physical == path && root == provider.root {
+        return false;
+    }
+    physical.starts_with(&root)
+        && is_provider_session_file(
+            &ProviderConfig {
+                name: provider.name,
+                root,
+                extension: provider.extension,
+            },
+            &physical,
+        )
+}
+
+fn matching_provider_names(path: &Path, providers: &[ProviderConfig]) -> Vec<&'static str> {
+    providers
+        .iter()
+        .filter(|provider| provider_matches_path(provider, path))
+        .map(|provider| provider.name)
+        .collect()
+}
+
+fn ambiguous_provider_path(path: &Path, providers: &[ProviderConfig]) -> bool {
+    let matches = matching_provider_names(path, providers);
+    matches.contains(&"pi") && matches.contains(&"omp")
+}
+
 /// Determine the provider name for a file path based on registered providers.
 ///
 /// Uses `Path::starts_with` for correct component-level matching
@@ -341,17 +393,11 @@ pub fn provider_for_path(
     path: &std::path::Path,
     providers: &[ProviderConfig],
 ) -> Option<&'static str> {
-    for provider in providers {
-        if path.starts_with(&provider.root) && is_provider_session_file(provider, path) {
-            return Some(provider.name);
-        }
+    let matches = matching_provider_names(path, providers);
+    if ambiguous_provider_path(path, providers) {
+        return None;
     }
-    if let Ok(physical) = path.canonicalize() {
-        if physical != path {
-            return provider_for_path(&physical, providers);
-        }
-    }
-    None
+    matches.into_iter().next()
 }
 
 /// Provider hook paths are hints, not permission to enroll a second transcript.
@@ -398,8 +444,8 @@ fn omp_native_id_conflict(path: &Path, providers: &[ProviderConfig]) -> bool {
         .filter(|other| {
             providers
                 .iter()
-                .find(|provider| provider.name == "omp" && other.starts_with(&provider.root))
-                .is_some_and(|provider| is_provider_session_file(provider, other))
+                .find(|provider| provider.name == "omp" && provider_matches_path(provider, other))
+                .is_some()
         })
         .filter_map(|other| crate::omp_session::read_session_header(&other).ok())
         .any(|other| other.native_id == header.native_id)
@@ -409,6 +455,9 @@ pub fn session_path_for_watcher_event(
     path: &std::path::Path,
     providers: &[ProviderConfig],
 ) -> Option<(PathBuf, &'static str)> {
+    if ambiguous_provider_path(path, providers) {
+        return None;
+    }
     for provider in providers {
         if !path.starts_with(&provider.root) {
             continue;
@@ -620,10 +669,45 @@ mod tests {
         assert_eq!(scan.inventory.footprint_bytes, 31);
         assert_eq!(scan.inventory.scan_error_count, 0);
         assert_eq!(scan.inventory.providers.len(), 2);
+
         let encoded = serde_json::to_string(&scan.inventory.providers).unwrap();
         assert!(!encoded.contains(tmp.path().to_string_lossy().as_ref()));
         assert!(!encoded.contains("session.jsonl"));
         assert!(!encoded.contains("opencode.db"));
+    }
+    #[test]
+    fn shared_pi_omp_roots_are_single_provider_and_watcher_consistent() {
+        let temp = tempfile::tempdir().unwrap();
+        let shared = temp.path().join("shared");
+        fs::create_dir_all(&shared).unwrap();
+        let path = shared.join("session.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"session\",\"version\":3,\"id\":\"native-shared\",\"cwd\":\"/tmp/shared\"}\n",
+        )
+        .unwrap();
+        let alias = temp.path().join("shared-alias");
+        std::os::unix::fs::symlink(&shared, &alias).unwrap();
+        let physical = path.canonicalize().unwrap();
+        let providers = existing_provider_roots(vec![
+            ProviderConfig {
+                name: "omp",
+                root: alias,
+                extension: "jsonl",
+            },
+            ProviderConfig {
+                name: "pi",
+                root: shared,
+                extension: "jsonl",
+            },
+        ]);
+
+        assert_eq!(
+            discover_all_files(&providers),
+            Vec::<(PathBuf, &'static str)>::new()
+        );
+        assert_eq!(provider_for_path(&physical, &providers), None);
+        assert_eq!(session_path_for_watcher_event(&physical, &providers), None);
     }
 
     // === Phase 0 characterization: TODAY's behavior for dynamic-workflow files ===

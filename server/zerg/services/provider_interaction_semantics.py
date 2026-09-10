@@ -27,6 +27,25 @@ INTERACTION_CONVERSATION_BOUNDARY = "conversation_boundary"
 INTERACTION_UNKNOWN_USER_INPUT = "unknown_user_input"
 
 _TITLE_ELIGIBLE_KINDS = frozenset({INTERACTION_DURABLE_USER_MESSAGE, INTERACTION_UNKNOWN_USER_INPUT})
+
+
+def omp_agent_end_is_terminal(event: Mapping[str, Any]) -> bool:
+    """Return OMP's terminal contract for a native ``agent_end`` record.
+
+    OMP may omit both lifecycle flags on ordinary completion. An explicit
+    ``isTerminal`` value is authoritative; otherwise ``willContinue`` controls
+    continuation, with an unmarked event treated as terminal.
+    """
+
+    is_terminal = event.get("isTerminal")
+    if isinstance(is_terminal, bool):
+        return is_terminal
+    will_continue = event.get("willContinue")
+    if isinstance(will_continue, bool):
+        return not will_continue
+    return True
+
+
 _INTERACTION_CONTEXT_KEY_MAX_BYTES = 255
 _INTERACTION_CONTEXT_KEYS_PREFIX = "keys:"
 VALID_INTERACTION_KINDS = frozenset(

@@ -61,11 +61,16 @@ fn nonempty_env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn active_profile() -> Option<String> {
-    std::env::var(OMP_PROFILE_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| value.trim().to_string())
+pub fn active_profile() -> Option<String> {
+    let value = std::env::var_os(OMP_PROFILE_ENV)?;
+    let value = value.to_string_lossy();
+    safe_profile_name(value.trim()).map(str::to_string)
+}
+
+fn discovery_profile() -> Option<String> {
+    let value = std::env::var_os(OMP_PROFILE_ENV)?;
+    let value = value.to_string_lossy();
+    safe_profile_name(value.trim()).map(str::to_string)
 }
 
 fn safe_profile_name(profile: &str) -> Option<&str> {
@@ -76,6 +81,11 @@ fn safe_profile_name(profile: &str) -> Option<&str> {
 
 fn provider_config_root() -> PathBuf {
     home_dir().join(".omp")
+}
+fn launch_config_root(cwd: &Path) -> PathBuf {
+    nonempty_env_path(OMP_CONFIG_DIR_ENV)
+        .map(|path| resolve_path(path, cwd))
+        .unwrap_or_else(provider_config_root)
 }
 
 fn configured_config_roots(cwd: &Path) -> Vec<PathBuf> {
@@ -155,14 +165,13 @@ fn legacy_profile_session_roots(config_root: &Path, profile: Option<&str>) -> Ve
 }
 
 /// Resolve OMP's version-18.1.14 archive roots. Named profiles are enumerated
-/// from disk, while the provider's profile and agent-directory aliases remain
-/// compatible with the stock binary.
+/// from disk and never inferred from Pi's environment contract.
 pub fn configured_session_roots(cwd: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(value) = std::env::var_os(OMP_SESSION_DIR_ENV).filter(|value| !value.is_empty()) {
         roots.push(resolve_path(PathBuf::from(value), cwd));
     }
-    let profile = active_profile();
+    let profile = discovery_profile();
     for data_root in configured_data_roots(cwd) {
         roots.extend(profile_session_roots(&data_root));
     }
@@ -176,10 +185,6 @@ pub fn configured_session_roots(cwd: &Path) -> Vec<PathBuf> {
     roots.dedup();
     roots
 }
-
-/// Resolve the session directory OMP itself selects for a fresh process.
-/// Discovery remains additive, but launch must not choose an inactive XDG root
-/// merely because it sorts before OMP's legacy fallback.
 pub fn session_dir_for_launch(cwd: &Path, profile: Option<&str>) -> Result<PathBuf> {
     if let Some(value) = nonempty_env_path(OMP_SESSION_DIR_ENV) {
         return Ok(resolve_path(value, cwd));
@@ -218,18 +223,61 @@ pub fn session_dir_for_launch(cwd: &Path, profile: Option<&str>) -> Result<PathB
         return Ok(candidate);
     }
 
-    let config_root = nonempty_env_path(OMP_CONFIG_DIR_ENV)
-        .map(|path| resolve_path(path, cwd))
-        .unwrap_or_else(provider_config_root);
-    let candidate = match profile.as_deref().and_then(safe_profile_name) {
-        Some(profile) => config_root
+    let config_root = launch_config_root(cwd);
+    if let Some(profile) = profile.as_deref().and_then(safe_profile_name) {
+        return Ok(config_root
             .join("profiles")
             .join(profile)
             .join("agent")
-            .join(OMP_SESSION_DIR_NAME),
-        None => config_root.join("agent").join(OMP_SESSION_DIR_NAME),
-    };
-    Ok(candidate)
+            .join(OMP_SESSION_DIR_NAME));
+    }
+    Ok(config_root.join("agent").join(OMP_SESSION_DIR_NAME))
+}
+fn normalized_overlap_path(path: &Path, cwd: &Path) -> PathBuf {
+    let absolute = resolve_path(path.to_path_buf(), cwd);
+    let mut existing = absolute.clone();
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            break;
+        };
+        missing.push(name.to_os_string());
+        if !existing.pop() {
+            break;
+        }
+    }
+    let mut normalized = existing.canonicalize().unwrap_or(existing);
+    for name in missing.iter().rev() {
+        normalized.push(name);
+    }
+    normalized
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    left == right || left.starts_with(right) || right.starts_with(left)
+}
+
+/// Refuse OMP storage that could also be crawled as Pi storage.
+///
+/// OMP accepts Pi-compatible environment variables in its child process, but
+/// Longhouse must never let the two providers claim one archive implicitly.
+pub fn ensure_session_dir_is_disjoint_from_pi(cwd: &Path, session_dir: &Path) -> Result<()> {
+    let selected = normalized_overlap_path(session_dir, cwd);
+    let mut pi_roots = crate::pi_session::configured_native_session_roots(cwd)?;
+    pi_roots.push(home_dir().join(".longhouse/agent/pi-console"));
+    pi_roots.sort();
+    pi_roots.dedup();
+    for pi_root in pi_roots {
+        let normalized_pi_root = normalized_overlap_path(&pi_root, cwd);
+        if paths_overlap(&selected, &normalized_pi_root) {
+            bail!(
+                "OMP session directory {} overlaps Pi storage {}; choose a non-overlapping --session-dir or LONGHOUSE_OMP_SESSION_DIR",
+                selected.display(),
+                normalized_pi_root.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn parse_record(line: &str) -> Option<Value> {
@@ -273,6 +321,20 @@ pub fn read_session_header(path: &Path) -> Result<OmpSessionHeader> {
         }
         if kind != "session" {
             bail!("OMP source does not begin with a session header");
+        }
+        if let Some(provider) = value
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|provider| !provider.is_empty())
+        {
+            anyhow::ensure!(
+                matches!(
+                    provider.to_ascii_lowercase().as_str(),
+                    "omp" | "oh-my-pi" | "@oh-my-pi/pi-coding-agent"
+                ),
+                "OMP session header contains foreign provider metadata: {provider}"
+            );
         }
         let native_id = value
             .get("id")
@@ -773,6 +835,7 @@ mod tests {
         assert!(roots.contains(&xdg_data.join("omp/profiles/archive/sessions")));
         assert!(roots.contains(&home.path().join(".omp/agent/sessions")));
         assert!(roots.contains(&omp_config.join("profiles/work/agent/sessions")));
+        assert!(roots.contains(&home.path().join(".omp/profiles/work/agent/sessions")));
         assert!(!roots.iter().any(|root| root.starts_with("/pi")));
     }
 
@@ -819,6 +882,26 @@ mod tests {
             read_session_header(&second).unwrap().native_id,
             "same-native-id"
         );
+    }
+
+    #[test]
+    fn omp_header_rejects_explicit_foreign_provider_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("foreign.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"session\",\"version\":3,\"id\":\"pi-id\",\"cwd\":\"/tmp/pi\",\"provider\":\"pi\"}\n",
+        )
+        .unwrap();
+        let error = read_session_header(&path).unwrap_err().to_string();
+        assert!(error.contains("foreign provider metadata"));
+
+        fs::write(
+            &path,
+            "{\"type\":\"session\",\"version\":3,\"id\":\"omp-id\",\"cwd\":\"/tmp/omp\",\"provider\":\"omp\"}\n",
+        )
+        .unwrap();
+        assert_eq!(read_session_header(&path).unwrap().native_id, "omp-id");
     }
 
     #[test]
@@ -872,14 +955,12 @@ mod tests {
     }
 
     #[test]
-    fn omp_config_profile_roots_ignore_pi_environment_aliases() {
+    fn omp_config_roots_ignore_pi_environment_aliases() {
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let omp_config = home.path().join("omp-config");
-        let pi_agent = home.path().join("omp-agent");
         fs::create_dir_all(&cwd).unwrap();
         fs::create_dir_all(omp_config.join("profiles/work/agent/sessions")).unwrap();
-        fs::create_dir_all(&pi_agent).unwrap();
 
         let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", None::<&str>, || {
@@ -888,12 +969,18 @@ mod tests {
                     Some(omp_config.to_str().unwrap()),
                     || {
                         temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
-                            temp_env::with_var("PI_CODING_AGENT_DIR", Some("omp-agent"), || {
-                                temp_env::with_var("OMP_PROFILE", Some("work"), || {
-                                    temp_env::with_var("PI_PROFILE", Some("work"), || {
-                                        configured_session_roots(&cwd)
-                                    })
-                                })
+                            temp_env::with_var("PI_CODING_AGENT_DIR", Some("pi-agent"), || {
+                                temp_env::with_var(
+                                    "PI_CODING_AGENT_SESSION_DIR",
+                                    Some("pi-sessions"),
+                                    || {
+                                        temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                                            temp_env::with_var("PI_PROFILE", Some("work"), || {
+                                                configured_session_roots(&cwd)
+                                            })
+                                        })
+                                    },
+                                )
                             })
                         })
                     },
@@ -902,26 +989,16 @@ mod tests {
         });
 
         assert!(roots.contains(&omp_config.join("profiles/work/agent/sessions")));
-        assert!(!roots.contains(&pi_agent.join("sessions")));
         assert!(!roots.iter().any(|root| root.starts_with("/pi")));
-
-        let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
-            temp_env::with_var(
-                OMP_CONFIG_DIR_ENV,
-                Some(omp_config.to_str().unwrap()),
-                || {
-                    temp_env::with_var("OMP_PROFILE", Some("work"), || {
-                        temp_env::with_var("PI_PROFILE", Some("other"), || {
-                            configured_session_roots(&cwd)
-                        })
-                    })
-                },
-            )
-        });
-        assert!(roots.contains(&omp_config.join("profiles/work/agent/sessions")));
-        assert!(!roots
-            .iter()
-            .any(|root| root.ends_with("profiles/other/agent/sessions")));
+        assert!(!roots.iter().any(|root| root.ends_with("pi-agent/sessions")));
+        assert!(!roots.iter().any(|root| root.ends_with("pi-sessions")));
+        assert_eq!(
+            roots.len(),
+            roots
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+        );
     }
 
     #[test]
@@ -933,9 +1010,7 @@ mod tests {
 
         let legacy = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
-                temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
-                    session_dir_for_launch(&cwd, None).unwrap()
-                })
+                session_dir_for_launch(&cwd, None).unwrap()
             })
         });
         assert_eq!(legacy, home.path().join(".omp/agent/sessions"));
@@ -943,12 +1018,64 @@ mod tests {
         fs::create_dir_all(xdg_data.join("omp")).unwrap();
         let xdg = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
-                temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
+                session_dir_for_launch(&cwd, None).unwrap()
+            })
+        });
+        assert_eq!(xdg, xdg_data.join("omp/sessions"));
+    }
+
+    #[test]
+    fn named_profile_uses_omp_config_root_and_empty_profile_uses_default() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        let xdg_data = home.path().join("xdg-data");
+        fs::create_dir_all(&cwd).unwrap();
+        let profile = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+            temp_env::with_var(OMP_CONFIG_DIR_ENV, Some("omp-config"), || {
+                temp_env::with_var("OMP_PROFILE", Some("work"), || {
                     session_dir_for_launch(&cwd, None).unwrap()
                 })
             })
         });
-        assert_eq!(xdg, xdg_data.join("omp/sessions"));
+        assert_eq!(profile, cwd.join("omp-config/profiles/work/agent/sessions"));
+
+        let default_profile =
+            temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+                temp_env::with_var(OMP_CONFIG_DIR_ENV, Some("omp-config"), || {
+                    temp_env::with_var("OMP_PROFILE", Some(""), || {
+                        session_dir_for_launch(&cwd, None).unwrap()
+                    })
+                })
+            });
+        assert_eq!(default_profile, cwd.join("omp-config/agent/sessions"));
+
+        fs::create_dir_all(xdg_data.join("omp")).unwrap();
+        let xdg_profile = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+            temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
+                temp_env::with_var(OMP_CONFIG_DIR_ENV, Some("omp-config"), || {
+                    temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                        session_dir_for_launch(&cwd, None).unwrap()
+                    })
+                })
+            })
+        });
+        assert_eq!(xdg_profile, xdg_data.join("omp/profiles/work/sessions"));
+    }
+
+    #[test]
+    fn session_dir_override_ignores_profile() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let selected = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+            temp_env::with_var(OMP_SESSION_DIR_ENV, Some("omp-agent"), || {
+                temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                    session_dir_for_launch(&cwd, None).unwrap()
+                })
+            })
+        });
+        assert_eq!(selected, cwd.join("omp-agent"));
     }
 
     #[test]
@@ -964,6 +1091,73 @@ mod tests {
             })
         });
         assert_eq!(selected, home.path().join(".omp/agent/sessions"));
+    }
+
+    #[test]
+    fn omp_launch_roots_ignore_all_pi_storage_aliases() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let selected = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+            temp_env::with_var("PI_CONFIG_DIR", Some("pi-config"), || {
+                temp_env::with_var("PI_CODING_AGENT_DIR", Some("pi-agent"), || {
+                    temp_env::with_var("PI_CODING_AGENT_SESSION_DIR", Some("pi-sessions"), || {
+                        temp_env::with_var("PI_PROFILE", Some("pi"), || {
+                            session_dir_for_launch(&cwd, None).unwrap()
+                        })
+                    })
+                })
+            })
+        });
+
+        assert_eq!(selected, home.path().join(".omp/agent/sessions"));
+    }
+
+    #[test]
+    fn omp_session_storage_rejects_pi_overlap_including_symlink_aliases() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        let pi_agent = cwd.join("pi-agent");
+        let pi_sessions = pi_agent.join("sessions");
+        fs::create_dir_all(&pi_sessions).unwrap();
+        let alias = cwd.join("pi-alias");
+        std::os::unix::fs::symlink(&pi_agent, &alias).unwrap();
+
+        let results = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+            temp_env::with_var("PI_CODING_AGENT_DIR", Some("pi-agent"), || {
+                (
+                    ensure_session_dir_is_disjoint_from_pi(&cwd, &pi_sessions),
+                    ensure_session_dir_is_disjoint_from_pi(&cwd, &pi_sessions.join("nested")),
+                    ensure_session_dir_is_disjoint_from_pi(&cwd, &cwd.join("omp-agent/sessions")),
+                    ensure_session_dir_is_disjoint_from_pi(&cwd, &alias.join("sessions")),
+                )
+            })
+        });
+
+        assert!(results.0.is_err());
+        assert!(results.1.is_err());
+        assert!(results.2.is_ok());
+        assert!(results.3.is_err());
+    }
+
+    #[test]
+    fn omp_discovery_keeps_overlapping_roots_for_shared_ambiguity_policy() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        fs::create_dir_all(&cwd).unwrap();
+        let pi_sessions = cwd.join("pi-agent/sessions");
+
+        let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+            temp_env::with_var("PI_CODING_AGENT_DIR", Some("pi-agent"), || {
+                temp_env::with_var(OMP_SESSION_DIR_ENV, Some("pi-agent/sessions"), || {
+                    configured_session_roots(&cwd)
+                })
+            })
+        });
+
+        assert!(roots.iter().any(|root| root == &pi_sessions));
     }
 
     #[test]

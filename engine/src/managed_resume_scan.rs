@@ -236,8 +236,18 @@ fn validate_omp(
         return Err("contract_invalid");
     }
     let cwd = valid_directory(value.get("cwd"))?;
-    valid_file(value.get("provider_binary"))?;
-    crate::omp_helm_launcher::resolve_binary(None).map_err(|_| "provider_incompatible")?;
+    let retained_binary = nonempty(value.get("provider_binary")).ok_or("provider_incompatible")?;
+    let current_binary =
+        crate::omp_helm_launcher::resolve_binary(None).map_err(|_| "provider_incompatible")?;
+    let expected_sha256 =
+        nonempty(value.get("provider_binary_sha256")).ok_or("provider_incompatible")?;
+    crate::omp_helm_launcher::verify_resume_binary_identity(
+        Path::new(&retained_binary),
+        Path::new(&current_binary),
+        &expected_sha256,
+    )
+    .map_err(|_| "provider_incompatible")?;
+    validate_omp_owners(value)?;
     let provider_session_id =
         nonempty(value.get("native_session_id")).ok_or("provider_state_missing")?;
     let session_file = nonempty(value.get("session_file")).ok_or("provider_state_missing")?;
@@ -248,6 +258,40 @@ fn validate_omp(
     )
     .map_err(|_| "provider_state_missing")?;
     Ok((provider_session_id, cwd))
+}
+
+fn validate_omp_owners(value: &Value) -> Result<(), &'static str> {
+    let mut owners = Vec::new();
+    for (pid_key, birth_key) in [
+        ("launcher_pid", "launcher_process_start_time"),
+        ("provider_pid", "provider_process_start_time"),
+    ] {
+        match (
+            value.get(pid_key).and_then(Value::as_u64),
+            nonempty(value.get(birth_key)),
+        ) {
+            (None, None) => {}
+            (Some(pid), Some(start)) if pid > 0 && pid <= u32::MAX as u64 => {
+                owners.push((pid, start));
+            }
+            (Some(_), Some(_)) => return Err("contract_invalid"),
+            _ => return Err("owner_unverifiable"),
+        }
+    }
+    if owners.is_empty() {
+        return Ok(());
+    }
+    let facts =
+        crate::process_identity::try_collect_process_facts_by_pid().ok_or("owner_unverifiable")?;
+    for (pid, expected_start) in owners {
+        if facts
+            .get(&(pid as u32))
+            .is_some_and(|fact| fact.lstart == expected_start)
+        {
+            return Err("execution_owner_alive");
+        }
+    }
+    Ok(())
 }
 
 fn validate_common(
@@ -453,6 +497,70 @@ mod tests {
             Some("contract_invalid")
         );
         assert!(observations[0].provider_session_id.is_none());
+    }
+
+    #[test]
+    fn omp_resume_scan_matches_launch_binary_identity_and_exact_source_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().join("workspace");
+        let binary = root.path().join("omp");
+        let other_binary = root.path().join("other-omp");
+        let session_file = root.path().join("session.jsonl");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::write(&binary, b"omp-binary").unwrap();
+        fs::write(&other_binary, b"different-omp-binary").unwrap();
+        fs::write(
+            &session_file,
+            format!(
+                "{{\"type\":\"session\",\"id\":\"native-omp\",\"cwd\":\"{}\"}}\n",
+                cwd.display()
+            ),
+        )
+        .unwrap();
+        let session_id = "66666666-6666-4666-8666-666666666666";
+        let contract = json!({
+            "schema_version": 1,
+            "provider": "omp",
+            "session_id": session_id,
+            "status": "stopped",
+            "cwd": cwd,
+            "provider_binary": binary,
+            "provider_binary_sha256": crate::omp_helm_launcher::provider_binary_sha256(&binary).unwrap(),
+            "native_session_id": "native-omp",
+            "session_file": session_file,
+        });
+        write_contract(root.path(), "managed-local/omp-helm", session_id, contract);
+
+        let valid = temp_env::with_var("LONGHOUSE_OMP_BIN", Some(binary.to_str().unwrap()), || {
+            scan_resume_contracts(root.path(), Utc::now())
+        });
+        assert_eq!(valid[0].contract_state, "valid");
+
+        let mismatch = temp_env::with_var(
+            "LONGHOUSE_OMP_BIN",
+            Some(other_binary.to_str().unwrap()),
+            || scan_resume_contracts(root.path(), Utc::now()),
+        );
+        assert_eq!(mismatch[0].contract_state, "invalid");
+        assert_eq!(
+            mismatch[0].unavailable_reason.as_deref(),
+            Some("provider_incompatible")
+        );
+    }
+
+    #[test]
+    fn omp_resume_owner_with_incomplete_birth_identity_is_unavailable() {
+        let pid = std::process::id();
+        assert_eq!(
+            validate_omp_owners(&json!({"launcher_pid": pid})),
+            Err("owner_unverifiable")
+        );
+        assert_eq!(
+            validate_omp_owners(&json!({
+                "provider_process_start_time": "Mon Jan  1 00:00:00 2024"
+            })),
+            Err("owner_unverifiable")
+        );
     }
 
     fn write_contract(root: &Path, relative_dir: &str, session_id: &str, value: Value) {

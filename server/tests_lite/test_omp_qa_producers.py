@@ -8,6 +8,7 @@ import pytest
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa.omp_console_producer import ASSERTION_ID as CONSOLE_ASSERTION
 from zerg.qa.omp_console_producer import REGISTRATION as CONSOLE_REGISTRATION
+from zerg.qa.omp_console_producer import _is_terminal_agent_end
 from zerg.qa.omp_console_producer import omp_console_assertions
 from zerg.qa.omp_console_producer import omp_native_model_evidence
 from zerg.qa.omp_helm_lifecycle import _VARIANTS
@@ -32,10 +33,10 @@ from zerg.qa.provider_qualification import _PROFILES
 
 def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> None:
     assert CONSOLE_REGISTRATION.producer_id == "omp.console_lifecycle.v1"
-    assert CONSOLE_REGISTRATION.producer_revision == 5
+    assert CONSOLE_REGISTRATION.producer_revision == 6
     assert CONSOLE_REGISTRATION.providers == ("omp",)
     assert CONSOLE_REGISTRATION.scenario_id == "omp_console_lifecycle"
-    assert CONSOLE_REGISTRATION.scenario_revision == 5
+    assert CONSOLE_REGISTRATION.scenario_revision == 6
     assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
     assert HELM_REGISTRATION.producer_revision == 6
@@ -47,6 +48,12 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
     assert "runtime_convergence_receipt" in HELM_REGISTRATION.required_artifacts
     assert ("omp", "omp_print_v1") in _PROFILES
     assert ("omp", "omp_helm_v1") in _PROFILES
+
+
+def test_omp_agent_end_without_optional_terminal_fields_is_terminal() -> None:
+    assert _is_terminal_agent_end({"type": "agent_end"}) is True
+    assert _is_terminal_agent_end({"type": "agent_end", "willContinue": True}) is False
+    assert _is_terminal_agent_end({"type": "agent_end", "isTerminal": False, "willContinue": False}) is False
 
 
 def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_path) -> None:
@@ -167,6 +174,8 @@ def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None
     assert body["text"] == "redirect now"
     assert body["intent"] == "steer"
     assert body["client_request_id"].startswith("omp-helm-steer-")
+    assert "native_session_id" not in result["payload"]
+    assert "status" not in result["payload"]
 
 
 def test_omp_helm_settlement_requires_terminal_channel_evidence(tmp_path) -> None:
@@ -413,7 +422,7 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
         },
         "omp_settlement": {
             "agent_end_terminal": True,
-            "agent_end_evidence_shape": True,
+            "agent_end_evidence_shape": False,
             "provider_response_source_bound": True,
             "provider_response_source_kind": "stdout_path",
             "stream_drained": True,
@@ -492,6 +501,8 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
             "native_source_bound": True,
             "channel_terminal_bound": True,
             "marker_count": 1,
+            "context_recalled": True,
+            "context_marker_count": 1,
             "terminal": True,
             "exact_file": True,
         },

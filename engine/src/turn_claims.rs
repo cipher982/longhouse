@@ -14,6 +14,13 @@ use uuid::Uuid;
 
 const CLAIM_SCHEMA_VERSION: u32 = 5;
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct OwnedProcessIdentity {
+    pub pid: u32,
+    pub process_group_id: i32,
+    pub process_start_time: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TurnClaim {
     pub schema_version: u32,
@@ -56,6 +63,11 @@ pub struct TurnClaim {
     pub projected_stdout_offset: u64,
     #[serde(default)]
     pub projected_seq: u64,
+    /// Process identities observed while the invocation was live. Recovery
+    /// needs these when the direct leader has already exited and reparented a
+    /// descendant out of the original process tree.
+    #[serde(default)]
+    pub owned_processes: Vec<OwnedProcessIdentity>,
     pub result: Option<Value>,
     pub error: Option<String>,
 }
@@ -143,6 +155,7 @@ impl TurnClaimRegistry {
             cancel_requested_at: None,
             projected_stdout_offset: 0,
             projected_seq: 0,
+            owned_processes: Vec::new(),
             result: None,
             error: None,
         };
@@ -176,6 +189,16 @@ impl TurnClaimRegistry {
         claim.process_group_id = process_group_id;
         claim.boot_id = crate::heartbeat::machine_boot_id();
         claim.process_start_time = process_start_time;
+        claim.owned_processes = pid
+            .zip(process_group_id)
+            .map(|(pid, process_group_id)| {
+                vec![OwnedProcessIdentity {
+                    pid,
+                    process_group_id,
+                    process_start_time: claim.process_start_time.clone(),
+                }]
+            })
+            .unwrap_or_default();
         claim.adapter = Some(adapter.to_string());
         claim.result = Some(result);
         claim.error = None;
@@ -204,6 +227,11 @@ impl TurnClaimRegistry {
         claim.process_group_id = Some(process_group_id);
         claim.boot_id = crate::heartbeat::machine_boot_id();
         claim.process_start_time = process_start_time;
+        claim.owned_processes = vec![OwnedProcessIdentity {
+            pid,
+            process_group_id,
+            process_start_time: claim.process_start_time.clone(),
+        }];
         claim.adapter = Some(adapter.to_string());
         claim.launch_id = Some(launch_id.to_string());
         claim.provider_thread_id = provider_thread_id.map(str::to_string);
@@ -239,6 +267,35 @@ impl TurnClaimRegistry {
         }
         claim.projected_stdout_offset = stdout_offset;
         claim.projected_seq = seq;
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
+
+    pub fn record_owned_processes(
+        &self,
+        run_id: &str,
+        observed: Vec<OwnedProcessIdentity>,
+    ) -> Result<TurnClaim> {
+        let mut claim = self.read(run_id)?;
+        if claim.state != "spawned" {
+            return Ok(claim);
+        }
+        let mut merged = claim.owned_processes;
+        for identity in observed {
+            if identity.pid == 0 || identity.process_group_id <= 0 {
+                continue;
+            }
+            if let Some(existing) = merged.iter_mut().find(|item| item.pid == identity.pid) {
+                *existing = identity;
+            } else {
+                merged.push(identity);
+            }
+        }
+        merged.sort_by_key(|identity| identity.pid);
+        merged.dedup_by_key(|identity| identity.pid);
+        merged.truncate(256);
+        claim.owned_processes = merged;
         claim.updated_at = Utc::now().to_rfc3339();
         self.write(&claim)?;
         Ok(claim)

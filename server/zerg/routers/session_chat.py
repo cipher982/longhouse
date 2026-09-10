@@ -1606,6 +1606,63 @@ async def _create_catalog_session_input_response(
             queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
         )
 
+    if str(getattr(source_session, "provider", "") or "").strip().lower() == "omp" and body.intent in {
+        INPUT_INTENT_AUTO,
+        INPUT_INTENT_QUEUE,
+    }:
+        # OMP owns follow-up delivery while its native turn is active. The Helm
+        # extension selects normal versus deliverAs=followUp from ctx.isIdle(),
+        # so do not serialize this provider through Longhouse's turn lock.
+        from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
+        from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
+
+        delivery_request_id = uuid.uuid4().hex
+        receipt_id = await _record_live_input_receipt_for_body(
+            source_session=source_session,
+            owner_id=owner_id,
+            body=body,
+            client_request_id=client_request_id,
+            intent=body.intent,
+            status_value=INPUT_STATUS_DELIVERING,
+            delivery_request_id=delivery_request_id,
+        )
+        if receipt_id is None:
+            raise HTTPException(status_code=503, detail="Live input receipt writer is unavailable")
+        result = await dispatch_managed_control_command(
+            db=db,
+            owner_id=owner_id,
+            session=source_session,
+            timeout_secs=15,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": body.text},
+            request_id=delivery_request_id,
+            run_id=None,
+        )
+        data = dict(result.data or {})
+        if not result.ok or int(data.get("exit_code", 1)) != 0:
+            error = str(result.error or data.get("stderr") or data.get("stdout") or "OMP native send failed")
+            await _finish_catalog_input_receipt(
+                receipt_id=receipt_id,
+                delivery_request_id=delivery_request_id,
+                error=error,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={"error_code": "omp_native_send_failed", "message": error},
+            )
+        await _finish_catalog_input_receipt(
+            receipt_id=receipt_id,
+            delivery_request_id=delivery_request_id,
+        )
+        return SessionInputResponse(
+            outcome="sent",
+            input_id=None,
+            live_input_id=receipt_id,
+            client_request_id=client_request_id,
+            intent=body.intent,
+            queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
+        )
+
     state = await _catalog_recent_input_summaries(source_session.id)
     if state is None:
         raise HTTPException(status_code=503, detail="Live input catalog is unavailable")

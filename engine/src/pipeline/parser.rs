@@ -305,7 +305,9 @@ struct RawMessage {
     /// message:{role, content}}`. Claude encodes it as the line type and Cursor
     /// puts it at the top level, so this is the third of three placements.
     role: Option<String>,
-    model: Option<String>,
+    provider: Option<String>,
+    #[serde(rename = "modelId", alias = "model")]
+    model_id: Option<String>,
     #[serde(rename = "stopReason", alias = "stop_reason")]
     stop_reason: Option<String>,
     #[serde(rename = "errorMessage")]
@@ -2388,7 +2390,7 @@ fn extract_provider_facts(
                 return;
             };
             let mut payload = serde_json::Map::new();
-            if let Some(model) = message.model.as_deref() {
+            if let Some(model) = message.model_id.as_deref() {
                 payload.insert("model".to_string(), serde_json::Value::from(model));
             }
             if let Some(effort) = obj.effort.as_deref() {
@@ -2602,10 +2604,21 @@ fn pi_image_placeholder(value: &Value, result: bool) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|mime| !mime.trim().is_empty())
         .unwrap_or("image");
+    let reference_suffix = value
+        .get("data")
+        .and_then(Value::as_str)
+        .filter(|reference| reference.starts_with("blob:sha256:"))
+        .map(|reference| {
+            format!(
+                "; unsupported media reference: {}",
+                bounded_text(reference, 128)
+            )
+        })
+        .unwrap_or_default();
     Some(if result {
-        format!("[image result: {mime}]")
+        format!("[image result: {mime}{reference_suffix}]")
     } else {
-        format!("[image attached: {mime}]")
+        format!("[image attached: {mime}{reference_suffix}]")
     })
 }
 
@@ -2926,6 +2939,28 @@ fn extract_pi_message_events(
     }
 }
 
+fn model_change_text(obj: &RawLine, omp: bool) -> Option<String> {
+    let (provider, model) = if omp {
+        (
+            obj.message
+                .as_ref()
+                .and_then(|message| message.provider.as_deref())
+                .or(obj.provider.as_deref()),
+            obj.message
+                .as_ref()
+                .and_then(|message| message.model_id.as_deref())
+                .or(obj.model_id.as_deref()),
+        )
+    } else {
+        (obj.provider.as_deref(), obj.model_id.as_deref())
+    };
+    Some(format!(
+        "Model changed to {}/{}",
+        provider.unwrap_or("unknown"),
+        model.unwrap_or("unknown")
+    ))
+}
+
 fn extract_pi_events(
     obj: &RawLine,
     session_id: &str,
@@ -2951,11 +2986,7 @@ fn extract_pi_events(
             &mut first_raw_line,
             "",
             Role::System,
-            Some(format!(
-                "Model changed to {}/{}",
-                obj.provider.as_deref().unwrap_or("unknown"),
-                obj.model_id.as_deref().unwrap_or("unknown")
-            )),
+            model_change_text(obj, false),
             None,
             None,
             None,
@@ -3087,9 +3118,30 @@ fn extract_omp_events(
     let start = events.len();
     let known = is_omp_line(obj);
     if known {
-        // OMP shares the proven content-block projection with Pi, but its event
-        // namespace remains distinct for downstream taxonomy and diagnostics.
-        extract_pi_events(obj, session_id, line_offset, raw_line, events);
+        if obj.r#type.as_deref() == Some("model_change") {
+            let mut first_raw_line = true;
+            push_pi_event(
+                obj,
+                session_id,
+                pi_timestamp(obj),
+                line_offset,
+                raw_line,
+                &mut first_raw_line,
+                "",
+                Role::System,
+                model_change_text(obj, true),
+                None,
+                None,
+                None,
+                None,
+                "pi_model_change",
+                events,
+            );
+        } else {
+            // OMP shares the proven content-block projection with Pi, but its
+            // event namespace remains distinct for downstream taxonomy.
+            extract_pi_events(obj, session_id, line_offset, raw_line, events);
+        }
     }
     if events.len() == start {
         let event_type = obj.r#type.as_deref();
@@ -3250,7 +3302,7 @@ fn extract_pi_provider_facts(obj: &RawLine, line_offset: u64, facts: &mut Vec<Pa
                     .filter_map(|key| usage.get(*key).and_then(Value::as_u64))
                     .sum();
                 payload.insert("context_tokens".to_string(), json!(context_tokens));
-                if let Some(model) = message.model.as_deref() {
+                if let Some(model) = message.model_id.as_deref() {
                     payload.insert("model".to_string(), json!(model));
                 }
                 push("turn.usage", Value::Object(payload));
@@ -3313,6 +3365,15 @@ fn extract_omp_provider_facts(
     for fact in &mut facts[start..] {
         if let Value::Object(payload) = &mut fact.payload {
             payload.insert("provider".to_string(), Value::String("omp".to_string()));
+            if fact.kind == "turn.usage" {
+                if let Some(provider) = obj
+                    .message
+                    .as_ref()
+                    .and_then(|message| message.provider.as_deref())
+                {
+                    payload.insert("native_provider".to_string(), json!(provider));
+                }
+            }
         }
     }
 }
@@ -5624,6 +5685,62 @@ mod tests {
             .source_lines
             .iter()
             .any(|line| line.raw_line == "not-json"));
+    }
+
+    #[test]
+    fn omp_projects_nested_model_identity_and_marks_blob_media_without_fabricating_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native.jsonl");
+        let cwd = dir.path().display().to_string();
+        let lines = [
+            format!(
+                r#"{{"type":"session","id":"omp-native","cwd":"{cwd}"}}"#
+            ),
+            r#"{"type":"message","id":"omp-user","message":{"role":"user","content":[{"type":"image","data":"blob:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mimeType":"image/png"}]}}"#.to_string(),
+            r#"{"type":"message","id":"omp-assistant","message":{"role":"assistant","provider":"openai","modelId":"gpt-5.2","usage":{"input":4,"output":2},"content":[{"type":"text","text":"done"}],"stopReason":"stop"}}"#.to_string(),
+            r#"{"type":"model_change","id":"omp-model","message":{"provider":"openai","modelId":"gpt-5.2"}}"#.to_string(),
+            r#"{"type":"reset_boundary","id":"omp-clear","reason":"clear"}"#.to_string(),
+        ];
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+        let user = result
+            .events
+            .iter()
+            .find(|event| event.role == Role::User)
+            .unwrap();
+        assert!(user
+            .content_text
+            .as_deref()
+            .is_some_and(|text| text.contains("unsupported media reference: blob:sha256:")));
+        assert!(result
+            .source_lines
+            .iter()
+            .any(|line| line.raw_line.contains("blob:sha256:")));
+        let model_change = result
+            .events
+            .iter()
+            .find(|event| event.raw_type == "omp_model_change")
+            .unwrap();
+        assert_eq!(
+            model_change.content_text.as_deref(),
+            Some("Model changed to openai/gpt-5.2")
+        );
+        let usage = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "turn.usage")
+            .unwrap();
+        assert_eq!(usage.payload["model"], "gpt-5.2");
+        assert_eq!(usage.payload["native_provider"], "openai");
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "omp_reset_boundary"));
+        assert!(!result
+            .provider_facts
+            .iter()
+            .any(|fact| fact.kind == "context.compaction" && fact.source_offset > 0));
     }
 
     #[test]

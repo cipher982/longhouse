@@ -9,6 +9,7 @@ const initialPrompt = process.env.LONGHOUSE_OMP_HELM_INITIAL_PROMPT ?? "";
 const initialPromptDeliveredAtLaunch =
   process.env.LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED === "1";
 const MAX_FRAME_BYTES = 512 * 1024;
+const MAX_METADATA_STRING_LENGTH = 256;
 
 if (!socketPath || !authToken || !launchSessionId) {
   throw new Error("Longhouse OMP Helm extension is missing launch-scoped channel identity");
@@ -79,8 +80,24 @@ export default function (pi: any) {
     old?.removeAllListeners();
   };
 
+  const compactLifecycleEvent = (kind: string, event: Frame): Frame => {
+    const compact: Frame = {
+      type: typeof event.type === "string" ? event.type.slice(0, MAX_METADATA_STRING_LENGTH) : kind,
+    };
+    for (const key of ["reason", "request_id", "turn_id", "run_id", "title", "toolName", "toolCallId"]) {
+      if (typeof event[key] === "string") {
+        compact[key] = event[key].slice(0, MAX_METADATA_STRING_LENGTH);
+      }
+    }
+    for (const key of ["isTerminal", "willContinue", "success", "isError"]) {
+      if (typeof event[key] === "boolean") compact[key] = event[key];
+    }
+    if (typeof event.status === "string") compact.status = event.status.slice(0, MAX_METADATA_STRING_LENGTH);
+    return compact;
+  };
+
   const sendEvent = (kind: string, event: Frame, ctx: any) =>
-    write({ kind, event, ...session(ctx) });
+    write({ kind, event: compactLifecycleEvent(kind, event), ...session(ctx) });
 
   const handleFrame = (frame: Frame, ctx: any, ownGeneration: number) => {
     if (ownGeneration !== generation) return;
@@ -228,7 +245,15 @@ export default function (pi: any) {
   const waitForReplacement = async (name: string, event: Frame, ctx: any) => {
     const previous = leaseGeneration;
     if (!lifecycle(name, event, ctx)) return false;
-    return await waitForGenerationChange(previous);
+    const changed = await waitForGenerationChange(previous);
+    if (!changed) {
+      write({
+        kind: "session_transition_cancelled",
+        transition: name,
+        ...session(ctx),
+      });
+    }
+    return changed;
   };
 
   pi.on("session_start", async (event: Frame, ctx: any) => {
@@ -247,11 +272,13 @@ export default function (pi: any) {
     }
   });
   pi.on("session_before_switch", async (event: Frame, ctx: any) => {
-    await waitForReplacement("session_before_switch", event, ctx);
+    const completed = await waitForReplacement("session_before_switch", event, ctx);
+    return completed ? undefined : { cancel: true };
   });
   pi.on("session_switch", async (event: Frame, ctx: any) => lifecycle("session_switch", event, ctx));
   pi.on("session_before_branch", async (event: Frame, ctx: any) => {
-    await waitForReplacement("session_before_branch", event, ctx);
+    const completed = await waitForReplacement("session_before_branch", event, ctx);
+    return completed ? undefined : { cancel: true };
   });
   pi.on("session_branch", async (event: Frame, ctx: any) => lifecycle("session_branch", event, ctx));
   pi.on("session_shutdown", async (event: Frame, ctx: any) => {
@@ -267,8 +294,21 @@ export default function (pi: any) {
   pi.on("tool_execution_end", async (event: Frame, ctx: any) => lifecycle("tool_execution_end", event, ctx));
   pi.on("message_update", async (event: Frame, ctx: any) => lifecycle("message_update", event, ctx));
   pi.on("agent_end", async (event: Frame, ctx: any) => {
-    const isTerminal = typeof event.isTerminal === "boolean" ? event.isTerminal : event.willContinue === false;
-    lifecycle("agent_end", { ...event, isTerminal }, ctx);
+    const isTerminal =
+      typeof event.isTerminal === "boolean"
+        ? event.isTerminal
+        : typeof event.willContinue === "boolean"
+          ? event.willContinue === false
+          : true;
+    lifecycle(
+      "agent_end",
+      {
+        type: "agent_end",
+        isTerminal,
+        ...(typeof event.willContinue === "boolean" ? { willContinue: event.willContinue } : {}),
+      },
+      ctx,
+    );
   });
   pi.on("session_stop", async (event: Frame, ctx: any) => lifecycle("session_stop", event, ctx));
 }

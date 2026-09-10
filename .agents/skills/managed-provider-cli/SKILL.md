@@ -127,6 +127,28 @@ Hard Codex contract:
 - Native JSONL is durable history; live previews never create archive rows.
   Preallocated native IDs and source bindings prevent duplicate Shadow rows.
 
+### OMP
+
+- `longhouse omp` manages stock `omp` as a distinct provider; it is not a Pi
+  alias even though OMP 18.1.14 accepts Pi-compatible `PI_CONFIG_DIR`,
+  `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, and `PI_PROFILE`
+  variables in its child environment. Preserve those variables for the stock
+  binary, but Longhouse's OMP discovery and launch roots MUST use
+  `LONGHOUSE_OMP_*`/explicit `--session-dir`, never Pi's `PI_*` roots. A
+  manually shared Pi/OMP archive is ambiguous and MUST NOT be dual-ingested.
+- Helm uses the stock OMP TUI plus a launch-scoped extension and authenticated
+  Unix channel. OMP normal completion may emit `agent_end` without
+  `isTerminal`/`willContinue`; treat that as terminal for OMP only. Explicit
+  `willContinue: true` remains continuation. Do not copy Pi's
+  `agent_settled`/boundary semantics into OMP.
+- Console is one stock `omp -p --mode json` process per turn with native tools,
+  context, extensions, skills, auth, and model settings. Use `provider_local`;
+  do not invent remote approval or auto-approval fallbacks.
+- Native JSONL is the durable OMP archive. Bind exact native identity,
+  workspace, and source file before claiming managed ownership; cold Resume
+  refuses a live prior owner and never creates a second source.
+
+
 ### Antigravity And Future CLIs
 
 - Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.

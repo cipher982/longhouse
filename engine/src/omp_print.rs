@@ -10,7 +10,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -100,6 +100,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
             crate::omp_session::session_dir_for_launch(&config.cwd, config.profile.as_deref()).ok()
         })
         .context("OMP has no session directory")?;
+    crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&config.cwd, &session_dir)?;
     std::fs::create_dir_all(&session_dir)?;
     set_private_dir(&session_dir)?;
 
@@ -170,11 +171,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .current_dir(&config.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file))
-        .env_remove("PI_CONFIG_DIR")
-        .env_remove("PI_CODING_AGENT_DIR")
-        .env_remove("PI_CODING_AGENT_SESSION_DIR")
-        .env_remove("PI_PROFILE");
+        .stderr(Stdio::from(stderr_file));
     ManagedIdentity::new(ManagedProvider::Omp, &config.session_id)
         .with_run_id(&config.run_id)
         .apply(&mut command, &[]);
@@ -227,6 +224,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         let _ = child.kill().await;
         return Err(error).context("persisting OMP Console spawn identity");
     }
+    refresh_owned_processes(&config.run_id);
 
     let sink = OmpPrintSink {
         session_id: config.session_id.clone(),
@@ -264,12 +262,14 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         }
     };
     let Some(provider_thread_id) = provider_thread_id else {
-        cleanup_process_group(Some(process_group_id)).await;
-        let _ = crate::turn_claims::default_registry()?.mark_failed(
-            &config.run_id,
-            "OMP native session identity was not confirmed before launch acknowledgment",
-        );
-        anyhow::bail!("OMP native session identity was not confirmed before launch acknowledgment");
+        let cleanup_verified = cleanup_live_claim(&config.run_id).await;
+        let error = if cleanup_verified {
+            "OMP native session identity was not confirmed before launch acknowledgment".to_string()
+        } else {
+            "OMP native session identity was not confirmed before launch acknowledgment; owned process-group cleanup was not verified".to_string()
+        };
+        let _ = crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error);
+        anyhow::bail!(error);
     };
 
     Ok(OmpPrintRunSummary {
@@ -404,7 +404,7 @@ pub async fn interrupt_omp_print_turn(run_id: &str, session_id: &str) -> Result<
         .process_group_id
         .context("OMP Console turn has no process-group identity")?;
     let actual_pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
-    if actual_pgid != pgid {
+    if actual_pgid != pgid || crate::process_group::leader_group_for(pid) != Some(pgid) {
         anyhow::bail!("OMP Console provider process-group identity changed");
     }
     registry.mark_cancel_requested(run_id)?;
@@ -416,7 +416,7 @@ pub async fn interrupt_omp_print_turn(run_id: &str, session_id: &str) -> Result<
         }
     }
     tokio::time::sleep(Duration::from_millis(750)).await;
-    if !cleanup_process_group(Some(pgid)).await {
+    if !cleanup_live_claim(run_id).await {
         anyhow::bail!("OMP Console process-group cleanup was not verified");
     }
     Ok(())
@@ -438,7 +438,7 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
         )
         .await
         {
-            let cleanup_verified = cleanup_process_group(sink.process_group_id).await;
+            let cleanup_verified = cleanup_live_claim(&sink.run_id).await;
             let reason = if cleanup_verified {
                 error.to_string()
             } else {
@@ -447,6 +447,7 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
             sink.post_terminal("run_failed", None, Some(reason)).await;
             return;
         }
+        refresh_owned_processes(&sink.run_id);
         match child.try_wait() {
             Ok(Some(status)) => {
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -470,7 +471,7 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
                 if source_bound {
                     sink.wake_transcript_shipper().await;
                 }
-                let cleanup_verified = cleanup_process_group(sink.process_group_id).await;
+                let cleanup_verified = cleanup_live_claim(&sink.run_id).await;
                 let (terminal_state, reason) = if cleanup_verified {
                     terminal_state_for_projection(
                         &projection,
@@ -498,7 +499,7 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
             }
             Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
             Err(error) => {
-                let cleanup_verified = cleanup_process_group(sink.process_group_id).await;
+                let cleanup_verified = cleanup_live_claim(&sink.run_id).await;
                 let reason = if cleanup_verified {
                     error.to_string()
                 } else {
@@ -536,7 +537,7 @@ async fn monitor_recovered_omp_claim(
         .await
         {
             let cleanup_verified =
-                cleanup_recovered_process_group(&claim, sink.process_group_id).await;
+                cleanup_recovered_process_group(&claim.run_id, &claim, sink.process_group_id).await;
             let reason = if cleanup_verified {
                 error.to_string()
             } else {
@@ -545,7 +546,12 @@ async fn monitor_recovered_omp_claim(
             sink.post_terminal("run_failed", None, Some(reason)).await;
             return;
         }
-        if claim_process_liveness(&claim) == ClaimLiveness::Gone {
+        refresh_owned_processes(&claim.run_id);
+        let liveness = crate::turn_claims::default_registry()
+            .and_then(|registry| registry.read(&claim.run_id))
+            .map(|current| claim_process_liveness(&current))
+            .unwrap_or(ClaimLiveness::Unknown);
+        if liveness == ClaimLiveness::Gone {
             let cancel_requested = crate::turn_claims::default_registry()
                 .and_then(|registry| registry.read(&claim.run_id))
                 .ok()
@@ -557,7 +563,7 @@ async fn monitor_recovered_omp_claim(
                 sink.wake_transcript_shipper().await;
             }
             let cleanup_verified =
-                cleanup_recovered_process_group(&claim, sink.process_group_id).await;
+                cleanup_recovered_process_group(&claim.run_id, &claim, sink.process_group_id).await;
             let (terminal_state, reason) = if cleanup_verified {
                 terminal_state_for_projection(
                     &projection,
@@ -616,7 +622,8 @@ async fn settle_recovered_dead_claim(
     if source_bound {
         sink.wake_transcript_shipper().await;
     }
-    let cleanup_verified = cleanup_recovered_process_group(claim, sink.process_group_id).await;
+    let cleanup_verified =
+        cleanup_recovered_process_group(&claim.run_id, claim, sink.process_group_id).await;
     let cancel_requested = crate::turn_claims::default_registry()
         .and_then(|registry| registry.read(&claim.run_id))
         .ok()
@@ -750,16 +757,7 @@ impl OmpStreamProjection {
             }
             Some("agent_settled" | "session_stop" | "turn_end") => {}
             Some("agent_end") => {
-                let is_terminal = event
-                    .get("isTerminal")
-                    .and_then(Value::as_bool)
-                    .unwrap_or_else(|| {
-                        event
-                            .get("willContinue")
-                            .and_then(Value::as_bool)
-                            .map(|value| !value)
-                            .unwrap_or(false)
-                    });
+                let is_terminal = is_terminal_agent_end(event);
                 if is_terminal {
                     self.turn_settled = true;
                 }
@@ -790,6 +788,19 @@ fn message_text(message: &Value) -> String {
             .collect(),
         _ => String::new(),
     }
+}
+
+fn is_terminal_agent_end(event: &Value) -> bool {
+    event
+        .get("isTerminal")
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            event
+                .get("willContinue")
+                .and_then(Value::as_bool)
+                .map(|value| !value)
+        })
+        .unwrap_or(true)
 }
 
 fn terminal_state_for_projection(
@@ -917,20 +928,7 @@ fn omp_phase_from_event(event: &Value) -> Option<(&'static str, Option<String>)>
                 .map(str::to_string),
         )),
         Some("tool_execution_end") => Some(("thinking", None)),
-        Some("agent_end")
-            if event
-                .get("isTerminal")
-                .and_then(Value::as_bool)
-                .unwrap_or_else(|| {
-                    event
-                        .get("willContinue")
-                        .and_then(Value::as_bool)
-                        .map(|value| !value)
-                        .unwrap_or(false)
-                }) =>
-        {
-            Some(("idle", None))
-        }
+        Some("agent_end") if is_terminal_agent_end(event) => Some(("idle", None)),
         _ => None,
     }
 }
@@ -1093,14 +1091,17 @@ impl OmpPrintSink {
         &self,
         terminal_state: &str,
         exit_code: Option<i32>,
-        stderr: Option<String>,
+        reason: Option<String>,
     ) {
         self.persist_local_phase("finished", None, Utc::now());
-        self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "terminal_signal", "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:terminal", self.session_id, self.run_id), "payload": {"managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot", "terminal_state": terminal_state, "terminal_reason": terminal_state, "terminal_source": OMP_PRINT_ADAPTER, "exit_code": exit_code, "stderr_tail": stderr, "provider_thread_id": self.provider_thread_id, "source_path": self.session_file.to_string_lossy(), "turn_id": self.turn_id, "client_request_id": self.client_request_id}})]).await;
+        let terminal_reason = reason.clone().unwrap_or_else(|| terminal_state.to_string());
+        self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "terminal_signal", "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:terminal", self.session_id, self.run_id), "payload": {"managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot", "terminal_state": terminal_state, "terminal_reason": terminal_reason, "terminal_source": OMP_PRINT_ADAPTER, "exit_code": exit_code, "stderr_tail": reason, "provider_thread_id": self.provider_thread_id, "source_path": self.session_file.to_string_lossy(), "turn_id": self.turn_id, "client_request_id": self.client_request_id}})]).await;
         crate::turn_claims::mark_terminal(
             &self.run_id,
             terminal_state,
-            (terminal_state == "run_failed").then_some(stderr).flatten(),
+            (terminal_state == "run_failed")
+                .then_some(reason.clone())
+                .flatten(),
         );
     }
     fn persist_local_phase(
@@ -1158,33 +1159,214 @@ async fn cleanup_process_group(process_group_id: Option<i32>) -> bool {
     !crate::process_group::group_is_alive(pgid)
 }
 
-fn recovered_process_group_is_safe(claim: &crate::turn_claims::TurnClaim) -> bool {
+fn live_process_group_is_safe(claim: &crate::turn_claims::TurnClaim, pgid: i32) -> bool {
+    if !claim.process_group_is_from_this_boot()
+        || claim.process_group_id != Some(pgid)
+        || !claim
+            .pid
+            .zip(claim.process_start_time.as_deref())
+            .is_some_and(|(pid, expected_start)| {
+                crate::process_identity::try_collect_process_fact(pid)
+                    .is_some_and(|fact| fact.lstart == expected_start)
+            })
+    {
+        return false;
+    }
+    claim.pid.and_then(crate::process_group::leader_group_for) == Some(pgid)
+}
+
+async fn cleanup_live_claim(run_id: &str) -> bool {
+    let Ok(registry) = crate::turn_claims::default_registry() else {
+        return false;
+    };
+    let Ok(claim) = registry.read(run_id) else {
+        return false;
+    };
+    let Some(pgid) = claim.process_group_id else {
+        let _ = cleanup_recorded_processes(&claim.owned_processes).await;
+        return false;
+    };
+    let group_cleanup_verified = if live_process_group_is_safe(&claim, pgid) {
+        cleanup_process_group(Some(pgid)).await
+    } else {
+        // Never signal a group after its recorded leader/birth identity stops
+        // proving ownership. Recorded PIDs are still cleaned up individually.
+        !crate::process_group::group_is_alive(pgid)
+    };
+    let recorded_cleanup_verified = cleanup_recorded_processes(&claim.owned_processes).await;
+    group_cleanup_verified
+        && recorded_cleanup_verified
+        && !crate::process_group::group_is_alive(pgid)
+}
+
+fn refresh_owned_processes(run_id: &str) {
+    let Ok(registry) = crate::turn_claims::default_registry() else {
+        return;
+    };
+    let Ok(claim) = registry.read(run_id) else {
+        return;
+    };
+    let (Some(pid), Some(process_group_id)) = (claim.pid, claim.process_group_id) else {
+        return;
+    };
+    let Some(lineage) = crate::process_identity::try_collect_process_lineage() else {
+        return;
+    };
+    let Some(facts) = crate::process_identity::try_collect_process_facts_by_pid() else {
+        return;
+    };
+    let Some(root_fact) = facts.get(&pid) else {
+        return;
+    };
+    if claim
+        .process_start_time
+        .as_deref()
+        .is_some_and(|expected| root_fact.lstart != expected)
+    {
+        return;
+    }
+    let mut observed = vec![crate::turn_claims::OwnedProcessIdentity {
+        pid,
+        process_group_id,
+        process_start_time: Some(root_fact.lstart.clone()),
+    }];
+    observed.extend(
+        crate::process_identity::owned_processes(&lineage, pid, Some(process_group_id))
+            .into_iter()
+            .filter_map(|(entry, _)| {
+                facts
+                    .get(&entry.pid)
+                    .map(|fact| crate::turn_claims::OwnedProcessIdentity {
+                        pid: entry.pid,
+                        process_group_id: entry.pgid,
+                        process_start_time: Some(fact.lstart.clone()),
+                    })
+            }),
+    );
+    let _ = registry.record_owned_processes(run_id, observed);
+}
+
+fn recorded_process_matches(
+    identity: &crate::turn_claims::OwnedProcessIdentity,
+) -> Result<Option<bool>> {
+    let Some(expected_start) = identity.process_start_time.as_deref() else {
+        return Ok(Some(false));
+    };
+    match crate::process_identity::inspect_process_fact(identity.pid) {
+        crate::process_identity::ProcessFactLookup::Present(fact) => {
+            Ok(Some(fact.lstart == expected_start))
+        }
+        crate::process_identity::ProcessFactLookup::Absent => Ok(Some(false)),
+        crate::process_identity::ProcessFactLookup::Unavailable => {
+            Err(anyhow::anyhow!("process identity probe unavailable"))
+        }
+    }
+}
+
+async fn cleanup_recorded_processes(
+    owned_processes: &[crate::turn_claims::OwnedProcessIdentity],
+) -> bool {
+    let mut live = Vec::new();
+    let mut identity_failure = false;
+    for identity in owned_processes {
+        match recorded_process_matches(identity) {
+            Ok(Some(true)) => live.push(identity.clone()),
+            Ok(Some(false)) => {}
+            Ok(None) => {}
+            Err(_) => identity_failure = true,
+        }
+    }
+    for identity in &live {
+        unsafe {
+            libc::kill(identity.pid as libc::pid_t, libc::SIGTERM);
+        }
+    }
+    let deadline = Instant::now() + crate::process_group::DEFAULT_GRACE;
+    loop {
+        live.retain(|identity| match recorded_process_matches(identity) {
+            Ok(Some(matches)) => matches,
+            Ok(None) => false,
+            Err(_) => {
+                identity_failure = true;
+                false
+            }
+        });
+        if live.is_empty() {
+            return !identity_failure;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    for identity in &live {
+        match recorded_process_matches(identity) {
+            Ok(Some(true)) => unsafe {
+                libc::kill(identity.pid as libc::pid_t, libc::SIGKILL);
+            },
+            Ok(Some(false)) | Ok(None) => {}
+            Err(_) => identity_failure = true,
+        }
+    }
+    let deadline = Instant::now() + crate::process_group::KILL_CONFIRM_BUDGET;
+    loop {
+        live.retain(|identity| match recorded_process_matches(identity) {
+            Ok(Some(matches)) => matches,
+            Ok(None) => false,
+            Err(_) => {
+                identity_failure = true;
+                false
+            }
+        });
+        if live.is_empty() {
+            return !identity_failure;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+fn recovered_process_group_is_safe(claim: &crate::turn_claims::TurnClaim, pgid: i32) -> bool {
     if !claim.process_group_is_from_this_boot() {
+        return false;
+    }
+    if claim.process_group_id != Some(pgid) {
         return false;
     }
     let (Some(pid), Some(expected_start)) = (claim.pid, claim.process_start_time.as_deref()) else {
         return false;
     };
-    match crate::process_identity::try_collect_process_fact(pid) {
-        Some(fact) => fact.lstart == expected_start,
-        None => false,
-    }
+    crate::process_identity::try_collect_process_fact(pid)
+        .is_some_and(|fact| fact.lstart == expected_start)
+        && crate::process_group::leader_group_for(pid) == Some(pgid)
 }
 
 async fn cleanup_recovered_process_group(
-    claim: &crate::turn_claims::TurnClaim,
+    run_id: &str,
+    fallback_claim: &crate::turn_claims::TurnClaim,
     process_group_id: Option<i32>,
 ) -> bool {
-    let Some(pgid) = process_group_id else {
+    // Descendant refreshes and terminal projection can race teardown. Always
+    // reload the claim so cleanup consumes the final owned-process inventory.
+    let claim = crate::turn_claims::default_registry()
+        .and_then(|registry| registry.read(run_id))
+        .unwrap_or_else(|_| fallback_claim.clone());
+    let Some(pgid) = claim.process_group_id.or(process_group_id) else {
         return false;
     };
-    if !crate::process_group::group_is_alive(pgid) {
-        return true;
-    }
-    if !recovered_process_group_is_safe(claim) {
-        return false;
-    }
-    cleanup_process_group(Some(pgid)).await
+    let group_cleanup_verified = if recovered_process_group_is_safe(&claim, pgid) {
+        cleanup_process_group(Some(pgid)).await
+    } else {
+        !crate::process_group::group_is_alive(pgid)
+    };
+    // A dead leader or surviving old group must not short-circuit the exact
+    // PID/birth-identity cleanup for descendants that changed process group.
+    let recorded_cleanup_verified = cleanup_recorded_processes(&claim.owned_processes).await;
+    group_cleanup_verified
+        && recorded_cleanup_verified
+        && !crate::process_group::group_is_alive(pgid)
 }
 fn private_output_file(path: &Path) -> Result<File> {
     Ok(OpenOptions::new()
@@ -1257,7 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_requires_native_agent_end_and_source_drain() {
+    fn ordinary_agent_end_is_terminal_but_explicit_continuation_is_not() {
         let mut projection = OmpStreamProjection::default();
         projection
             .apply(
@@ -1280,10 +1462,7 @@ mod tests {
             "run_failed"
         );
         projection
-            .apply(
-                None,
-                &json!({"type":"agent_end","isTerminal":false,"willContinue":false}),
-            )
+            .apply(None, &json!({"type":"agent_end","willContinue":true}))
             .unwrap();
         assert_eq!(
             terminal_state_for_projection(&projection, Some(true), false, None, true, true, true).0,
@@ -1292,7 +1471,7 @@ mod tests {
         projection
             .apply(
                 None,
-                &json!({"type":"agent_end","isTerminal":true,"willContinue":false}),
+                &json!({"type":"agent_end","isTerminal":false,"willContinue":false}),
             )
             .unwrap();
         assert_eq!(
@@ -1300,6 +1479,9 @@ mod tests {
                 .0,
             "run_failed"
         );
+        projection
+            .apply(None, &json!({"type":"agent_end"}))
+            .unwrap();
         assert_eq!(
             terminal_state_for_projection(&projection, Some(true), false, None, true, true, true).0,
             "run_completed"
@@ -1324,7 +1506,7 @@ header = {
     "version": 3,
     "id": native_id,
     "timestamp": "2026-09-09T22:43:51.533Z",
-    "cwd": "/Users/davidrose/git/zerg/longhouse",
+    "cwd": os.getcwd(),
 }
 if os.path.getsize(source) == 0:
     with open(source, "w", encoding="utf-8") as stream:
@@ -1348,6 +1530,146 @@ for event in events:
         let mut permissions = std::fs::metadata(path).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[test]
+    fn recovered_cleanup_rejects_reused_pid_identity_without_signalling() {
+        let pid = std::process::id();
+        let process_group_id = unsafe { libc::getpgid(pid as libc::pid_t) };
+        let identity = crate::turn_claims::OwnedProcessIdentity {
+            pid,
+            process_group_id,
+            process_start_time: Some("not-the-current-process".into()),
+        };
+        assert_eq!(recorded_process_matches(&identity).unwrap(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn recovered_cleanup_signals_matching_pid_after_process_group_change() {
+        use std::process::Command as StdCommand;
+
+        let mut child = StdCommand::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        let fact = crate::process_identity::try_collect_process_fact(pid).unwrap();
+        let actual_group = unsafe { libc::getpgid(pid as libc::pid_t) };
+        let recorded = crate::turn_claims::OwnedProcessIdentity {
+            pid,
+            process_group_id: if actual_group == 1 { 2 } else { 1 },
+            process_start_time: Some(fact.lstart),
+        };
+        let reused_pid = crate::turn_claims::OwnedProcessIdentity {
+            pid: std::process::id(),
+            process_group_id: actual_group,
+            process_start_time: Some("not-the-current-process".into()),
+        };
+        let waiter = std::thread::spawn(move || child.wait().unwrap());
+
+        assert!(cleanup_recorded_processes(&[reused_pid, recorded]).await);
+        assert!(!waiter.join().unwrap().success());
+    }
+
+    #[tokio::test]
+    async fn recovered_cleanup_still_consumes_owned_pids_when_group_is_untrusted() {
+        use std::process::Command as StdCommand;
+
+        let temp = tempfile::tempdir().unwrap();
+        let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
+        let run_id = Uuid::new_v4().to_string();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let current_pid = std::process::id();
+        let current_pgid = unsafe { libc::getpgid(current_pid as libc::pid_t) };
+        let mut child = StdCommand::new("sleep").arg("30").spawn().unwrap();
+        let child_pid = child.id();
+        let child_fact = crate::process_identity::try_collect_process_fact(child_pid).unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                current_pid,
+                current_pgid,
+                Some("not-the-current-process".into()),
+                OMP_PRINT_ADAPTER,
+                "launch",
+                None,
+                "/tmp/stdout.log",
+                "/tmp/stderr.log",
+                json!({}),
+            )
+            .unwrap();
+        let claim = registry
+            .record_owned_processes(
+                &run_id,
+                vec![crate::turn_claims::OwnedProcessIdentity {
+                    pid: child_pid,
+                    process_group_id: current_pgid,
+                    process_start_time: Some(child_fact.lstart),
+                }],
+            )
+            .unwrap();
+        let waiter = std::thread::spawn(move || child.wait().unwrap());
+
+        assert!(!cleanup_recovered_process_group(&run_id, &claim, Some(current_pgid)).await);
+        assert!(!waiter.join().unwrap().success());
+    }
+
+    #[tokio::test]
+    async fn live_cleanup_consumes_owned_pids_after_leader_identity_is_lost() {
+        use std::process::Command as StdCommand;
+
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", &longhouse_home);
+        }
+        let registry = crate::turn_claims::default_registry().unwrap();
+        let run_id = Uuid::new_v4().to_string();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let current_pid = std::process::id();
+        let current_pgid = unsafe { libc::getpgid(current_pid as libc::pid_t) };
+        let mut child = StdCommand::new("sleep").arg("30").spawn().unwrap();
+        let child_pid = child.id();
+        let child_fact = crate::process_identity::try_collect_process_fact(child_pid).unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                current_pid,
+                current_pgid,
+                Some("not-the-current-process".into()),
+                OMP_PRINT_ADAPTER,
+                "launch",
+                None,
+                "/tmp/stdout.log",
+                "/tmp/stderr.log",
+                json!({}),
+            )
+            .unwrap();
+        registry
+            .record_owned_processes(
+                &run_id,
+                vec![crate::turn_claims::OwnedProcessIdentity {
+                    pid: child_pid,
+                    process_group_id: current_pgid,
+                    process_start_time: Some(child_fact.lstart),
+                }],
+            )
+            .unwrap();
+        let waiter = std::thread::spawn(move || child.wait().unwrap());
+
+        assert!(!cleanup_live_claim(&run_id).await);
+        assert!(!waiter.join().unwrap().success());
+        match previous_home {
+            Some(home) => unsafe { std::env::set_var("LONGHOUSE_HOME", home) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
     }
 
     async fn wait_for_terminal(run_id: &str) -> crate::turn_claims::TurnClaim {

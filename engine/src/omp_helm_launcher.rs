@@ -37,6 +37,8 @@ const STATE_DIR_NAME: &str = "managed-local/omp-helm";
 const EXTENSION_FILE_NAME: &str = "longhouse-omp-helm.ts";
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(8);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
+const NATIVE_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+const TRANSITION_RECONCILE_GRACE: Duration = Duration::from_secs(5);
 const MAX_FRAME_BYTES: usize = 512 * 1024;
 const MAX_PENDING_COMMANDS: usize = 64;
 const EXTENSION_ASSET: &str = include_str!("../assets/longhouse-omp-helm.ts");
@@ -270,8 +272,15 @@ impl OmpHelmServer {
         if matches!(kind, "session_start" | "session_reconnect") {
             return true;
         }
-        if matches!(kind, "session_switch" | "session_branch") && state.state.pending_transition {
-            return true;
+        if matches!(kind, "session_switch" | "session_branch") {
+            return state.state.pending_transition;
+        }
+        if kind == "session_transition_cancelled" {
+            return state.state.pending_transition
+                && frame.get("native_session_id").and_then(Value::as_str)
+                    == Some(state.state.native_session_id.as_str())
+                && frame.get("session_file").and_then(Value::as_str)
+                    == Some(state.state.session_file.as_str());
         }
         state.state.native_session_id.is_empty()
             || (frame.get("native_session_id").and_then(Value::as_str)
@@ -327,16 +336,30 @@ impl OmpHelmServer {
             .get("session_file")
             .and_then(Value::as_str)
             .context("OMP extension frame has no native session file")?;
-        let (session_id, previous, previous_source) = {
+        let expected_frame_generation = frame
+            .get("lease_generation")
+            .and_then(Value::as_str)
+            .context("OMP extension frame has no lease generation")?;
+        let (session_id, previous, previous_source, expected_generation, expected_pending) = {
             let state = self.shared.lock().expect("OMP state mutex poisoned");
             anyhow::ensure!(
                 state.extension_connection_id.as_deref() == Some(connection_id),
                 "OMP extension connection was replaced"
             );
+            anyhow::ensure!(
+                state.state.lease_generation == expected_frame_generation,
+                "OMP extension lease generation was replaced"
+            );
+            anyhow::ensure!(
+                state.state.pending_transition == replacement,
+                "OMP native session transition state changed"
+            );
             (
                 state.state.session_id.clone(),
                 state.state.native_session_id.clone(),
                 state.state.session_file.clone(),
+                state.state.lease_generation.clone(),
+                state.state.pending_transition,
             )
         };
         if !replacement {
@@ -353,12 +376,21 @@ impl OmpHelmServer {
         // instead of minting a Shadow session in this transition window.
         let db_path = crate::config::get_agent_db_path()?;
         let conn = crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))?;
-        crate::omp_session::reserve_source_for_thread(
-            &conn,
-            Path::new(source),
-            &session_id,
-            Some(native_id),
-        )?;
+        {
+            let state = self.shared.lock().expect("OMP state mutex poisoned");
+            identity_commit_authority_matches_locked(
+                &state,
+                connection_id,
+                &expected_generation,
+                expected_pending,
+            )?;
+            crate::omp_session::reserve_source_for_thread(
+                &conn,
+                Path::new(source),
+                &session_id,
+                Some(native_id),
+            )?;
+        }
         let deadline = Instant::now() + SOCKET_TIMEOUT;
         let header = loop {
             match crate::omp_session::read_session_header(Path::new(source)) {
@@ -374,17 +406,22 @@ impl OmpHelmServer {
             header.native_id == native_id,
             "OMP extension native identity does not match its source header"
         );
+        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        identity_commit_authority_matches_locked(
+            &state,
+            connection_id,
+            &expected_generation,
+            expected_pending,
+        )?;
+        // The lease check and the final source bind share one state lock. A
+        // timeout can therefore either revoke the lease first, or linearize
+        // after this commit, but it cannot turn a late replacement ready.
         crate::omp_session::bind_source_for_thread(
             &conn,
             Path::new(source),
             &session_id,
             native_id,
         )?;
-        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
-        anyhow::ensure!(
-            state.extension_connection_id.as_deref() == Some(connection_id),
-            "OMP extension connection was replaced during binding"
-        );
         state.state.native_session_id = native_id.to_string();
         state.state.session_file = source.to_string();
         state.state.pending_transition = false;
@@ -395,6 +432,22 @@ impl OmpHelmServer {
         self.persist_state()?;
         self.publish_binding(Path::new(source), native_id, previous != native_id)?;
         Ok(())
+    }
+
+    fn identity_failure_is_current(
+        &self,
+        connection_id: &str,
+        frame: &Value,
+        replacement: bool,
+    ) -> bool {
+        let Some(expected_generation) = frame.get("lease_generation").and_then(Value::as_str)
+        else {
+            return false;
+        };
+        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        state.extension_connection_id.as_deref() == Some(connection_id)
+            && state.state.lease_generation == expected_generation
+            && state.state.pending_transition == replacement
     }
 
     fn mark_degraded(&self, error: &anyhow::Error) {
@@ -429,14 +482,17 @@ impl OmpHelmServer {
             let _ = self.persist_state();
             self.send_extension_frame(
                 connection_id,
-                json!({"kind": "extension_generation", "connection_id": connection, "lease_generation": generation}),
+                json!({"kind": "extension_generation", "connection_id": connection, "lease_generation": generation.clone()}),
             );
+            self.schedule_transition_reconcile(connection_id.to_string(), generation);
             return;
         }
         match kind {
             "session_start" | "session_reconnect" => {
                 if let Err(error) = self.update_identity(connection_id, &frame, false) {
-                    self.mark_degraded(&error);
+                    if self.identity_failure_is_current(connection_id, &frame, false) {
+                        self.mark_degraded(&error);
+                    }
                     eprintln!("Longhouse: OMP native identity binding failed: {error:#}");
                 }
             }
@@ -460,9 +516,35 @@ impl OmpHelmServer {
             "session_switch" | "session_branch" => {
                 let replacement = self.current_state().pending_transition;
                 if let Err(error) = self.update_identity(connection_id, &frame, replacement) {
-                    self.mark_degraded(&error);
+                    if self.identity_failure_is_current(connection_id, &frame, replacement) {
+                        self.mark_degraded(&error);
+                    }
                     eprintln!("Longhouse: OMP native replacement binding failed: {error:#}");
                 }
+            }
+            "session_transition_cancelled" => {
+                let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+                if state.extension_connection_id.as_deref() != Some(connection_id)
+                    || frame.get("lease_generation").and_then(Value::as_str)
+                        != Some(state.state.lease_generation.as_str())
+                    || !state.state.pending_transition
+                {
+                    return;
+                }
+                fail_pending_locked(&mut state, "OMP native session transition cancelled");
+                state.state.pending_transition = false;
+                state.state.ready = true;
+                state.state.status = "ready".into();
+                state.state.terminal_reason = None;
+                state.state.updated_at = Utc::now().to_rfc3339();
+                let generation = state.state.lease_generation.clone();
+                let connection = state.state.connection_id.clone();
+                drop(state);
+                let _ = self.persist_state();
+                self.send_extension_frame(
+                    connection_id,
+                    json!({"kind": "extension_generation", "connection_id": connection, "lease_generation": generation}),
+                );
             }
             "command_result" => {
                 if let Some(request_id) = frame.get("request_id").and_then(Value::as_str) {
@@ -501,23 +583,53 @@ impl OmpHelmServer {
         }
     }
 
+    fn schedule_transition_reconcile(&self, connection_id: String, lease_generation: String) {
+        let server = self.clone();
+        thread::spawn(move || {
+            thread::sleep(TRANSITION_RECONCILE_GRACE);
+            server.reconcile_transition_timeout(&connection_id, &lease_generation);
+        });
+    }
+
+    fn reconcile_transition_timeout(&self, connection_id: &str, lease_generation: &str) {
+        let (connection, generation) = {
+            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            if state.extension_connection_id.as_deref() != Some(connection_id)
+                || !state.state.pending_transition
+                || state.state.lease_generation != lease_generation
+            {
+                return;
+            }
+
+            // An ambiguous transition must not restore control for either source.
+            // Revoke the transition lease so a late native event cannot bind.
+            fail_pending_locked(&mut state, "OMP native session transition timed out");
+            state.state.pending_transition = false;
+            state.state.ready = false;
+            state.state.status = "degraded".into();
+            state.state.terminal_reason = Some("native_session_transition_not_committed".into());
+            state.state.lease_generation = Uuid::new_v4().to_string();
+            state.state.updated_at = Utc::now().to_rfc3339();
+            let connection = state.state.connection_id.clone();
+            let generation = state.state.lease_generation.clone();
+            drop(state);
+            let _ = self.persist_state();
+            (connection, generation)
+        };
+        self.send_extension_frame(
+            connection_id,
+            json!({"kind": "extension_generation", "connection_id": connection, "lease_generation": generation}),
+        );
+    }
+
     fn record_activity(&self, kind: &str, frame: &Value) {
         let event = frame.get("event");
         let phase = match kind {
             "agent_end" => {
-                let is_terminal = event
-                    .and_then(|value| value.get("isTerminal"))
-                    .and_then(Value::as_bool)
-                    .or_else(|| {
-                        event
-                            .and_then(|value| value.get("willContinue"))
-                            .and_then(Value::as_bool)
-                            .map(|value| !value)
-                    });
-                match is_terminal {
-                    Some(true) => "idle",
-                    Some(false) => "running",
-                    None => return,
+                if is_terminal_agent_end(event) {
+                    "idle"
+                } else {
+                    "running"
                 }
             }
             "agent_start"
@@ -538,17 +650,9 @@ impl OmpHelmServer {
             state.state.agent_end_is_terminal = None;
             state.state.agent_end_will_continue = None;
         } else if kind == "agent_end" {
-            let is_terminal = event
-                .and_then(|value| value.get("isTerminal"))
-                .and_then(Value::as_bool)
-                .or_else(|| {
-                    event
-                        .and_then(|value| value.get("willContinue"))
-                        .and_then(Value::as_bool)
-                        .map(|value| !value)
-                });
+            let is_terminal = is_terminal_agent_end(event);
             state.state.agent_end_observed = true;
-            state.state.agent_end_is_terminal = is_terminal;
+            state.state.agent_end_is_terminal = Some(is_terminal);
             state.state.agent_end_will_continue = event
                 .and_then(|value| value.get("willContinue"))
                 .and_then(Value::as_bool);
@@ -674,19 +778,19 @@ impl OmpHelmServer {
             command["session_file"] = json!(state.state.session_file);
             command["auth_token"] = json!(state.state.channel_token);
             command["session_id"] = json!(state.state.session_id);
+            if kind == "terminate" {
+                // The request already passed the authenticated ownership check.
+                // Arm local group ownership before asking native OMP to drain so
+                // a lost acknowledgement cannot leave the provider unowned.
+                self.terminate_requested.store(true, Ordering::Release);
+            }
             if extension.send(command).is_err() {
                 state.pending.remove(&request_id);
                 return channel_error("session_not_attached", "OMP extension channel is closed");
             }
         }
         match receiver.recv_timeout(COMMAND_TIMEOUT) {
-            Ok(response) => {
-                if kind == "terminate" && response.get("ok").and_then(Value::as_bool) == Some(true)
-                {
-                    self.terminate_requested.store(true, Ordering::Release);
-                }
-                response
-            }
+            Ok(response) => response,
             Err(_) => {
                 self.shared
                     .lock()
@@ -752,6 +856,40 @@ fn remote_authority_matches_locked(state: &SharedState, frame: &Value) -> bool {
             == Some(state.state.connection_id.as_str())
         && frame.get("lease_generation").and_then(Value::as_str)
             == Some(state.state.lease_generation.as_str())
+}
+
+fn identity_commit_authority_matches_locked(
+    state: &SharedState,
+    connection_id: &str,
+    expected_generation: &str,
+    expected_pending: bool,
+) -> Result<()> {
+    anyhow::ensure!(
+        state.extension_connection_id.as_deref() == Some(connection_id),
+        "OMP extension connection was replaced during identity binding"
+    );
+    anyhow::ensure!(
+        state.state.lease_generation == expected_generation,
+        "OMP extension lease generation was replaced during identity binding"
+    );
+    anyhow::ensure!(
+        state.state.pending_transition == expected_pending,
+        "OMP native session transition changed during identity binding"
+    );
+    Ok(())
+}
+
+fn is_terminal_agent_end(event: Option<&Value>) -> bool {
+    event
+        .and_then(|value| value.get("isTerminal"))
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            event
+                .and_then(|value| value.get("willContinue"))
+                .and_then(Value::as_bool)
+                .map(|value| !value)
+        })
+        .unwrap_or(true)
 }
 
 fn fail_pending_locked(state: &mut SharedState, message: &str) {
@@ -839,7 +977,7 @@ pub fn resolve_binary(explicit: Option<String>) -> Result<String> {
     anyhow::bail!("OMP executable not found. Install stock `omp` or set --omp-bin.")
 }
 
-fn provider_binary_sha256(path: &Path) -> Result<String> {
+pub(crate) fn provider_binary_sha256(path: &Path) -> Result<String> {
     let mut file = File::open(path).with_context(|| {
         format!(
             "open OMP executable for integrity check: {}",
@@ -856,6 +994,23 @@ fn provider_binary_sha256(path: &Path) -> Result<String> {
         hasher.update(&buffer[..bytes_read]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+pub(crate) fn verify_resume_binary_identity(
+    retained_binary: &Path,
+    current_binary: &Path,
+    expected_sha256: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        fs::canonicalize(retained_binary).ok() == fs::canonicalize(current_binary).ok(),
+        "OMP Resume binary does not match the retained launch"
+    );
+    let current_sha256 = provider_binary_sha256(current_binary)?;
+    anyhow::ensure!(
+        current_sha256 == expected_sha256,
+        "OMP Resume binary integrity does not match the retained launch"
+    );
+    Ok(())
 }
 
 fn write_extension_file(dir: &Path) -> Result<PathBuf> {
@@ -918,15 +1073,15 @@ fn read_resume_state(session_id: &str, cwd: &Path, binary: &str) -> Result<OmpHe
         fs::canonicalize(&state.cwd).ok() == fs::canonicalize(cwd).ok(),
         "OMP Resume must run from its retained workspace"
     );
-    anyhow::ensure!(
-        fs::canonicalize(&state.provider_binary).ok() == fs::canonicalize(binary).ok(),
-        "OMP Resume binary does not match the retained launch"
-    );
-    let current_binary_sha256 = provider_binary_sha256(Path::new(binary))?;
-    anyhow::ensure!(
-        state.provider_binary_sha256.as_deref() == Some(current_binary_sha256.as_str()),
-        "OMP Resume binary integrity does not match the retained launch"
-    );
+    let expected_sha256 = state
+        .provider_binary_sha256
+        .as_deref()
+        .context("OMP retained launch has no binary integrity identity")?;
+    verify_resume_binary_identity(
+        Path::new(&state.provider_binary),
+        Path::new(binary),
+        expected_sha256,
+    )?;
     anyhow::ensure!(
         !state.native_session_id.is_empty(),
         "OMP retained launch contract has no native session identity"
@@ -938,34 +1093,49 @@ fn read_resume_state(session_id: &str, cwd: &Path, binary: &str) -> Result<OmpHe
     )?;
     let facts = crate::process_identity::try_collect_process_facts_by_pid()
         .context("OMP Resume cannot verify prior process identities")?;
-    for (label, pid, birth) in [
-        (
-            "launcher",
-            Some(state.launcher_pid),
-            state.launcher_process_start_time.as_deref(),
-        ),
-        (
-            "provider",
-            state.provider_pid,
-            state.provider_process_start_time.as_deref(),
-        ),
-    ] {
-        if let (Some(pid), Some(birth)) = (pid, birth) {
+    verify_resume_owner(
+        &facts,
+        "launcher",
+        Some(state.launcher_pid),
+        state.launcher_process_start_time.as_deref(),
+        true,
+    )?;
+    verify_resume_owner(
+        &facts,
+        "provider",
+        state.provider_pid,
+        state.provider_process_start_time.as_deref(),
+        false,
+    )?;
+    Ok(state)
+}
+
+fn verify_resume_owner(
+    facts: &HashMap<u32, crate::process_identity::ProcessFact>,
+    label: &str,
+    pid: Option<u32>,
+    birth: Option<&str>,
+    required: bool,
+) -> Result<()> {
+    match (pid, birth.map(str::trim).filter(|value| !value.is_empty())) {
+        (None, None) if !required => Ok(()),
+        (Some(pid), Some(birth)) if pid > 0 => {
             if facts.get(&pid).is_some_and(|fact| fact.lstart == birth) {
                 anyhow::bail!(
                     "OMP Resume refused while the previous {label} execution owner is still alive"
                 );
             }
+            Ok(())
         }
+        _ => anyhow::bail!("OMP Resume cannot verify prior {label} process identity"),
     }
-    Ok(state)
 }
 
 fn effective_profile(config: &LaunchConfig) -> Option<String> {
     let profile = config
         .profile
         .clone()
-        .or_else(|| std::env::var("OMP_PROFILE").ok());
+        .or_else(crate::omp_session::active_profile);
     profile
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
@@ -996,6 +1166,7 @@ fn select_session_storage(
         .or_else(|| configured_session_dir.map(Path::to_path_buf))
         .or_else(|| crate::omp_session::session_dir_for_launch(cwd, profile).ok())
         .context("OMP has no session directory")?;
+    crate::omp_session::ensure_session_dir_is_disjoint_from_pi(cwd, &session_dir)?;
     let session_file = match resume_state {
         Some(state) => PathBuf::from(&state.session_file),
         None => crate::omp_session::reserve_session_path(&session_dir)?,
@@ -1033,21 +1204,23 @@ fn run_provider(
         ));
         return Err(error);
     }
-    let mut sent = false;
-    let started = Instant::now();
-    let mut status = None;
-    loop {
-        if (server.terminate_requested.load(Ordering::Acquire)
-            || signal.load(Ordering::Acquire) != 0)
-            && !sent
+    let mut escalation_sent = false;
+    let mut native_shutdown_deadline = None;
+    let status = loop {
+        if server.terminate_requested.load(Ordering::Acquire) && native_shutdown_deadline.is_none()
         {
+            native_shutdown_deadline = Some(Instant::now() + NATIVE_SHUTDOWN_GRACE);
+        }
+        let signal_requested = signal.load(Ordering::Acquire) != 0;
+        let grace_expired =
+            native_shutdown_deadline.is_some_and(|deadline| Instant::now() >= deadline);
+        if (signal_requested || grace_expired) && !escalation_sent {
             crate::managed_terminal::terminate_owned_group(&mut child, pid as libc::pid_t);
-            sent = true;
+            escalation_sent = true;
         }
         match child.try_wait() {
             Ok(Some(exit)) => {
-                status = Some(exit);
-                break;
+                break Some(exit);
             }
             Ok(None) => {}
             Err(error) => {
@@ -1055,15 +1228,8 @@ fn run_provider(
                 return Err(error).context("waiting for stock OMP");
             }
         }
-        if sent && started.elapsed() > Duration::from_secs(2) {
-            break;
-        }
         thread::sleep(Duration::from_millis(25));
-    }
-    if status.is_none() {
-        crate::managed_terminal::terminate_owned_group(&mut child, pid as libc::pid_t);
-        status = child.try_wait()?;
-    }
+    };
     let outcome = runtime.block_on(crate::process_group::shutdown_group(
         pid as i32,
         crate::process_group::DEFAULT_GRACE,
@@ -1287,12 +1453,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             } else {
                 "0"
             },
-        )
-        .env_remove("PI_CONFIG_DIR")
-        .env_remove("PI_CODING_AGENT_DIR")
-        .env_remove("PI_CODING_AGENT_SESSION_DIR")
-        .env_remove("PI_PROFILE")
-        .env_remove("OMP_PROFILE");
+        );
     if let Some(profile) = profile.as_deref() {
         command.env("OMP_PROFILE", profile);
         command.arg("--profile").arg(profile);
@@ -1341,6 +1502,9 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         server_for_spawn.persist_state()?;
         if let Some(transaction) = transaction.as_mut() {
             transaction.confirm_or_degrade("OMP", &crate::config::get_agent_dir()?, &deferred);
+        }
+        if let Some(registration) = degraded.as_ref() {
+            registration.provider_alive.store(true, Ordering::Release);
         }
         Ok(())
     }) {
@@ -1516,6 +1680,184 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_transition_restores_authority_for_unchanged_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let server = OmpHelmServer::start(state(), socket_path, socket_dir, state_path).unwrap();
+        let (sender, _receiver) = mpsc::channel();
+        {
+            let mut shared = server.shared.lock().unwrap();
+            shared.extension_sender = Some(sender);
+            shared.extension_connection_id = Some("connection".into());
+        }
+        let before = json!({
+            "kind": "session_before_switch",
+            "auth_token": "token",
+            "session_id": "session",
+            "native_session_id": "native",
+            "session_file": "/tmp/session.jsonl",
+            "connection_id": "connection",
+            "lease_generation": "generation"
+        });
+        server.handle_extension_frame("connection", before);
+        let switching = server.current_state();
+        assert!(switching.pending_transition);
+        assert!(!switching.ready);
+        let cancelled = json!({
+            "kind": "session_transition_cancelled",
+            "auth_token": "token",
+            "session_id": "session",
+            "native_session_id": "native",
+            "session_file": "/tmp/session.jsonl",
+            "connection_id": "connection",
+            "lease_generation": switching.lease_generation
+        });
+        server.handle_extension_frame("connection", cancelled);
+        let restored = server.current_state();
+        assert!(restored.ready);
+        assert!(!restored.pending_transition);
+        assert_eq!(restored.status, "ready");
+        server.shutdown();
+    }
+
+    #[test]
+    fn timed_out_transition_rejects_late_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let server = OmpHelmServer::start(state(), socket_path, socket_dir, state_path).unwrap();
+        let (sender, _receiver) = mpsc::channel();
+        {
+            let mut shared = server.shared.lock().unwrap();
+            shared.extension_sender = Some(sender);
+            shared.extension_connection_id = Some("connection".into());
+        }
+        server.handle_extension_frame(
+            "connection",
+            json!({
+                "kind": "session_before_switch",
+                "auth_token": "token",
+                "session_id": "session",
+                "native_session_id": "native",
+                "session_file": "/tmp/session.jsonl",
+                "connection_id": "connection",
+                "lease_generation": "generation"
+            }),
+        );
+        let switching = server.current_state();
+        server.reconcile_transition_timeout("connection", &switching.lease_generation);
+        let degraded = server.current_state();
+        assert!(!degraded.ready);
+        assert!(!degraded.pending_transition);
+        assert_eq!(degraded.status, "degraded");
+
+        server.handle_extension_frame(
+            "connection",
+            json!({
+                "kind": "session_transition_cancelled",
+                "auth_token": "token",
+                "session_id": "session",
+                "native_session_id": "native",
+                "session_file": "/tmp/session.jsonl",
+                "connection_id": "connection",
+                "lease_generation": switching.lease_generation
+            }),
+        );
+        let after_stale_cancel = server.current_state();
+        assert!(!after_stale_cancel.ready);
+        assert_eq!(after_stale_cancel.status, "degraded");
+
+        for kind in ["session_switch", "session_branch"] {
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": kind,
+                    "auth_token": "token",
+                    "session_id": "session",
+                    "native_session_id": "late-native",
+                    "session_file": "/tmp/late-session.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": degraded.lease_generation
+                }),
+            );
+            let after = server.current_state();
+            assert_eq!(after.native_session_id, "native");
+            assert_eq!(after.session_file, "/tmp/session.jsonl");
+            assert!(!after.ready);
+            assert_eq!(after.status, "degraded");
+        }
+        server.shutdown();
+    }
+
+    #[test]
+    fn in_flight_replacement_cannot_commit_after_lease_timeout() {
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let replacement_source = temp.path().join("late-replacement.jsonl");
+        let mut initial = state();
+        initial.session_id = Uuid::new_v4().to_string();
+        initial.session_file = temp.path().join("original.jsonl").display().to_string();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "session_before_switch",
+                    "auth_token": "token",
+                    "session_id": server.current_state().session_id,
+                    "native_session_id": "native",
+                    "session_file": server.current_state().session_file,
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let switching = server.current_state();
+            let frame = json!({
+                "kind": "session_switch",
+                "auth_token": "token",
+                "session_id": switching.session_id,
+                "native_session_id": "late-native",
+                "session_file": replacement_source,
+                "connection_id": "connection",
+                "lease_generation": switching.lease_generation
+            });
+            let worker = {
+                let server = server.clone();
+                std::thread::spawn(move || server.update_identity("connection", &frame, true))
+            };
+            std::thread::sleep(Duration::from_millis(100));
+            server.reconcile_transition_timeout("connection", &switching.lease_generation);
+            fs::write(
+                &replacement_source,
+                b"{\"type\":\"session\",\"id\":\"late-native\",\"cwd\":\"/tmp\"}\n",
+            )
+            .unwrap();
+
+            assert!(worker.join().unwrap().is_err());
+            let after = server.current_state();
+            assert_eq!(after.native_session_id, "native");
+            assert!(!after.ready);
+            assert!(!after.pending_transition);
+            assert_eq!(after.status, "degraded");
+            server.shutdown();
+        });
+    }
+
+    #[test]
     fn omp_extension_preserves_terminal_and_transition_events() {
         assert!(EXTENSION_ASSET.contains("const write ="));
         assert!(EXTENSION_ASSET.contains("const close ="));
@@ -1525,9 +1867,27 @@ mod tests {
         assert!(EXTENSION_ASSET.contains("LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED"));
         assert!(EXTENSION_ASSET.contains("initial_prompt_grant"));
         assert!(EXTENSION_ASSET.contains("session_stop"));
+        assert!(EXTENSION_ASSET.contains("session_transition_cancelled"));
         assert!(EXTENSION_ASSET.contains("pi.on(\"agent_end\""));
+        assert!(EXTENSION_ASSET.contains("compactLifecycleEvent"));
+        assert!(!EXTENSION_ASSET.contains("event, ...session(ctx)"));
         assert!(EXTENSION_ASSET.contains("tool_execution_update"));
         assert!(EXTENSION_ASSET.contains("isTerminal"));
+    }
+
+    #[test]
+    fn ordinary_agent_end_is_terminal_without_overriding_continuation() {
+        assert!(is_terminal_agent_end(None));
+        assert!(is_terminal_agent_end(Some(&json!({"type": "agent_end"}))));
+        assert!(!is_terminal_agent_end(Some(
+            &json!({"type": "agent_end", "willContinue": true})
+        )));
+        assert!(!is_terminal_agent_end(Some(
+            &json!({"type": "agent_end", "isTerminal": false, "willContinue": false})
+        )));
+        assert!(is_terminal_agent_end(Some(
+            &json!({"type": "agent_end", "isTerminal": true, "willContinue": true})
+        )));
     }
 
     #[test]
@@ -1600,5 +1960,13 @@ mod tests {
         )));
         assert!(initial_prompt_delivered(Some("  ")));
         assert!(initial_prompt_delivered(None));
+    }
+
+    #[test]
+    fn resume_owner_birth_identity_is_required() {
+        let facts = HashMap::new();
+        assert!(verify_resume_owner(&facts, "launcher", Some(42), None, true).is_err());
+        assert!(verify_resume_owner(&facts, "provider", Some(42), None, false).is_err());
+        assert!(verify_resume_owner(&facts, "provider", None, None, false).is_ok());
     }
 }

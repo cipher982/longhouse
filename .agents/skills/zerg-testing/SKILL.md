@@ -31,6 +31,8 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
   Those are evidence-delivery paths, not ownership or teardown authorities.
 - Keep only durable source fixtures and the receipt required by the proof.
   Report any intentionally retained artifact, owner, and cleanup command.
+- Rendered frames and verification transcripts are evidence, not durable user-facing artifacts: keep only the required receipt under ignored artifacts and remove named QA windows/sessions before handoff.
+- Cleanup is a release gate, not a follow-up: re-read `git status --short`, the exact owned PID/process-group inventory, hosted session inventory, and `xcrun simctl list devices` before declaring the run complete.
 ## Core Commands
 ```bash
 make test                # unit tests

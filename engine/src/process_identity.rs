@@ -44,6 +44,13 @@ impl ProcessFact {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessFactLookup {
+    Present(ProcessFact),
+    Absent,
+    Unavailable,
+}
+
 pub fn collect_process_facts_by_pid() -> HashMap<u32, ProcessFact> {
     try_collect_process_facts_by_pid().unwrap_or_default()
 }
@@ -51,6 +58,15 @@ pub fn collect_process_facts_by_pid() -> HashMap<u32, ProcessFact> {
 /// Read one process identity without depending on a successful whole-system
 /// inventory. This is used when persisting or validating an owned child PID.
 pub fn try_collect_process_fact(pid: u32) -> Option<ProcessFact> {
+    match inspect_process_fact(pid) {
+        ProcessFactLookup::Present(fact) => Some(fact),
+        ProcessFactLookup::Absent | ProcessFactLookup::Unavailable => None,
+    }
+}
+
+/// Inspect one PID while preserving the difference between a missing process
+/// and an unavailable process-identity probe.
+pub fn inspect_process_fact(pid: u32) -> ProcessFactLookup {
     let output = Command::new("ps")
         .args([
             "-p",
@@ -58,15 +74,29 @@ pub fn try_collect_process_fact(pid: u32) -> Option<ProcessFact> {
             "-o",
             "pid=,tty=,stat=,lstart=,command=",
         ])
-        .output()
-        .ok()?;
+        .output();
+    let Ok(output) = output else {
+        return ProcessFactLookup::Unavailable;
+    };
     if !output.status.success() {
-        return None;
+        return if output.status.code() == Some(1) && output.stderr.is_empty() {
+            ProcessFactLookup::Absent
+        } else {
+            ProcessFactLookup::Unavailable
+        };
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let mut lines = text.lines().filter(|line| !line.trim().is_empty());
-    let (parsed_pid, fact) = parse_process_fact(lines.next()?)?;
-    (lines.next().is_none() && parsed_pid == pid).then_some(fact)
+    let Some(line) = lines.next() else {
+        return ProcessFactLookup::Absent;
+    };
+    let Some((parsed_pid, fact)) = parse_process_fact(line) else {
+        return ProcessFactLookup::Unavailable;
+    };
+    if lines.next().is_some() || parsed_pid != pid {
+        return ProcessFactLookup::Unavailable;
+    }
+    ProcessFactLookup::Present(fact)
 }
 
 /// Collect one coherent process inventory, distinguishing a valid empty scan

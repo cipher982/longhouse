@@ -36,6 +36,7 @@ from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
+from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 
 SCENARIO_ID = "omp_helm_lifecycle"
 ASSERTIONS = (
@@ -225,6 +226,8 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             observation.get("cold_resume_exact_file") is True
             and resume.get("native_source_bound") is True
             and resume.get("marker_count") == 1
+            and resume.get("context_recalled") is True
+            and resume.get("context_marker_count") == 1
             and resume.get("channel_terminal_bound") is True
             and resume.get("terminal") is True
             and resume.get("exact_file") is True
@@ -536,6 +539,7 @@ def _wait_native_marker(
     marker: str,
     *,
     minimum_offset: int = 0,
+    role: str = "assistant",
     timeout: float = 90,
 ) -> dict[str, Any]:
     def observe() -> dict[str, Any] | None:
@@ -543,7 +547,7 @@ def _wait_native_marker(
             if row.get("type") != "message":
                 continue
             message = row.get("message")
-            if not isinstance(message, Mapping) or message.get("role") != "assistant":
+            if not isinstance(message, Mapping) or message.get("role") != role:
                 continue
             if marker in json.dumps(message, sort_keys=True):
                 return row
@@ -566,10 +570,7 @@ def _native_message_text(message: Mapping[str, Any]) -> str:
 
 
 def _is_terminal_agent_end(event: Mapping[str, Any]) -> bool:
-    is_terminal = event.get("isTerminal")
-    if isinstance(is_terminal, bool):
-        return is_terminal
-    return event.get("willContinue") is False
+    return omp_agent_end_is_terminal(event)
 
 
 def _native_marker_evidence(
@@ -579,6 +580,7 @@ def _native_marker_evidence(
     marker: str,
     minimum_offset: int,
     native_session_id: str,
+    role: str = "assistant",
 ) -> dict[str, Any]:
     message = row.get("message")
     text = _native_message_text(message) if isinstance(message, Mapping) else ""
@@ -588,7 +590,7 @@ def _native_marker_evidence(
             session_file.is_file()
             and row.get("type") == "message"
             and isinstance(message, Mapping)
-            and message.get("role") == "assistant"
+            and message.get("role") == role
             and isinstance(row.get("id"), str)
             and isinstance(offset, int)
             and offset >= minimum_offset
@@ -598,6 +600,7 @@ def _native_marker_evidence(
         "source_offset": offset,
         "minimum_source_offset": minimum_offset,
         "native_session_id": native_session_id,
+        "message_role": role,
         "event_id": row.get("id"),
         "marker": marker,
         "marker_count": text.count(marker),
@@ -931,13 +934,6 @@ def _run_engine(
         raise RuntimeError(f"unsupported OMP Helm control command: {command}")
 
     response = _runtime_post(api_url, token, path, payload)
-    local_state = _read_state(Path(str(env.get("LONGHOUSE_HOME") or "")) / "managed-local" / "omp-helm" / f"{session_id}.json")
-    if local_state:
-        response.setdefault("native_session_id", local_state.get("native_session_id"))
-        response.setdefault(
-            "status",
-            "active" if local_state.get("phase") in {"running", "thinking"} else "idle",
-        )
     if command in {"send", "steer"}:
         accepted = response.get("outcome") in {"sent", "queued"}
     elif command == "abort":
@@ -1344,6 +1340,37 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         old_state = dict(current_state)
         old_native_id = str(current_state.get("native_session_id") or "")
+        if first.alive() is not True:
+            raise RuntimeError("OMP original owner was not live for stale-launcher proof")
+        stale_launcher = ProviderPtySession.start(
+            argv=_launch_argv(
+                args,
+                workspace=workspace,
+                prompt="This launcher must be refused while the original OMP owner remains live.",
+                resume_session=current_session_id,
+            ),
+            cwd=workspace,
+            env=env,
+            terminal_path=root / "omp-helm-stale-launcher.raw",
+            thread_name="omp-helm-stale-launcher-terminal-drain",
+        )
+        sessions.append(stale_launcher)
+        try:
+            stale_launcher_returncode = stale_launcher.process.wait(timeout=15)
+        except subprocess.TimeoutExpired as exc:
+            stale_launcher.close()
+            raise RuntimeError("OMP stale launcher did not refuse a live owner") from exc
+        stale_launcher.close()
+        stale_launcher_output = stale_launcher.terminal_path.read_text(encoding="utf-8", errors="replace")
+        stale_launcher_evidence = {
+            "returncode": stale_launcher_returncode,
+            "terminal_path": str(stale_launcher.terminal_path),
+            "original_owner_live": True,
+            "owner_refusal_observed": (
+                stale_launcher_returncode != 0
+                and ("execution owner" in stale_launcher_output or "already attached" in stale_launcher_output)
+            ),
+        }
         observation["omp_native_extension_channel_bound"] = bool(
             current_state.get("ready") is True
             and current_state.get("connection_id")
@@ -1525,9 +1552,19 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             timeout=60,
         )
         stale = _stale_frame(old_state, text="stale OMP owner must be refused")
-        controls["stale_owner"] = {"response": stale, "old_state": old_state, "new_state": replaced_state}
-        observation["stale_owner_refused"] = stale.get("ok") is False and (stale.get("error") or {}).get("code") == "stale_channel"
+        controls["stale_owner"] = {
+            "second_launcher": stale_launcher_evidence,
+            "response": stale,
+            "old_state": old_state,
+            "new_state": replaced_state,
+        }
+        observation["stale_owner_refused"] = (
+            stale_launcher_evidence["owner_refusal_observed"]
+            and stale.get("ok") is False
+            and (stale.get("error") or {}).get("code") == "stale_channel"
+        )
         observation["stale_owner_evidence"] = {
+            "second_launcher": stale_launcher_evidence,
             "error_code": (stale.get("error") or {}).get("code"),
             "old_native_session_id": old_state.get("native_session_id"),
             "new_native_session_id": replaced_state.get("native_session_id"),
@@ -1535,6 +1572,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         current_state = replaced_state
         current_session_file = Path(str(replaced_state["session_file"]))
         current_native_id = str(replaced_state["native_session_id"])
+        context_phrase = f"OMP_HELM_CONTEXT_{os.urandom(8).hex()}"
         _register_native_source(
             source_claims,
             label="replacement",
@@ -1558,7 +1596,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=f"Reply with exactly {replacement_marker}.",
+            text=(f"Remember this context phrase: {context_phrase}. Then reply with exactly {replacement_marker}."),
         )
         replacement_row = _wait_native_marker(
             current_session_file,
@@ -1572,6 +1610,20 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             minimum_offset=replacement_offset,
             native_session_id=current_native_id,
         )
+        context_seed_row = _wait_native_marker(
+            current_session_file,
+            context_phrase,
+            minimum_offset=replacement_offset,
+            role="user",
+        )
+        context_seed_evidence = _native_marker_evidence(
+            context_seed_row,
+            current_session_file,
+            marker=context_phrase,
+            minimum_offset=replacement_offset,
+            native_session_id=current_native_id,
+            role="user",
+        )
         replacement_evidence.update(_channel_command_evidence(replacement, replaced_state))
         replacement_evidence.update({"observation_scope": "replacement", "source_generation": "replacement"})
         controls["replacement"] = {
@@ -1579,7 +1631,9 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "state": dict(replaced_state),
             "command": replacement,
             "marker_row": replacement_row,
+            "context_seed_row": context_seed_row,
             "evidence": replacement_evidence,
+            "context_evidence": context_seed_evidence,
         }
         observation["native_replacement_bound"] = (
             replacement_evidence["channel_ack_bound"]
@@ -1617,11 +1671,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
 
         resume_marker = f"OMP_HELM_RESUME_{os.urandom(8).hex()}"
         resume_offset = _read_source_size(current_session_file)
+        resume_prompt = f"Without reading any files, reply with the context phrase you remember followed by exactly {resume_marker}."
         resumed = ProviderPtySession.start(
             argv=_launch_argv(
                 args,
                 workspace=workspace,
-                prompt=f"Reply with exactly {resume_marker}.",
+                prompt=resume_prompt,
                 resume_session=current_session_id,
             ),
             cwd=workspace,
@@ -1649,6 +1704,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             }
         )
         resume_row = _wait_native_marker(resume_file, resume_marker, minimum_offset=resume_offset)
+        resume_context_row = _wait_native_marker(
+            resume_file,
+            context_phrase,
+            minimum_offset=resume_offset,
+            role="assistant",
+        )
         resume_terminal, resume_channel_state = _wait_channel_terminal(
             longhouse_home,
             session_id=current_session_id,
@@ -1661,6 +1722,20 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             marker=resume_marker,
             minimum_offset=resume_offset,
             native_session_id=str(resume_state.get("native_session_id") or ""),
+        )
+        resume_context_evidence = _native_marker_evidence(
+            resume_context_row,
+            resume_file,
+            marker=context_phrase,
+            minimum_offset=resume_offset,
+            native_session_id=str(resume_state.get("native_session_id") or ""),
+        )
+        context_recalled = (
+            context_seed_evidence["native_source_bound"]
+            and context_seed_evidence["marker_count"] == 1
+            and resume_context_evidence["native_source_bound"]
+            and resume_context_evidence["marker_count"] == 1
+            and context_phrase not in resume_prompt
         )
         resume_terminal_evidence = _channel_terminal_evidence(
             resume_terminal,
@@ -1694,6 +1769,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         observation["cold_resume_evidence"] = {
             **resume_marker_evidence,
+            "context_phrase": context_phrase,
+            "resume_prompt": resume_prompt,
+            "context_recalled": context_recalled,
+            "context_marker_count": resume_context_evidence["marker_count"],
+            "context_seed": context_seed_evidence,
+            "context_resume": resume_context_evidence,
             "native_source_bound": resume_marker_evidence["native_source_bound"],
             "channel_terminal_bound": resume_terminal_evidence["channel_source_bound"],
             "terminal": resume_terminal_evidence["terminal"],
@@ -1705,11 +1786,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         }
         controls["cold_resume"] = {
             "action_label": "cold_resume",
-            "prompt": f"Reply with exactly {resume_marker}.",
+            "prompt": resume_prompt,
             "state": dict(resume_state),
             "marker_row": resume_row,
+            "context_row": resume_context_row,
             "terminal": resume_terminal_evidence["terminal"],
             "marker_evidence": resume_marker_evidence,
+            "context_evidence": resume_context_evidence,
             "evidence": resume_marker_evidence,
             "terminal_evidence": resume_terminal_evidence,
         }

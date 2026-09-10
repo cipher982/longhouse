@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import SessionLivePreview
 from zerg.models.live_store import LiveSessionLivePreview
+from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
 from zerg.services.provisional_events import EVENT_ORIGIN_LIVE_PROVISIONAL
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.provisional_events import build_provisional_cursor
@@ -153,9 +154,7 @@ def _omp_print_preview_candidate(
         turn_id=_item_scoped_turn_id(turn_id, message_index),
     )
     stop_reason = _optional_str(message.get("stopReason")) if isinstance(message, dict) else None
-    terminal = (
-        stop_reason in {"stop", "length"} or raw_type == "agent_end" and (raw.get("isTerminal") is True or raw.get("willContinue") is False)
-    )
+    terminal = stop_reason in {"stop", "length"} or (raw_type == "agent_end" and omp_agent_end_is_terminal(raw))
     observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
     seq = _coerce_seq(payload.get("seq"))
     return LivePreviewCandidate(

@@ -1419,6 +1419,7 @@
         "antigravity",
         "claude",
         "codex",
+        "omp",
         "opencode"
       ]
     },
@@ -1933,6 +1934,7 @@
       "path": "server/zerg/routers/session_chat.py",
       "providers": [
         "claude",
+        "omp",
         "pi"
       ]
     },
