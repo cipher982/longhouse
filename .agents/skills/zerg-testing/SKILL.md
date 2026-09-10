@@ -23,6 +23,8 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
   `--session-dir`; never let a verification command write to David's default
   provider archive. If a protocol ignores that flag, record the exact native
   session path and remove it in the same `finally` block.
+- Every disposable proof run must allocate unique `mktemp -d` roots, record every path/PID it owns, and install an `EXIT/INT/TERM` trap; fixed `/tmp` names and untracked scratch files are prohibited.
+- Before handoff, delete every exact run-owned path and verify no run-owned process, session, simulator, tab, or service remains; retain only the requested receipt under ignored `artifacts/`.
 - In `finally`/cleanup, stop owned processes and services, retire the hosted
   session, close tabs/simulators, remove scratch homes and generated fixtures,
   then re-read the session/process inventory. Do not leave a verification
@@ -31,6 +33,8 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
   Those are evidence-delivery paths, not ownership or teardown authorities.
 - Keep only durable source fixtures and the receipt required by the proof.
   Report any intentionally retained artifact, owner, and cleanup command.
+- A failed or superseded proof may be deleted only after its required authoritative source retention is verified; then delete its exact evidence root, request file, scratch `HOME`, native session/archive, and owned processes. Retain only the required receipt under ignored `artifacts/`, with its owner and cleanup command.
+- If authoritative retention fails, preserve the disposable isolation as evidence, mark cleanup failed, and report its exact owner and removal condition; never delete the only source and call cleanup complete.
 - Rendered frames and verification transcripts are evidence, not durable user-facing artifacts: keep only the required receipt under ignored artifacts and remove named QA windows/sessions before handoff.
 - Cleanup is a release gate, not a follow-up: re-read `git status --short`, the exact owned PID/process-group inventory, hosted session inventory, and `xcrun simctl list devices` before declaring the run complete.
 ## Core Commands

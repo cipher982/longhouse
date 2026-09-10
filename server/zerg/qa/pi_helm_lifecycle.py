@@ -893,19 +893,27 @@ def _cleanup_receipt(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _retain_source(root: Path, source: Path, name: str, secrets: list[str]) -> dict[str, Any]:
+def _retain_source(
+    root: Path,
+    source: Path,
+    name: str,
+    secrets: list[str],
+    *,
+    require_complete: bool = False,
+) -> dict[str, Any]:
     target = root / "source-artifacts" / name
     try:
         content = source.read_bytes()
     except OSError as exc:
-        return {"source": str(source), "retained": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"source": str(source), "retained": False, "complete": False, "error": f"{type(exc).__name__}: {exc}"}
     for secret in secrets:
         if secret:
             secret_bytes = secret.encode()
             replacement = (b"<redacted>" * ((len(secret_bytes) + 9) // 10))[: len(secret_bytes)]
             content = content.replace(secret_bytes, replacement)
     max_bytes = 16 * 1024 * 1024
-    truncated = len(content) > max_bytes
+    exceeds_bound = len(content) > max_bytes
+    truncated = exceeds_bound and not require_complete
     if truncated:
         content = content[:max_bytes] + b"\n[truncated by QA evidence bound]\n"
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -914,7 +922,9 @@ def _retain_source(root: Path, source: Path, name: str, secrets: list[str]) -> d
         "source": str(source),
         "path": target.relative_to(root).as_posix(),
         "retained": True,
+        "complete": not truncated,
         "truncated": truncated,
+        "size_exceeds_evidence_bound": exceeds_bound,
         "bytes": len(content),
     }
 
@@ -965,6 +975,7 @@ def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]
         and cleanup.get("shipper_stop_verified") is True
         and cleanup.get("canary_session_hidden") is True
         and cleanup.get("scratch_removed") is True
+        and cleanup.get("source_retention_verified") is True
         and cleanup.get("cleanup_errors", []) == []
     )
     return {
@@ -1987,11 +1998,16 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         source_paths.update((f"native-{path.stem}", path) for path in native_root.rglob("*.jsonl"))
         for name, source in source_paths.items():
             if source.is_file():
-                retained_sources.append(_retain_source(root, source, f"{name}.raw", source_secrets))
+                retained_sources.append(_retain_source(root, source, f"{name}.raw", source_secrets, require_complete=True))
         retained_by_source = {
             str(Path(str(item["source"])).resolve()): str(item["path"])
             for item in retained_sources
-            if item.get("retained") is True and isinstance(item.get("source"), str) and isinstance(item.get("path"), str)
+            if (
+                item.get("retained") is True
+                and item.get("complete") is True
+                and isinstance(item.get("source"), str)
+                and isinstance(item.get("path"), str)
+            )
         }
 
         def attach_retained_native_paths(value: object) -> None:
@@ -2035,6 +2051,44 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         observations["process_provider_dead"] = observations["cleanup"]["provider_process_dead"]
         observations["process_group_dead"] = observations["cleanup"]["process_group_dead"]
         observations["no_orphan_provider_processes"] = observations["cleanup"]["no_orphan_provider_processes"]
+        source_retention_failures = [
+            item
+            for item in retained_sources
+            if item.get("retained") is not True or item.get("complete") is not True or not isinstance(item.get("path"), str)
+        ]
+        source_retention_verified = bool(retained_sources) and not source_retention_failures
+        observations["cleanup"]["retained_source_artifacts"] = retained_sources
+        observations["cleanup"]["source_retention_failures"] = source_retention_failures
+        observations["cleanup"]["source_retention_verified"] = source_retention_verified
+        isolation_removed = False
+        if source_retention_verified:
+            try:
+                shutil.rmtree(isolation)
+            except OSError as exc:
+                observations.setdefault("cleanup_errors", []).append(f"{type(exc).__name__}: {exc}")
+            isolation_removed = not isolation.exists()
+        else:
+            observations["cleanup"]["isolation_retained"] = str(isolation)
+            observations["cleanup"]["isolation_retention_reason"] = "authoritative source retention is incomplete"
+        observations["scratch_removed"] = isolation_removed
+        if not observations["scratch_removed"]:
+            observations.setdefault("cleanup_errors", []).append("scratch isolation directory remains")
+        observations["cleanup"]["scratch_removed"] = observations["scratch_removed"]
+        cleanup_errors = observations.get("cleanup_errors") if isinstance(observations.get("cleanup_errors"), list) else []
+        observations["cleanup"]["cleanup_errors"] = list(cleanup_errors)
+        observations["cleanup"]["status"] = (
+            "pass"
+            if observations["cleanup"].get("status") == "pass"
+            and observations["cleanup"].get("canary_session_hidden") is True
+            and shipper_stop_ok
+            and observations["cleanup"].get("source_retention_verified") is True
+            and observations["scratch_removed"] is True
+            and not cleanup_errors
+            else "fail"
+        )
+        if failure is None and observations["cleanup"]["status"] != "pass":
+            failure = RuntimeError("Pi Helm cleanup did not prove source retention, shipper stop, and scratch removal")
+            observations["error"] = str(failure)
         if failure is not None:
             _write_json(
                 root / "failure-envelope.json",
@@ -2050,28 +2104,6 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                     source_secrets,
                 ),
             )
-        try:
-            shutil.rmtree(isolation)
-        except OSError as exc:
-            observations.setdefault("cleanup_errors", []).append(f"{type(exc).__name__}: {exc}")
-        observations["scratch_removed"] = not isolation.exists()
-        if not observations["scratch_removed"]:
-            observations.setdefault("cleanup_errors", []).append("scratch isolation directory remains")
-        observations["cleanup"]["scratch_removed"] = observations["scratch_removed"]
-        cleanup_errors = observations.get("cleanup_errors") if isinstance(observations.get("cleanup_errors"), list) else []
-        observations["cleanup"]["cleanup_errors"] = list(cleanup_errors)
-        observations["cleanup"]["status"] = (
-            "pass"
-            if observations["cleanup"].get("status") == "pass"
-            and observations["cleanup"].get("canary_session_hidden") is True
-            and shipper_stop_ok
-            and observations["scratch_removed"] is True
-            and not cleanup_errors
-            else "fail"
-        )
-        if failure is None and observations["cleanup"]["status"] != "pass":
-            failure = RuntimeError("Pi Helm cleanup did not prove shipper stop and scratch removal")
-            observations["error"] = str(failure)
         _write_json(root / "cleanup-receipt.json", observations["cleanup"])
     source_secrets = [value for name, value in env.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
     observations = _redact_value(observations, source_secrets)

@@ -2052,6 +2052,8 @@ mod tests {
         assert!(!EXTENSION_ASSET.contains("event, ...session(ctx)"));
         assert!(EXTENSION_ASSET.contains("tool_execution_update"));
         assert!(EXTENSION_ASSET.contains("message_start"));
+        assert!(EXTENSION_ASSET.contains("message_update"));
+        assert!(EXTENSION_ASSET.contains("assistantMessageEvent"));
         assert!(EXTENSION_ASSET.contains("message_end"));
         assert!(EXTENSION_ASSET.contains("isTerminal"));
         assert!(EXTENSION_ASSET.contains("MALFORMED_BOOLEAN_MARKER"));

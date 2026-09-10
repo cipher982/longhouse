@@ -1242,7 +1242,11 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("OMP Helm qualification requires explicit LONGHOUSE_OMP_LIVE opt-in")
     if not args.api_url or not args.agents_token:
         raise RuntimeError("OMP Helm qualification requires Runtime Host URL and token")
-    isolation = root / "isolation"
+    # Keep a failed isolation quarantine outside the sealed evidence tree. It
+    # may contain the disposable machine token until owned processes are dead;
+    # the evidence scanner must never have to choose between preserving it and
+    # accepting a secret-bearing artifact.
+    isolation = root.parent / f"{root.name}-isolation"
     provider_home = isolation / "home"
     longhouse_home = provider_home / ".longhouse"
     workspace = isolation / "workspace"

@@ -12,6 +12,7 @@ from zerg.qa.pi_helm_lifecycle import _cleanup_receipt
 from zerg.qa.pi_helm_lifecycle import _write_scenario_receipts
 from zerg.qa.pi_helm_lifecycle import _native_snapshot
 from zerg.qa.pi_helm_lifecycle import _redact_value
+from zerg.qa.pi_helm_lifecycle import _retain_source
 from zerg.qa.pi_helm_lifecycle import _state_identity
 from zerg.qa.pi_helm_lifecycle import pi_helm_lifecycle_assertions
 from zerg.qa.pi_native import pi_native_model_evidence
@@ -26,6 +27,18 @@ def test_helm_retained_evidence_excludes_live_channel_authority() -> None:
     assert secret not in json.dumps(retained)
     assert "channel_token" not in retained["owner"]
     assert "auth_token" not in retained["frame"]
+
+def test_helm_authoritative_retention_does_not_truncate_large_source(tmp_path) -> None:
+    source = tmp_path / "native.jsonl"
+    source.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
+
+    retained = _retain_source(tmp_path / "evidence", source, "native.raw", [], require_complete=True)
+
+    assert retained["retained"] is True
+    assert retained["complete"] is True
+    assert retained["truncated"] is False
+    assert retained["size_exceeds_evidence_bound"] is True
+    assert (tmp_path / "evidence" / "source-artifacts" / "native.raw").stat().st_size == source.stat().st_size
 
 
 def test_helm_auth_failure_is_not_hidden_as_a_convergence_timeout(monkeypatch) -> None:

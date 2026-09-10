@@ -317,6 +317,7 @@ export default function (pi: any) {
   pi.on("tool_execution_end", async (event: Frame, ctx: any) => lifecycle("tool_execution_end", event, ctx));
   pi.on("message_start", async (event: Frame, ctx: any) => lifecycle("message_start", event, ctx));
   pi.on("message_end", async (event: Frame, ctx: any) => lifecycle("message_end", event, ctx));
+  pi.on("message_update", async (event: Frame, ctx: any) => lifecycle("message_update", event, ctx));
   pi.on("agent_end", async (event: Frame, ctx: any) => lifecycle("agent_end", event, ctx));
   pi.on("session_stop", async (event: Frame, ctx: any) => lifecycle("session_stop", event, ctx));
 }
