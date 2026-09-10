@@ -449,52 +449,7 @@ pub fn cmd_shipping_inspect(source_epoch: Option<&str>, json: bool) -> anyhow::R
     )
     .with_context(|| format!("opening SQLite DB: {}", db_path.display()))?;
     conn.busy_timeout(Duration::from_secs(5))?;
-    let mut statement = conn.prepare(
-        "SELECT pending.source_epoch, pending.source_path, pending.range_start,
-                pending.range_end, pending.event_count, pending.raw_bytes,
-                pending.attempt_count, pending.created_at, pending.blocked_at,
-                pending.block_kind, pending.block_detail, pending.wake_at,
-                epoch.provider, epoch.bound_session_id
-         FROM pending_source_envelope AS pending
-         JOIN source_epoch_registry AS epoch
-           ON epoch.source_epoch = pending.source_epoch
-         WHERE (?1 IS NULL OR pending.source_epoch = ?1)
-         ORDER BY pending.blocked_at IS NULL, pending.blocked_at, pending.created_at",
-    )?;
-    let rows = statement.query_map([source_epoch], |row| {
-        let block_kind: Option<String> = row.get(9)?;
-        Ok(serde_json::json!({
-            "source_epoch": row.get::<_, String>(0)?,
-            "source_path": row.get::<_, String>(1)?,
-            "range_start": row.get::<_, i64>(2)?,
-            "range_end": row.get::<_, i64>(3)?,
-            "event_count": row.get::<_, i64>(4)?,
-            "raw_bytes": row.get::<_, i64>(5)?,
-            "attempt_count": row.get::<_, i64>(6)?,
-            "created_at": row.get::<_, String>(7)?,
-            "blocked_at": row.get::<_, Option<String>>(8)?,
-            "block_kind": block_kind,
-            "block_detail": row.get::<_, Option<String>>(10)?,
-            "next_examination_at": row.get::<_, String>(11)?,
-            "provider": row.get::<_, String>(12)?,
-            "bound_session_id": row.get::<_, Option<String>>(13)?,
-        }))
-    })?;
-    let mut sources = Vec::new();
-    for row in rows {
-        let mut value = row?;
-        // Whether anything local is still trying is the one thing a user cannot
-        // read off the raw row, and it decides what they should do next.
-        let kind = value["block_kind"].as_str().map(str::to_string);
-        let reconciling =
-            crate::state::pending_source_envelope::block_kind_is_reconciling(kind.as_deref());
-        value["local_recovery_in_progress"] = serde_json::Value::from(reconciling);
-        // The local file is the actual evidence; the envelope is one queued
-        // attempt to upload it. Say so, because "discard" reads as data loss.
-        let path = value["source_path"].as_str().unwrap_or_default();
-        value["source_file_present"] = serde_json::Value::from(Path::new(path).exists());
-        sources.push(value);
-    }
+    let sources = load_shipping_sources(&conn, source_epoch)?;
 
     if json {
         println!(
@@ -515,27 +470,303 @@ pub fn cmd_shipping_inspect(source_epoch: Option<&str>, json: bool) -> anyhow::R
         return Ok(());
     }
     for source in &sources {
-        let epoch = source["source_epoch"].as_str().unwrap_or("?");
-        println!("Source epoch {epoch}");
-        println!(
-            "  provider     {}",
-            source["provider"].as_str().unwrap_or("?")
+        print_shipping_source_evidence(source);
+    }
+    Ok(())
+}
+
+/// The opaque-source-id prefix Cursor conversations carry. The SQL above
+/// matches its shape rather than this constant.
+const CURSOR_OPAQUE_SOURCE_PREFIX: &str = "cursor-store-v1:";
+
+fn load_shipping_sources(
+    conn: &Connection,
+    source_epoch: Option<&str>,
+) -> anyhow::Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        "SELECT epoch.source_epoch, epoch.provider, epoch.opaque_source_id,
+                epoch.bound_session_id,
+                pending.source_path, pending.range_start, pending.range_end,
+                pending.event_count, pending.raw_bytes, pending.attempt_count,
+                pending.created_at, pending.blocked_at, pending.block_kind,
+                pending.block_detail, pending.wake_at,
+                lane.last_position, lane.updated_at,
+                root.root_blob_id, root.message_blob_ids_json, root.updated_at,
+                capture.last_blob_id, capture.updated_at,
+                (SELECT COUNT(*) FROM pending_source_envelope_supersession AS supersession
+                 WHERE supersession.source_epoch = epoch.source_epoch),
+                (SELECT binding.path
+                 FROM session_binding AS binding
+                 WHERE binding.provider = epoch.provider
+                   AND binding.provider_session_id IS NOT NULL
+                   AND binding.provider_session_id = COALESCE(
+                         NULLIF(epoch.provider_session_id, ''),
+                         CASE WHEN epoch.opaque_source_id LIKE 'cursor-store-v1:%'
+                              THEN substr(epoch.opaque_source_id, instr(epoch.opaque_source_id, ':') + 1)
+                              ELSE epoch.opaque_source_id END)
+                 ORDER BY binding.updated_at DESC
+                 LIMIT 1),
+                epoch.provider_session_id, epoch.ended_at, epoch.end_reason
+         FROM source_epoch_registry AS epoch
+         LEFT JOIN pending_source_envelope AS pending
+           ON pending.source_epoch = epoch.source_epoch
+         LEFT JOIN source_epoch_lane_state AS lane
+           ON lane.source_epoch = epoch.source_epoch AND lane.lane = 'durable'
+         LEFT JOIN cursor_store_root_state AS root
+           ON root.conversation_uuid =
+              CASE WHEN epoch.opaque_source_id LIKE 'cursor-store-v1:%'
+                   THEN substr(epoch.opaque_source_id, instr(epoch.opaque_source_id, ':') + 1)
+                   ELSE epoch.opaque_source_id END
+         LEFT JOIN cursor_store_capture_cursor AS capture
+           ON capture.source_epoch = epoch.source_epoch
+         -- Unscoped: active epochs only. A registry keeps every epoch it has
+         -- ever rotated through, which is history, not a queue; naming one
+         -- explicitly still reaches it.
+         WHERE (?1 IS NULL OR epoch.source_epoch = ?1)
+           AND (?1 IS NOT NULL OR epoch.ended_at IS NULL)
+         ORDER BY epoch.provider, epoch.opaque_source_id, epoch.created_at",
+    )?;
+    let rows = statement.query_map([source_epoch], |row| {
+        let provider: String = row.get(1)?;
+        let opaque_source_id: String = row.get(2)?;
+        let pending_path: Option<String> = row.get(4)?;
+        let binding_path: Option<String> = row.get(23)?;
+        let block_kind: Option<String> = row.get(12)?;
+        let provider_session_id: Option<String> = row.get(24)?;
+        let source_path = shipping_source_path(
+            &provider,
+            &opaque_source_id,
+            provider_session_id.as_deref(),
+            pending_path.as_deref(),
+            binding_path.as_deref(),
         );
-        println!(
-            "  file         {}",
-            source["source_path"].as_str().unwrap_or("?")
+        let source_file = source_path
+            .as_deref()
+            .and_then(|path| fs::metadata(path).ok())
+            .map(|metadata| {
+                let mtime = metadata
+                    .modified()
+                    .ok()
+                    .map(chrono::DateTime::<chrono::Utc>::from)
+                    .map(|value| value.to_rfc3339());
+                serde_json::json!({
+                    "present": true,
+                    "size": metadata.len(),
+                    "mtime": mtime,
+                })
+            })
+            .unwrap_or_else(|| serde_json::json!({
+                "present": false,
+                "size": Value::Null,
+                "mtime": Value::Null,
+            }));
+        let capture_updated_at: Option<String> = row.get(21)?;
+        let shipping_updated_at: Option<String> = row.get(16)?;
+        let root_order_relation = recorded_root_order_relation(
+            row.get::<_, Option<String>>(18)?.as_deref(),
         );
+        let pending = pending_path.as_ref().map(|path| {
+            serde_json::json!({
+                "source_epoch": row.get::<_, String>(0).unwrap_or_default(),
+                "source_path": path,
+                "range_start": row.get::<_, Option<i64>>(5).unwrap_or(None),
+                "range_end": row.get::<_, Option<i64>>(6).unwrap_or(None),
+                "event_count": row.get::<_, Option<i64>>(7).unwrap_or(None),
+                "raw_bytes": row.get::<_, Option<i64>>(8).unwrap_or(None),
+                "attempt_count": row.get::<_, Option<i64>>(9).unwrap_or(None),
+                "created_at": row.get::<_, Option<String>>(10).unwrap_or(None),
+                "blocked_at": row.get::<_, Option<String>>(11).unwrap_or(None),
+                "block_kind": block_kind.clone(),
+                "block_detail": row.get::<_, Option<String>>(13).unwrap_or(None),
+                "next_examination_at": row.get::<_, Option<String>>(14).unwrap_or(None),
+            })
+        });
+        let reconciling =
+            crate::state::pending_source_envelope::block_kind_is_reconciling(block_kind.as_deref());
+        let capture_position = row.get::<_, Option<String>>(20)?;
+        let shipping_position = row.get::<_, Option<i64>>(15)?;
+        Ok(serde_json::json!({
+            "source_epoch": row.get::<_, String>(0)?,
+            "provider": provider,
+            "opaque_source_id": opaque_source_id,
+            "bound_session_id": row.get::<_, Option<String>>(3)?,
+            "source_path": source_path,
+            "source_file_present": source_file["present"],
+            "source_file_size": source_file["size"],
+            "source_file_mtime": source_file["mtime"],
+            "root_blob_id": row.get::<_, Option<String>>(17)?,
+            "root_ordering": root_order_relation,
+            "root_updated_at": row.get::<_, Option<String>>(19)?,
+            "capture_position": capture_position,
+            "capture_position_updated_at": capture_updated_at.clone(),
+            "capture_position_age_seconds": shipping_age_seconds(capture_updated_at.as_deref()),
+            "shipping_last_position": shipping_position,
+            "shipping_position_updated_at": shipping_updated_at.clone(),
+            "shipping_position_age_seconds": shipping_age_seconds(shipping_updated_at.as_deref()),
+            "supersession_count": row.get::<_, i64>(22)?,
+            "pending": pending,
+            "range_start": row.get::<_, Option<i64>>(5)?,
+            "range_end": row.get::<_, Option<i64>>(6)?,
+            "event_count": row.get::<_, Option<i64>>(7)?,
+            "raw_bytes": row.get::<_, Option<i64>>(8)?,
+            "attempt_count": row.get::<_, Option<i64>>(9)?,
+            "created_at": row.get::<_, Option<String>>(10)?,
+            "blocked_at": row.get::<_, Option<String>>(11)?,
+            "block_kind": block_kind,
+            "block_detail": row.get::<_, Option<String>>(13)?,
+            "next_examination_at": row.get::<_, Option<String>>(14)?,
+            "local_recovery_in_progress": reconciling,
+            "provider_session_id": provider_session_id,
+            "ended_at": row.get::<_, Option<String>>(25)?,
+            "end_reason": row.get::<_, Option<String>>(26)?,
+        }))
+    })?;
+    let sources: Vec<Value> = rows.collect::<rusqlite::Result<_>>()?;
+    Ok(sources)
+}
+fn shipping_source_path(
+    provider: &str,
+    opaque_source_id: &str,
+    provider_session_id: Option<&str>,
+    pending_path: Option<&str>,
+    binding_path: Option<&str>,
+) -> Option<String> {
+    if let Some(path) = pending_path {
+        return Some(path.to_string());
+    }
+    if let Some(path) = binding_path {
+        return Some(path.to_string());
+    }
+    if provider.eq_ignore_ascii_case("cursor") {
+        let conversation = provider_session_id
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                opaque_source_id
+                    .strip_prefix(CURSOR_OPAQUE_SOURCE_PREFIX)
+                    .map(str::to_string)
+            });
+        if let Some(conversation) = conversation {
+            return crate::cursor_visibility::configured_cursor_store(&conversation)
+                .map(|path| path.display().to_string());
+        }
+    }
+    // A file source's opaque id is `path-sha256:…`, which is not reversible, so
+    // a source with neither a pending envelope nor a session binding has no path
+    // to report. Say nothing rather than inventing one; only an opaque id that
+    // is actually a path is treated as one.
+    let path = Path::new(opaque_source_id);
+    (path.is_absolute() || path.exists()).then(|| opaque_source_id.to_string())
+}
+
+fn truncate_shipping_identifier(value: &str) -> String {
+    const MAX_CHARS: usize = 96;
+    let mut chars = value.chars();
+    let prefix: String = chars.by_ref().take(MAX_CHARS - 1).collect();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        value.to_string()
+    }
+}
+
+fn recorded_root_order_relation(raw_ids: Option<&str>) -> &'static str {
+    match raw_ids {
+        Some(raw)
+            if serde_json::from_str::<Value>(raw)
+                .ok()
+                .is_some_and(|value| value.is_array()) =>
+        {
+            "recorded"
+        }
+        Some(_) => "inconclusive",
+        None => "not_recorded",
+    }
+}
+
+fn shipping_age_seconds(updated_at: Option<&str>) -> Option<u64> {
+    let updated_at = updated_at?.parse::<chrono::DateTime<chrono::Utc>>().ok()?;
+    Some(
+        chrono::Utc::now()
+            .signed_duration_since(updated_at)
+            .num_seconds()
+            .max(0) as u64,
+    )
+}
+
+fn print_shipping_source_evidence(source: &Value) {
+    let epoch = source["source_epoch"].as_str().unwrap_or("?");
+    println!("Source epoch {epoch}");
+    println!("  provider     {}", source["provider"].as_str().unwrap_or("?"));
+    println!(
+        "  source id    {}",
+        source["opaque_source_id"]
+            .as_str()
+            .map(truncate_shipping_identifier)
+            .unwrap_or_else(|| "?".to_string())
+    );
+    println!(
+        "  bound session {}",
+        source["bound_session_id"].as_str().unwrap_or("none")
+    );
+    if let Some(ended_at) = source["ended_at"].as_str() {
+        println!(
+            "  lifecycle    ended {ended_at} ({})",
+            source["end_reason"].as_str().unwrap_or("unknown reason")
+        );
+    }
+    println!("  file         {}", source["source_path"].as_str().unwrap_or("?"));
+    println!(
+        "  file present {}",
+        if source["source_file_present"].as_bool() == Some(true) {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "  file stat    {} bytes, mtime {}",
+        source["source_file_size"],
+        source["source_file_mtime"].as_str().unwrap_or("unknown")
+    );
+    println!(
+        "  capture root {} ({}, updated {})",
+        source["root_blob_id"].as_str().unwrap_or("none"),
+        source["root_ordering"].as_str().unwrap_or("unknown"),
+        source["root_updated_at"].as_str().unwrap_or("unknown")
+    );
+    println!(
+        "  capture     {} (updated {}, age {}s)",
+        source["capture_position"].as_str().unwrap_or("none"),
+        source["capture_position_updated_at"]
+            .as_str()
+            .unwrap_or("unknown"),
+        source["capture_position_age_seconds"]
+            .as_u64()
+            .map(|age| age.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    println!(
+        "  shipping    position {} (updated {}, age {}s)",
+        source["shipping_last_position"],
+        source["shipping_position_updated_at"]
+            .as_str()
+            .unwrap_or("unknown"),
+        source["shipping_position_age_seconds"]
+            .as_u64()
+            .map(|age| age.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    println!("  superseded   {} envelope(s)", source["supersession_count"]);
+    if source["pending"].is_null() {
+        println!("  pending      none");
+    } else {
         println!(
             "  retained     {} events, {} bytes, range {}..{}",
-            source["event_count"], source["raw_bytes"], source["range_start"], source["range_end"]
-        );
-        println!(
-            "  file present {}",
-            if source["source_file_present"].as_bool() == Some(true) {
-                "yes — the transcript itself is on disk"
-            } else {
-                "NO — this envelope is the only copy"
-            }
+            source["event_count"],
+            source["raw_bytes"],
+            source["range_start"],
+            source["range_end"]
         );
         match source["blocked_at"].as_str() {
             Some(blocked_at) => {
@@ -565,9 +796,8 @@ pub fn cmd_shipping_inspect(source_epoch: Option<&str>, json: bool) -> anyhow::R
             }
             None => println!("  status       queued, not blocked"),
         }
-        println!();
     }
-    Ok(())
+    println!();
 }
 
 /// Drop a blocked source's retained envelope.
@@ -4396,6 +4626,164 @@ mod tests {
             // Inspect should succeed read-only without errors
             cmd_shipping_inspect(Some(&epoch.to_string()), true).unwrap();
         });
+    }
+
+    #[test]
+    fn shipping_inspect_lists_frozen_and_healthy_sources_without_pending_envelopes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("longhouse-shipper.db");
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let frozen_epoch = uuid::Uuid::new_v4();
+        let healthy_epoch = uuid::Uuid::new_v4();
+        let hashed_epoch = uuid::Uuid::new_v4();
+        let ended_epoch = uuid::Uuid::new_v4();
+        let frozen_conversation = uuid::Uuid::new_v4().to_string();
+        let healthy_conversation = uuid::Uuid::new_v4().to_string();
+        let frozen_store = dir.path().join("frozen.store.db");
+        let healthy_store = dir.path().join("healthy.store.db");
+        std::fs::write(&frozen_store, b"newer source bytes").unwrap();
+        std::fs::write(&healthy_store, b"healthy source bytes").unwrap();
+        let frozen_updated = (chrono::Utc::now() - chrono::Duration::hours(5)).to_rfc3339();
+        let healthy_updated = chrono::Utc::now().to_rfc3339();
+
+        // Cursor sources carry a conversation in the opaque id and record the
+        // provider's own identity beside it; the path is only reachable through
+        // the session binding, which is what a source with no pending envelope
+        // has to fall back on.
+        for (epoch, conversation, store, updated, position, blob) in [
+            (
+                frozen_epoch,
+                frozen_conversation.as_str(),
+                &frozen_store,
+                frozen_updated.as_str(),
+                12_i64,
+                "frozen-blob",
+            ),
+            (
+                healthy_epoch,
+                healthy_conversation.as_str(),
+                &healthy_store,
+                healthy_updated.as_str(),
+                24_i64,
+                "healthy-blob",
+            ),
+        ] {
+            let epoch = epoch.to_string();
+            let store_path = store.to_string_lossy().to_string();
+            conn.execute(
+                "INSERT INTO source_epoch_registry (
+                    source_epoch, provider, opaque_source_id, file_incarnation,
+                    start_reason, max_observed_len, bound_session_id,
+                    provider_session_id, created_at, updated_at
+                 ) VALUES (?1, 'cursor', ?2, 'fixture', 'initial', 100, ?3, ?4, ?5, ?5)",
+                params![
+                    epoch,
+                    format!("cursor-store-v1:{conversation}"),
+                    format!("session-{conversation}"),
+                    conversation,
+                    updated
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO session_binding (path, session_id, provider, updated_at, provider_session_id)
+                 VALUES (?1, ?2, 'cursor', ?3, ?4)",
+                params![store_path, format!("session-{conversation}"), updated, conversation],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO source_epoch_lane_state (
+                    source_epoch, lane, last_position, updated_at
+                 ) VALUES (?1, 'durable', ?2, ?3)",
+                params![epoch, position, updated],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO cursor_store_root_state (
+                    conversation_uuid, root_blob_id, message_blob_ids_json, updated_at
+                 ) VALUES (?1, ?2, '[\"message-1\"]', ?3)",
+                params![conversation, blob, updated],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO cursor_store_capture_cursor (
+                    source_epoch, last_blob_id, updated_at
+                 ) VALUES (?1, ?2, ?3)",
+                params![epoch, blob, updated],
+            )
+            .unwrap();
+        }
+
+        // A file source keeps only a hash of its path, so with nothing pending
+        // and no binding there is no path to report — and saying so is the
+        // point, because the old output simply omitted the source.
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                source_epoch, provider, opaque_source_id, file_incarnation,
+                start_reason, max_observed_len, created_at, updated_at
+             ) VALUES (?1, 'claude', 'path-sha256:deadbeef', 'fixture', 'initial', 10, ?2, ?2)",
+            params![hashed_epoch.to_string(), healthy_updated.as_str()],
+        )
+        .unwrap();
+
+        // An epoch that has already ended is history. An unscoped listing is for
+        // finding live sources, so it must not drown in every epoch the registry
+        // has ever rotated through.
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                source_epoch, provider, opaque_source_id, file_incarnation,
+                start_reason, max_observed_len, created_at, updated_at,
+                ended_at, end_reason
+             ) VALUES (?1, 'claude', 'path-sha256:feedface', 'fixture', 'initial', 10, ?2, ?2, ?2, 'replaced')",
+            params![ended_epoch.to_string(), healthy_updated.as_str()],
+        )
+        .unwrap();
+
+        let sources = load_shipping_sources(&conn, None).unwrap();
+        assert_eq!(sources.len(), 3, "ended epochs are not part of the live view");
+        let frozen = sources
+            .iter()
+            .find(|source| source["capture_position"] == "frozen-blob")
+            .unwrap();
+        let healthy = sources
+            .iter()
+            .find(|source| source["capture_position"] == "healthy-blob")
+            .unwrap();
+        assert!(frozen["pending"].is_null());
+        assert_eq!(frozen["source_file_present"], true);
+        assert_eq!(frozen["root_ordering"], "recorded");
+        assert_eq!(
+            frozen["source_path"].as_str(),
+            Some(frozen_store.to_string_lossy().as_ref()),
+            "a no-pending source resolves its path through the provider session binding"
+        );
+        assert!(
+            frozen["capture_position_age_seconds"]
+                .as_u64()
+                .unwrap()
+                > healthy["capture_position_age_seconds"].as_u64().unwrap()
+        );
+        assert!(
+            frozen["shipping_position_age_seconds"]
+                .as_u64()
+                .unwrap()
+                > healthy["shipping_position_age_seconds"].as_u64().unwrap()
+        );
+
+        let hashed = sources
+            .iter()
+            .find(|source| source["source_epoch"] == hashed_epoch.to_string())
+            .unwrap();
+        assert!(
+            hashed["source_path"].is_null(),
+            "a hashed opaque id is not a path and must not be reported as one"
+        );
+        assert_eq!(hashed["source_file_present"], false);
+
+        // Naming an ended epoch explicitly still reaches it.
+        let ended = load_shipping_sources(&conn, Some(&ended_epoch.to_string())).unwrap();
+        assert_eq!(ended.len(), 1);
+        assert!(ended[0]["ended_at"].is_string());
     }
 
     #[test]

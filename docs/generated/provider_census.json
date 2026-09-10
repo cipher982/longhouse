@@ -137,7 +137,8 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {
