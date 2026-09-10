@@ -509,7 +509,7 @@ def test_served_projector_describes_expired_activity_without_claiming_it_is_curr
     assert served.activity.valid_until == NOW + timedelta(seconds=1)
     assert served.presentation.primary is not None
     assert served.presentation.primary.key == "no_recent_activity"
-    assert served.presentation.primary.label == "No recent activity (last: running a tool)"
+    assert served.presentation.primary.label == "Last observed running a tool"
     assert served.presentation.primary.observed_at == NOW
 
 

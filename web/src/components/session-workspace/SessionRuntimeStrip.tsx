@@ -151,6 +151,29 @@ export function advanceProviderEvidenceTransition(
   };
 }
 
+/**
+ * A stale activity observation is served as what was last seen ("Last observed
+ * idle"), never as a current state. Its age is the reader's actual question, so
+ * it belongs on the headline rather than inside the evidence disclosure.
+ */
+export function withObservationAge(
+  headline: string,
+  primary: { key?: string | null; observed_at?: string | null } | null | undefined,
+  nowMs: number,
+): string {
+  if (primary?.key !== "no_recent_activity" || !primary.observed_at)
+    return headline;
+  const observedMs = Date.parse(primary.observed_at);
+  if (Number.isNaN(observedMs)) return headline;
+  const seconds = Math.floor((nowMs - observedMs) / 1_000);
+  if (seconds < 0) return headline;
+  if (seconds < 60) return `${headline} \u00B7 just now`;
+  if (seconds < 3_600) return `${headline} \u00B7 ${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86_400)
+    return `${headline} \u00B7 ${Math.floor(seconds / 3_600)}h ago`;
+  return `${headline} \u00B7 ${Math.floor(seconds / 86_400)}d ago`;
+}
+
 /** Build Ledger copy strictly from canonical facts plus the viewer's stream evidence. */
 export function buildSessionLedgerState(
   session: AgentSession,
@@ -208,8 +231,12 @@ export function buildSessionLedgerState(
     : tone === "unknown"
       ? "Activity uncertain"
       : interaction.isManagedLocalSession
-        ? display.headline
-        : getRuntimeOutcomeLabel(runtime);
+        ? withObservationAge(display.headline, facts.presentation.primary, nowMs)
+        : withObservationAge(
+            getRuntimeOutcomeLabel(runtime),
+            facts.presentation.primary,
+            nowMs,
+          );
   const detail = pending
     ? "A response is required before another message."
     : tone === "unknown"

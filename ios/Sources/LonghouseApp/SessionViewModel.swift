@@ -227,7 +227,7 @@ final class SessionViewModel: ObservableObject {
             // Scene activation can race the route task. The first opener
             // already owns cache/tail work; joining it here would read disk
             // again and wait on a second reload before the UI can settle.
-            if enableRealtime {
+            if enableRealtime, hasLoadedTranscript {
                 if streamTask == nil {
                     startStream(sessionId: sessionId, appState: appState)
                 }
@@ -260,6 +260,7 @@ final class SessionViewModel: ObservableObject {
             detailWasLoadedFromPrimary = false
 
             items = []
+            activity.reset()
             transcriptRowsReconciled = false
             subagents = []
             transcriptRowsPublishedPreview = nil

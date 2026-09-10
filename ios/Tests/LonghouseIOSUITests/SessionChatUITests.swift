@@ -9,6 +9,7 @@ final class SessionChatUITests: XCTestCase {
     private enum LaunchEnvironment {
         static let chatFixture = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
+        static let mobileDetailDelayMs = "LONGHOUSE_UI_TEST_MOBILE_DETAIL_DELAY_MS"
     }
 
     private enum LaunchArgument {
@@ -70,7 +71,8 @@ final class SessionChatUITests: XCTestCase {
             name: "basic",
             eventCount: 9,
             appearance: .dark,
-            tailDelayMs: 30000
+            tailDelayMs: 30000,
+            detailDelayMs: 30000
         )
 
         let primaryChrome = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
@@ -91,7 +93,8 @@ final class SessionChatUITests: XCTestCase {
             name: "loading-long-title",
             eventCount: 9,
             appearance: .dark,
-            tailDelayMs: 30000
+            tailDelayMs: 30000,
+            detailDelayMs: 30000
         )
 
         let title = app.descendants(matching: .any)["session-navigation-title"]
@@ -294,13 +297,17 @@ final class SessionChatUITests: XCTestCase {
         name: String = "basic",
         eventCount: Int,
         appearance: Appearance = .light,
-        tailDelayMs: Int? = nil
+        tailDelayMs: Int? = nil,
+        detailDelayMs: Int? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.chatFixture] = name
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
         if let tailDelayMs {
             app.launchEnvironment["LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"] = String(tailDelayMs)
+        }
+        if let detailDelayMs {
+            app.launchEnvironment[LaunchEnvironment.mobileDetailDelayMs] = String(detailDelayMs)
         }
         app.launchArguments += [LaunchArgument.appearanceOverride, appearance.rawValue]
         app.launch()

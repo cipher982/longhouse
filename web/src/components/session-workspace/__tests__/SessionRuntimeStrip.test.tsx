@@ -6,6 +6,7 @@ import {
   advanceProviderEvidenceTransition,
   buildSessionLedgerState,
   providerEvidenceIdentity,
+  withObservationAge,
 } from "../SessionRuntimeStrip";
 
 type Transition = Parameters<typeof advanceProviderEvidenceTransition>[1];
@@ -243,5 +244,55 @@ describe("SessionRuntimeStrip provider recovery notices", () => {
     );
     expect(switched.noticeAction).toBe("clear");
     expect(switched.notice).toBeNull();
+  });
+});
+
+describe("withObservationAge", () => {
+  const nowMs = Date.parse("2026-09-10T00:00:00.000Z");
+  const stale = (observedAt: string | null) => ({
+    key: "no_recent_activity",
+    observed_at: observedAt,
+  });
+
+  it("puts the age of a stale observation on the headline", () => {
+    expect(
+      withObservationAge(
+        "Last observed idle",
+        stale("2026-09-09T21:00:00.000Z"),
+        nowMs,
+      ),
+    ).toBe("Last observed idle \u00B7 3h ago");
+  });
+
+  it("uses minutes and days at the right scales", () => {
+    expect(
+      withObservationAge("Last observed idle", stale("2026-09-09T23:48:00.000Z"), nowMs),
+    ).toBe("Last observed idle \u00B7 12m ago");
+    expect(
+      withObservationAge("Last observed idle", stale("2026-09-07T00:00:00.000Z"), nowMs),
+    ).toBe("Last observed idle \u00B7 3d ago");
+    expect(
+      withObservationAge("Last observed idle", stale("2026-09-09T23:59:40.000Z"), nowMs),
+    ).toBe("Last observed idle \u00B7 just now");
+  });
+
+  it("leaves every other headline alone", () => {
+    expect(
+      withObservationAge("Using Bash", { key: "executing", observed_at: "2026-09-09T21:00:00.000Z" }, nowMs),
+    ).toBe("Using Bash");
+    expect(withObservationAge("Idle", null, nowMs)).toBe("Idle");
+  });
+
+  it("does not invent an age it cannot compute", () => {
+    expect(withObservationAge("Last observed idle", stale(null), nowMs)).toBe(
+      "Last observed idle",
+    );
+    expect(withObservationAge("Last observed idle", stale("not a date"), nowMs)).toBe(
+      "Last observed idle",
+    );
+    // A clock skewed into the future is not a negative age.
+    expect(
+      withObservationAge("Last observed idle", stale("2026-09-10T00:05:00.000Z"), nowMs),
+    ).toBe("Last observed idle");
   });
 });

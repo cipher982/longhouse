@@ -2424,7 +2424,7 @@ struct LonghouseMenuBarCoreTests {
               "presentation": {
                 "primary": {
                   "key": "no_recent_activity",
-                  "label": "No recent activity (last: 2h ago)",
+                  "label": "Last observed idle",
                   "tone": "quiet"
                 }
               }

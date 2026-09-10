@@ -3555,13 +3555,21 @@ fn extract_events(
     }
 }
 
-const CURSOR_INJECTION_TAGS: [(&str, &str); 6] = [
+/// Envelopes Cursor writes into a `role="user"` record that the human never
+/// typed. Each entry is an observed Cursor harness root, not a guess: an
+/// unknown `<tag>`-rooted prompt is still a prompt, because people paste XML
+/// and quote harness examples.
+const CURSOR_INJECTION_TAGS: [(&str, &str); 10] = [
     ("<user_info>", "</user_info>"),
     ("<agent_transcripts>", "</agent_transcripts>"),
     ("<rules>", "</rules>"),
     ("<system_reminder>", "</system_reminder>"),
     ("<attached_files>", "</attached_files>"),
     ("<system_notification>", "</system_notification>"),
+    ("<available_subagent_types>", "</available_subagent_types>"),
+    ("<available_subagent_models>", "</available_subagent_models>"),
+    ("<dynamic_tool_catalog>", "</dynamic_tool_catalog>"),
+    ("<dynamic_tool_namespaces>", "</dynamic_tool_namespaces>"),
 ];
 
 fn cursor_query_is_inside_injection(text: &str, query_start: usize) -> bool {
@@ -5755,6 +5763,27 @@ mod tests {
             result.metadata.session_id,
             "019c638d-0000-0000-0000-000000000099"
         );
+    }
+
+    /// Cursor's subagent catalogue is a harness preamble written into a
+    /// `role="user"` record. Without the marker it read as a 4.5 KB message
+    /// David typed. A prompt that merely mentions the tag is still a prompt.
+    #[test]
+    fn test_cursor_subagent_catalogue_is_injected_context_not_a_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "cursor-subagents.jsonl",
+            &[
+                r#"{"role":"user","timestamp":"2026-09-09T18:00:00Z","message":{"content":[{"type":"text","text":"<available_subagent_types>\n- explore: Fast agent for codebases.\n</available_subagent_types>\n<dynamic_tool_catalog>\n<dynamic_tool_namespaces>\n</dynamic_tool_namespaces>\n</dynamic_tool_catalog>"}]}}"#,
+                r#"{"role":"user","timestamp":"2026-09-09T18:00:01Z","message":{"content":[{"type":"text","text":"What does <available_subagent_types> mean in Cursor?"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+        assert_eq!(result.events[0].role, Role::System);
+        assert_eq!(result.events[1].role, Role::User);
     }
 
     #[test]

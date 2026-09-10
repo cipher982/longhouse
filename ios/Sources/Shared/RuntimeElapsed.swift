@@ -27,4 +27,14 @@ enum RuntimeElapsed {
     static func label(from start: Date, to end: Date, precise: Bool) -> String {
         label(seconds: end.timeIntervalSince(start), precise: precise)
     }
+
+    /// How long ago an observation was made. Returns nil rather than inventing
+    /// an age when the observation is stamped in the future, which a skewed
+    /// clock can do.
+    static func ageLabel(from observed: Date, to now: Date) -> String? {
+        let seconds = now.timeIntervalSince(observed)
+        guard seconds >= 0 else { return nil }
+        if seconds < 60 { return "just now" }
+        return "\(label(seconds: seconds, precise: false)) ago"
+    }
 }

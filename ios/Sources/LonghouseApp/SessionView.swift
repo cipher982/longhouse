@@ -72,10 +72,10 @@ struct SessionView: View {
             bottomChrome
                 .frame(maxWidth: .infinity)
         }
-        // The principal toolbar item is the only title surface. An empty
-        // navigation title avoids UIKit briefly laying out a second, fully
-        // sized title during a NavigationStack push.
-        .navigationTitle("")
+        // The principal toolbar item owns the visible title surface. Keep a
+        // stable fallback navigation title for the Back label; never bind the
+        // navigation title to detail so it cannot resize during the push.
+        .navigationTitle(fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -84,10 +84,9 @@ struct SessionView: View {
                     subtitle: viewModel.detail?.identitySubtitle ?? fallbackSubtitle
                 )
             }
-            // Keep one trailing toolbar item mounted for the entire push
-            // transition. Inserting/removing a toolbar item as detail and the
-            // transcript arrive makes UIKit animate a blurred placeholder
-            // over the destination title.
+            // Keep one trailing toolbar slot mounted for the entire push. The
+            // loading glyph is the bounded placeholder; replacing its content
+            // does not insert a second control over the destination title.
             ToolbarItem(placement: .topBarTrailing) {
                 overflowMenu
             }
@@ -306,9 +305,8 @@ struct SessionView: View {
     }
 
     private var isSessionInteractionReady: Bool {
-        // The compact detail lane owns native session chrome. It can paint the
-        // runtime dock, composer, and menu while the transcript tail/WebKit
-        // render continues independently.
+        // Compact native chrome is owned by the primary detail lane. It may
+        // become available while the transcript tail/WebKit render continues.
         viewModel.detail != nil
     }
 

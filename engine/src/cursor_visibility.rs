@@ -71,13 +71,46 @@ impl CursorProviderTurn {
     }
 }
 
+/// A generation Cursor reported as failed. Kept separately from `turns`
+/// because the failure that matters most arrives without a prompt receipt:
+/// Cursor's own auto-continuations emit `afterAgentThought` and `stop(error)`
+/// and never call `beforeSubmitPrompt`, so anchoring outcomes to prompts threw
+/// the interesting ones away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CursorTurnFailure {
+    pub generation_id: String,
+    pub status: String,
+    pub observed_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CursorVisibilityEvidence {
     pub turns: Vec<CursorProviderTurn>,
+    pub failures: Vec<CursorTurnFailure>,
+    /// Generation of the newest terminal receipt, and whether it failed.
+    /// A failure is worth telling the user about only while nothing has
+    /// superseded it.
+    pub latest_terminal: Option<(String, bool)>,
     pub session_ended: bool,
     pub ambiguous: bool,
     pub first_activity_at: Option<DateTime<Utc>>,
     pub last_activity_at: Option<DateTime<Utc>>,
+}
+
+impl CursorVisibilityEvidence {
+    /// The failure to surface, if the session's most recent turn is the one
+    /// that failed. A later completed turn supersedes it, so the row clears
+    /// itself without anyone tracking acknowledgement.
+    pub(crate) fn unsuperseded_failure(&self) -> Option<&CursorTurnFailure> {
+        let (generation_id, failed) = self.latest_terminal.as_ref()?;
+        failed
+            .then(|| {
+                self.failures
+                    .iter()
+                    .find(|failure| &failure.generation_id == generation_id)
+            })
+            .flatten()
+    }
 }
 
 impl CursorVisibilityEvidence {
@@ -169,7 +202,23 @@ pub(crate) fn has_cursor_prompt_receipt(
     })
 }
 
+/// Whether Cursor has a store for this conversation at all, however many
+/// workspaces hold one. Distinct from `configured_cursor_store`, which needs a
+/// single unambiguous path to wake; here the question is only whether an
+/// authoritative source exists, so ambiguity still answers yes.
+pub(crate) fn cursor_store_exists(conversation_id: &str) -> bool {
+    !cursor_store_candidates(conversation_id).is_empty()
+}
+
 pub(crate) fn configured_cursor_store(conversation_id: &str) -> Option<PathBuf> {
+    let candidates = cursor_store_candidates(conversation_id);
+    let [store] = candidates.as_slice() else {
+        return None;
+    };
+    Some(store.clone())
+}
+
+fn cursor_store_candidates(conversation_id: &str) -> Vec<PathBuf> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     let cursor_home = std::env::var_os("CURSOR_HOME")
         .map(PathBuf::from)
@@ -189,11 +238,9 @@ pub(crate) fn configured_cursor_store(conversation_id: &str) -> Option<PathBuf> 
             .map(|entry| entry.path().join(conversation_id).join("store.db"))
             .filter(|path| path.is_file())
             .collect::<Vec<_>>();
-        let [store] = stores.as_slice() else {
-            return None;
-        };
-        Some(store.clone())
+        (!stores.is_empty()).then_some(stores)
     })
+    .unwrap_or_default()
 }
 
 #[cfg(unix)]
@@ -204,33 +251,43 @@ pub(crate) fn wake_cursor_transcript(
     run_id: Option<&str>,
     transcript_path: Option<&Path>,
 ) {
-    let transcript = transcript_path
+    // store.db is the render authority; Cursor's hook payload points at the
+    // lossy agent-transcripts projection. Waking only the hook's path is how a
+    // turn-completion wake kept refreshing the projection nobody should read
+    // while the store went unrefreshed between scans. Wake the store first,
+    // then the projection so its raw archive stays current too.
+    let store = configured_cursor_store(conversation_id);
+    let projection = transcript_path
         .filter(|path| path.is_file())
         .map(Path::to_path_buf)
-        .or_else(|| configured_cursor_store(conversation_id));
-    let Some(transcript) = transcript else {
+        .filter(|path| store.as_deref() != Some(path.as_path()));
+    let targets: Vec<PathBuf> = [store, projection].into_iter().flatten().collect();
+    if targets.is_empty() {
         return;
-    };
+    }
     let Ok(socket) = crate::config::get_agent_transcript_wake_socket_path() else {
         return;
     };
-    let Ok(mut stream) = UnixStream::connect(socket) else {
-        return;
-    };
-    let _ = stream.set_write_timeout(Some(StdDuration::from_millis(75)));
-    let payload = json!({
-        "provider": "cursor",
-        "path": transcript,
-        "phase": "idle",
-        "session_id": session_id,
-        "run_id": run_id,
-        "turn_id": generation_id,
-        "provider_turn_id": conversation_id,
-        "wake_reason": "turn_completed",
-        "observed_at_ms": Utc::now().timestamp_millis(),
-        "file_len_hint": transcript.metadata().ok().map(|metadata| metadata.len()),
-    });
-    let _ = stream.write_all(payload.to_string().as_bytes());
+    for transcript in targets {
+        // One failed connect must not cost the other target its wake.
+        let Ok(mut stream) = UnixStream::connect(&socket) else {
+            continue;
+        };
+        let _ = stream.set_write_timeout(Some(StdDuration::from_millis(75)));
+        let payload = json!({
+            "provider": "cursor",
+            "path": transcript,
+            "phase": "idle",
+            "session_id": session_id,
+            "run_id": run_id,
+            "turn_id": generation_id,
+            "provider_turn_id": conversation_id,
+            "wake_reason": "turn_completed",
+            "observed_at_ms": Utc::now().timestamp_millis(),
+            "file_len_hint": transcript.metadata().ok().map(|metadata| metadata.len()),
+        });
+        let _ = stream.write_all(payload.to_string().as_bytes());
+    }
 }
 
 pub(crate) fn load_cursor_visibility_evidence(
@@ -293,6 +350,9 @@ pub(crate) fn parse_cursor_visibility_evidence(
     conversation_id: &str,
 ) -> Result<CursorVisibilityEvidence> {
     let mut turns = Vec::<CursorProviderTurn>::new();
+    let mut failures = Vec::<CursorTurnFailure>::new();
+    let mut latest_terminal: Option<(String, bool)> = None;
+    let mut failure_indices = HashMap::<String, usize>::new();
     let mut indices = HashMap::<String, usize>::new();
     let mut session_ended = false;
     let mut ambiguous = false;
@@ -369,6 +429,50 @@ pub(crate) fn parse_cursor_visibility_evidence(
             }
             continue;
         }
+        // Outcome first: a terminal failure is evidence about the session even
+        // when its generation never produced a prompt receipt, and the lookup
+        // below would otherwise drop the whole generation on the floor.
+        // A committed response is itself a successful terminal receipt, so a
+        // turn that answers after a failed one supersedes it even when its own
+        // stop hook is dropped.
+        if event == "afterAgentResponse" {
+            latest_terminal = Some((generation_id.to_string(), false));
+        }
+        if event == "stop" {
+            if let Some(status) = payload
+                .and_then(|payload| payload.get("status"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+            {
+                latest_terminal = Some((
+                    generation_id.to_string(),
+                    matches!(status, "error" | "aborted"),
+                ));
+            }
+            if let Some(status) = payload
+                .and_then(|payload| payload.get("status"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|status| matches!(*status, "error" | "aborted"))
+            {
+                match failure_indices.get(generation_id).copied() {
+                    Some(index) => {
+                        if let Some(existing) = failures.get_mut(index) {
+                            existing.status = status.to_string();
+                            existing.observed_at = observed_at.or(existing.observed_at);
+                        }
+                    }
+                    None => {
+                        failure_indices.insert(generation_id.to_string(), failures.len());
+                        failures.push(CursorTurnFailure {
+                            generation_id: generation_id.to_string(),
+                            status: status.to_string(),
+                            observed_at,
+                        });
+                    }
+                }
+            }
+        }
         let Some(index) = indices.get(generation_id).copied() else {
             continue;
         };
@@ -427,6 +531,8 @@ pub(crate) fn parse_cursor_visibility_evidence(
     }
     Ok(CursorVisibilityEvidence {
         turns,
+        failures,
+        latest_terminal,
         session_ended,
         ambiguous,
         first_activity_at,
@@ -437,6 +543,92 @@ pub(crate) fn parse_cursor_visibility_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The failure that matters most has no prompt receipt: Cursor's own
+    /// auto-continuation runs a generation that emits thoughts and then
+    /// `stop(error)` without ever calling `beforeSubmitPrompt`. Anchoring
+    /// outcomes to prompts dropped exactly those, so the phone showed a
+    /// session that quietly stopped talking while the terminal showed an error.
+    #[test]
+    fn failed_generations_survive_without_a_prompt_receipt() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T20:50:00Z","conversation_id":"conversation","payload":{"generation_id":"human","prompt":"build it"}}
+{"event":"afterAgentResponse","observed_at":"2026-09-09T20:56:50Z","conversation_id":"conversation","payload":{"generation_id":"human","text":"done"}}
+{"event":"stop","observed_at":"2026-09-09T20:56:50Z","conversation_id":"conversation","payload":{"generation_id":"human","status":"completed"}}
+{"event":"afterAgentThought","observed_at":"2026-09-09T20:57:45Z","conversation_id":"conversation","payload":{"generation_id":"continuation","text":"thinking"}}
+{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"continuation","status":"error"}}
+{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"other","payload":{"generation_id":"elsewhere","status":"error"}}"#,
+            "conversation",
+        )
+        .unwrap();
+
+        assert_eq!(evidence.turns.len(), 1);
+        assert_eq!(evidence.failures.len(), 1);
+        let failure = &evidence.failures[0];
+        assert_eq!(failure.generation_id, "continuation");
+        assert_eq!(failure.status, "error");
+        assert_eq!(
+            failure.observed_at.map(|value| value.to_rfc3339()),
+            Some("2026-09-09T20:57:46+00:00".to_string())
+        );
+        // A completed turn is not a failure, and another conversation's
+        // failure is not this session's.
+        assert!(!evidence
+            .failures
+            .iter()
+            .any(|entry| entry.generation_id == "human" || entry.generation_id == "elsewhere"));
+        // Nothing has answered since, so this failure is the session's outcome.
+        assert_eq!(
+            evidence
+                .unsuperseded_failure()
+                .map(|entry| entry.generation_id.as_str()),
+            Some("continuation")
+        );
+    }
+
+    /// A turn that answers after a failed one is the session's outcome now, so
+    /// the failure row clears itself.
+    #[test]
+    fn a_later_completed_turn_supersedes_an_earlier_failure() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"failed","status":"error"}}
+{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T21:10:00Z","conversation_id":"conversation","payload":{"generation_id":"next","prompt":"try again"}}
+{"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","payload":{"generation_id":"next","text":"fixed"}}
+{"event":"stop","observed_at":"2026-09-09T21:11:01Z","conversation_id":"conversation","payload":{"generation_id":"next","status":"completed"}}"#,
+            "conversation",
+        )
+        .unwrap();
+
+        assert_eq!(evidence.failures.len(), 1);
+        assert!(evidence.unsuperseded_failure().is_none());
+    }
+
+    /// A dropped stop hook must not resurrect a superseded failure: a committed
+    /// response is itself a successful terminal receipt.
+    #[test]
+    fn a_committed_response_supersedes_without_its_stop_hook() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"failed","status":"error"}}
+{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T21:10:00Z","conversation_id":"conversation","payload":{"generation_id":"next","prompt":"try again"}}
+{"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","payload":{"generation_id":"next","text":"fixed"}}"#,
+            "conversation",
+        )
+        .unwrap();
+
+        assert!(evidence.unsuperseded_failure().is_none());
+    }
+
+    #[test]
+    fn duplicate_stop_receipts_report_one_failure() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"g","status":"error"}}
+{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"g","status":"error"}}"#,
+            "conversation",
+        )
+        .unwrap();
+        assert_eq!(evidence.failures.len(), 1);
+    }
+
     #[test]
     fn activity_tracks_provider_work_not_teardown_or_unrelated_receipts() {
         let evidence = parse_cursor_visibility_evidence(

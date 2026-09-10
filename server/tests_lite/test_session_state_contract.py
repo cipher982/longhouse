@@ -148,10 +148,34 @@ def test_expired_activity_with_live_control_is_unknown_plus_live_control():
     assert facts.activity.state == "unknown"
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.key == "no_recent_activity"
-    assert facts.presentation.primary.label == "No recent activity (last: running a tool)"
+    assert facts.presentation.primary.label == "Last observed running a tool"
     assert facts.presentation.access is not None
     assert facts.presentation.access.label == "Live control"
     assert "Ready" not in facts.model_dump_json()
+
+
+def test_stale_observation_label_names_what_was_seen_and_carries_its_clock():
+    """The label must not assert a current state, and must not leak a raw enum.
+
+    "No recent activity (last: idle)" said nothing a reader could act on: `last`
+    was the activity *kind*, not a time, so a quiet session read as broken. The
+    label names the observation; `observed_at` lets every client render its age.
+    """
+
+    facts = _facts(runtime=_runtime(phase="idle", confidence="stale"))
+
+    primary = facts.presentation.primary
+    assert primary is not None
+    assert primary.key == "no_recent_activity"
+    assert primary.label == "Last observed idle"
+    assert primary.tone == "quiet"
+    # The clock the clients render from.
+    assert primary.observed_at is not None
+    assert primary.observed_at == facts.activity.observed_at
+    # No claim of a current state, and no raw kind in the prose.
+    assert "(last:" not in primary.label
+    assert facts.activity.state == "unknown"
+    assert facts.activity.raw_kind == "idle"
 
 
 def test_mode_does_not_consume_the_rolled_up_control_label():
@@ -870,7 +894,7 @@ def test_console_run_stops_claiming_work_once_its_activity_evidence_expires():
     assert facts.activity.state == "unknown"
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.key == "no_recent_activity"
-    assert facts.presentation.primary.label == "No recent activity (last: running a tool)"
+    assert facts.presentation.primary.label == "Last observed running a tool"
     assert facts.working_set == "history"
 
 

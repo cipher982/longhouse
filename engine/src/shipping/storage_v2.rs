@@ -129,6 +129,11 @@ pub struct StorageV2RenderRecord {
     pub tool_call_id: Option<String>,
     pub thread_id: Option<String>,
     pub branch_kind: Option<String>,
+    /// Parser-owned semantic kind. Serialized only when a parser has an exact
+    /// fact to assert, so ordinary records keep the legacy field set the host
+    /// validates against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interaction_kind: Option<String>,
     pub raw_record_ordinal: usize,
 }
 

@@ -95,13 +95,19 @@ SessionMode = Literal["shadow", "helm", "console", "unknown"]
 # would say they have going right now; everything else is history.
 WorkingSet = Literal["open", "history"]
 
+# Copy for an activity observation whose freshness window has passed. The
+# label names the observation and lets the client render its age from
+# `observed_at`; it deliberately does not assert a current state. "Idle for 3h"
+# would claim an uninterrupted span nobody observed, and the older
+# "No recent activity (last: idle)" leaked this raw enum into a sentence that
+# said nothing a reader could act on.
 _LAST_SEEN_LABEL: dict[str, str] = {
-    "thinking": "thinking",
-    "running": "running a tool",
-    "idle": "idle",
-    "needs_user": "idle",
-    "blocked": "blocked",
-    "stalled": "stalled",
+    "thinking": "Last observed thinking",
+    "running": "Last observed running a tool",
+    "idle": "Last observed idle",
+    "needs_user": "Last observed idle",
+    "blocked": "Last observed blocked",
+    "stalled": "Last observed stalled",
 }
 _ENDED_RUNTIME_STATES = {"session_ended", "process_gone", *RUN_TERMINAL_STATES}
 _ACTIVITY_MAP: dict[str, ActivityState] = {
@@ -964,7 +970,7 @@ def _primary(
         if last_seen is not None:
             return SessionPresentationLabel(
                 key="no_recent_activity",
-                label=f"No recent activity (last: {last_seen})",
+                label=last_seen,
                 tone="quiet",
                 observed_at=activity.observed_at,
             )

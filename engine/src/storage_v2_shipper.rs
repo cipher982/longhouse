@@ -44,7 +44,7 @@ pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
 const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
 // v7: failed/aborted managed prose remains inspectable as abandoned output,
 // without authorizing it as a committed head reply. Replay historical sources.
-const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v7-abandoned-prose";
+const CURSOR_PARSER_REVISION: &str = "cursor-store-render-v8-turn-outcome";
 const LIVE_TARGET_BATCH_BYTES: usize = 64 * 1024;
 const BACKLOG_TARGET_BATCH_BYTES: usize = 2 * 1024 * 1024;
 
@@ -297,6 +297,13 @@ fn prepare_next_envelope_with_limit(
             let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes as u64
                 && pending.attempt_count == 0
                 && maximum_batch_bytes < MAX_RAW_BATCH_BYTES;
+            // An envelope prepared before this binary decided the Cursor
+            // projection is raw-only still carries a render, and shipping it
+            // would take the current generation back from the store. Drop the
+            // unattempted one and re-prepare from the same bytes.
+            let obsolete_unattempted_cursor_render = pending.attempt_count == 0
+                && cursor_projection_is_raw_only(provider, path)
+                && pending_carries_render(&pending)?;
             if oversized_render_rejected {
                 if !pending_source_envelope::discard_after_cursor_resync(
                     conn,
@@ -305,7 +312,7 @@ fn prepare_next_envelope_with_limit(
                 )? {
                     return pending_to_prepared(pending).map(Some);
                 }
-            } else if !oversized_unattempted
+            } else if !(oversized_unattempted || obsolete_unattempted_cursor_render)
                 || !pending_source_envelope::discard_unattempted(
                     conn,
                     pending.source_epoch,
@@ -635,11 +642,21 @@ fn prepare_next_envelope_with_limit(
             range_kind: "byte_offset".to_string(),
             range_start: raw_batch.range_start,
             range_end: raw_batch.range_end,
-            // A Cursor snapshot without a clock cannot certify an empty
-            // transcript. Other providers retain their metadata-only receipts.
-            render: (!is_cursor_agent_transcript_path(provider, path)
-                || parse_result.metadata.started_at.is_some()
-                || !render_records.is_empty())
+            // Cursor's agent-transcripts JSONL is raw evidence only. It has
+            // no tool results, no tool_call_ids, no per-event clock and no
+            // reasoning blocks, and it inlines thought summaries into the
+            // committed answer; store.db carries all of it. Both sources bind
+            // one session, and whichever publishes a render last becomes the
+            // current generation, so attaching a render here is what let the
+            // lossy projection overwrite the authoritative one. Keep shipping
+            // its bytes; never let it claim render authority.
+            // Suppressed outright when store.db owns this conversation's render;
+            // otherwise the original rule stands, because a Cursor snapshot
+            // without a clock cannot certify an empty transcript.
+            render: (!cursor_projection_is_raw_only(provider, path)
+                && (!is_cursor_agent_transcript_path(provider, path)
+                    || parse_result.metadata.started_at.is_some()
+                    || !render_records.is_empty()))
             .then(|| StorageV2Render {
                 generation_id: render_generation.to_string(),
                 parser_revision: PARSER_REVISION.to_string(),
@@ -2795,6 +2812,165 @@ pub(crate) fn prepare_next_opencode_envelope(
     }
 }
 
+/// Cursor writes the prompts a person actually typed to `prompt_history.json`
+/// beside `store.db`. That file is the provider's own record of human
+/// authorship, which neither the store nor the hook stream gives us: Cursor
+/// wraps its own auto-continuations ("Briefly inform the user about the task
+/// result…") in the same `<user_query>` envelope as a real prompt, and it
+/// injects harness preambles as `role="user"` records. Both then render as
+/// messages the user appears to have written.
+///
+/// Absence of a hook receipt would be the wrong test — Shadow sessions have no
+/// hooks, hook files can be truncated, and Cursor does emit receipts for some
+/// internal prompts. A positive record of what a human typed has none of those
+/// failure modes, and it fails open: no file, an unreadable file, or a file
+/// that matches nothing in this conversation leaves every turn a user turn.
+#[derive(Debug, Default)]
+struct CursorPromptHistory {
+    entries: std::collections::HashSet<String>,
+}
+
+impl CursorPromptHistory {
+    fn load(db_path: &Path) -> Self {
+        let Some(dir) = db_path.parent() else {
+            return Self::default();
+        };
+        let Ok(bytes) = std::fs::read(dir.join("prompt_history.json")) else {
+            return Self::default();
+        };
+        let Ok(Value::Array(items)) = serde_json::from_slice::<Value>(&bytes) else {
+            return Self::default();
+        };
+        // Cursor elides pasted blocks in the history as "[Pasted text #1 +83
+        // lines]" while the store holds them expanded. Without the sidecar a
+        // real prompt containing a paste would look unmatched.
+        let pastes = Self::pasted_text(dir);
+        Self {
+            entries: items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|entry| Self::expand_pastes(entry, &pastes).trim().to_string())
+                .filter(|entry| !entry.is_empty())
+                .collect(),
+        }
+    }
+
+    fn pasted_text(dir: &Path) -> HashMap<String, String> {
+        let Ok(bytes) = std::fs::read(dir.join("pasted_text.json")) else {
+            return HashMap::new();
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+            return HashMap::new();
+        };
+        value
+            .get("entries")
+            .and_then(Value::as_object)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        value.as_str().map(|text| (key.clone(), text.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Replace `[Pasted text #<id> ...]` with the sidecar's content. A pasted
+    /// block can itself quote a placeholder, so expansion repeats until it
+    /// reaches a fixed point, bounded so a self-referential sidecar cannot spin.
+    fn expand_pastes(entry: &str, pastes: &HashMap<String, String>) -> String {
+        let mut expanded = Self::expand_pastes_once(entry, pastes);
+        for _ in 0..4 {
+            let next = Self::expand_pastes_once(&expanded, pastes);
+            if next == expanded {
+                break;
+            }
+            expanded = next;
+        }
+        expanded
+    }
+
+    fn expand_pastes_once(entry: &str, pastes: &HashMap<String, String>) -> String {
+        const OPEN: &str = "[Pasted text #";
+        let mut out = String::with_capacity(entry.len());
+        let mut rest = entry;
+        while let Some(start) = rest.find(OPEN) {
+            let (before, tail) = rest.split_at(start);
+            out.push_str(before);
+            let body = &tail[OPEN.len()..];
+            let Some(end) = body.find(']') else {
+                out.push_str(tail);
+                return out;
+            };
+            let token = &body[..end];
+            let id = token
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .unwrap_or_default();
+            match pastes.get(id) {
+                Some(text) => out.push_str(text),
+                None => {
+                    out.push_str(OPEN);
+                    out.push_str(token);
+                    out.push(']');
+                }
+            }
+            rest = &body[end + 1..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn contains(&self, prompt: &str) -> bool {
+        self.entries.contains(prompt.trim())
+    }
+}
+
+/// The history file is only trustworthy for a conversation it demonstrably
+/// covers. Requiring one confirmed match keeps a rotated or capped history from
+/// demoting every real prompt in a long session.
+fn cursor_human_prompt_witness(
+    snapshot: &cursor_store::CursorStoreSnapshot,
+    db_path: &Path,
+) -> Option<CursorPromptHistory> {
+    let history = CursorPromptHistory::load(db_path);
+    if history.is_empty() {
+        return None;
+    }
+    let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
+        return None;
+    };
+    let blobs = snapshot
+        .blob_rows
+        .iter()
+        .map(|row| (row.id.as_str(), row.data_bytes.as_slice()))
+        .collect::<HashMap<_, _>>();
+    let corroborated = root_ids.iter().any(|blob_id| {
+        let Some(bytes) = blobs.get(blob_id.as_str()) else {
+            return false;
+        };
+        let Ok(message) = serde_json::from_slice::<Value>(bytes) else {
+            return false;
+        };
+        if message.get("role").and_then(Value::as_str) != Some("user") {
+            return false;
+        }
+        cursor_message_blocks(&message)
+            .iter()
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .any(|text| {
+                let (role, body) = classify_cursor_text("user", text);
+                role == "user" && history.contains(&body)
+            })
+    });
+    corroborated.then_some(history)
+}
+
 #[derive(Debug, Default)]
 struct CursorTextProjection {
     suppressed: HashSet<(String, usize)>,
@@ -2816,6 +2992,12 @@ fn cursor_message_blocks(message: &Value) -> Vec<Value> {
     }
 }
 
+/// Turn alignment deliberately does not consult the prompt-history witness.
+/// A store turn is whatever Cursor sent the model, and dropping one shifts every
+/// later receipt: the turn's assistant blocks would attach to the previous turn,
+/// `unique_cursor_receipt_path` would fail to reconstruct that receipt, and a
+/// committed reply would be suppressed. The witness decides a row's *label*, and
+/// a label must never be able to hide an answer.
 fn cursor_text_projection(
     snapshot: &cursor_store::CursorStoreSnapshot,
     evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
@@ -3061,6 +3243,7 @@ fn cursor_render_records(
     selected: &[cursor_store_records::CursorRawRecord],
     started_at_us: i64,
     visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
+    witness: Option<&CursorPromptHistory>,
 ) -> Result<Vec<StorageV2RenderRecord>> {
     let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
         return Ok(Vec::new());
@@ -3091,6 +3274,11 @@ fn cursor_render_records(
         );
     }
     let projection = cursor_text_projection(snapshot, visibility_evidence);
+    // The conversation's last message decides which page owns a turn-outcome
+    // row, so a paged capture emits it once instead of once per page.
+    let carries_conversation_tail = root_ids
+        .last()
+        .is_some_and(|tail| selected_blobs.contains_key(tail));
     let mut records = Vec::new();
     for (message_order, blob_id) in root_ids.iter().enumerate() {
         let Some((source_position, raw_record_ordinal, blob_bytes)) = selected_blobs.get(blob_id)
@@ -3112,6 +3300,7 @@ fn cursor_render_records(
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
             let mut abandoned = false;
+            let mut interaction_kind: Option<String> = None;
             let (
                 event_role,
                 content_text,
@@ -3133,11 +3322,12 @@ fn cursor_render_records(
                         }
                         abandoned = projection.abandoned.contains(&key);
                     }
-                    let (effective_role, effective_text) = if kind == "reasoning" {
-                        ("assistant".to_string(), text)
+                    let (effective_role, effective_text, kind_override) = if kind == "reasoning" {
+                        ("assistant".to_string(), text, None)
                     } else {
-                        classify_cursor_text(role, &text)
+                        classify_cursor_text_with_witness(role, &text, witness)
                     };
+                    interaction_kind = kind_override;
                     (effective_role, Some(effective_text), None, None, None, None)
                 }
                 "tool-call" => (
@@ -3200,11 +3390,98 @@ fn cursor_render_records(
                     (kind == "reasoning").then(|| "reasoning".to_string())
                 },
                 parent_uuid: None,
+                interaction_kind,
                 raw_record_ordinal: *raw_record_ordinal,
             });
         }
     }
+    if carries_conversation_tail {
+        append_cursor_turn_failure(&mut records, visibility_evidence, started_at_us);
+    }
     Ok(records)
+}
+
+/// Cursor reports a failed turn only through its hook stream: the store keeps
+/// whatever prose the attempt produced (suppressed or abandoned, never a head
+/// reply) and says nothing about the outcome. Without this row a failed turn
+/// reads as a session that simply stopped talking — which is exactly what the
+/// phone showed while the terminal showed an error.
+///
+/// Exactly one row, on the page that carries the conversation's last message,
+/// and only while nothing has superseded the failure. `event_key` is derived
+/// per render object, so appending to every page of a paged capture would put
+/// one duplicate in the timeline per page.
+fn append_cursor_turn_failure(
+    records: &mut Vec<StorageV2RenderRecord>,
+    visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
+    started_at_us: i64,
+) {
+    let Some(failure) = visibility_evidence.and_then(|evidence| evidence.unsuperseded_failure())
+    else {
+        return;
+    };
+    // Anchor to the last selected record: the row reads raw evidence this
+    // envelope already carries rather than inventing a record of its own.
+    let Some((source_position, raw_record_ordinal, last_order_time_us)) =
+        records.last().map(|record| {
+            (
+                record.source_position,
+                record.raw_record_ordinal,
+                record.order_time_us,
+            )
+        })
+    else {
+        return;
+    };
+    let event_id_material = format!("cursor:turn-failed:{}", failure.generation_id);
+    let label = if failure.status == "aborted" {
+        "Cursor stopped this turn before it finished."
+    } else {
+        "Cursor reported this turn failed. Its output was not committed as a reply."
+    };
+    records.push(StorageV2RenderRecord {
+        event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, event_id_material.as_bytes()).to_string(),
+        parent_uuid: None,
+        order_time_us: last_order_time_us.max(started_at_us).saturating_add(1),
+        source_position,
+        event_subordinal: 0,
+        role: "system".to_string(),
+        content_text: Some(label.to_string()),
+        tool_name: None,
+        tool_input_json: None,
+        tool_output_text: None,
+        tool_call_id: None,
+        thread_id: None,
+        branch_kind: None,
+        interaction_kind: Some("provider_notification".to_string()),
+        raw_record_ordinal,
+    });
+}
+
+/// Cursor's own record of typed prompts decides authorship when it covers this
+/// conversation; otherwise the envelope rules stand on their own.
+///
+/// A demoted turn is marked, not hidden. `prompt_history.json` may be capped or
+/// rotated, so the cost of being wrong has to be a mislabelled row rather than
+/// a real message the user can no longer find — the same treatment Claude's
+/// background-task envelope already gets.
+fn classify_cursor_text_with_witness(
+    role: &str,
+    text: &str,
+    witness: Option<&CursorPromptHistory>,
+) -> (String, String, Option<String>) {
+    let (effective_role, effective_text) = classify_cursor_text(role, text);
+    if effective_role != "user" {
+        return (effective_role, effective_text, None);
+    }
+    match witness {
+        Some(history) if !history.contains(&effective_text) => (
+            "system".to_string(),
+            effective_text,
+            Some("provider_notification".to_string()),
+        ),
+        _ => (effective_role, effective_text, None),
+    }
 }
 
 fn classify_cursor_text(role: &str, text: &str) -> (String, String) {
@@ -3699,11 +3976,13 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
             .with_timezone(&Utc);
         (opened_at, opened_at)
     });
+    let prompt_witness = cursor_human_prompt_witness(&store_snapshot, db_path);
     let mut render_records = cursor_render_records(
         &store_snapshot,
         &selected,
         started_at.timestamp_micros(),
         visibility_evidence.as_ref(),
+        prompt_witness.as_ref(),
     )?;
     let previous_provider_session_id = if range_start == 0 {
         if let Some(managed_session_id) = managed_session_id.as_deref() {
@@ -4450,6 +4729,7 @@ fn render_record(
         tool_call_id: event.tool_call_id.clone(),
         thread_id: None,
         branch_kind: None,
+        interaction_kind: None,
         raw_record_ordinal,
     })
 }
@@ -4508,6 +4788,7 @@ fn insert_conversation_reset_boundary(
         parent_uuid: None,
         thread_id: None,
         branch_kind: Some("conversation_reset".to_string()),
+        interaction_kind: None,
         raw_record_ordinal: 0,
     });
     records.sort_by(|left, right| {
@@ -4686,6 +4967,25 @@ fn omp_title_slot_revision(path: &Path) -> Result<Option<String>> {
 /// is still in flight, so a byte offset that was valid for the previous file
 /// contents can land in the middle of a different line. Source revisions make
 /// that rewrite an explicit source epoch and restart framing at byte zero.
+/// The projection loses its render only when the authoritative source for the
+/// same conversation actually exists. A conversation Cursor never gave a
+/// `store.db` has no other source, and suppressing its render would leave the
+/// session with no current generation rather than a lossy one.
+fn cursor_projection_is_raw_only(provider: &str, path: &Path) -> bool {
+    cursor_agent_transcript_conversation_id(provider, path).is_some_and(|conversation_id| {
+        crate::cursor_visibility::cursor_store_exists(&conversation_id)
+    })
+}
+
+fn pending_carries_render(
+    pending: &pending_source_envelope::PendingSourceEnvelope,
+) -> Result<bool> {
+    Ok(pending_to_prepared(pending.clone())?
+        .envelope
+        .render
+        .is_some())
+}
+
 fn is_cursor_agent_transcript_path(provider: &str, path: &Path) -> bool {
     provider.eq_ignore_ascii_case("cursor")
         && path
@@ -4910,6 +5210,7 @@ mod tests {
             parent_uuid: None,
             thread_id: None,
             branch_kind: None,
+            interaction_kind: None,
             raw_record_ordinal: 0,
         }];
 
@@ -5286,10 +5587,11 @@ mod tests {
                 assert_eq!(prepared.envelope.session.ended_at, None);
                 acknowledge_prepared(&mut conn, prepared);
             }
-            assert_eq!(
-                first_transcript.envelope.render.as_ref().unwrap().records[0].order_time_us,
-                1_773_403_200_000_000
-            );
+            // The lossy agent-transcripts projection ships bytes only; the
+            // store owns the render. Source activity above is what this test
+            // is about, and it holds for both sources either way.
+            assert!(first_transcript.envelope.render.is_none());
+            assert!(!first_transcript.envelope.records.is_empty());
 
             // A parser upgrade or historical reimport opens a new ingestion
             // epoch without changing when this provider conversation happened.
@@ -5311,10 +5613,7 @@ mod tests {
                 );
                 acknowledge_prepared(&mut conn, prepared);
             }
-            assert_eq!(
-                replay_transcript.envelope.render.as_ref().unwrap().records[0].order_time_us,
-                1_773_403_200_000_000
-            );
+            assert!(replay_transcript.envelope.render.is_none());
 
             write_activity(1_773_403_320_000_i64);
             let mut root_ids = vec![0xbb; 32];
@@ -5784,7 +6083,8 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
         let head = rendered
             .iter()
             .filter(|record| record.branch_kind.as_deref() != Some("abandoned"))
@@ -5837,13 +6137,377 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
         assert_eq!(rendered.len(), 4);
         assert_eq!(rendered[0].role, "user");
         assert_eq!(rendered[1].role, "assistant");
         assert_eq!(rendered[1].content_text.as_deref(), Some("progress"));
         assert_eq!(rendered[2].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(rendered[3].content_text.as_deref(), Some("done"));
+    }
+
+    /// A failed turn keeps its prose out of the head branch, which is right,
+    /// but silence is not an outcome. The session row names the failure so the
+    /// timeline says what the terminal said.
+    #[test]
+    fn cursor_failed_turn_renders_a_typed_outcome_row() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let final_text = "4444444444444444444444444444444444444444444444444444444444444444";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                final_text,
+                serde_json::json!({"role":"assistant","content":[{"type":"reasoning","text":"a thought"},{"type":"text","text":"done"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
+                generation_id: "generation-2".to_string(),
+                prompt: "do work".to_string(),
+                response_text: Some("done".to_string()),
+                stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
+            }],
+            failures: vec![crate::cursor_visibility::CursorTurnFailure {
+                generation_id: "continuation".to_string(),
+                status: "error".to_string(),
+                observed_at: None,
+            }],
+            latest_terminal: Some(("continuation".to_string(), true)),
+            ..Default::default()
+        };
+
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+        let outcome = rendered.last().expect("a failure row is appended");
+        assert_eq!(outcome.role, "system");
+        assert_eq!(
+            outcome.interaction_kind.as_deref(),
+            Some("provider_notification")
+        );
+        assert!(outcome
+            .content_text
+            .as_deref()
+            .is_some_and(|text| text.contains("failed")));
+        // It sorts after the turn it describes and reuses that turn's raw
+        // evidence rather than inventing a raw record of its own.
+        let previous = &rendered[rendered.len() - 2];
+        assert!(outcome.order_time_us > previous.order_time_us);
+        assert_eq!(outcome.raw_record_ordinal, previous.raw_record_ordinal);
+        // The reasoning block stays suppressed; only the committed reply and
+        // the outcome row reach the head branch.
+        assert!(!rendered
+            .iter()
+            .any(|record| record.content_text.as_deref() == Some("a thought")));
+    }
+
+    /// Cursor wraps its own auto-continuation in the same `<user_query>`
+    /// envelope as a typed prompt, so the envelope alone cannot tell them
+    /// apart. `prompt_history.json` records what a person actually submitted.
+    #[test]
+    fn cursor_prompt_history_separates_typed_prompts_from_provider_continuations() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("store.db");
+        fs::write(
+            dir.path().join("prompt_history.json"),
+            serde_json::to_vec(&serde_json::json!(["do work"])).unwrap(),
+        )
+        .unwrap();
+
+        let history = CursorPromptHistory::load(&store_path);
+        assert!(!history.is_empty());
+        assert_eq!(
+            classify_cursor_text_with_witness(
+                "user",
+                "<user_query>do work</user_query>",
+                Some(&history)
+            ),
+            ("user".to_string(), "do work".to_string(), None)
+        );
+        let (role, _, kind) = classify_cursor_text_with_witness(
+            "user",
+            "<user_query>Briefly inform the user about the task result.</user_query>",
+            Some(&history),
+        );
+        assert_eq!(role, "system");
+        // Marked, not hidden: a capped history must cost a label, not a message.
+        assert_eq!(kind.as_deref(), Some("provider_notification"));
+        // No witness, no demotion: Shadow sessions and unreadable histories
+        // keep every prompt a user prompt.
+        assert_eq!(
+            classify_cursor_text_with_witness(
+                "user",
+                "<user_query>Briefly inform the user about the task result.</user_query>",
+                None
+            )
+            .0,
+            "user"
+        );
+    }
+
+    /// Cursor elides pastes in the history and expands them in the store, so a
+    /// real prompt carrying pasted text would look unmatched without the
+    /// sidecar. This is the case that would have hidden one of David's own
+    /// messages.
+    #[test]
+    fn cursor_prompt_history_expands_pasted_text_before_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("store.db");
+        fs::write(
+            dir.path().join("prompt_history.json"),
+            serde_json::to_vec(&serde_json::json!([
+                "\"\"\"[Pasted text #1 +83 lines]\"\"\"\n\nLooks like there is follow-up on teams."
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("pasted_text.json"),
+            serde_json::to_vec(&serde_json::json!({"entries": {"1": "line one\nline two"}}))
+                .unwrap(),
+        )
+        .unwrap();
+
+        let history = CursorPromptHistory::load(&store_path);
+        let expanded = "\"\"\"line one\nline two\"\"\"\n\nLooks like there is follow-up on teams.";
+        assert!(history.contains(expanded));
+        assert_eq!(
+            classify_cursor_text_with_witness(
+                "user",
+                &format!("<user_query>{expanded}</user_query>"),
+                Some(&history)
+            )
+            .0,
+            "user"
+        );
+    }
+
+    /// A label must never be able to hide an answer. The witness demotes a row
+    /// at render time only; turn alignment still sees every store user turn, so
+    /// a wrongly demoted prompt cannot shift receipts and suppress the reply
+    /// that followed it.
+    #[test]
+    fn a_demoted_prompt_still_anchors_its_turn_for_receipt_alignment() {
+        let first_user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let first_reply = "2222222222222222222222222222222222222222222222222222222222222222";
+        let second_user = "3333333333333333333333333333333333333333333333333333333333333333";
+        let second_reply = "4444444444444444444444444444444444444444444444444444444444444444";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                first_user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                first_reply,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"first answer"}]}),
+            ),
+            (
+                second_user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>keep going</user_query>"}]}),
+            ),
+            (
+                second_reply,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"second answer"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![
+                crate::cursor_visibility::CursorProviderTurn {
+                    generation_id: "g1".to_string(),
+                    prompt: "do work".to_string(),
+                    response_text: Some("first answer".to_string()),
+                    stop_status: Some("completed".to_string()),
+                    stop_observed_at: None,
+                },
+                crate::cursor_visibility::CursorProviderTurn {
+                    generation_id: "g2".to_string(),
+                    prompt: "keep going".to_string(),
+                    response_text: Some("second answer".to_string()),
+                    stop_status: Some("completed".to_string()),
+                    stop_observed_at: None,
+                },
+            ],
+            ..Default::default()
+        };
+        // A history that covers only the first prompt: the second is exactly
+        // the capped/rotated case that must cost a label, not an answer.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("prompt_history.json"),
+            serde_json::to_vec(&serde_json::json!(["do work"])).unwrap(),
+        )
+        .unwrap();
+        let witness = CursorPromptHistory::load(&dir.path().join("store.db"));
+
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), Some(&witness))
+                .unwrap();
+
+        let text: Vec<&str> = rendered
+            .iter()
+            .filter_map(|record| record.content_text.as_deref())
+            .collect();
+        assert!(text.contains(&"first answer"));
+        assert!(
+            text.contains(&"second answer"),
+            "the demoted prompt must not suppress the reply that followed it"
+        );
+        let demoted = rendered
+            .iter()
+            .find(|record| record.content_text.as_deref() == Some("keep going"))
+            .expect("the demoted prompt is still rendered");
+        assert_eq!(demoted.role, "system");
+        assert_eq!(
+            demoted.interaction_kind.as_deref(),
+            Some("provider_notification")
+        );
+    }
+
+    /// A pasted block can quote a placeholder of its own; the store holds the
+    /// fully expanded text, so one pass would leave a real prompt unmatched.
+    #[test]
+    fn cursor_prompt_history_expands_nested_paste_placeholders() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("prompt_history.json"),
+            serde_json::to_vec(&serde_json::json!([
+                "before [Pasted text #1 +2 lines] after"
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("pasted_text.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "entries": {"1": "outer [Pasted text #2 +1 lines]", "2": "inner"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let history = CursorPromptHistory::load(&dir.path().join("store.db"));
+
+        assert!(history.contains("before outer inner after"));
+    }
+
+    #[test]
+    fn cursor_prompt_history_keeps_unknown_paste_placeholders_verbatim() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("prompt_history.json"),
+            serde_json::to_vec(&serde_json::json!(["see [Pasted text #9 +4 lines] please"]))
+                .unwrap(),
+        )
+        .unwrap();
+        let history = CursorPromptHistory::load(&dir.path().join("store.db"));
+        assert!(history.contains("see [Pasted text #9 +4 lines] please"));
+    }
+
+    #[test]
+    fn cursor_prompt_history_is_ignored_when_it_does_not_cover_the_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("store.db");
+        fs::write(
+            dir.path().join("prompt_history.json"),
+            serde_json::to_vec(&serde_json::json!([
+                "a prompt from some other conversation"
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let (snapshot, _selected) = cursor_visibility_fixture(vec![(
+            user,
+            serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+        )]);
+        // A rotated or capped history that matches nothing here must not demote
+        // every real prompt in the conversation.
+        assert!(cursor_human_prompt_witness(&snapshot, &store_path).is_none());
+    }
+
+    #[test]
+    fn cursor_missing_prompt_history_leaves_authorship_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let (snapshot, _selected) = cursor_visibility_fixture(vec![(
+            user,
+            serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+        )]);
+        assert!(cursor_human_prompt_witness(&snapshot, &dir.path().join("store.db")).is_none());
+    }
+
+    /// A later completed turn supersedes an earlier failure, so the outcome row
+    /// clears itself without anyone tracking acknowledgement.
+    #[test]
+    fn cursor_superseded_failure_renders_no_outcome_row() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let final_text = "4444444444444444444444444444444444444444444444444444444444444444";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                final_text,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"done"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
+                generation_id: "generation-2".to_string(),
+                prompt: "do work".to_string(),
+                response_text: Some("done".to_string()),
+                stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
+            }],
+            failures: vec![crate::cursor_visibility::CursorTurnFailure {
+                generation_id: "older".to_string(),
+                status: "error".to_string(),
+                observed_at: None,
+            }],
+            latest_terminal: Some(("generation-2".to_string(), false)),
+            ..Default::default()
+        };
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+        assert!(rendered
+            .iter()
+            .all(|record| record.interaction_kind.is_none()));
+    }
+
+    #[test]
+    fn cursor_healthy_turn_renders_no_outcome_row() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let final_text = "4444444444444444444444444444444444444444444444444444444444444444";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                final_text,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"done"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
+                generation_id: "generation-2".to_string(),
+                prompt: "do work".to_string(),
+                response_text: Some("done".to_string()),
+                stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
+            }],
+            ..Default::default()
+        };
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+        assert!(rendered
+            .iter()
+            .all(|record| record.interaction_kind.is_none()));
     }
 
     #[test]
@@ -5876,7 +6540,8 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].role, "user");
     }
@@ -5907,7 +6572,8 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].role, "user");
     }
@@ -5942,7 +6608,8 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
         assert_eq!(rendered.len(), 3);
         assert_eq!(rendered[0].role, "user");
         assert_eq!(rendered[1].tool_call_id.as_deref(), Some("call-1"));
@@ -5970,7 +6637,8 @@ mod tests {
         ]);
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence::default();
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].role, "user");
         assert_eq!(selected.len(), 2, "unverified text remains in raw storage");
@@ -6009,7 +6677,8 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
 
         assert_eq!(rendered.len(), 3);
         assert_eq!(rendered[0].role, "user");
@@ -6053,7 +6722,8 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
 
         assert_eq!(rendered.len(), 2);
         assert_eq!(rendered[0].role, "user");
@@ -6085,7 +6755,8 @@ mod tests {
         )
         .unwrap();
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
 
         assert_eq!(rendered.len(), 2);
         assert_eq!(rendered[0].role, "user");
@@ -6128,7 +6799,8 @@ mod tests {
             ..Default::default()
         };
 
-        let rendered = cursor_render_records(&snapshot, &selected, 0, Some(&evidence)).unwrap();
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
         assert_eq!(rendered.len(), 2);
         assert!(rendered.iter().all(|record| record.role == "user"));
     }
@@ -8285,8 +8957,12 @@ mod tests {
             .unwrap();
         let mut poisoned = correct.envelope.clone();
         poisoned.session_id = stale_session_id.clone();
-        poisoned.render.as_mut().unwrap().generation_id =
-            render_generation_id(Uuid::parse_str(&stale_session_id).unwrap()).to_string();
+        // Cursor's agent-transcripts projection ships raw-only, so there may be
+        // no render to poison. The stale session id is what this test is about.
+        if let Some(render) = poisoned.render.as_mut() {
+            render.generation_id =
+                render_generation_id(Uuid::parse_str(&stale_session_id).unwrap()).to_string();
+        }
         let poisoned_body = encode_zstd(
             &serde_json::to_vec(&poisoned).unwrap(),
             "cross-provider fixture body",
@@ -8397,10 +9073,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(repaired.envelope.session_id, conversation_id);
-        assert_eq!(
-            repaired.envelope.render.unwrap().generation_id,
-            render_generation_id(Uuid::parse_str(&conversation_id).unwrap()).to_string()
-        );
+        if let Some(render) = repaired.envelope.render {
+            assert_eq!(
+                render.generation_id,
+                render_generation_id(Uuid::parse_str(&conversation_id).unwrap()).to_string()
+            );
+        }
         assert!(crate::state::session_binding::SessionBinding::new(&conn)
             .get_for_provider(&stable_source_path(&path).to_string_lossy(), "claude")
             .unwrap()

@@ -128,6 +128,18 @@ struct SessionRuntimeDock: View {
                 evidenceNow = Date()
             }
         }
+        // A stale observation's age is the one number on this row that keeps
+        // changing while nothing else does. Tick it slowly; minute granularity
+        // needs no more, and a quiet session should stay cheap.
+        .task(id: observationClockKey) {
+            guard detail.stateFacts.primary?.key == "no_recent_activity" else { return }
+            guard !UITestHooks.holdsAmbientMotion else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                if Task.isCancelled { break }
+                evidenceNow = Date()
+            }
+        }
         .task(id: noticeTaskKey) {
             guard let deadline = transition.until else { return }
             let remaining = deadline.timeIntervalSinceNow
@@ -186,6 +198,12 @@ struct SessionRuntimeDock: View {
     private var startupGraceTaskKey: String {
         "\(detail.id):transport-startup"
     }
+
+    private var observationClockKey: String {
+        [detail.id, detail.stateFacts.primary?.key ?? "", detail.stateFacts.primary?.observedAt ?? ""]
+            .joined(separator: ":")
+    }
+
     private var noticeTaskKey: String {
         "\(transition.notice.map { String(describing: $0) } ?? "none"):\(transition.until?.timeIntervalSince1970 ?? 0)"
     }
@@ -269,10 +287,12 @@ struct SessionRuntimeDock: View {
                     if state == .working && typeSize.isAccessibilitySize {
                         elapsed(asOf: now, state: state)
                     }
-                    if let connectionLabel = connectionLabel(for: state) {
-                        Text(connectionLabel)
+                    if let subline = subline(for: state, asOf: now) {
+                        Text(subline)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .accessibilityIdentifier("session-runtime-subline")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -332,6 +352,23 @@ struct SessionRuntimeDock: View {
         isOpen
             && (hasObservedConnection || startupGraceExpired)
             && realtimeConnection != .connected
+    }
+
+    /// A stale observation carries its own clock. The server names what was
+    /// last seen ("Last observed idle"); the age belongs beside it, not behind
+    /// the disclosure toggle, because "how long ago" is the whole question a
+    /// quiet session raises.
+    private func observationAge(asOf now: Date) -> String? {
+        guard let primary = detail.stateFacts.primary, primary.key == "no_recent_activity" else { return nil }
+        guard let observed = primary.observedAt.flatMap(LonghouseDateParser.parse) else { return nil }
+        return RuntimeElapsed.ageLabel(from: observed, to: now)
+    }
+
+    /// The connection half is exception-first and often absent, which leaves the
+    /// age standing alone. That is the right emphasis for a quiet session.
+    private func subline(for state: SessionLedgerEvidence, asOf now: Date) -> String? {
+        let parts = [observationAge(asOf: now), connectionLabel(for: state)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
     }
 
     private func connectionLabel(for state: SessionLedgerEvidence) -> String? {
@@ -523,6 +560,7 @@ struct SessionRuntimeDock: View {
         let state = ledger(asOf: evidenceNow)
         if detail.canDraftBeforeSendReady { return detail.launchSetupStatusLabel }
         var parts = [headline(for: state)]
+        if let age = observationAge(asOf: evidenceNow) { parts.append(age) }
         if let start = elapsedStart {
             let end = isExecuting
                 ? RuntimeElapsed.observedEnd(validUntil: detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse), now: evidenceNow)
