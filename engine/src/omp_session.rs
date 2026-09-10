@@ -437,6 +437,19 @@ pub fn reserve_session_path(session_dir: &Path) -> Result<PathBuf> {
     bail!("unable to reserve a unique OMP session path")
 }
 
+/// Compare workspace identities after resolving harmless symlink aliases.
+fn workspace_binding_matches(actual: &str, expected: &str) -> bool {
+    if actual == expected {
+        return true;
+    }
+    match (
+        Path::new(actual).canonicalize(),
+        Path::new(expected).canonicalize(),
+    ) {
+        (Ok(actual), Ok(expected)) => actual == expected,
+        _ => false,
+    }
+}
 /// Validate an exact continuation before OMP is allowed to apply its
 /// create-if-missing `--resume` behavior.
 pub fn verify_exact_session_file(
@@ -456,7 +469,7 @@ pub fn verify_exact_session_file(
     );
     if let Some(expected_cwd) = expected_cwd {
         anyhow::ensure!(
-            header.cwd == expected_cwd,
+            workspace_binding_matches(&header.cwd, expected_cwd),
             "OMP resume workspace does not match the exact binding"
         );
     }
@@ -497,7 +510,10 @@ pub fn verify_exact_session_file(
         );
         if let Some(expected_cwd) = expected_cwd {
             anyhow::ensure!(
-                object.get("cwd").and_then(Value::as_str) == Some(expected_cwd),
+                object
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .is_some_and(|actual| workspace_binding_matches(actual, expected_cwd)),
                 "OMP resume history contains a different workspace identity"
             );
         }
@@ -925,6 +941,31 @@ mod tests {
             verify_exact_session_file(&dir.path().join("corrupt.jsonl"), "native-id", None)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn exact_resume_accepts_symlink_equivalent_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_workspace = dir.path().join("real-workspace");
+        let alias_workspace = dir.path().join("workspace-alias");
+        fs::create_dir(&real_workspace).unwrap();
+        std::os::unix::fs::symlink(&real_workspace, &alias_workspace).unwrap();
+        let path = dir.path().join("session.jsonl");
+        fs::write(
+            &path,
+            format!(
+                "{{\"type\":\"session\",\"version\":3,\"id\":\"native-id\",\"cwd\":\"{}\"}}\n",
+                alias_workspace.display()
+            ),
+        )
+        .unwrap();
+
+        assert!(verify_exact_session_file(
+            &path,
+            "native-id",
+            Some(real_workspace.to_str().unwrap())
+        )
+        .is_ok());
     }
 
     #[test]
