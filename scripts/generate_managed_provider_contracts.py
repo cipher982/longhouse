@@ -51,6 +51,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.check and args.init_from_current_json:
+        parser.error("--check cannot be combined with --init-from-current-json")
+
     if args.init_from_current_json:
         _write_schema_from_current_json()
 

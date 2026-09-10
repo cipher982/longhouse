@@ -8,20 +8,17 @@
 # it — three separate red CI runs on 2026-07-31 traced to exactly that, plus a
 # blocked release.
 #
-# Regenerating is mechanical and has no judgement in it, so this fixes rather
-# than complains: it rewrites the manifest and fails the commit only to make
-# you stage the result.
+# Checking is deliberately non-mutating: authors can regenerate explicitly with
+# scripts/generate_managed_provider_contracts.py --write after this hook fails.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-before=$(git hash-object server/zerg/config/managed_provider_contracts.json 2>/dev/null || echo missing)
-(cd server && uv run --extra dev python ../scripts/generate_managed_provider_contracts.py --write) >/dev/null
-after=$(git hash-object server/zerg/config/managed_provider_contracts.json)
-
-if [[ "$before" != "$after" ]]; then
-  echo "managed_provider_contracts.json was stale and has been regenerated." >&2
-  echo "An adapter source changed, which invalidates the contract digest." >&2
-  echo "Stage server/zerg/config/managed_provider_contracts.json and commit again." >&2
-  exit 1
+if (cd server && uv run --extra dev python ../scripts/generate_managed_provider_contracts.py --check) >/dev/null; then
+  exit 0
 fi
+
+echo "managed_provider_contracts.json is stale and must be regenerated." >&2
+echo "An adapter source changed, which invalidates the contract digest." >&2
+echo "Run scripts/generate_managed_provider_contracts.py --write, then stage server/zerg/config/managed_provider_contracts.json and commit again." >&2
+exit 1

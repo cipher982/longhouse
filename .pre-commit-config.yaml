@@ -132,7 +132,7 @@ repos:
         pass_filenames: false
 
       # -----------------------------------------------------------------------
-      # Regenerate the managed-provider contract digest when an adapter changes
+      # Check the managed-provider contract digest when an adapter changes
       # -----------------------------------------------------------------------
       - id: check-provider-contract-digest
         name: Managed provider contract digest
@@ -144,8 +144,8 @@ repos:
         # (provider_coordination_oracles.py, cfef3ee8c) left a stale digest that
         # aborted `make validate` on main and stayed red for days. A list that
         # must be updated whenever the schema gains a source is a list that goes
-        # stale. The check regenerates and compares in ~0.15s, so running it on
-        # every commit is cheaper than the one CI outage it prevents.
+        # stale. The non-mutating check runs in ~0.15s, so running it on every
+        # commit is cheaper than the one CI outage it prevents.
         always_run: true
         pass_filenames: false
 
