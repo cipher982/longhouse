@@ -397,7 +397,7 @@ struct SessionRuntimeDock: View {
     }
 
     private func shouldShowConnectionEvidence(state: SessionLedgerEvidence) -> Bool {
-        evidenceDisclosure || state == .uncertain || transportFailureVisible
+        evidenceDisclosure || state == .uncertain
     }
 
     private func evidenceLabel(_ state: SessionLedgerEvidence) -> String {
