@@ -72,9 +72,9 @@ _CELL_BY_VARIANT = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
-    producer_revision=7,
+    producer_revision=8,
     scenario_id=SCENARIO_ID,
-    scenario_revision=7,
+    scenario_revision=8,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -195,7 +195,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and observation.get("omp_transcript_shipper_started") is True
             and observation.get("omp_transcript_flush_completed") is True
             and observation.get("omp_runtime_transcript_converged") is True
-            and observation.get("runtime_control_identity_complete") is True
+            and _runtime_control_identity_is_complete(observation.get("runtime_control_identity"))
             and observation.get("runtime_agents_api_controls") is True
             and settlement_ok
         ),
@@ -535,6 +535,37 @@ def _control_identity_receipt(identity: Mapping[str, Any]) -> dict[str, Any]:
         },
         "transient_errors": list(identity.get("transient_errors") or []),
     }
+
+
+def _control_identity_receipt_is_bound(receipt: Any) -> bool:
+    if not isinstance(receipt, Mapping):
+        return False
+    expected_subject_key = receipt.get("expected_subject_key")
+    actions = receipt.get("actions")
+    if not isinstance(expected_subject_key, str) or not expected_subject_key:
+        return False
+    if receipt.get("session_id") is None or receipt.get("control_subject_key") != expected_subject_key:
+        return False
+    if receipt.get("served_path") != "canonical_session_detail" or not isinstance(actions, Mapping):
+        return False
+    return all(isinstance(actions.get(name), str) and actions.get(name) == "available" for name in ("send_input", "interrupt", "terminate"))
+
+
+def _runtime_control_identity_is_complete(identity: Any) -> bool:
+    if not isinstance(identity, Mapping):
+        return False
+    labels = ("initial", "replacement", "cold_resume", "final")
+    receipts = [identity.get(label) for label in labels]
+    if not all(_control_identity_receipt_is_bound(receipt) for receipt in receipts):
+        return False
+    session_ids = {str(receipt["session_id"]) for receipt in receipts if isinstance(receipt, Mapping)}
+    subject_keys = [str(receipt["expected_subject_key"]) for receipt in receipts if isinstance(receipt, Mapping)]
+    return (
+        len(session_ids) == 1
+        and len(subject_keys) == len(labels)
+        and len(set(subject_keys[:3])) == 3
+        and subject_keys[3] == subject_keys[2]
+    )
 
 
 def _is_transient_runtime_read_error(error: BaseException) -> bool:

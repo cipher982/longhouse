@@ -44,6 +44,20 @@ from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
 from zerg.qa.provider_qualification import _PROFILES
 
 
+def _identity_receipt(subject_key: str, *, session_id: str = "session-1") -> dict[str, object]:
+    return {
+        "session_id": session_id,
+        "expected_subject_key": subject_key,
+        "served_path": "canonical_session_detail",
+        "control_subject_key": subject_key,
+        "actions": {
+            "send_input": "available",
+            "interrupt": "available",
+            "terminate": "available",
+        },
+    }
+
+
 def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> None:
     assert CONSOLE_REGISTRATION.producer_id == "omp.console_lifecycle.v1"
     assert CONSOLE_REGISTRATION.producer_revision == 7
@@ -52,8 +66,8 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
     assert CONSOLE_REGISTRATION.scenario_revision == 7
     assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
-    assert HELM_REGISTRATION.producer_revision == 7
-    assert HELM_REGISTRATION.scenario_revision == 7
+    assert HELM_REGISTRATION.producer_revision == 8
+    assert HELM_REGISTRATION.scenario_revision == 8
     assert HELM_REGISTRATION.providers == ("omp",)
     assert HELM_REGISTRATION.scenario_id == "omp_helm_lifecycle"
     assert "transcript_flush_receipt" in HELM_REGISTRATION.required_artifacts
@@ -804,6 +818,9 @@ def test_omp_served_control_identity_requires_exact_subject_and_actions() -> Non
     assert not _served_control_identity(diagnostic, expected_subject_key="connection:conn-2:lease-7")
     diagnostic["shadow"]["control"]["actions"]["terminate"]["state"] = "unavailable"
     assert not _served_control_identity(diagnostic, expected_subject_key="connection:conn-1:lease-7")
+    diagnostic["shadow"]["control"]["actions"]["interrupt"]["state"] = "unavailable"
+    assert not _served_control_identity(diagnostic, expected_subject_key="connection:conn-1:lease-7")
+    diagnostic["shadow"]["control"]["actions"]["interrupt"]["state"] = "available"
     diagnostic["shadow"]["control"]["actions"].pop("terminate")
     assert not _served_control_identity(diagnostic, expected_subject_key="connection:conn-1:lease-7")
 
@@ -1081,6 +1098,12 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
         "omp_runtime_transcript_converged": True,
         "runtime_agents_api_controls": True,
         "runtime_control_identity_complete": True,
+        "runtime_control_identity": {
+            "initial": _identity_receipt("connection:initial:lease-1"),
+            "replacement": _identity_receipt("connection:replacement:lease-2"),
+            "cold_resume": _identity_receipt("connection:resume:lease-3"),
+            "final": _identity_receipt("connection:resume:lease-3"),
+        },
         "send_idle": True,
         "follow_up_native": True,
         "steer_active": True,
@@ -1149,6 +1172,8 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
 
     assert set(omp_helm_lifecycle_assertions(observation)) == set(HELM_ASSERTIONS)
     assert all(omp_helm_lifecycle_assertions(observation).values())
+    observation["runtime_control_identity"]["replacement"]["control_subject_key"] = "connection:wrong:lease-2"
+    assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
     observation["abort_evidence"]["terminal"] = False
     assert omp_helm_lifecycle_assertions(observation)["omp_helm_abort_native"] is False
 

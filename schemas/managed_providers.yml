@@ -2217,7 +2217,7 @@ providers:
         id: omp_helm_launch_registration
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 7
+        minimum_scenario_revision: 8
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - <<: *omp_helm_lifecycle_assertion
