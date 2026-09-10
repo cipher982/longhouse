@@ -52,8 +52,8 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
     assert CONSOLE_REGISTRATION.scenario_revision == 7
     assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
-    assert HELM_REGISTRATION.producer_revision == 6
-    assert HELM_REGISTRATION.scenario_revision == 6
+    assert HELM_REGISTRATION.producer_revision == 7
+    assert HELM_REGISTRATION.scenario_revision == 7
     assert HELM_REGISTRATION.providers == ("omp",)
     assert HELM_REGISTRATION.scenario_id == "omp_helm_lifecycle"
     assert "transcript_flush_receipt" in HELM_REGISTRATION.required_artifacts
@@ -793,6 +793,7 @@ def test_omp_served_control_identity_requires_exact_subject_and_actions() -> Non
             "control": {
                 "actions": {
                     "send_input": {"state": "available"},
+                    "interrupt": {"state": "available"},
                     "terminate": {"state": "available"},
                 }
             },
@@ -801,6 +802,8 @@ def test_omp_served_control_identity_requires_exact_subject_and_actions() -> Non
 
     assert _served_control_identity(diagnostic, expected_subject_key="connection:conn-1:lease-7")
     assert not _served_control_identity(diagnostic, expected_subject_key="connection:conn-2:lease-7")
+    diagnostic["shadow"]["control"]["actions"]["terminate"]["state"] = "unavailable"
+    assert not _served_control_identity(diagnostic, expected_subject_key="connection:conn-1:lease-7")
     diagnostic["shadow"]["control"]["actions"].pop("terminate")
     assert not _served_control_identity(diagnostic, expected_subject_key="connection:conn-1:lease-7")
 
@@ -816,6 +819,7 @@ def test_omp_wait_runtime_control_identity_retries_until_projection_matches(monk
                     "control": {
                         "actions": {
                             "send_input": {"state": "available"},
+                            "interrupt": {"state": "available"},
                             "terminate": {"state": "available"},
                         }
                     },
@@ -838,6 +842,48 @@ def test_omp_wait_runtime_control_identity_retries_until_projection_matches(monk
 
     assert result["session_id"] == "session-1"
     assert result["expected_subject_key"] == "connection:conn-1:lease-7"
+
+
+def test_omp_wait_runtime_control_identity_retries_transient_reads(monkeypatch) -> None:
+    diagnostics = iter(
+        [
+            RuntimeError("Runtime Host HTTP 503"),
+            {
+                "served_path": "canonical_session_detail",
+                "shadow": {
+                    "fact_sources": {"control": {"subject_key": "connection:conn-1:lease-7"}},
+                    "control": {
+                        "actions": {
+                            "send_input": {"state": "available"},
+                            "interrupt": {"state": "available"},
+                            "terminate": {"state": "available"},
+                        }
+                    },
+                },
+            },
+        ]
+    )
+
+    def runtime_get(*_args):
+        value = next(diagnostics)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr(
+        "zerg.qa.omp_helm_lifecycle._runtime_get",
+        runtime_get,
+    )
+
+    result = _wait_runtime_control_identity(
+        "https://runtime.example",
+        "token",
+        session_id="session-1",
+        state={"connection_id": "conn-1", "lease_generation": "lease-7"},
+        timeout=1,
+    )
+
+    assert result["transient_errors"] == ["Runtime Host HTTP 503"]
 
 
 def test_omp_runtime_convergence_does_not_prove_an_incomplete_events_page() -> None:
@@ -1034,6 +1080,7 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
         "omp_transcript_flush_completed": True,
         "omp_runtime_transcript_converged": True,
         "runtime_agents_api_controls": True,
+        "runtime_control_identity_complete": True,
         "send_idle": True,
         "follow_up_native": True,
         "steer_active": True,

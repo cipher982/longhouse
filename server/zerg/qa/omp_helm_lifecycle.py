@@ -72,9 +72,9 @@ _CELL_BY_VARIANT = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
-    producer_revision=6,
+    producer_revision=7,
     scenario_id=SCENARIO_ID,
-    scenario_revision=6,
+    scenario_revision=7,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -195,6 +195,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and observation.get("omp_transcript_shipper_started") is True
             and observation.get("omp_transcript_flush_completed") is True
             and observation.get("omp_runtime_transcript_converged") is True
+            and observation.get("runtime_control_identity_complete") is True
             and observation.get("runtime_agents_api_controls") is True
             and settlement_ok
         ),
@@ -507,7 +508,39 @@ def _served_control_identity(
         and control_source.get("subject_key") == expected_subject_key
         and isinstance(actions.get("send_input"), dict)
         and actions["send_input"].get("state") == "available"
+        and isinstance(actions.get("interrupt"), dict)
+        and actions["interrupt"].get("state") == "available"
         and isinstance(actions.get("terminate"), dict)
+        and actions["terminate"].get("state") == "available"
+    )
+
+
+def _control_identity_receipt(identity: Mapping[str, Any]) -> dict[str, Any]:
+    diagnostic = identity.get("diagnostic") if isinstance(identity.get("diagnostic"), Mapping) else {}
+    shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), Mapping) else {}
+    fact_sources = shadow.get("fact_sources") if isinstance(shadow.get("fact_sources"), Mapping) else {}
+    control_source = fact_sources.get("control") if isinstance(fact_sources.get("control"), Mapping) else {}
+    control = shadow.get("control") if isinstance(shadow.get("control"), Mapping) else {}
+    actions = control.get("actions") if isinstance(control.get("actions"), Mapping) else {}
+    return {
+        "session_id": identity.get("session_id"),
+        "expected_subject_key": identity.get("expected_subject_key"),
+        "served_path": diagnostic.get("served_path"),
+        "shadow_mode": shadow.get("mode"),
+        "control_subject_key": control_source.get("subject_key"),
+        "actions": {
+            name: (value.get("state") if isinstance(value, Mapping) else None)
+            for name, value in actions.items()
+            if name in {"send_input", "interrupt", "terminate"}
+        },
+        "transient_errors": list(identity.get("transient_errors") or []),
+    }
+
+
+def _is_transient_runtime_read_error(error: BaseException) -> bool:
+    message = str(error)
+    return message.startswith("Runtime Host HTTP ") and any(
+        message.startswith(f"Runtime Host HTTP {status}") for status in _RUNTIME_HOST_RETRY_STATUSES
     )
 
 
@@ -522,25 +555,34 @@ def _wait_runtime_control_identity(
     connection_id = str(state.get("connection_id") or "").strip()
     lease_generation = str(state.get("lease_generation") or "").strip()
     expected_subject_key = f"connection:{connection_id}:{lease_generation}"
+    transient_errors: list[str] = []
 
     def observe() -> dict[str, Any] | None:
-        diagnostic = _runtime_get(
-            url,
-            token,
-            f"/api/agents/sessions/{session_id}/state-diagnostics",
-        )
+        try:
+            diagnostic = _runtime_get(
+                url,
+                token,
+                f"/api/agents/sessions/{session_id}/state-diagnostics",
+            )
+        except RuntimeError as exc:
+            if not _is_transient_runtime_read_error(exc):
+                raise
+            transient_errors.append(str(exc))
+            del transient_errors[:-8]
+            return None
         if not _served_control_identity(diagnostic, expected_subject_key=expected_subject_key):
             return None
         return {
             "session_id": session_id,
             "expected_subject_key": expected_subject_key,
             "diagnostic": diagnostic,
+            "transient_errors": list(transient_errors),
         }
 
     return _wait(
         observe,
         timeout=timeout,
-        description="Runtime Host managed control identity",
+        description=f"Runtime Host managed control identity {expected_subject_key}",
     )
 
 
@@ -1340,6 +1382,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         "omp_transcript_shipper_started": False,
         "omp_transcript_flush_completed": False,
         "omp_runtime_transcript_converged": False,
+        "runtime_control_identity_complete": False,
         "send_idle": False,
         "follow_up_native": False,
         "steer_active": False,
@@ -1442,17 +1485,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             session_id=current_session_id,
             state=current_state,
         )
-        initial_convergence["control_identity"] = {
-            "session_id": initial_control_identity["session_id"],
-            "expected_subject_key": initial_control_identity["expected_subject_key"],
-        }
+        initial_control_receipt = _control_identity_receipt(initial_control_identity)
+        initial_convergence["control_identity"] = initial_control_receipt
         runtime_convergence = {"initial": initial_convergence}
         observation["omp_transcript_flush_completed"] = initial_convergence.get("status") == "pass"
         observation["omp_runtime_transcript_converged"] = observation["omp_transcript_flush_completed"]
-        observation["runtime_control_identity"] = {
-            "session_id": initial_control_identity["session_id"],
-            "expected_subject_key": initial_control_identity["expected_subject_key"],
-        }
+        observation["runtime_control_identity"] = {"initial": initial_control_receipt}
         observation["runtime_convergence"] = runtime_convergence
         old_state = dict(current_state)
         old_native_id = str(current_state.get("native_session_id") or "")
@@ -1737,6 +1775,16 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             session_id=current_session_id,
             native_session_id=current_native_id,
         )
+        replacement_control_identity = _wait_runtime_control_identity(
+            str(args.api_url),
+            str(args.agents_token),
+            session_id=current_session_id,
+            state=replaced_state,
+        )
+        replacement_control_receipt = _control_identity_receipt(replacement_control_identity)
+        runtime_control_identity = observation["runtime_control_identity"]
+        if isinstance(runtime_control_identity, dict):
+            runtime_control_identity["replacement"] = replacement_control_receipt
         replacement_marker = f"OMP_HELM_REPLACEMENT_{os.urandom(8).hex()}"
         source_generations.append(
             {
@@ -1792,6 +1840,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "context_seed_row": context_seed_row,
             "evidence": replacement_evidence,
             "context_evidence": context_seed_evidence,
+            "control_identity": replacement_control_receipt,
         }
         observation["native_replacement_bound"] = (
             replacement_evidence["channel_ack_bound"]
@@ -1824,6 +1873,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "state": dict(replaced_state),
             "command": terminate,
             "stopped_state": stopped,
+            "control_identity": replacement_control_receipt,
         }
         observation["terminate_owned"] = terminate.get("accepted") is True and stopped.get("terminal_reason") == "remote_terminate"
 
@@ -1846,6 +1896,16 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         sessions.append(resumed)
         resume_state = _wait_state(longhouse_home, session_id=current_session_id)
+        resume_control_identity = _wait_runtime_control_identity(
+            str(args.api_url),
+            str(args.agents_token),
+            session_id=current_session_id,
+            state=resume_state,
+        )
+        resume_control_receipt = _control_identity_receipt(resume_control_identity)
+        runtime_control_identity = observation["runtime_control_identity"]
+        if isinstance(runtime_control_identity, dict):
+            runtime_control_identity["cold_resume"] = resume_control_receipt
         resume_file = Path(str(resume_state["session_file"]))
         _register_native_source(
             source_claims,
@@ -1976,6 +2036,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "context_evidence": resume_context_evidence,
             "evidence": resume_marker_evidence,
             "terminal_evidence": resume_terminal_evidence,
+            "control_identity": resume_control_receipt,
         }
         settled_state = _wait_state(
             longhouse_home,
@@ -1999,6 +2060,30 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             flush=final_flush,
             native_source_path=str(resume_file),
         )
+        final_control_state = _wait_state(
+            longhouse_home,
+            session_id=current_session_id,
+            predicate=lambda value: (
+                value.get("phase") == "idle"
+                and value.get("native_session_id") == str(resume_state.get("native_session_id") or "")
+                and value.get("session_file") == str(resume_file)
+            ),
+        )
+        final_control_identity = _wait_runtime_control_identity(
+            str(args.api_url),
+            str(args.agents_token),
+            session_id=current_session_id,
+            state=final_control_state,
+        )
+        final_control_receipt = _control_identity_receipt(final_control_identity)
+        final_convergence["control_identity"] = final_control_receipt
+        runtime_control_identity = observation["runtime_control_identity"]
+        if isinstance(runtime_control_identity, dict):
+            runtime_control_identity["final"] = final_control_receipt
+            observation["runtime_control_identity_complete"] = all(
+                label in runtime_control_identity for label in ("initial", "replacement", "cold_resume", "final")
+            )
+        current_state = dict(final_control_state)
         runtime_convergence["final"] = final_convergence
         observation["omp_transcript_flush_completed"] = (
             observation["omp_transcript_flush_completed"] is True and final_convergence.get("status") == "pass"
@@ -2018,7 +2103,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             observation["omp_agent_end_settlement_observed"] = settlement.get("agent_end_terminal") is True
             observation["omp_native_archive_bound"] = settlement.get("native_archive_bound") is True
             observation["omp_native_extension_channel_bound"] = settlement.get("agent_end_evidence_shape") is True
-        current_state = dict(resume_state)
+        current_state = dict(final_control_state)
         final_terminate = _run_engine(args.engine, "terminate", current_session_id, env)
         final_stopped = _wait_stopped(longhouse_home, current_session_id)
         resumed.process.wait(timeout=15)
@@ -2027,6 +2112,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "state": dict(resume_state),
             "command": final_terminate,
             "stopped_state": final_stopped,
+            "control_identity": final_control_receipt,
         }
     finally:
         for provider_session in sessions:
