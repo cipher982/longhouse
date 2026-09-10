@@ -240,6 +240,58 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
     assert evidence["result_event"]["model_source"] == "provider_event"
 
 
+def test_omp_native_model_evidence_uses_bound_response_without_continuation_receipt(tmp_path) -> None:
+    _write_omp_console_settlement_fixture(
+        tmp_path,
+        first_turn_events=[{"type": "session", "id": "native-1"}],
+    )
+    stdout_source = tmp_path / "provider-sources" / "stdout.jsonl"
+    stdout_source.write_text(
+        "\n".join(
+            json.dumps(event)
+            for event in [
+                {"type": "session", "id": "native-1"},
+                {
+                    "type": "message",
+                    "model": "openrouter/fixture-model",
+                    "message": {
+                        "role": "assistant",
+                        "model": "openrouter/fixture-model",
+                        "stopReason": "stop",
+                        "usage": {"input": 3, "output": 2, "cost": {"total": 0.0001}},
+                    },
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "console-continuation-receipt.json").unlink()
+    (tmp_path / "provider-response-binding-receipt.json").write_text(
+        json.dumps(
+            {
+                "provider_thread_id": "native-1",
+                "provider_response_source_kind": "stdout_path",
+                "provider_response_source_path": "/stdout/provider.jsonl",
+                "provider_response_source_sha256": f"sha256:{hashlib.sha256(stdout_source.read_bytes()).hexdigest()}",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = omp_native_model_evidence(
+        tmp_path,
+        source_canary="omp_console_lifecycle",
+        qualification_model="openrouter/fixture-model",
+        api_key_configured=True,
+        first_turn_only=True,
+    )
+
+    assert evidence is not None
+    assert evidence["model"] == "openrouter/fixture-model"
+    assert evidence["result_event"]["usage"]["output"] == 2
+
+
 def _write_omp_console_settlement_fixture(tmp_path, *, first_turn_events, later_events=(), malformed_suffix=b""):
     native_source = tmp_path / "provider-sources" / "native.jsonl"
     native_source.parent.mkdir()

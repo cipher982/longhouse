@@ -163,6 +163,13 @@ def omp_native_model_evidence(
         expected_native_id = str(binding.get("provider_thread_id") or dispatch.get("provider_thread_id") or "")
         first_turn = _first_turn_source_window(evidence_root, sources, expected_native_id=expected_native_id)
         if first_turn is None:
+            first_turn = _first_turn_source_window_from_response_binding(
+                evidence_root,
+                sources,
+                binding=binding,
+                expected_native_id=expected_native_id,
+            )
+        if first_turn is None:
             return None
         selected_source, selected_source_relative, _, first_turn_events = first_turn
         assistant_messages = [
@@ -387,6 +394,60 @@ def _first_turn_source_window(
         return None
     relative_path = source_path.relative_to(root.resolve()).as_posix()
     return source_path, relative_path, source_bytes, first_turn_events
+
+
+def _first_turn_source_window_from_response_binding(
+    root: Path,
+    sources: list[object],
+    *,
+    binding: Mapping[str, Any],
+    expected_native_id: str = "",
+) -> tuple[Path, str, bytes, list[Mapping[str, Any]]] | None:
+    """Use the bound first provider response when continuation evidence is absent.
+
+    A semantic canary can fail after the provider has already completed its
+    first model turn, before the continuation receipt is written. The response
+    binding is still an exact, digest-bound source boundary for that turn; use
+    it for model-call accounting rather than misclassifying a real provider
+    response as an unauthenticated run.
+    """
+
+    source_kind = binding.get("provider_response_source_kind")
+    source_ref = binding.get("provider_response_source_path")
+    source_digest = binding.get("provider_response_source_sha256")
+    if (
+        source_kind not in {"source_path", "stdout_path"}
+        or not isinstance(source_ref, str)
+        or not source_ref
+        or not isinstance(source_digest, str)
+    ):
+        return None
+    matching_rows = [
+        item
+        for item in sources
+        if isinstance(item, Mapping)
+        and item.get("retained") is True
+        and item.get("kind") == source_kind
+        and item.get("source") == source_ref
+    ]
+    if len(matching_rows) != 1:
+        return None
+    retained_path = matching_rows[0].get("path")
+    source_path = _retained_source_path(root, retained_path)
+    if source_path is None:
+        return None
+    try:
+        source_bytes = source_path.read_bytes()
+    except OSError:
+        return None
+    if f"sha256:{hashlib.sha256(source_bytes).hexdigest()}" != source_digest:
+        return None
+    events, malformed = _parse_native_events(source_bytes)
+    if malformed or (
+        expected_native_id and not any(event.get("type") == "session" and event.get("id") == expected_native_id for event in events)
+    ):
+        return None
+    return source_path, source_path.relative_to(root.resolve()).as_posix(), source_bytes, events
 
 
 def _native_settlement(root: Path) -> dict[str, object]:
