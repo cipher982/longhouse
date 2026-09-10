@@ -304,6 +304,10 @@ _CURSOR_INJECTION_MARKERS = (
     "<system_reminder>",
     "<attached_files>",
     "<system_notification>",
+    "<available_subagent_types>",
+    "<available_subagent_models>",
+    "<dynamic_tool_catalog>",
+    "<dynamic_tool_namespaces>",
 )
 _CURSOR_INJECTION_TAGS = tuple((marker, marker.replace("<", "</", 1)) for marker in _CURSOR_INJECTION_MARKERS)
 
