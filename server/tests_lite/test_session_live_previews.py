@@ -160,6 +160,109 @@ def _omp_event(
     )
 
 
+def _omp_helm_event(
+    *,
+    session_id,
+    occurred_at: datetime,
+    seq: int,
+    live_text: str,
+    turn_id: str = "omp-turn-1",
+    turn_completed: bool = False,
+) -> RuntimeEventIngest:
+    run_id = "00000000-0000-0000-0000-000000000001"
+    return RuntimeEventIngest(
+        runtime_key=f"omp:{session_id}",
+        session_id=session_id,
+        run_id=run_id,
+        provider="omp",
+        device_id="cinder",
+        source="omp_helm_channel",
+        kind="progress_signal",
+        occurred_at=occurred_at,
+        dedupe_key=f"omp-helm:stream:{session_id}:{turn_id}:{seq}",
+        payload={
+            "progress_kind": "omp_helm_stream",
+            "run_id": run_id,
+            "turn_id": turn_id,
+            "seq": seq,
+            "live_text": live_text,
+            "turn_completed": turn_completed,
+        },
+    )
+
+
+def test_omp_helm_stream_projects_live_text_across_turns(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "omp_helm_stream.db")
+    now = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="omp")
+        partial = _omp_helm_event(
+            session_id=session.id,
+            occurred_at=now,
+            seq=1,
+            live_text="partial answer",
+        )
+        settled = _omp_helm_event(
+            session_id=session.id,
+            occurred_at=now + timedelta(milliseconds=10),
+            seq=2,
+            live_text="final answer",
+            turn_completed=True,
+        )
+        next_turn = _omp_helm_event(
+            session_id=session.id,
+            occurred_at=now + timedelta(seconds=1),
+            seq=1,
+            live_text="next answer",
+            turn_id="omp-turn-2",
+            turn_completed=True,
+        )
+
+        assert ingest_runtime_events(db, [partial, settled, next_turn]).accepted == 3
+        db.commit()
+        row = db.get(SessionLivePreview, session.id)
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert row is not None
+    assert row.source == "omp_helm_channel"
+    assert row.turn_key == f"omp_helm_channel:{session.id}:unknown-thread:omp-turn-2"
+    assert preview.text == "next answer"
+    assert preview.provisional_complete is True
+
+
+def test_omp_helm_stream_projects_live_text_and_completion(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "omp_helm_stream.db")
+    now = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1), provider="omp")
+        partial = _omp_helm_event(
+            session_id=session.id,
+            occurred_at=now,
+            seq=1,
+            live_text="partial answer",
+        )
+        settled = _omp_helm_event(
+            session_id=session.id,
+            occurred_at=now + timedelta(milliseconds=10),
+            seq=2,
+            live_text="final answer",
+            turn_completed=True,
+        )
+
+        assert ingest_runtime_events(db, [partial, settled]).accepted == 2
+        db.commit()
+        row = db.get(SessionLivePreview, session.id)
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert row is not None
+    assert row.source == "omp_helm_channel"
+    assert row.turn_key == f"omp_helm_channel:{session.id}:unknown-thread:omp-turn-1"
+    assert preview.text == "final answer"
+    assert preview.provisional_complete is True
+
+
 def test_omp_print_stream_projects_partial_and_settled_assistant_message(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "omp_print_stream.db")
     now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)

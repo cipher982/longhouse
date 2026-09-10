@@ -530,6 +530,58 @@ def test_served_run_inventory_accepts_canonical_ended_terminal_state(monkeypatch
     assert evidence["active_run_count"] == 0
 
 
+def test_served_run_inventory_uses_terminal_facts_when_activity_head_is_unknown(monkeypatch):
+    monkeypatch.setattr(
+        lifecycle,
+        "_request",
+        lambda *_args: {
+            "session_id": "session-1",
+            "served_path": "canonical_session_detail",
+            "shadow": {
+                "run": {"id": "run-1", "lifecycle": "ended"},
+                "activity": {"state": "unknown"},
+            },
+        },
+    )
+
+    evidence = lifecycle._served_run_inventory_evidence(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        [{"session_id": "session-1", "run_id": "run-1", "state": "terminal"}],
+    )
+
+    assert evidence["retired"] is True
+    assert evidence["active_run_count"] == 0
+    assert evidence["activity_state"] == "unknown"
+    assert evidence["activity_state_authority"] == "diagnostic_head"
+
+
+def test_served_run_inventory_rejects_explicitly_active_activity_head(monkeypatch):
+    monkeypatch.setattr(
+        lifecycle,
+        "_request",
+        lambda *_args: {
+            "session_id": "session-1",
+            "served_path": "canonical_session_detail",
+            "shadow": {
+                "run": {"id": "run-1", "lifecycle": "ended"},
+                "activity": {"state": "executing"},
+            },
+        },
+    )
+
+    evidence = lifecycle._served_run_inventory_evidence(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        [{"session_id": "session-1", "run_id": "run-1", "state": "terminal"}],
+    )
+
+    assert evidence["retired"] is False
+    assert evidence["active_run_count"] is None
+
+
 @pytest.mark.parametrize(
     ("served_session_id", "served_run_id"),
     [("other-session", "run-1"), ("session-1", "old-run")],

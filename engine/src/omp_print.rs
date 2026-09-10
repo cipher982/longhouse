@@ -25,6 +25,7 @@ use crate::managed_identity_contract::ManagedProvider;
 
 pub const OMP_PRINT_ADAPTER: &str = "omp_print";
 pub const DEFAULT_OMP_BIN: &str = "omp";
+const TERMINAL_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub struct OmpPrintRunConfig {
@@ -427,6 +428,7 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
     let mut offset = 0_u64;
     let mut pending = Vec::new();
     let mut seq = 0_u64;
+    let mut terminal_drain_deadline = None;
     sink.post_phase("thinking", None, 0).await;
     loop {
         if let Err(error) = publish_stdout_growth(
@@ -438,7 +440,7 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
         )
         .await
         {
-            let cleanup_verified = cleanup_live_claim(&sink.run_id).await;
+            let cleanup_verified = cleanup_owned_child(child, &sink.run_id).await;
             let reason = if cleanup_verified {
                 error.to_string()
             } else {
@@ -446,6 +448,11 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
             };
             sink.post_terminal("run_failed", None, Some(reason)).await;
             return;
+        }
+        if projection.turn_settled {
+            terminal_drain_deadline.get_or_insert_with(|| Instant::now() + TERMINAL_DRAIN_GRACE);
+        } else {
+            terminal_drain_deadline = None;
         }
         refresh_owned_processes(&sink.run_id);
         match child.try_wait() {
@@ -497,9 +504,25 @@ async fn monitor_omp_print(child: &mut Child, stderr_path: &Path, mut sink: OmpP
                     .await;
                 return;
             }
-            Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
+            Ok(None) => {
+                if terminal_drain_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    let cleanup_verified = cleanup_owned_child(child, &sink.run_id).await;
+                    let reason = if cleanup_verified {
+                        format!(
+                            "OMP terminal event did not release the provider process within {}s",
+                            TERMINAL_DRAIN_GRACE.as_secs()
+                        )
+                    } else {
+                        "OMP terminal drain expired and owned process-group cleanup was not verified"
+                            .to_string()
+                    };
+                    sink.post_terminal("run_failed", None, Some(reason)).await;
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
             Err(error) => {
-                let cleanup_verified = cleanup_live_claim(&sink.run_id).await;
+                let cleanup_verified = cleanup_owned_child(child, &sink.run_id).await;
                 let reason = if cleanup_verified {
                     error.to_string()
                 } else {
@@ -525,6 +548,7 @@ async fn monitor_recovered_omp_claim(
     let mut offset = claim.projected_stdout_offset;
     let mut pending = Vec::new();
     let mut seq = claim.projected_seq;
+    let mut terminal_drain_deadline = None;
     sink.post_phase("thinking", None, seq).await;
     loop {
         if let Err(error) = publish_stdout_growth(
@@ -545,6 +569,11 @@ async fn monitor_recovered_omp_claim(
             };
             sink.post_terminal("run_failed", None, Some(reason)).await;
             return;
+        }
+        if projection.turn_settled {
+            terminal_drain_deadline.get_or_insert_with(|| Instant::now() + TERMINAL_DRAIN_GRACE);
+        } else {
+            terminal_drain_deadline = None;
         }
         refresh_owned_processes(&claim.run_id);
         let liveness = crate::turn_claims::default_registry()
@@ -587,6 +616,23 @@ async fn monitor_recovered_omp_claim(
             };
             sink.post_terminal(terminal_state, None, terminal_reason)
                 .await;
+            return;
+        }
+        if liveness == ClaimLiveness::Live
+            && terminal_drain_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            let cleanup_verified =
+                cleanup_recovered_process_group(&claim.run_id, &claim, sink.process_group_id).await;
+            let reason = if cleanup_verified {
+                format!(
+                    "OMP recovered terminal event did not release the provider process within {}s",
+                    TERMINAL_DRAIN_GRACE.as_secs()
+                )
+            } else {
+                "OMP recovered terminal drain expired and owned process-group cleanup was not verified"
+                    .to_string()
+            };
+            sink.post_terminal("run_failed", None, Some(reason)).await;
             return;
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -1203,6 +1249,17 @@ async fn cleanup_live_claim(run_id: &str) -> bool {
         && recorded_cleanup_verified
         && !crate::process_group::group_is_alive(pgid)
 }
+async fn cleanup_owned_child(child: &mut Child, run_id: &str) -> bool {
+    let _ = cleanup_live_claim(run_id).await;
+    let reaped = tokio::time::timeout(Duration::from_secs(2), child.wait())
+        .await
+        .is_ok_and(|result| result.is_ok());
+    if !reaped {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+    cleanup_live_claim(run_id).await
+}
 
 fn refresh_owned_processes(run_id: &str) {
     let Ok(registry) = crate::turn_claims::default_registry() else {
@@ -1683,6 +1740,61 @@ for event in events:
 
         assert!(!cleanup_live_claim(&run_id).await);
         assert!(!waiter.join().unwrap().success());
+        match previous_home {
+            Some(home) => unsafe { std::env::set_var("LONGHOUSE_HOME", home) },
+            None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },
+        }
+    }
+    #[tokio::test]
+    async fn live_cleanup_reaps_owned_child_before_verifying_group_death() {
+        use std::os::unix::process::CommandExt;
+
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let previous_home = std::env::var_os("LONGHOUSE_HOME");
+        unsafe {
+            std::env::set_var("LONGHOUSE_HOME", &longhouse_home);
+        }
+        let registry = crate::turn_claims::default_registry().unwrap();
+        let run_id = Uuid::new_v4().to_string();
+        let session_id = Uuid::new_v4().to_string();
+        let thread_id = Uuid::new_v4().to_string();
+        registry
+            .claim(&run_id, &session_id, &thread_id, None, None, "omp")
+            .unwrap();
+        let mut child = Command::new("sleep");
+        child.arg("30");
+        unsafe {
+            child.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = child.spawn().unwrap();
+        let child_pid = child.id().unwrap();
+        let process_group_id = i32::try_from(child_pid).unwrap();
+        registry
+            .mark_spawned_invocation(
+                &run_id,
+                child_pid,
+                process_group_id,
+                crate::turn_claims::process_start_time_for_pid(Some(child_pid)),
+                OMP_PRINT_ADAPTER,
+                "launch",
+                None,
+                "/tmp/stdout.log",
+                "/tmp/stderr.log",
+                json!({}),
+            )
+            .unwrap();
+        refresh_owned_processes(&run_id);
+
+        assert!(cleanup_owned_child(&mut child, &run_id).await);
+        assert!(child.try_wait().unwrap().is_some());
+
         match previous_home {
             Some(home) => unsafe { std::env::set_var("LONGHOUSE_HOME", home) },
             None => unsafe { std::env::remove_var("LONGHOUSE_HOME") },

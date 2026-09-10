@@ -167,7 +167,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ab3b4493dd8fa9babcdaac9beff7c0033019781a76606e9574af2537b8a465cb"
+              "oracle_digest": "d0005c8c201eeb483e00fe3bf7380419806610038a0c486ac217a2d9e1eb9b12"
             }
           ]
         },
@@ -1041,7 +1041,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ab3b4493dd8fa9babcdaac9beff7c0033019781a76606e9574af2537b8a465cb"
+              "oracle_digest": "d0005c8c201eeb483e00fe3bf7380419806610038a0c486ac217a2d9e1eb9b12"
             },
             {
               "id": "real_print_marker_returned",
@@ -1552,7 +1552,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ab3b4493dd8fa9babcdaac9beff7c0033019781a76606e9574af2537b8a465cb"
+              "oracle_digest": "d0005c8c201eeb483e00fe3bf7380419806610038a0c486ac217a2d9e1eb9b12"
             }
           ]
         },
@@ -2280,7 +2280,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "19419ed89b7cacd6e253c139ac3be649bf7768e2eb7881286b0bec34ec472c91"
+      "adapter_digest": "8e804d6d6d0c2da33b4459bddc1bf73b2b345a06a52ba5ec03d2a5161c9502e5"
     },
     {
       "provider": "cursor",
@@ -2434,7 +2434,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ab3b4493dd8fa9babcdaac9beff7c0033019781a76606e9574af2537b8a465cb"
+              "oracle_digest": "d0005c8c201eeb483e00fe3bf7380419806610038a0c486ac217a2d9e1eb9b12"
             }
           ]
         },
@@ -3283,10 +3283,16 @@
         "engine/src/discovery.rs",
         "engine/src/pipeline/parser.rs",
         "engine/src/storage_v2_shipper.rs",
+        "engine/src/daemon.rs",
+        "engine/src/heartbeat.rs",
+        "engine/src/managed_omp_helm_scan.rs",
         "engine/src/omp_helm_launcher.rs",
         "engine/src/omp_helm_control.rs",
         "engine/assets/longhouse-omp-helm.ts",
         "engine/src/omp_print.rs",
+        "server/zerg/services/session_live_previews.py",
+        "server/zerg/services/session_runtime.py",
+        "server/zerg/services/provider_interaction_semantics.py",
         "server/zerg/qa/provider_adapters/omp.py",
         "server/zerg/qa/omp_console_producer.py",
         "server/zerg/qa/omp_helm_lifecycle.py"
@@ -3525,7 +3531,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
+              "oracle_digest": "d2a4b6b8e27e0ce48a5fcac4a7fff9ec6cbd6a7373a24068c83223ed274673f7"
             },
             {
               "id": "omp_helm_send_idle",
@@ -3536,7 +3542,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
+              "oracle_digest": "d2a4b6b8e27e0ce48a5fcac4a7fff9ec6cbd6a7373a24068c83223ed274673f7"
             },
             {
               "id": "omp_helm_follow_up_native",
@@ -3547,7 +3553,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
+              "oracle_digest": "d2a4b6b8e27e0ce48a5fcac4a7fff9ec6cbd6a7373a24068c83223ed274673f7"
             },
             {
               "id": "omp_helm_steer_active",
@@ -3558,7 +3564,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
+              "oracle_digest": "d2a4b6b8e27e0ce48a5fcac4a7fff9ec6cbd6a7373a24068c83223ed274673f7"
             },
             {
               "id": "omp_helm_abort_native",
@@ -3569,7 +3575,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
+              "oracle_digest": "d2a4b6b8e27e0ce48a5fcac4a7fff9ec6cbd6a7373a24068c83223ed274673f7"
             },
             {
               "id": "omp_helm_terminate_owned",
@@ -3580,7 +3586,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
+              "oracle_digest": "d2a4b6b8e27e0ce48a5fcac4a7fff9ec6cbd6a7373a24068c83223ed274673f7"
             },
             {
               "id": "omp_helm_native_replacement_bound",
@@ -3591,7 +3597,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
+              "oracle_digest": "d2a4b6b8e27e0ce48a5fcac4a7fff9ec6cbd6a7373a24068c83223ed274673f7"
             }
           ]
         },
@@ -3618,7 +3624,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
+              "oracle_digest": "d2a4b6b8e27e0ce48a5fcac4a7fff9ec6cbd6a7373a24068c83223ed274673f7"
             },
             {
               "id": "omp_helm_stale_owner_refused",
@@ -3629,7 +3635,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
+              "oracle_digest": "d2a4b6b8e27e0ce48a5fcac4a7fff9ec6cbd6a7373a24068c83223ed274673f7"
             }
           ]
         },
@@ -3651,12 +3657,12 @@
               "id": "omp_console_turn_settled_and_bound",
               "scenario_id": "omp_console_lifecycle",
               "oracle_source": "server/zerg/qa/omp_console_producer.py",
-              "minimum_scenario_revision": 6,
+              "minimum_scenario_revision": 7,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8975c2070b4e563aa37450cfbffb67e8c6a403dc4c842828dcb7890560afebfa"
+              "oracle_digest": "d2caba9cb7207939fd52eb607a3c84e35211d3b9b9b09b1379c01efb5514cfb1"
             }
           ]
         }
@@ -3719,7 +3725,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "71d0a450c01abb69432cd559db787c14cbc09279b461239b8e18d0e53b2570ef"
+      "adapter_digest": "5d9b92cff71844eaf7e83bbe48aaebe71ad7771312916c0c9910cb082f06d9ce"
     }
   ]
 }

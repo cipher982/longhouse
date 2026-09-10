@@ -2099,10 +2099,16 @@ providers:
   - engine/src/discovery.rs
   - engine/src/pipeline/parser.rs
   - engine/src/storage_v2_shipper.rs
+  - engine/src/daemon.rs
+  - engine/src/heartbeat.rs
+  - engine/src/managed_omp_helm_scan.rs
   - engine/src/omp_helm_launcher.rs
   - engine/src/omp_helm_control.rs
   - engine/assets/longhouse-omp-helm.ts
   - engine/src/omp_print.rs
+  - server/zerg/services/session_live_previews.py
+  - server/zerg/services/session_runtime.py
+  - server/zerg/services/provider_interaction_semantics.py
   - server/zerg/qa/provider_adapters/omp.py
   - server/zerg/qa/omp_console_producer.py
   - server/zerg/qa/omp_helm_lifecycle.py
@@ -2251,7 +2257,7 @@ providers:
       - id: omp_console_turn_settled_and_bound
         scenario_id: omp_console_lifecycle
         oracle_source: server/zerg/qa/omp_console_producer.py
-        minimum_scenario_revision: 6
+        minimum_scenario_revision: 7
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
   transcript_signals:

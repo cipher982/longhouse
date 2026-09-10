@@ -727,21 +727,9 @@ def _exact_session_retirement(receipt: Mapping[str, Any] | None, session_id: str
     )
 
 
-def _wait_native_terminal(
-    session_file: Path,
-    *,
-    minimum_offset: int = 0,
-    timeout: float = 90,
-) -> dict[str, Any]:
-    def observe() -> dict[str, Any] | None:
-        for row in _native_rows(session_file, minimum_offset):
-            if row.get("type") != "agent_end":
-                continue
-            if _is_terminal_agent_end(row):
-                return row
-        return None
-
-    return _wait(observe, timeout=timeout, description="OMP native terminal agent_end")
+def _turn_sequence(state: Mapping[str, Any]) -> int:
+    value = state.get("live_turn_seq")
+    return value if type(value) is int and value >= 0 else 0
 
 
 def _wait_channel_terminal(
@@ -750,6 +738,7 @@ def _wait_channel_terminal(
     session_id: str,
     native_session_id: str,
     session_file: Path,
+    minimum_turn_seq: int = 0,
     timeout: float = 90,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     def observe() -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -760,6 +749,7 @@ def _wait_channel_terminal(
             state.get("ready") is True
             and state.get("native_session_id") == native_session_id
             and state.get("session_file") == str(session_file)
+            and _turn_sequence(state) >= minimum_turn_seq
             and state.get("agent_end_observed") is True
             and state.get("agent_end_is_terminal") is True
         ):
@@ -906,21 +896,30 @@ def _runtime_post(api_url: str, token: str, path: str, payload: Mapping[str, Any
     }
     if body is not None:
         headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(
-        f"{api_url.rstrip('/')}{path}",
-        data=body,
-        method="POST",
-        headers=headers,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            value = json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Runtime Host HTTP {exc.code}: {detail[:500]}") from exc
-    if not isinstance(value, dict):
-        raise RuntimeError("Runtime Host returned a non-object control response")
-    return value
+    for attempt in range(60):
+        request = urllib.request.Request(
+            f"{api_url.rstrip('/')}{path}",
+            data=body,
+            method="POST",
+            headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                value = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            # TranscriptShipper.flush restarts the real Machine Agent after
+            # the storage proof. The control websocket can take a few seconds
+            # to re-register; do not mistake that bounded reconnect window for
+            # a failed provider control path.
+            if exc.code == 409 and "live longhouse control channel" in detail.lower() and attempt < 59:
+                time.sleep(0.5)
+                continue
+            raise RuntimeError(f"Runtime Host HTTP {exc.code}: {detail[:500]}") from exc
+        if not isinstance(value, dict):
+            raise RuntimeError("Runtime Host returned a non-object control response")
+        return value
+    raise RuntimeError("Runtime Host control request exhausted reconnect attempts")
 
 
 def _run_engine(
@@ -1325,6 +1324,22 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         current_state = _wait_state(longhouse_home)
         current_session_id = str(current_state["session_id"])
         current_session_file = Path(str(current_state["session_file"]))
+        owner_records.append(
+            _process_record(
+                current_state.get("launcher_pid"),
+                current_state.get("launcher_process_start_time"),
+                "launcher",
+                owner="initial",
+            )
+        )
+        owner_records.append(
+            _process_record(
+                current_state.get("provider_pid"),
+                current_state.get("provider_process_start_time"),
+                "provider",
+                owner="initial",
+            )
+        )
         _register_native_source(
             source_claims,
             label="initial",
@@ -1334,11 +1349,18 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         initial_session_file = current_session_file
         initial_row = _wait_native_marker(current_session_file, initial_marker)
+        initial_channel_state = _wait_state(
+            longhouse_home,
+            session_id=current_session_id,
+            predicate=lambda value: (value.get("agent_end_observed") is True and _turn_sequence(value) >= _turn_sequence(current_state)),
+            timeout=90,
+        )
         _wait_channel_terminal(
             longhouse_home,
             session_id=current_session_id,
             native_session_id=str(current_state.get("native_session_id") or ""),
             session_file=current_session_file,
+            minimum_turn_seq=_turn_sequence(initial_channel_state),
         )
         initial_flush = shipper.flush("omp-helm-initial")
         if not _flush_receipt_complete(initial_flush):
@@ -1356,22 +1378,6 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         observation["omp_transcript_flush_completed"] = initial_convergence.get("status") == "pass"
         observation["omp_runtime_transcript_converged"] = observation["omp_transcript_flush_completed"]
         observation["runtime_convergence"] = runtime_convergence
-        owner_records.append(
-            _process_record(
-                current_state.get("launcher_pid"),
-                current_state.get("launcher_process_start_time"),
-                "launcher",
-                owner="initial",
-            )
-        )
-        owner_records.append(
-            _process_record(
-                current_state.get("provider_pid"),
-                current_state.get("provider_process_start_time"),
-                "provider",
-                owner="initial",
-            )
-        )
         old_state = dict(current_state)
         old_native_id = str(current_state.get("native_session_id") or "")
         if first.alive() is not True:
@@ -1566,6 +1572,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         observation["steer_evidence"] = steer_evidence
 
+        abort_idle_state = _wait_state(
+            longhouse_home,
+            session_id=current_session_id,
+            predicate=lambda value: value.get("phase") == "idle",
+            timeout=30,
+        )
         abort_marker = f"OMP_HELM_ABORT_{os.urandom(8).hex()}"
         active_for_abort = _run_engine(
             args.engine,
@@ -1574,10 +1586,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             env,
             text=f"Run the shell command `sleep 15`, then reply with exactly {abort_marker}.",
         )
-        _wait_state(
+        abort_active_state = _wait_state(
             longhouse_home,
             session_id=current_session_id,
-            predicate=lambda value: value.get("phase") in {"running", "thinking"},
+            predicate=lambda value: (
+                value.get("phase") in {"running", "thinking"} and _turn_sequence(value) > _turn_sequence(abort_idle_state)
+            ),
             timeout=30,
         )
         abort_offset = _read_source_size(current_session_file)
@@ -1587,6 +1601,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             session_id=current_session_id,
             native_session_id=str(current_state.get("native_session_id") or ""),
             session_file=current_session_file,
+            minimum_turn_seq=_turn_sequence(abort_active_state),
         )
         abort_evidence = _channel_terminal_evidence(
             abort_end,
@@ -1790,18 +1805,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             session_id=current_session_id,
             native_session_id=str(resume_state.get("native_session_id") or ""),
             session_file=resume_file,
+            minimum_turn_seq=_turn_sequence(resume_state),
         )
         resume_marker_evidence = _native_marker_evidence(
             resume_row,
             resume_file,
             marker=resume_marker,
-            minimum_offset=resume_offset,
-            native_session_id=str(resume_state.get("native_session_id") or ""),
-        )
-        resume_context_evidence = _native_marker_evidence(
-            resume_context_row,
-            resume_file,
-            marker=context_phrase,
             minimum_offset=resume_offset,
             native_session_id=str(resume_state.get("native_session_id") or ""),
         )
@@ -1812,6 +1821,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             minimum_offset=resume_offset,
             native_session_id=str(resume_state.get("native_session_id") or ""),
             role="user",
+        )
+        resume_context_evidence = _native_marker_evidence(
+            resume_context_row,
+            resume_file,
+            marker=context_phrase,
+            minimum_offset=resume_offset,
+            native_session_id=str(resume_state.get("native_session_id") or ""),
         )
         context_recalled = (
             context_seed_evidence["native_source_bound"]

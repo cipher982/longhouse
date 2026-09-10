@@ -1749,6 +1749,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 opencode_count = result.opencode_observations.len(),
                                 cursor_count = result.cursor_observations.len(),
                                 pi_count = result.pi_observations.len(),
+                                omp_count = result.omp_observations.len(),
+                                omp_live_count = result.omp_observations.iter().filter(|observation| observation.live).count(),
                                 process_inventory_ms = result.process_inventory_ms,
                                 codex_elapsed_ms = result.codex_elapsed_ms,
                                 antigravity_elapsed_ms = result.antigravity_elapsed_ms,
@@ -1756,6 +1758,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 opencode_elapsed_ms = result.opencode_elapsed_ms,
                                 cursor_elapsed_ms = result.cursor_elapsed_ms,
                                 pi_elapsed_ms = result.pi_elapsed_ms,
+                                omp_elapsed_ms = result.omp_elapsed_ms,
                                 retained_stale_rows = result.retained_stale_rows,
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan was slow"
@@ -1771,6 +1774,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 opencode_count = result.opencode_observations.len(),
                                 cursor_count = result.cursor_observations.len(),
                                 pi_count = result.pi_observations.len(),
+                                omp_count = result.omp_observations.len(),
+                                omp_live_count = result.omp_observations.iter().filter(|observation| observation.live).count(),
                                 process_inventory_ms = result.process_inventory_ms,
                                 codex_elapsed_ms = result.codex_elapsed_ms,
                                 antigravity_elapsed_ms = result.antigravity_elapsed_ms,
@@ -1778,6 +1783,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 opencode_elapsed_ms = result.opencode_elapsed_ms,
                                 cursor_elapsed_ms = result.cursor_elapsed_ms,
                                 pi_elapsed_ms = result.pi_elapsed_ms,
+                                omp_elapsed_ms = result.omp_elapsed_ms,
                                 retained_stale_rows = result.retained_stale_rows,
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan completed"

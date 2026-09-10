@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -11,6 +14,7 @@ from zerg.qa.omp_console_producer import _PROFILE as CONSOLE_PROFILE
 from zerg.qa.omp_console_producer import ASSERTION_ID as CONSOLE_ASSERTION
 from zerg.qa.omp_console_producer import REGISTRATION as CONSOLE_REGISTRATION
 from zerg.qa.omp_console_producer import _is_terminal_agent_end
+from zerg.qa.omp_console_producer import _native_settlement as omp_console_settlement
 from zerg.qa.omp_console_producer import omp_console_assertions
 from zerg.qa.omp_console_producer import omp_native_model_evidence
 from zerg.qa.omp_helm_lifecycle import _PROFILE as HELM_PROFILE
@@ -33,15 +37,16 @@ from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
 from zerg.qa.omp_helm_lifecycle import _runtime_convergence
 from zerg.qa.omp_helm_lifecycle import _served_projection_evidence
 from zerg.qa.omp_helm_lifecycle import omp_helm_lifecycle_assertions
+from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
 from zerg.qa.provider_qualification import _PROFILES
 
 
 def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> None:
     assert CONSOLE_REGISTRATION.producer_id == "omp.console_lifecycle.v1"
-    assert CONSOLE_REGISTRATION.producer_revision == 6
+    assert CONSOLE_REGISTRATION.producer_revision == 7
     assert CONSOLE_REGISTRATION.providers == ("omp",)
     assert CONSOLE_REGISTRATION.scenario_id == "omp_console_lifecycle"
-    assert CONSOLE_REGISTRATION.scenario_revision == 6
+    assert CONSOLE_REGISTRATION.scenario_revision == 7
     assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
     assert HELM_REGISTRATION.producer_revision == 6
@@ -82,6 +87,7 @@ def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(m
         "ready": True,
         "native_session_id": "native-1",
         "session_file": str(tmp_path / "omp.jsonl"),
+        "live_turn_seq": 3,
         "agent_end_observed": True,
         "agent_end_is_terminal": True,
         "agent_end_will_continue": None,
@@ -100,6 +106,7 @@ def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(m
         session_id="session-1",
         native_session_id="native-1",
         session_file=tmp_path / "omp.jsonl",
+        minimum_turn_seq=3,
     )
 
     assert event == {"type": "agent_end", "source": "omp_helm_extension_channel"}
@@ -117,9 +124,21 @@ def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(m
         session_id="session-1",
         native_session_id="native-1",
         session_file=tmp_path / "omp.jsonl",
+        minimum_turn_seq=3,
     )
     assert event["isTerminal"] is True
     assert event["willContinue"] is False
+    state["live_turn_seq"] = 2
+    assert (
+        omp_helm_lifecycle._wait_channel_terminal(
+            tmp_path,
+            session_id="session-1",
+            native_session_id="native-1",
+            session_file=tmp_path / "omp.jsonl",
+            minimum_turn_seq=3,
+        )
+        is None
+    )
 
 
 def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_path) -> None:
@@ -128,6 +147,7 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
         "\n".join(
             json.dumps(event)
             for event in [
+                {"type": "session", "id": "native-1"},
                 {
                     "type": "message",
                     "model": "openrouter/fixture-model",
@@ -159,12 +179,14 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
         + "\n",
         encoding="utf-8",
     )
+    source_digest = f"sha256:{hashlib.sha256(source.read_bytes()).hexdigest()}"
     (tmp_path / "provider-source-retention.json").write_text(
         json.dumps(
             {
                 "sources": [
                     {
-                        "path": str(source),
+                        "source": str(source),
+                        "path": source.relative_to(tmp_path).as_posix(),
                         "kind": "source_path",
                         "retained": True,
                     }
@@ -173,12 +195,34 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
         ),
         encoding="utf-8",
     )
+    (tmp_path / "console-continuation-receipt.json").write_text(
+        json.dumps(
+            {
+                "first_turn_evidence": {
+                    "source_kind": "source_path",
+                    "retained_path": source.relative_to(tmp_path).as_posix(),
+                    "retained_source_path": str(source),
+                    "source_sha256": source_digest,
+                    "source_start_offset": 0,
+                    "source_end_offset": source.stat().st_size,
+                    "provider_thread_id": "native-1",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "adapter-dispatch-receipt.json").write_text(json.dumps({"provider_thread_id": "native-1"}), encoding="utf-8")
+    (tmp_path / "provider-response-binding-receipt.json").write_text(
+        json.dumps({"provider_thread_id": "native-1"}),
+        encoding="utf-8",
+    )
 
     evidence = omp_native_model_evidence(
         tmp_path,
         source_canary="omp_console_lifecycle",
         qualification_model="openrouter/fixture-model",
         api_key_configured=True,
+        first_turn_only=True,
     )
 
     assert evidence is not None
@@ -194,6 +238,217 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
     assert artifact["event_sha256"].startswith("sha256:") and len(artifact["event_sha256"]) == 71
     assert artifact["native_event_sha256"].startswith("sha256:") and len(artifact["native_event_sha256"]) == 71
     assert evidence["result_event"]["model_source"] == "provider_event"
+
+
+def _write_omp_console_settlement_fixture(tmp_path, *, first_turn_events, later_events=(), malformed_suffix=b""):
+    native_source = tmp_path / "provider-sources" / "native.jsonl"
+    native_source.parent.mkdir()
+    first_turn_bytes = ("\n".join(json.dumps(event) for event in first_turn_events) + "\n").encode()
+    later_bytes = ("\n".join(json.dumps(event) for event in later_events) + "\n").encode() if later_events else b""
+    native_source.write_bytes(first_turn_bytes + later_bytes + malformed_suffix)
+
+    stdout_source = tmp_path / "provider-sources" / "stdout.jsonl"
+    stdout_source.write_text(json.dumps({"type": "agent_end"}) + "\n", encoding="utf-8")
+    native_relative = native_source.relative_to(tmp_path).as_posix()
+    stdout_relative = stdout_source.relative_to(tmp_path).as_posix()
+    (tmp_path / "provider-source-retention.json").write_text(
+        json.dumps(
+            {
+                "sources": [
+                    {
+                        "source": "/native/session.jsonl",
+                        "kind": "source_path",
+                        "path": native_relative,
+                        "retained": True,
+                    },
+                    {
+                        "source": "/stdout/provider.jsonl",
+                        "kind": "stdout_path",
+                        "path": stdout_relative,
+                        "retained": True,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "console-continuation-receipt.json").write_text(
+        json.dumps(
+            {
+                "first_turn_evidence": {
+                    "source_kind": "source_path",
+                    "retained_path": native_relative,
+                    "retained_source_path": "/native/session.jsonl",
+                    "source_sha256": f"sha256:{hashlib.sha256(native_source.read_bytes()).hexdigest()}",
+                    "source_start_offset": 0,
+                    "source_end_offset": len(first_turn_bytes),
+                    "provider_thread_id": "native-1",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "adapter-dispatch-receipt.json").write_text(json.dumps({"provider_thread_id": "native-1"}), encoding="utf-8")
+    (tmp_path / "provider-response-binding-receipt.json").write_text(
+        json.dumps(
+            {
+                "provider_thread_id": "native-1",
+                "marker": "OMP_FIRST_TURN_MARKER",
+                "tool_marker": "OMP_TOOL_OUTPUT",
+                "provider_response_source_kind": "stdout_path",
+                "provider_response_source_path": "/stdout/provider.jsonl",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "console-boundary-receipt.json").write_text(
+        json.dumps({"claim_state": "terminal", "claim_terminal_state": "run_completed"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "transcript-flush-receipt.json").write_text(
+        json.dumps({"status": "pass", "exit_code": 0}),
+        encoding="utf-8",
+    )
+    return native_source, first_turn_bytes
+
+
+def test_omp_native_settlement_binds_native_evidence_to_first_turn_and_keeps_stdout_terminal_separate(tmp_path) -> None:
+    marker = "OMP_FIRST_TURN_MARKER"
+    tool_marker = "OMP_TOOL_OUTPUT"
+    first_turn = [
+        {"type": "session", "id": "native-1"},
+        {"type": "message", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "call-1"}]}},
+        {"type": "message", "message": {"role": "toolResult", "toolCallId": "call-1", "content": tool_marker}},
+        {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]}},
+    ]
+    later_events = [
+        {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]}},
+    ]
+    _write_omp_console_settlement_fixture(tmp_path, first_turn_events=first_turn, later_events=later_events)
+
+    settlement = omp_console_settlement(tmp_path)
+
+    assert settlement["status"] == "pass"
+    assert settlement["agent_end_terminal"] is True
+    assert settlement["agent_end_evidence_source"] == "omp_print_projection"
+    assert settlement["provider_response_source_kind"] == "stdout_path"
+    assert settlement["native_archive_bound"] is True
+    assert settlement["native_marker_count"] == 1
+    assert settlement["native_tool_call_ids"] == ["call-1"]
+    assert settlement["native_tool_result_ids"] == ["call-1"]
+    assert settlement["native_tool_evidence_complete"] is True
+    assert settlement["malformed_source"] is False
+
+
+@pytest.mark.parametrize("failure", ("missing", "mismatched", "duplicate", "bad", "mid-line", "past-eof"))
+def test_omp_native_settlement_rejects_missing_mismatched_duplicate_or_invalid_first_turn_window(tmp_path, failure) -> None:
+    marker = "OMP_FIRST_TURN_MARKER"
+    source, first_turn_bytes = _write_omp_console_settlement_fixture(
+        tmp_path,
+        first_turn_events=[
+            {"type": "session", "id": "native-1"},
+            {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]}},
+        ],
+    )
+    continuation_path = tmp_path / "console-continuation-receipt.json"
+    continuation = json.loads(continuation_path.read_text(encoding="utf-8"))
+    if failure == "missing":
+        continuation.pop("first_turn_evidence")
+    elif failure == "mismatched":
+        continuation["first_turn_evidence"]["retained_source_path"] = "/other/session.jsonl"
+    elif failure == "duplicate":
+        retention_path = tmp_path / "provider-source-retention.json"
+        retention = json.loads(retention_path.read_text(encoding="utf-8"))
+        retention["sources"].append(dict(retention["sources"][0]))
+        retention_path.write_text(json.dumps(retention), encoding="utf-8")
+    elif failure == "bad":
+        continuation["first_turn_evidence"]["source_end_offset"] = 0
+    elif failure == "mid-line":
+        continuation["first_turn_evidence"]["source_end_offset"] = len(first_turn_bytes) - 1
+    elif failure == "past-eof":
+        continuation["first_turn_evidence"]["source_end_offset"] = source.stat().st_size + 1
+    continuation_path.write_text(json.dumps(continuation), encoding="utf-8")
+
+    settlement = omp_console_settlement(tmp_path)
+
+    assert settlement["status"] == "fail"
+    assert settlement["native_archive_bound"] is False
+    assert settlement["native_tool_evidence_complete"] is False
+
+
+def test_omp_native_settlement_rejects_malformed_records_outside_first_turn_window(tmp_path) -> None:
+    _write_omp_console_settlement_fixture(
+        tmp_path,
+        first_turn_events=[{"type": "session", "id": "native-1"}],
+        malformed_suffix=b"not-json\n",
+    )
+
+    settlement = omp_console_settlement(tmp_path)
+
+    assert settlement["status"] == "fail"
+    assert settlement["malformed_source"] is True
+    assert settlement["native_archive_bound"] is False
+
+
+def test_omp_native_settlement_ignores_tool_and_marker_evidence_outside_first_turn_window(tmp_path) -> None:
+    _write_omp_console_settlement_fixture(
+        tmp_path,
+        first_turn_events=[{"type": "session", "id": "native-1"}],
+        later_events=[
+            {"type": "message", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "late-call"}]}},
+            {"type": "message", "message": {"role": "toolResult", "toolCallId": "late-call", "content": "OMP_TOOL_OUTPUT"}},
+            {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "OMP_FIRST_TURN_MARKER"}]}},
+        ],
+    )
+
+    settlement = omp_console_settlement(tmp_path)
+
+    assert settlement["status"] == "fail"
+    assert settlement["native_marker_count"] == 0
+    assert settlement["native_tool_call_ids"] == []
+    assert settlement["native_tool_result_ids"] == []
+    assert settlement["native_tool_evidence_complete"] is False
+
+
+def test_omp_native_model_evidence_rejects_successful_model_event_outside_first_turn_window(tmp_path) -> None:
+    _write_omp_console_settlement_fixture(
+        tmp_path,
+        first_turn_events=[{"type": "session", "id": "native-1"}],
+        later_events=[
+            {
+                "type": "message",
+                "model": "openrouter/fixture-model",
+                "message": {
+                    "role": "assistant",
+                    "model": "openrouter/fixture-model",
+                    "stopReason": "stop",
+                    "content": [{"type": "text", "text": "late model"}],
+                    "usage": {"input": 1, "output": 1},
+                },
+            }
+        ],
+    )
+
+    assert (
+        omp_native_model_evidence(
+            tmp_path,
+            source_canary="omp_console_lifecycle",
+            qualification_model="openrouter/fixture-model",
+            api_key_configured=True,
+            first_turn_only=True,
+        )
+        is None
+    )
+
+
+def test_omp_continuation_prompt_names_the_earlier_context_label_without_tool_or_marker_replay() -> None:
+    prompt = _omp_continuation_prompt("OMP_RESUME_MARKER")
+
+    assert '"Remember this context phrase:"' in prompt
+    assert "earlier user message" in prompt
+    assert "Do not use tools" in prompt
+    assert "repeat an assistant marker" in prompt
+    assert "OMP_RESUME_MARKER" in prompt
 
 
 def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None:
@@ -250,6 +505,47 @@ def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None
     assert result["request"]["path"] == result["path"]
     assert result["request"]["payload"]["text"] == "redirect now"
     assert result["request"]["payload"]["intent"] == "steer"
+
+
+def test_omp_runtime_control_retries_machine_agent_reconnect(monkeypatch) -> None:
+    attempts = 0
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"outcome": "sent"}'
+
+    def _urlopen(_request, timeout):
+        nonlocal attempts
+        assert timeout == 20
+        attempts += 1
+        if attempts < 3:
+            raise urllib.error.HTTPError(
+                "https://runtime.test/api/agents/sessions/session-1/input",
+                409,
+                "conflict",
+                {},
+                io.BytesIO(b'{"detail":"no live Longhouse control channel"}'),
+            )
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr(omp_helm_lifecycle.time, "sleep", lambda _seconds: None)
+
+    response = omp_helm_lifecycle._runtime_post(
+        "https://runtime.test",
+        "agent-token",
+        "/api/agents/sessions/session-1/input",
+        {"text": "hello"},
+    )
+
+    assert response == {"outcome": "sent"}
+    assert attempts == 3
 
 
 def test_omp_channel_ack_binds_real_runtime_input_response_to_channel_state() -> None:

@@ -83,6 +83,7 @@ pub(crate) fn collect_observations_from_paths(
         let launcher_alive = state.launcher_pid.is_some_and(|pid| {
             process_facts.get(&pid).is_some_and(|fact| {
                 (fact.command.contains("omp_helm")
+                    || fact.command.contains("omp-helm")
                     || (fact.command.contains("longhouse") && fact.command.contains("omp")))
                     && state
                         .launcher_process_start_time
@@ -175,5 +176,60 @@ mod tests {
         assert!(!observations[0].live);
         assert_eq!(observations[0].run_id.as_deref(), Some("run"));
         assert_eq!(observations[0].native_session_id.as_deref(), Some("native"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn hyphenated_omp_helm_launcher_is_live() {
+        use crate::process_identity::ProcessFact;
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("channel.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let state = serde_json::json!({
+            "session_id": "session",
+            "native_session_id": "native",
+            "run_id": "run",
+            "connection_id": "connection",
+            "lease_generation": "generation",
+            "socket_path": socket,
+            "launcher_pid": 1111,
+            "launcher_process_start_time": "birth",
+            "provider_pid": 2222,
+            "provider_process_start_time": "birth",
+            "status": "ready",
+            "ready": true,
+            "started_at": "2026-09-09T00:00:00Z",
+            "updated_at": "2026-09-09T00:00:01Z"
+        });
+        let path = dir.path().join("session.json");
+        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+        let facts = HashMap::from([
+            (
+                1111,
+                ProcessFact {
+                    pid: 1111,
+                    tty: "??".into(),
+                    stat: "S".into(),
+                    lstart: "birth".into(),
+                    command: "longhouse-engine omp-helm launch --cwd /tmp".into(),
+                    start_time: None,
+                },
+            ),
+            (
+                2222,
+                ProcessFact {
+                    pid: 2222,
+                    tty: "??".into(),
+                    stat: "S".into(),
+                    lstart: "birth".into(),
+                    command: "omp".into(),
+                    start_time: None,
+                },
+            ),
+        ]);
+        let observations = collect_observations_from_paths(&[path], &facts);
+        assert_eq!(observations.len(), 1);
+        assert!(observations[0].live);
     }
 }

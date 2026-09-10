@@ -41,6 +41,8 @@ const NATIVE_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 const TRANSITION_RECONCILE_GRACE: Duration = Duration::from_secs(5);
 const MAX_FRAME_BYTES: usize = 512 * 1024;
 const MAX_PENDING_COMMANDS: usize = 64;
+const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
+
 const EXTENSION_ASSET: &str = include_str!("../assets/longhouse-omp-helm.ts");
 
 pub struct LaunchConfig {
@@ -96,6 +98,10 @@ struct OmpHelmStateFile {
     agent_end_is_terminal_present: bool,
     #[serde(default)]
     agent_end_will_continue_present: bool,
+    #[serde(default)]
+    live_turn_seq: u64,
+    #[serde(default)]
+    live_message_seq: u64,
     terminal_state: Option<String>,
     terminal_reason: Option<String>,
     exit_code: Option<i32>,
@@ -109,6 +115,10 @@ struct SharedState {
     extension_sender: Option<mpsc::Sender<Value>>,
     extension_connection_id: Option<String>,
     pending: HashMap<String, mpsc::Sender<Value>>,
+    live_assistant_text: String,
+    live_text_seq: u64,
+    live_turn_seq: u64,
+    live_message_seq: u64,
 }
 
 #[derive(Clone)]
@@ -139,6 +149,10 @@ impl OmpHelmServer {
                 extension_sender: None,
                 extension_connection_id: None,
                 pending: HashMap::new(),
+                live_assistant_text: String::new(),
+                live_text_seq: 0,
+                live_turn_seq: 0,
+                live_message_seq: 0,
             })),
             socket_path,
             state_path,
@@ -431,6 +445,10 @@ impl OmpHelmServer {
         state.state.pending_transition = false;
         state.state.ready = true;
         state.state.status = "ready".into();
+        if previous != native_id {
+            state.live_assistant_text.clear();
+            state.live_text_seq = 0;
+        }
         state.state.updated_at = Utc::now().to_rfc3339();
         drop(state);
         self.persist_state()?;
@@ -574,6 +592,8 @@ impl OmpHelmServer {
             | "tool_execution_start"
             | "tool_execution_update"
             | "tool_execution_end"
+            | "message_start"
+            | "message_end"
             | "message_update" => self.record_activity(kind, &frame),
             "agent_end" => {
                 // OMP's session event is the authoritative distinction between
@@ -626,6 +646,15 @@ impl OmpHelmServer {
         );
     }
 
+    fn append_live_text(target: &mut String, delta: &str) {
+        for character in delta.chars() {
+            if target.len() + character.len_utf8() > MAX_LIVE_TEXT_BYTES {
+                break;
+            }
+            target.push(character);
+        }
+    }
+
     fn record_activity(&self, kind: &str, frame: &Value) {
         let event = frame.get("event");
         let phase = match kind {
@@ -641,38 +670,63 @@ impl OmpHelmServer {
             | "tool_execution_start"
             | "tool_execution_update"
             | "tool_execution_end" => "running",
-            "message_update" => "thinking",
+            "message_start" | "message_end" | "message_update" => "thinking",
             _ => return,
         };
         let tool = event
             .and_then(|value| value.get("toolName"))
             .and_then(Value::as_str)
             .map(str::to_string);
+        let turn_completed = kind == "agent_end" && is_terminal_agent_end(event);
+        let live_delta = (kind == "message_update")
+            .then(|| omp_live_text_delta(event).map(str::to_string))
+            .flatten();
         let mut state = self.shared.lock().expect("OMP state mutex poisoned");
         if kind == "agent_start" {
+            state.live_turn_seq = state.live_turn_seq.saturating_add(1);
+            state.live_message_seq = 0;
+            state.state.live_turn_seq = state.live_turn_seq;
+            state.state.live_message_seq = 0;
             state.state.agent_end_observed = false;
             state.state.agent_end_is_terminal = None;
             state.state.agent_end_will_continue = None;
             state.state.agent_end_is_terminal_present = false;
             state.state.agent_end_will_continue_present = false;
+            state.live_assistant_text.clear();
+            state.live_text_seq = 0;
+        } else if kind == "message_start" {
+            state.live_message_seq = state.live_message_seq.saturating_add(1);
+            state.state.live_message_seq = state.live_message_seq;
+            state.live_assistant_text.clear();
+            state.live_text_seq = 0;
         } else if kind == "agent_end" {
-            let is_terminal = is_terminal_agent_end(event);
+            let is_terminal = turn_completed;
             state.state.agent_end_observed = true;
             state.state.agent_end_is_terminal = Some(is_terminal);
-            state.state.agent_end_is_terminal_present = event
-                .and_then(|value| value.get("isTerminal"))
-                .is_some();
+            state.state.agent_end_is_terminal_present =
+                event.and_then(|value| value.get("isTerminal")).is_some();
             state.state.agent_end_will_continue = event
                 .and_then(|value| value.get("willContinue"))
                 .and_then(Value::as_bool);
-            state.state.agent_end_will_continue_present = event
-                .and_then(|value| value.get("willContinue"))
-                .is_some();
+            state.state.agent_end_will_continue_present =
+                event.and_then(|value| value.get("willContinue")).is_some();
+        }
+        if let Some(delta) = live_delta.as_deref() {
+            Self::append_live_text(&mut state.live_assistant_text, delta);
+            state.live_text_seq = state.live_text_seq.saturating_add(1);
+        } else if turn_completed && !state.live_assistant_text.is_empty() {
+            state.live_text_seq = state.live_text_seq.saturating_add(1);
         }
         state.state.phase = phase.into();
         state.state.tool_name = tool.clone();
         state.state.updated_at = Utc::now().to_rfc3339();
         let current = state.state.clone();
+        let live_text = state.live_assistant_text.clone();
+        let live_text_seq = state.live_text_seq;
+        let live_turn_seq = state.live_turn_seq;
+        let live_message_seq = state.live_message_seq;
+        let turn_id = live_turn_id(&current.run_id, live_turn_seq, live_message_seq);
+        let publish_live = live_delta.is_some() || (turn_completed && !live_text.is_empty());
         drop(state);
         let _ = self.persist_state();
         if let Ok(conn) = crate::state::db::open_client_connection(
@@ -690,6 +744,16 @@ impl OmpHelmServer {
             let _ = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal);
         }
         self.publish_phase(phase, tool);
+        if publish_live {
+            self.publish_live_text(
+                &current,
+                &turn_id,
+                live_delta.as_deref().unwrap_or_default(),
+                &live_text,
+                live_text_seq,
+                turn_completed,
+            );
+        }
     }
 
     fn publish_binding(&self, source: &Path, native_id: &str, replacement: bool) -> Result<()> {
@@ -753,6 +817,49 @@ impl OmpHelmServer {
             Path::new(&state.session_file),
             &state.native_session_id,
             "phase",
+        );
+    }
+    fn publish_live_text(
+        &self,
+        state: &OmpHelmStateFile,
+        turn_id: &str,
+        delta: &str,
+        live_text: &str,
+        seq: u64,
+        turn_completed: bool,
+    ) {
+        if let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() {
+            let _ = crate::outbox::enqueue_runtime_event(
+                &outbox,
+                &json!({
+                    "runtime_key": format!("omp:{}", state.session_id),
+                    "session_id": state.session_id,
+                    "provider": "omp",
+                    "run_id": state.run_id,
+                    "source": OMP_HELM_TRANSPORT,
+                    "kind": "progress_signal",
+                    "occurred_at": Utc::now().to_rfc3339(),
+                    "dedupe_key": format!("omp-progress:{}:{}:{}:{}", state.session_id, state.run_id, turn_id, seq),
+                    "payload": {
+                        "progress_kind": "omp_helm_stream",
+                        "turn_id": turn_id,
+                        "seq": seq,
+                        "run_id": state.run_id,
+                        "delta": delta,
+                        "live_text": live_text,
+                        "turn_completed": turn_completed,
+                        "managed_transport": OMP_HELM_TRANSPORT,
+                        "execution_lifetime": "interactive",
+                        "provider_session_id": state.native_session_id,
+                    }
+                }),
+            );
+        }
+        wake_transcript_shipper(
+            state,
+            Path::new(&state.session_file),
+            &state.native_session_id,
+            "progress",
         );
     }
 
@@ -891,6 +998,21 @@ fn identity_commit_authority_matches_locked(
     Ok(())
 }
 
+fn omp_live_text_delta(event: Option<&Value>) -> Option<&str> {
+    let event = event?;
+    if event.get("message_event_type").and_then(Value::as_str) != Some("text_delta") {
+        return None;
+    }
+    event
+        .get("delta")
+        .and_then(Value::as_str)
+        .filter(|delta| !delta.is_empty())
+}
+
+fn live_turn_id(run_id: &str, turn_seq: u64, message_seq: u64) -> String {
+    format!("{run_id}:{turn_seq}:{message_seq}")
+}
+
 fn is_terminal_agent_end(event: Option<&Value>) -> bool {
     for field in ["isTerminal", "willContinue"] {
         if event
@@ -952,6 +1074,23 @@ fn home_state() -> Result<PathBuf> {
 }
 fn state_dir() -> Result<PathBuf> {
     Ok(home_state()?.join(STATE_DIR_NAME))
+}
+fn socket_path(session_id: &str) -> Result<(PathBuf, PathBuf)> {
+    let suffix = session_id.split('-').next().unwrap_or("session");
+    #[cfg(unix)]
+    let user_id = unsafe { libc::geteuid() };
+    #[cfg(not(unix))]
+    let user_id = 0;
+    #[cfg(unix)]
+    let temp_root = PathBuf::from("/tmp");
+    #[cfg(not(unix))]
+    let temp_root = std::env::temp_dir();
+    let directory = temp_root.join(format!(
+        "longhouse-omp-{}-{suffix}-{}",
+        user_id,
+        Uuid::new_v4().simple()
+    ));
+    Ok((directory.join("channel.sock"), directory))
 }
 
 fn launch_lock(session_id: &str) -> Result<File> {
@@ -1386,12 +1525,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             crate::config::get_agent_dir().unwrap_or_else(|_| PathBuf::from(".")),
         )
     });
-    let socket_dir = std::env::temp_dir().join(format!(
-        "longhouse-omp-{}-{}",
-        std::process::id(),
-        Uuid::new_v4().simple()
-    ));
-    let socket = socket_dir.join("channel.sock");
+    let (socket, socket_dir) = socket_path(&session_id)?;
     let now = Utc::now().to_rfc3339();
     let state = OmpHelmStateFile {
         schema_version: 1,
@@ -1434,6 +1568,8 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         agent_end_will_continue: None,
         agent_end_is_terminal_present: false,
         agent_end_will_continue_present: false,
+        live_turn_seq: 0,
+        live_message_seq: 0,
         terminal_state: None,
         terminal_reason: None,
         exit_code: None,
@@ -1660,6 +1796,8 @@ mod tests {
             agent_end_will_continue: None,
             agent_end_is_terminal_present: false,
             agent_end_will_continue_present: false,
+            live_turn_seq: 0,
+            live_message_seq: 0,
             ready: true,
             pending_transition: false,
             terminal_state: None,
@@ -1667,6 +1805,15 @@ mod tests {
             exit_code: None,
             started_at: "now".into(),
             updated_at: "now".into(),
+        }
+    }
+    #[test]
+    fn socket_path_uses_short_unix_temp_root() {
+        let (socket, directory) = socket_path("12345678-1234-1234-1234-123456789012").unwrap();
+        #[cfg(unix)]
+        {
+            assert_eq!(directory.parent(), Some(Path::new("/tmp")));
+            assert!(socket.to_string_lossy().len() < 104);
         }
     }
 
@@ -1677,6 +1824,10 @@ mod tests {
             extension_sender: Some(mpsc::channel().0),
             extension_connection_id: Some("connection".into()),
             pending: HashMap::new(),
+            live_assistant_text: String::new(),
+            live_text_seq: 0,
+            live_turn_seq: 0,
+            live_message_seq: 0,
         };
         let frame = json!({
             "auth_token": "token",
@@ -1696,6 +1847,10 @@ mod tests {
             extension_sender: None,
             extension_connection_id: None,
             pending: HashMap::from([(String::from("request"), sender)]),
+            live_assistant_text: String::new(),
+            live_text_seq: 0,
+            live_turn_seq: 0,
+            live_message_seq: 0,
         };
         fail_pending_locked(&mut shared, "replacement");
         let response = receiver.recv().unwrap();
@@ -1896,9 +2051,11 @@ mod tests {
         assert!(EXTENSION_ASSET.contains("compactLifecycleEvent"));
         assert!(!EXTENSION_ASSET.contains("event, ...session(ctx)"));
         assert!(EXTENSION_ASSET.contains("tool_execution_update"));
+        assert!(EXTENSION_ASSET.contains("message_start"));
+        assert!(EXTENSION_ASSET.contains("message_end"));
         assert!(EXTENSION_ASSET.contains("isTerminal"));
         assert!(EXTENSION_ASSET.contains("MALFORMED_BOOLEAN_MARKER"));
-        assert!(EXTENSION_ASSET.contains("key in event"));
+        assert!(EXTENSION_ASSET.contains("value !== null && value !== undefined"));
     }
 
     #[test]
@@ -1920,6 +2077,24 @@ mod tests {
         assert!(!is_terminal_agent_end(Some(
             &json!({"type": "agent_end", "willContinue": "false"})
         )));
+    }
+    #[test]
+    fn live_preview_accepts_text_deltas_only() {
+        let text_delta = json!({"message_event_type": "text_delta", "delta": "hello"});
+        let thinking_delta =
+            json!({"message_event_type": "thinking_delta", "delta": "secret reasoning"});
+        let empty_delta = json!({"message_event_type": "text_delta", "delta": ""});
+
+        assert_eq!(omp_live_text_delta(Some(&text_delta)), Some("hello"));
+        assert_eq!(omp_live_text_delta(Some(&thinking_delta)), None);
+        assert_eq!(omp_live_text_delta(Some(&empty_delta)), None);
+    }
+
+    #[test]
+    fn live_preview_turn_id_changes_when_agent_starts_again() {
+        assert_ne!(live_turn_id("run", 1, 1), live_turn_id("run", 2, 1));
+        assert_ne!(live_turn_id("run", 2, 1), live_turn_id("run", 2, 2));
+        assert_eq!(live_turn_id("run", 2, 2), "run:2:2");
     }
 
     #[test]

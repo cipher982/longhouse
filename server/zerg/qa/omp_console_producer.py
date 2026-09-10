@@ -31,9 +31,9 @@ SUPPORTED_VARIANT = lifecycle.SUPPORTED_VARIANT
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.console_lifecycle.v1",
-    producer_revision=6,
+    producer_revision=7,
     scenario_id=SCENARIO_ID,
-    scenario_revision=6,
+    scenario_revision=7,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -146,6 +146,7 @@ def omp_native_model_evidence(
     source_canary: str,
     api_key_configured: bool,
     qualification_model: str | None = None,
+    first_turn_only: bool = False,
 ) -> dict[str, Any] | None:
     """Bind OMP's provider-reported model call to one retained JSONL source."""
 
@@ -156,40 +157,64 @@ def omp_native_model_evidence(
     selected_source_relative: str | None = None
     selected_event: Mapping[str, Any] | None = None
     selected_events: list[Mapping[str, Any]] = []
-    for item in sources:
-        if not isinstance(item, Mapping) or item.get("retained") is not True or item.get("kind") != "source_path":
-            continue
-        raw_path = item.get("path")
-        if not isinstance(raw_path, str) or not raw_path:
-            continue
-        candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = evidence_root / candidate
-        if candidate.is_symlink():
-            continue
-        try:
-            path = candidate.resolve(strict=True)
-            relative_path = path.relative_to(evidence_root).as_posix()
-            source_bytes = path.read_bytes()
-        except (OSError, ValueError):
-            continue
-        try:
-            events = [
-                value for line in source_bytes.splitlines() if line.strip() for value in [json.loads(line)] if isinstance(value, Mapping)
-            ]
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            continue
+    if first_turn_only:
+        dispatch = _read_json(evidence_root / "adapter-dispatch-receipt.json") or {}
+        binding = _read_json(evidence_root / "provider-response-binding-receipt.json") or {}
+        expected_native_id = str(binding.get("provider_thread_id") or dispatch.get("provider_thread_id") or "")
+        first_turn = _first_turn_source_window(evidence_root, sources, expected_native_id=expected_native_id)
+        if first_turn is None:
+            return None
+        selected_source, selected_source_relative, _, first_turn_events = first_turn
         assistant_messages = [
             event
-            for event in events
+            for event in first_turn_events
             if event.get("type") == "message" and isinstance(event.get("message"), Mapping) and event["message"].get("role") == "assistant"
         ]
         assistants = [event for event in assistant_messages if _successful_assistant_event(event)]
         if assistants:
-            selected_source = path
-            selected_source_relative = relative_path
             selected_event = assistants[-1]
             selected_events = assistant_messages
+    else:
+        for item in sources:
+            if not isinstance(item, Mapping) or item.get("retained") is not True or item.get("kind") != "source_path":
+                continue
+            raw_path = item.get("path")
+            if not isinstance(raw_path, str) or not raw_path:
+                continue
+            candidate = Path(raw_path)
+            if not candidate.is_absolute():
+                candidate = evidence_root / candidate
+            if candidate.is_symlink():
+                continue
+            try:
+                path = candidate.resolve(strict=True)
+                relative_path = path.relative_to(evidence_root).as_posix()
+                source_bytes = path.read_bytes()
+            except (OSError, ValueError):
+                continue
+            try:
+                events = [
+                    value
+                    for line in source_bytes.splitlines()
+                    if line.strip()
+                    for value in [json.loads(line)]
+                    if isinstance(value, Mapping)
+                ]
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            assistant_messages = [
+                event
+                for event in events
+                if event.get("type") == "message"
+                and isinstance(event.get("message"), Mapping)
+                and event["message"].get("role") == "assistant"
+            ]
+            assistants = [event for event in assistant_messages if _successful_assistant_event(event)]
+            if assistants:
+                selected_source = path
+                selected_source_relative = relative_path
+                selected_event = assistants[-1]
+                selected_events = assistant_messages
     if selected_source is None or selected_source_relative is None or selected_event is None:
         return None
 
@@ -267,6 +292,103 @@ def _is_terminal_agent_end(event: Mapping[str, Any]) -> bool:
     return omp_agent_end_is_terminal(event)
 
 
+def _parse_native_events(source_bytes: bytes) -> tuple[list[Mapping[str, Any]], bool]:
+    events: list[Mapping[str, Any]] = []
+    malformed = False
+    for raw_line in source_bytes.splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            event = json.loads(raw_line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            malformed = True
+            continue
+        if isinstance(event, Mapping):
+            events.append(event)
+        else:
+            malformed = True
+    return events, malformed
+
+
+def _retained_source_path(root: Path, raw_path: object) -> Path | None:
+    if not isinstance(raw_path, str) or not raw_path or Path(raw_path).is_absolute():
+        return None
+    candidate = root / raw_path
+    if candidate.is_symlink():
+        return None
+    try:
+        path = candidate.resolve(strict=True)
+        path.relative_to(root.resolve())
+    except (OSError, ValueError):
+        return None
+    return path
+
+
+def _first_turn_source_window(
+    root: Path,
+    sources: list[object],
+    *,
+    expected_native_id: str = "",
+) -> tuple[Path, str, bytes, list[Mapping[str, Any]]] | None:
+    continuation = _read_json(root / "console-continuation-receipt.json") or {}
+    first_turn = continuation.get("first_turn_evidence")
+    if not isinstance(first_turn, Mapping):
+        return None
+    if first_turn.get("source_kind") != "source_path":
+        return None
+
+    retained_path = first_turn.get("retained_path")
+    retained_source_path = first_turn.get("retained_source_path")
+    source_start_offset = first_turn.get("source_start_offset")
+    source_end_offset = first_turn.get("source_end_offset")
+    source_sha256 = first_turn.get("source_sha256")
+    matching_rows = [
+        item
+        for item in sources
+        if isinstance(item, Mapping)
+        and item.get("retained") is True
+        and item.get("kind") == "source_path"
+        and item.get("path") == retained_path
+    ]
+    if (
+        not isinstance(retained_path, str)
+        or not retained_path
+        or Path(retained_path).is_absolute()
+        or not isinstance(retained_source_path, str)
+        or not retained_source_path
+        or not isinstance(source_sha256, str)
+        or type(source_start_offset) is not int
+        or source_start_offset != 0
+        or type(source_end_offset) is not int
+        or source_end_offset <= source_start_offset
+        or len(matching_rows) != 1
+        or matching_rows[0].get("source") != retained_source_path
+        or (expected_native_id and first_turn.get("provider_thread_id") != expected_native_id)
+    ):
+        return None
+
+    source_path = _retained_source_path(root, retained_path)
+    if source_path is None:
+        return None
+    try:
+        source_bytes = source_path.read_bytes()
+    except OSError:
+        return None
+    if source_end_offset > len(source_bytes) or source_bytes[source_end_offset - 1 : source_end_offset] != b"\n":
+        return None
+    if source_sha256 != f"sha256:{hashlib.sha256(source_bytes).hexdigest()}":
+        return None
+
+    _, full_malformed = _parse_native_events(source_bytes)
+    if full_malformed:
+        return None
+    first_turn_events, first_turn_malformed = _parse_native_events(source_bytes[:source_end_offset])
+    if first_turn_malformed:
+        return None
+    relative_path = source_path.relative_to(root.resolve()).as_posix()
+    return source_path, relative_path, source_bytes, first_turn_events
+
+
 def _native_settlement(root: Path) -> dict[str, object]:
     """Bind OMP's print terminal and native archive/tool evidence separately."""
 
@@ -275,6 +397,9 @@ def _native_settlement(root: Path) -> dict[str, object]:
     dispatch = _read_json(root / "adapter-dispatch-receipt.json") or {}
     binding = _read_json(root / "provider-response-binding-receipt.json") or {}
     expected_native_id = str(binding.get("provider_thread_id") or dispatch.get("provider_thread_id") or "")
+    first_turn = _first_turn_source_window(root, sources, expected_native_id=expected_native_id)
+    first_turn_events = first_turn[3] if first_turn is not None else []
+    first_turn_source_bound = first_turn is not None
     marker = str(binding.get("marker") or "")
     tool_marker = str(binding.get("tool_marker") or "")
     response_source_kind = binding.get("provider_response_source_kind")
@@ -285,7 +410,6 @@ def _native_settlement(root: Path) -> dict[str, object]:
     provider_response_source_bound = False
     native_archive_bound = False
     native_session_id_bound = False
-    native_marker_count = 0
     tool_call_ids: set[str] = set()
     tool_result_ids: set[str] = set()
     tool_output_marker_count = 0
@@ -301,57 +425,17 @@ def _native_settlement(root: Path) -> dict[str, object]:
         if not isinstance(raw_path, str) or not isinstance(raw_source, str):
             continue
         source_paths.append(raw_source)
+        source_path = _retained_source_path(root, raw_path)
+        if source_path is None:
+            continue
         try:
-            lines = (root / raw_path).read_bytes().splitlines()
+            source_bytes = source_path.read_bytes()
         except OSError:
             continue
-        events: list[Mapping[str, Any]] = []
-        for raw_line in lines:
-            if not raw_line.strip():
-                continue
-            try:
-                event = json.loads(raw_line)
-            except json.JSONDecodeError:
-                malformed_source = True
-                continue
-            if isinstance(event, Mapping):
-                events.append(event)
-            else:
-                malformed_source = True
-        headers = [event for event in events if event.get("type") == "session" and event.get("id") == expected_native_id]
-        assistant_events = [
-            event
-            for event in events
-            if event.get("type") in {"message", "message_end"}
-            and isinstance(event.get("message"), Mapping)
-            and event["message"].get("role") == "assistant"
-        ]
-        marker_count = sum(_native_message_text(event["message"]).count(marker) for event in assistant_events if marker)
-        native_marker_count = max(native_marker_count, marker_count)
+        events, source_malformed = _parse_native_events(source_bytes)
+        malformed_source = malformed_source or source_malformed
         if any(event.get("type") == "agent_settled" for event in events):
             agent_settled_seen = True
-
-        if kind == "source_path":
-            native_session_id_bound = native_session_id_bound or len(headers) == 1
-            native_archive_bound = native_archive_bound or (len(headers) == 1 and marker_count == 1)
-            if len(headers) == 1:
-                for event in events:
-                    message = event.get("message")
-                    if not isinstance(message, Mapping):
-                        continue
-                    role = message.get("role")
-                    content = message.get("content")
-                    blocks = content if isinstance(content, list) else []
-                    if role == "assistant":
-                        for block in blocks:
-                            if isinstance(block, Mapping) and block.get("type") == "toolCall" and block.get("id"):
-                                tool_call_ids.add(str(block["id"]))
-                    elif role == "toolResult":
-                        tool_call_id = message.get("toolCallId")
-                        if isinstance(tool_call_id, str) and tool_call_id:
-                            tool_result_ids.add(tool_call_id)
-                        text = _native_message_text(message)
-                        tool_output_marker_count += text.count(tool_marker) if tool_marker else 0
 
         if kind == response_source_kind and raw_source == response_source_path:
             provider_response_source_bound = True
@@ -362,6 +446,40 @@ def _native_settlement(root: Path) -> dict[str, object]:
                 and (isinstance(event.get("isTerminal"), bool) or isinstance(event.get("willContinue"), bool))
                 for event in events
             )
+
+    native_session_id_bound = (
+        sum(1 for event in first_turn_events if event.get("type") == "session" and event.get("id") == expected_native_id) == 1
+    )
+    for event in first_turn_events:
+        message = event.get("message")
+        if not isinstance(message, Mapping):
+            continue
+        role = message.get("role")
+        content = message.get("content")
+        blocks = content if isinstance(content, list) else []
+        if role == "assistant":
+            for block in blocks:
+                if isinstance(block, Mapping) and block.get("type") == "toolCall" and block.get("id"):
+                    tool_call_ids.add(str(block["id"]))
+        elif role == "toolResult":
+            tool_call_id = message.get("toolCallId")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                tool_result_ids.add(tool_call_id)
+            text = _native_message_text(message)
+            tool_output_marker_count += text.count(tool_marker) if tool_marker else 0
+
+    first_turn_headers = [event for event in first_turn_events if event.get("type") == "session" and event.get("id") == expected_native_id]
+    first_turn_marker_count = sum(
+        _native_message_text(event["message"]).count(marker)
+        for event in first_turn_events
+        if event.get("type") in {"message", "message_end"}
+        and isinstance(event.get("message"), Mapping)
+        and event["message"].get("role") == "assistant"
+        and marker
+    )
+    native_archive_bound = (
+        first_turn_source_bound and len(first_turn_headers) == 1 and first_turn_marker_count == 1 and not malformed_source
+    )
 
     boundary = _read_json(root / "console-boundary-receipt.json") or {}
     flush = _read_json(root / "transcript-flush-receipt.json") or {}
@@ -390,7 +508,7 @@ def _native_settlement(root: Path) -> dict[str, object]:
         "native_archive_bound": native_archive_bound,
         "native_session_id_bound": native_session_id_bound,
         "native_terminal_after_assistant": False,
-        "native_marker_count": native_marker_count,
+        "native_marker_count": first_turn_marker_count,
         "expected_native_session_id": expected_native_id,
         "native_tool_call_ids": sorted(tool_call_ids),
         "native_tool_result_ids": sorted(tool_result_ids),
@@ -472,6 +590,7 @@ def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
         source_canary=PROFILE,
         api_key_configured=bool(str(os.environ.get("OPENROUTER_API_KEY") or "").strip()),
         qualification_model=str(getattr(args, "model", "") or ""),
+        first_turn_only=True,
     )
     if model_evidence is not None:
         observation["live_model_evidence"] = model_evidence

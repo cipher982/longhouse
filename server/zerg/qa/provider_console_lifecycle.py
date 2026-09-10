@@ -1243,7 +1243,7 @@ def _served_run_inventory_evidence(
     served_run_id = str(run.get("id") or "")
     session_identity_match = served_session_id == session_id
     run_identity_match = expected_run_id is not None and served_run_id == expected_run_id
-    retired = (
+    terminal_run_proven = (
         len(terminal_claims) == len(claims)
         and bool(claims)
         and all(session_id == claim_session_id for claim_session_id in claim_session_ids)
@@ -1253,8 +1253,12 @@ def _served_run_inventory_evidence(
         and session_identity_match
         and run_identity_match
         and terminal_state in {"completed", "ended", "failed", "cancelled", "terminal", "stopped"}
-        and activity_state in {"", "quiescent", "idle", "finished"}
     )
+    # Activity heads are expiring observations. A missing/unknown head must
+    # not be converted into idle; terminal claim/run facts prove retirement
+    # here, while an explicitly active head still disproves it.
+    activity_compatible = activity_state in {"", "unknown", "quiescent", "idle", "finished"}
+    retired = terminal_run_proven and activity_compatible
     return {
         "retired": retired,
         "active_run_count": 0 if retired else None,
@@ -1267,6 +1271,7 @@ def _served_run_inventory_evidence(
         "served_path": diagnostic.get("served_path"),
         "terminal_state": terminal_state or None,
         "activity_state": activity_state or None,
+        "activity_state_authority": "diagnostic_head" if activity_state else "terminal_run_facts",
         "run_ids": claim_run_ids,
     }
 
@@ -1329,6 +1334,13 @@ def _claim_uses_provider_binary(claim: Mapping[str, object], provider_binary: Pa
 
 def _native_model(provider: str, model: str) -> str:
     return f"openrouter/{model}" if provider in {"opencode", "pi"} and not model.startswith("openrouter/") else model
+
+
+def _omp_continuation_prompt(resume_marker: str) -> str:
+    return (
+        'Reply with the value labelled "Remember this context phrase:" in the earlier user message, '
+        f"followed by exactly {resume_marker} and nothing else. Do not use tools or repeat an assistant marker."
+    )
 
 
 def _claim_uses_selected_model(claim: Mapping[str, object], *, provider: str, model: str) -> bool:
@@ -1742,7 +1754,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             resume_marker = f"LH_{provider.upper()}_RESUME_{uuid4().hex}"
             resume_message = f"Reply with exactly {resume_marker} and nothing else."
             if provider in {"pi", "omp"}:
-                resume_message = f"Reply with the context phrase you remember, followed by exactly {resume_marker} and nothing else."
+                resume_message = _omp_continuation_prompt(resume_marker)
             resume_request_id = f"console-resume-{uuid4()}"
             resume = _start_turn(
                 api_url=api_url,
