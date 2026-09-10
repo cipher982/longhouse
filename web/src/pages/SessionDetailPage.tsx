@@ -37,11 +37,11 @@ import {
   resolveSessionRuntimeState,
 } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
-import { useWallClock } from "../hooks/useWallClock";
 import {
   isActivityExecuting,
   isActivityStalled,
 } from "../lib/activityEvidence";
+import { useWallClock } from "../hooks/useWallClock";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useAuth } from "../lib/auth";
 import { config } from "../lib/config";
@@ -588,50 +588,55 @@ function SessionDetailWorkspaceRoute({
               className="session-control-dock session-control-dock--bar"
               data-testid="session-control-dock"
             >
-              <SessionRuntimeStrip
-                session={displaySession}
-                interaction={interaction}
-                testId="session-control-strip"
-                activityFeed={activityFeed ?? null}
-                streamConnected={streamConnected}
-              />
-              <div className="session-control-dock__composer">
-                {activePauseRequest ? (
-                  <SessionPauseRequestPanel
-                    pauseRequest={activePauseRequest}
-                    onRespond={handlePauseRequestResponse}
-                  />
-                ) : null}
-                <SessionChat
-                  key={sessionChatTarget.id}
-                  session={sessionChatTarget}
-                  layout="dock"
-                  chatMode={
-                    interaction.mode === "managed_local"
-                      ? "managed_local"
-                      : undefined
-                  }
-                  composerPlaceholder={interaction.placeholder}
-                  composerDisabledReason={composerDisabledReason}
-                  composerDisabledTitle={interaction.notice?.title ?? null}
-                  managedLaunchSuggestion={null}
-                  submitLabel={interaction.submitLabel}
-                  canQueueNextInput={Boolean(
-                    displaySession.capabilities?.can_queue_next_input,
-                  )}
-                  canSteerActiveTurn={Boolean(
-                    displaySession.capabilities?.can_steer_active_turn,
-                  )}
-                  timelineItems={items}
-                  isStalled={isActivityStalled(
-                    displaySession.session_state.activity,
-                    nowMs,
-                  )}
-                  isSessionExecuting={isActivityExecuting(
-                    displaySession.session_state.activity,
-                    nowMs,
-                  )}
+              <div
+                className="session-balanced-field"
+                data-testid="session-balanced-field"
+              >
+                <SessionRuntimeStrip
+                  session={displaySession}
+                  interaction={interaction}
+                  testId="session-control-strip"
+                  activityFeed={activityFeed ?? null}
+                  streamConnected={streamConnected}
                 />
+                <div className="session-control-dock__composer">
+                  {activePauseRequest ? (
+                    <SessionPauseRequestPanel
+                      pauseRequest={activePauseRequest}
+                      onRespond={handlePauseRequestResponse}
+                    />
+                  ) : null}
+                  <SessionChat
+                    key={sessionChatTarget.id}
+                    session={sessionChatTarget}
+                    layout="dock"
+                    chatMode={
+                      interaction.mode === "managed_local"
+                        ? "managed_local"
+                        : undefined
+                    }
+                    composerPlaceholder={interaction.placeholder}
+                    composerDisabledReason={composerDisabledReason}
+                    composerDisabledTitle={interaction.notice?.title ?? null}
+                    managedLaunchSuggestion={null}
+                    submitLabel={interaction.submitLabel}
+                    canQueueNextInput={Boolean(
+                      displaySession.capabilities?.can_queue_next_input,
+                    )}
+                    canSteerActiveTurn={Boolean(
+                      displaySession.capabilities?.can_steer_active_turn,
+                    )}
+                    timelineItems={items}
+                    isStalled={isActivityStalled(
+                      displaySession.session_state.activity,
+                      nowMs,
+                    )}
+                    isSessionExecuting={isActivityExecuting(
+                      displaySession.session_state.activity,
+                      nowMs,
+                    )}
+                  />
+                </div>
               </div>
             </div>
           }

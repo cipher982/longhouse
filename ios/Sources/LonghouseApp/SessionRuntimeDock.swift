@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// Observed transitions, not transport reconnection alone, earn a notice.
@@ -52,9 +53,271 @@ struct SessionLedgerNoticeState {
     }
 }
 
-/// The integrated Ledger status row of the control card: an evidence-gated
-/// activity strip, provider headline, elapsed observation and scoped stream
-/// state. Literal tool/context details stay behind deliberate disclosure.
+/// The one continuous Balanced surface shared by status and composer. Meaning
+/// comes from served facts immediately; only these background layers settle.
+enum SessionSignalMaterialKind: Equatable {
+    case working
+    case exception
+    case settled
+}
+
+struct SessionSignalField<Content: View>: View {
+    let detail: SessionDetail
+    @ObservedObject var activity: ActivityPulseStore
+    let realtimeConnection: SessionRealtimeConnection
+    let content: Content
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var fieldNow = Date()
+    @State private var receiptTask: Task<Void, Never>?
+    @State private var receiptActive = false
+    @State private var receiptOpacity = 0.0
+    @State private var lastObservedPulseAt: Date?
+
+    init(
+        detail: SessionDetail,
+        activity: ActivityPulseStore,
+        realtimeConnection: SessionRealtimeConnection,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.detail = detail
+        self.activity = activity
+        self.realtimeConnection = realtimeConnection
+        self.content = content()
+    }
+
+    private var materialKind: SessionSignalMaterialKind {
+        switch detail.ledgerEvidence(connection: realtimeConnection, asOf: fieldNow) {
+        case .working: return .working
+        case .attention, .uncertain: return .exception
+        case .quiet: return .settled
+        }
+    }
+
+    private var holdMotion: Bool { reduceMotion || UITestHooks.holdsAmbientMotion }
+
+    private var activityDeadlineKey: String {
+        "\(detail.id):\(detail.stateFacts.activityValidUntil ?? "")"
+    }
+
+    var body: some View {
+        let kind = materialKind
+        content
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                ZStack(alignment: .top) {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(workMaterial)
+                        .opacity(kind == .working ? 1 : 0)
+                        .animation(
+                            reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.36),
+                            value: kind
+                        )
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(exceptionMaterial)
+                        .opacity(kind == .exception ? 1 : 0)
+                        .animation(
+                            reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.36),
+                            value: kind
+                        )
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(settledMaterial)
+                        .opacity(kind == .settled ? 1 : 0)
+                        .animation(
+                            reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.36),
+                            value: kind
+                        )
+                    workSheen(kind: kind)
+                    ActivityReceiptTrail(
+                        store: activity,
+                        tone: signalTone,
+                        evidenceLive: kind == .working
+                    )
+                    .opacity(kind == .working ? 1 : 0)
+                    .animation(
+                        reduceMotion ? nil : .linear(duration: 0.12),
+                        value: kind
+                    )
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(
+                            RadialGradient(
+                                colors: [signalTone.opacity(0.16), .clear],
+                                center: UnitPoint(x: 0.72, y: 0.54),
+                                startRadius: 2,
+                                endRadius: 240
+                            )
+                        )
+                        .opacity(receiptOpacity)
+                }
+                .clipped()
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(borderColor(for: kind), lineWidth: 0.75)
+                    .animation(
+                        reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.36),
+                        value: kind
+                    )
+            )
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.12), radius: 16, y: 5)
+            .task(id: activityDeadlineKey) {
+                fieldNow = Date()
+                guard let deadline = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) else {
+                    return
+                }
+                let remaining = deadline.timeIntervalSinceNow
+                if remaining > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
+                if !Task.isCancelled { fieldNow = Date() }
+            }
+            .onAppear {
+                fieldNow = Date()
+                lastObservedPulseAt = activity.latestPulseAt
+            }
+            .onChange(of: activity.latestPulseAt) { _, latest in
+                guard latest != lastObservedPulseAt else { return }
+                lastObservedPulseAt = latest
+                startReceiptAccent()
+            }
+            .onChange(of: realtimeConnection) { _, _ in fieldNow = Date() }
+            .onChange(of: materialKind) { _, kind in
+                fieldNow = Date()
+                guard kind != .working, receiptActive else { return }
+                receiptTask?.cancel()
+                receiptTask = nil
+                receiptActive = false
+                withAnimation(reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.12)) {
+                    receiptOpacity = 0
+                }
+            }
+            .onChange(of: detail.id) { _, _ in
+                receiptTask?.cancel()
+                receiptTask = nil
+                receiptActive = false
+                receiptOpacity = 0
+                lastObservedPulseAt = activity.latestPulseAt
+            }
+            .onDisappear {
+                receiptTask?.cancel()
+                receiptTask = nil
+                receiptActive = false
+                receiptOpacity = 0
+            }
+            .onChange(of: reduceMotion) { _, reduced in
+                guard reduced else { return }
+                receiptTask?.cancel()
+                receiptTask = nil
+                receiptActive = false
+                receiptOpacity = 0
+            }
+            .accessibilityElement(children: .contain)
+    }
+
+    private func workSheen(kind: SessionSignalMaterialKind) -> some View {
+        SwiftUI.TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: kind != .working || holdMotion)) { context in
+            let phase = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: 2.8) / 2.8
+            let intensity = holdMotion ? 0.08 : 0.09 + 0.07 * (0.5 + 0.5 * sin(phase * 2 * .pi))
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(RadialGradient(
+                    colors: [sheenColor.opacity(intensity), .clear],
+                    center: UnitPoint(x: 0.65, y: 0),
+                    startRadius: 0,
+                    endRadius: 260
+                ))
+        }
+        .opacity(kind == .working ? 1 : 0)
+        .animation(
+            reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.12),
+            value: kind
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+    private func startReceiptAccent() {
+        guard materialKind == .working, !receiptActive else { return }
+        receiptActive = true
+        receiptTask?.cancel()
+        withAnimation(reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.156)) {
+            receiptOpacity = 1
+        }
+        receiptTask = Task { @MainActor in
+            if reduceMotion {
+                try? await Task.sleep(nanoseconds: 1_300_000_000)
+            } else {
+                try? await Task.sleep(nanoseconds: 156_000_000)
+                guard !Task.isCancelled else { return }
+                withAnimation(.timingCurve(0.2, 0.8, 0.2, 1, duration: 1.144)) {
+                    receiptOpacity = 0
+                }
+                try? await Task.sleep(nanoseconds: 1_144_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            receiptOpacity = 0
+            receiptActive = false
+            receiptTask = nil
+        }
+    }
+
+    private var signalTone: Color {
+        colorScheme == .dark
+            ? Color(red: 0.72, green: 0.86, blue: 0.77)
+            : Color(red: 0.20, green: 0.47, blue: 0.31)
+    }
+
+    private var sheenColor: Color {
+        colorScheme == .dark ? Color(red: 0.72, green: 1.0, blue: 0.82) : Color.white
+    }
+
+    private var workMaterial: LinearGradient {
+        if colorScheme == .dark {
+            return LinearGradient(
+                colors: [Color(red: 0.09, green: 0.21, blue: 0.16), Color(red: 0.06, green: 0.14, blue: 0.11)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        return LinearGradient(
+            colors: [Color(red: 0.91, green: 0.97, blue: 0.93), Color(red: 0.82, green: 0.93, blue: 0.86)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var exceptionMaterial: LinearGradient {
+        LinearGradient(
+            colors: colorScheme == .dark
+                ? [Color(red: 0.22, green: 0.18, blue: 0.12), Color(red: 0.13, green: 0.11, blue: 0.08)]
+                : [Color(red: 0.99, green: 0.95, blue: 0.87), Color(red: 0.96, green: 0.90, blue: 0.79)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var settledMaterial: Color {
+        colorScheme == .dark
+            ? Color(red: 0.09, green: 0.13, blue: 0.10)
+            : Color(.secondarySystemBackground)
+    }
+
+    private func borderColor(for kind: SessionSignalMaterialKind) -> Color {
+        switch kind {
+        case .working: return signalTone.opacity(0.28)
+        case .exception: return TranscriptPalette.attention.opacity(0.48)
+        case .settled: return Color.secondary.opacity(0.22)
+        }
+    }
+}
+
+/// The integrated Ledger status row of the control card: provider headline,
+/// elapsed observation and scoped stream state. Receipt history belongs to the
+/// enclosing Balanced signal field; literal tool/context details stay behind
+/// deliberate disclosure.
 struct SessionRuntimeDock: View {
     let detail: SessionDetail
     @ObservedObject var activity: ActivityPulseStore
@@ -160,9 +423,10 @@ struct SessionRuntimeDock: View {
                 startupGraceExpired = true
             }
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: evidenceDisclosure)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: noticeIsVisible)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: connectionLabel(for: ledger(asOf: evidenceNow)))
+        .animation(
+            reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.38),
+            value: statusGeometrySignature
+        )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
     }
@@ -173,6 +437,7 @@ struct SessionRuntimeDock: View {
         [detail.id, detail.stateFacts.primary?.key ?? "", detail.stateFacts.activityTool ?? "", detail.stateFacts.activityState]
             .joined(separator: ":")
     }
+
 
     private var evidenceDeadlineKey: String {
         "\(detail.id):\(detail.stateFacts.activityValidUntil ?? "")"
@@ -220,9 +485,19 @@ struct SessionRuntimeDock: View {
             evidence: detail.stateFacts.providerEvidenceIdentity,
             connection: realtimeConnection,
             resultAt: detail.stateFacts.lastResultAt,
+
             now: now
         )
         noticeNow = now
+    }
+
+    private var statusGeometrySignature: String {
+        let state = ledger(asOf: evidenceNow)
+        return [
+            "\(shouldExpand)", "\(evidenceDisclosure)", "\(noticeIsVisible)",
+            headline(for: state), operationLine(for: state) ?? "",
+            subline(for: state, asOf: evidenceNow) ?? "", exceptionReason(state) ?? ""
+        ].joined(separator: "|")
     }
 
     private func reanchorElapsed() {
@@ -253,38 +528,27 @@ struct SessionRuntimeDock: View {
         return detail.ledgerEvidence(connection: realtimeConnection, asOf: now)
     }
 
-    private func evidenceIsLive(asOf now: Date) -> Bool {
-        guard ledger(asOf: now) == .working else { return false }
-        guard detail.stateFacts.activityEvidenceIsLive(asOf: now) else { return false }
-        return true
-    }
 
     private func statusLines(asOf now: Date) -> some View {
         let state = ledger(asOf: now)
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                Group {
-                    if state == .working && !reduceMotion && !UITestHooks.holdsAmbientMotion {
-                        // This means the provider still reports work, not that
-                        // new output arrived. Receipts have their own trace.
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(headlineColor(for: state))
-                            .accessibilityIdentifier("session-runtime-working")
-                    } else {
-                        Image(systemName: statusGlyph(for: state))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(headlineColor(for: state))
-                    }
-                }
-                .frame(width: 16, height: 16)
-                .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(headline(for: state))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(headlineColor(for: state))
                         .lineLimit(2)
-                    if state == .working && typeSize.isAccessibilitySize {
+                        .transaction { $0.animation = nil }
+                    if let operationLine = operationLine(for: state) {
+                        Text(operationLine)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(state == .uncertain ? Color.secondary : Color.primary.opacity(0.78))
+                            .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
+                            .truncationMode(.middle)
+                            .transaction { $0.animation = nil }
+                            .accessibilityIdentifier("session-runtime-operation")
+                    }
+                    if (state == .working || (state == .quiet && detail.stateFacts.lastResultAt != nil)) && typeSize.isAccessibilitySize {
                         elapsed(asOf: now, state: state)
                     }
                     if let subline = subline(for: state, asOf: now) {
@@ -297,15 +561,10 @@ struct SessionRuntimeDock: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(1)
-                if state == .working && !typeSize.isAccessibilitySize {
+                if (state == .working || (state == .quiet && detail.stateFacts.lastResultAt != nil)) && !typeSize.isAccessibilitySize {
                     elapsed(asOf: now, state: state)
                         .fixedSize(horizontal: true, vertical: false)
                 }
-                ActivityStrip(
-                    store: activity,
-                    tone: tone(for: state),
-                    evidenceLive: evidenceIsLive(asOf: now)
-                )
                 if isOpen || detail.runtimeTailLine != nil || detail.runtimeCapabilityLabel != nil {
                     Button {
                         evidenceDisclosure.toggle()
@@ -323,7 +582,6 @@ struct SessionRuntimeDock: View {
             }
             if shouldExpand || evidenceDisclosure || noticeIsVisible {
                 evidenceContext(state: state)
-                    .transition(reduceMotion ? .identity : .opacity)
             }
         }
     }
@@ -339,14 +597,6 @@ struct SessionRuntimeDock: View {
             || detail.isTranscriptSyncing
     }
 
-    private func statusGlyph(for state: SessionLedgerEvidence) -> String {
-        switch state {
-        case .working: return "bolt.fill"
-        case .attention: return "hand.raised.fill"
-        case .uncertain: return "questionmark.circle"
-        case .quiet: return "circle"
-        }
-    }
 
     private var transportFailureVisible: Bool {
         isOpen
@@ -362,6 +612,18 @@ struct SessionRuntimeDock: View {
         guard let primary = detail.stateFacts.primary, primary.key == "no_recent_activity" else { return nil }
         guard let observed = primary.observedAt.flatMap(LonghouseDateParser.parse) else { return nil }
         return RuntimeElapsed.ageLabel(from: observed, to: now)
+    }
+
+    private func operationLine(for state: SessionLedgerEvidence) -> String? {
+        if let tail = detail.runtimeTailLine,
+           !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return state == .uncertain ? "Last observed: \(tail)" : tail
+        }
+        guard let tool = detail.stateFacts.activityTool,
+              !tool.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return state == .uncertain ? "Last observed tool: \(tool)" : "Tool: \(tool)"
     }
 
     /// The connection half is exception-first and often absent, which leaves the
@@ -385,16 +647,18 @@ struct SessionRuntimeDock: View {
 
     private func headline(for state: SessionLedgerEvidence) -> String {
         switch state {
-        case .uncertain: return "Activity uncertain"
-        default: return detail.runtimeHeadline
+        case .uncertain:
+            return realtimeConnection == .disconnected ? "Updates interrupted" : "Activity uncertain"
+        case .attention:
+            return detail.activePauseRequest != nil ? "Permission needed" : detail.runtimeHeadline
+        default:
+            return detail.runtimeHeadline
         }
     }
-    private func tone(for state: SessionLedgerEvidence) -> Color {
-        state == .uncertain ? Color.secondary : style.dot.color
-    }
+
 
     private func headlineColor(for state: SessionLedgerEvidence) -> Color {
-        if state == .uncertain { return .secondary }
+        if state == .uncertain { return TranscriptPalette.attention }
         switch style.dot {
         case .attention: return TranscriptPalette.attention
         case .live: return .primary
@@ -409,12 +673,20 @@ struct SessionRuntimeDock: View {
                 Text(notice == .finished ? "Turn finished" : "Activity evidence restored")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .transaction { $0.animation = nil }
+            }
+            if let reason = exceptionReason(state) {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(TranscriptPalette.attention)
+                    .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
+                    .transaction { $0.animation = nil }
             }
             if let pauseRequest = detail.activePauseRequest {
                 Text(pauseRequest.canRespond ? "Answer in the session card below." : "Answer in the provider terminal.")
                     .foregroundStyle(.secondary)
             }
-            if shouldShowConnectionEvidence(state: state) {
+            if evidenceDisclosure {
                 HStack(spacing: 6) {
                     Image(systemName: state == .uncertain ? "questionmark.circle" : "antenna.radiowaves.left.and.right")
                         .font(.caption)
@@ -422,6 +694,7 @@ struct SessionRuntimeDock: View {
                         .font(.caption.weight(.medium))
                 }
                 .foregroundStyle(.secondary)
+                .transaction { $0.animation = nil }
             }
             if detail.controlBlock.isFault, let message = detail.controlHealthMessage {
                 Text(message)
@@ -444,26 +717,33 @@ struct SessionRuntimeDock: View {
                     .accessibilityIdentifier("session-runtime-tail")
             }
             if evidenceDisclosure {
-                if state != .working {
-                    elapsed(asOf: evidenceNow, state: state)
-                }
                 capabilityChip
             }
         }
-        .padding(.leading, 24)
     }
 
-    private func shouldShowConnectionEvidence(state: SessionLedgerEvidence) -> Bool {
-        evidenceDisclosure || state == .uncertain
-    }
 
+    private func exceptionReason(_ state: SessionLedgerEvidence) -> String? {
+        switch state {
+        case .uncertain:
+            return realtimeConnection == .disconnected
+                ? "Connection lost. The agent may still be working."
+                : "No fresh provider evidence. The agent may still be working."
+        case .attention:
+            return detail.activePauseRequest == nil
+                ? nil
+                : "A command is waiting for approval. Review it before work can continue."
+        default:
+            return nil
+        }
+    }
     private func evidenceLabel(_ state: SessionLedgerEvidence) -> String {
         switch realtimeConnection {
         case .connected:
             if state == .uncertain {
-                return "The update connection is healthy, but current provider activity is unconfirmed."
+                return "Viewer is connected, but provider activity is unconfirmed."
             }
-            return "Updates connected"
+            return "Provider evidence is valid."
         case .connecting:
             return startupGraceExpired || hasObservedConnection ? "Updates connecting" : "Checking for updates…"
         case .disconnected:
@@ -471,7 +751,7 @@ struct SessionRuntimeDock: View {
                 return "Checking for updates…"
             }
             if state == .uncertain {
-                return "Updates disconnected; the agent may still be running"
+                return "Viewer updates are unavailable; the agent may still be working."
             }
             return "Updates disconnected"
         }
@@ -479,7 +759,6 @@ struct SessionRuntimeDock: View {
     private var launchSetupLine: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                ActivityStrip(store: activity, tone: RuntimeSignal.live.color, evidenceLive: false)
                 Text(detail.launchSetupStatusLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
@@ -510,19 +789,21 @@ struct SessionRuntimeDock: View {
     // expires, the count freezes rather than following a wall-clock timer.
     @ViewBuilder
     private func elapsed(asOf now: Date, state: SessionLedgerEvidence) -> some View {
-        if let start = elapsedStart {
+        if state == .quiet, detail.stateFacts.lastResultAt != nil, let lastTurn = detail.lastTurn {
+            elapsedText(
+                RuntimeElapsed.label(seconds: Double(lastTurn.durationMs) / 1000, precise: true),
+                state: state
+            )
+        } else if state == .working, let start = elapsedStart {
             let validUntil = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse)
-            let live = evidenceIsLive(asOf: now)
-            if live {
+            if reduceMotion || UITestHooks.holdsAmbientMotion {
+                let end = RuntimeElapsed.observedEnd(validUntil: validUntil, now: now)
+                elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true), state: state)
+            } else {
                 SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
                     let end = RuntimeElapsed.observedEnd(validUntil: validUntil, now: context.date)
                     elapsedText(RuntimeElapsed.label(from: start, to: end, precise: true), state: state)
                 }
-            } else {
-                let end = isExecuting
-                    ? RuntimeElapsed.observedEnd(validUntil: validUntil, now: now)
-                    : now
-                elapsedText(RuntimeElapsed.label(from: start, to: end, precise: isExecuting), state: state)
             }
         }
     }
@@ -561,13 +842,16 @@ struct SessionRuntimeDock: View {
         if detail.canDraftBeforeSendReady { return detail.launchSetupStatusLabel }
         var parts = [headline(for: state)]
         if let age = observationAge(asOf: evidenceNow) { parts.append(age) }
-        if let start = elapsedStart {
-            let end = isExecuting
-                ? RuntimeElapsed.observedEnd(validUntil: detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse), now: evidenceNow)
-                : evidenceNow
-            parts.append(RuntimeElapsed.label(from: start, to: end, precise: isExecuting))
+        if state == .working, let start = elapsedStart {
+            let end = RuntimeElapsed.observedEnd(
+                validUntil: detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse),
+                now: evidenceNow
+            )
+            parts.append(RuntimeElapsed.label(from: start, to: end, precise: true))
+        } else if state == .quiet, detail.stateFacts.lastResultAt != nil, let lastTurn = detail.lastTurn {
+            parts.append(RuntimeElapsed.label(seconds: Double(lastTurn.durationMs) / 1000, precise: true))
         }
-        if let detailLabel = detail.runtimeDetail { parts.append(detailLabel) }
+        if let detailLabel = operationLine(for: state) { parts.append(detailLabel) }
         if style.capability != .live, let label = detail.runtimeCapabilityLabel { parts.append(label) }
         if evidenceDisclosure || state == .uncertain || transportFailureVisible {
             parts.append(evidenceLabel(state))

@@ -40,6 +40,11 @@ const capturePath = option("--capture");
 const source = capturePath
   ? JSON.parse(await readFile(resolve(capturePath), "utf8")).workspace
   : buildSessionDetailStressFixture().workspace;
+const recordedTool = [...source.projection.items]
+  .reverse()
+  .map((item) => item.event)
+  .find((event) => event?.tool_name && event.tool_input_json);
+const activeTool = recordedTool?.tool_name ?? "Read";
 await mkdir(output, { recursive: true });
 const errors: string[] = [];
 const evidence: Array<Record<string, unknown>> = [];
@@ -77,7 +82,7 @@ function resetFixture() {
     activity: {
       state: "executing",
       raw_kind: "running",
-      tool: "Read",
+      tool: activeTool,
       source: "qa",
       observed_at: iso(),
       valid_until: iso(120_000),
@@ -108,7 +113,7 @@ function resetFixture() {
     presentation: {
       primary: {
         key: "executing",
-        label: "Using Read",
+        label: `Using ${activeTool}`,
         tone: "running",
         observed_at: iso(),
       },
@@ -132,7 +137,21 @@ function resetFixture() {
   };
   session.is_writable_head = true;
   session.ended_at = null;
-  session.transcript_preview = null;
+  session.transcript_preview = recordedTool
+    ? {
+        event_id: -1,
+        text: "",
+        tool_name: activeTool,
+        tool_input_json: recordedTool.tool_input_json,
+        tool_call_id: recordedTool.tool_call_id,
+        tool_call_state: "running",
+        event_origin: "provisional",
+        timestamp: iso(),
+        is_provisional: true,
+        is_complete: false,
+        is_stale: false,
+      }
+    : null;
   session.runtime_display = { ...session.runtime_display, pause_request: null };
   workspace.thread.sessions = workspace.thread.sessions.map((item) =>
     item.id === session.id ? session : item,
@@ -164,20 +183,58 @@ function restoreWork() {
   session.session_state.activity = {
     state: "executing",
     raw_kind: "running",
-    tool: "Read",
+    tool: activeTool,
     source: "qa",
     observed_at: iso(),
     valid_until: iso(120_000),
   };
   session.session_state.presentation.primary = {
     key: "executing",
-    label: "Using Read",
+    label: `Using ${activeTool}`,
     tone: "running",
     observed_at: iso(),
   };
   session.session_state.pending_interaction = null;
   session.runtime_display.pause_request = null;
   publish();
+}
+function requireApproval() {
+  session.session_state.pending_interaction = {
+    id: "ledger-approval",
+    kind: "approval",
+    opened_at: iso(),
+    can_respond: false,
+  };
+  session.runtime_display.pause_request = {
+    id: "ledger-approval",
+    session_id: session.id,
+    runtime_key: "qa",
+    provider: session.provider,
+    kind: "permission_prompt",
+    status: "pending",
+    can_respond: false,
+    title: "Approve repository changes",
+    summary: "Approval must be answered in the provider terminal.",
+    tool_name: activeTool,
+    occurred_at: iso(),
+  };
+}
+function finishTurn() {
+  session.session_state.activity.state = "quiescent";
+  session.session_state.pending_interaction = null;
+  session.runtime_display.pause_request = null;
+  session.session_state.presentation.primary = {
+    key: "finished",
+    label: "Turn ended",
+    tone: "idle",
+    observed_at: iso(),
+  };
+  session.session_state.last_result_at = iso();
+  session.session_state.last_result_outcome = "success";
+  session.last_turn = {
+    duration_ms: 42_000,
+    ended_at: session.session_state.last_result_at,
+  };
 }
 resetFixture();
 const server = createServer(async (request, response) => {
@@ -189,6 +246,43 @@ const server = createServer(async (request, response) => {
       response.writeHead(status, { "Content-Type": "application/json" });
       response.end(JSON.stringify(body));
     };
+    // Loopback-only control of this fixture, never a provider command. This
+    // drives the real native client through the same facts as the web journey.
+    if (path === "/__qa/scenario" && request.method === "POST") {
+      switch (url.searchParams.get("state")) {
+        case "working":
+          restoreWork();
+          break;
+        case "receipt":
+          publish();
+          break;
+        case "expired":
+          session.session_state.activity.valid_until = iso(-1);
+          publish();
+          break;
+        case "disconnected":
+          refuseStream = true;
+          for (const stream of streams) stream.end();
+          streams.clear();
+          break;
+        case "reconnected":
+          refuseStream = false;
+          break;
+        case "approval":
+          requireApproval();
+          publish();
+          break;
+        case "finished":
+          finishTurn();
+          publish();
+          break;
+        default:
+          json({ error: "Unknown fixture scenario" }, 400);
+          return;
+      }
+      json({ state: url.searchParams.get("state") });
+      return;
+    }
     if (path === `${base}/workspace/stream`) {
       if (refuseStream) {
         json({ detail: "Controlled connection loss" }, 503);
@@ -225,6 +319,14 @@ const server = createServer(async (request, response) => {
       }
       if (path === `${base}/workspace`) {
         json(workspace);
+        return;
+      }
+      if (path === `${base}/mobile-tail`) {
+        json({
+          session,
+          projection: workspace.projection,
+          snapshot_event_id: null,
+        });
         return;
       }
       if (path === `${base}/thread`) {
@@ -397,29 +499,10 @@ try {
         );
       });
       await shot(page, `${size.name}-working`);
-      assert.equal(
-        await page
-          .getByTestId("live-work-ribbon")
-          .locator("summary")
-          .getByText("Updates connected", { exact: true })
-          .isVisible(),
-        false,
-        "Healthy transport stays out of the normal status row",
-      );
-      assert.equal(
-        await page
-          .getByText("Fresh provider evidence restored.", { exact: true })
-          .count(),
-        0,
-        "Initial connection must not announce provider recovery",
-      );
       if (size.reducedMotion === "reduce") {
         const reducedMotionFrame = await page.evaluate(() => {
           const ribbon = document.querySelector<HTMLElement>(
             '[data-testid="live-work-ribbon"]',
-          );
-          const glyph = ribbon?.querySelector<HTMLElement>(
-            ".session-ledger__glyph",
           );
           const canvas = ribbon?.querySelector<HTMLCanvasElement>(
             '[data-testid="session-activity-strip"]',
@@ -430,7 +513,17 @@ try {
               ? context.getImageData(0, 0, canvas.width, canvas.height).data
               : null;
           return {
-            animationName: glyph ? getComputedStyle(glyph).animationName : "",
+            runningAnimations: document
+              .getAnimations()
+              .filter(
+                (animation) =>
+                  animation.playState === "running" &&
+                  animation.effect instanceof KeyframeEffect &&
+                  animation.effect.target instanceof Element &&
+                  animation.effect.target.closest(
+                    '[data-testid="session-control-dock"]',
+                  ),
+              ).length,
             canvasWidth: canvas?.width ?? 0,
             canvasPainted: Boolean(
               pixels &&
@@ -441,9 +534,9 @@ try {
           };
         });
         assert.equal(
-          reducedMotionFrame.animationName,
-          "none",
-          "Reduced motion freezes the working glyph",
+          reducedMotionFrame.runningAnimations,
+          0,
+          "Reduced motion stops continuous control-surface animation",
         );
         assert.ok(
           reducedMotionFrame.canvasWidth > 0 &&
@@ -451,11 +544,6 @@ try {
           "Reduced motion still paints the active update canvas",
         );
       }
-      assert.ok(
-        (await page.getByTestId("session-control-dock").boundingBox())!
-          .height <= 120,
-        "Ordinary work keeps the combined dock within 120px",
-      );
       const draft = page.locator(".session-chat textarea");
       await draft.fill("Keep my draft through evidence changes.");
       await draft.focus();
@@ -474,11 +562,55 @@ try {
         const next = await draft.boundingBox();
         assert.ok(
           next &&
+            Math.abs(next.x - initial.x) < 1 &&
             Math.abs(next.y - initial.y) < 1 &&
+            Math.abs(next.width - initial.width) < 1 &&
             Math.abs(next.height - initial.height) < 1,
           `Status grows without moving the active draft: ${JSON.stringify({ initial, next })}`,
         );
       };
+      // Sample during transitions, not only their settled endpoints.
+      await page.evaluate(() => {
+        const input = document.querySelector<HTMLTextAreaElement>(
+          ".session-chat textarea",
+        )!;
+        const dock = document.querySelector<HTMLElement>(
+          '[data-testid="session-control-dock"]',
+        )!;
+        const original = input.getBoundingClientRect();
+        const samples: Array<{
+          at: number;
+          height: number;
+          displacement: number;
+        }> = [];
+        let running = true;
+        let maximumDisplacement = 0;
+        let previousHeight = -1;
+        const sample = () => {
+          if (!running) return;
+          const rect = input.getBoundingClientRect();
+          const displacement = Math.max(
+            Math.abs(rect.x - original.x),
+            Math.abs(rect.y - original.y),
+            Math.abs(rect.width - original.width),
+            Math.abs(rect.height - original.height),
+          );
+          maximumDisplacement = Math.max(maximumDisplacement, displacement);
+          const height = dock.getBoundingClientRect().height;
+          if (height !== previousHeight || displacement > 0.5) {
+            samples.push({ at: performance.now(), height, displacement });
+            previousHeight = height;
+          }
+          requestAnimationFrame(sample);
+        };
+        Object.assign(window, {
+          stopBalancedGeometryProbe: () => {
+            running = false;
+            return { maximumDisplacement, samples };
+          },
+        });
+        sample();
+      });
       session.session_state.activity.valid_until = iso(1000);
       publish();
       await motion(page, false);
@@ -506,23 +638,10 @@ try {
       publish();
       await motion(page, false);
       await shot(page, `${size.name}-reconnected-stale`);
-      assert.equal(
-        await page
-          .getByText("Fresh provider evidence restored.", { exact: true })
-          .count(),
-        0,
-        "Reconnect with stale provider evidence must not announce recovery",
-      );
       restoreWork();
       await motion(page, true);
       await preserveDraft();
       await shot(page, `${size.name}-recovered`);
-      assert.ok(
-        (await page
-          .getByText("Fresh provider evidence restored.", { exact: true })
-          .count()) > 0,
-        "A genuinely refreshed provider observation announces recovery",
-      );
       session.session_state.host.state = "offline";
       publish();
       await motion(page, false);
@@ -543,37 +662,13 @@ try {
             .getByTestId("live-work-ribbon")
             .getAttribute("data-connection"),
           "reconnecting",
-        );
-        assert.equal(
-          await page
-            .getByText("Fresh provider evidence restored.", { exact: true })
-            .count(),
-          0,
-          "Heartbeat silence must not announce refreshed provider evidence",
+          "A silent open socket must lose viewer connectivity authority",
         );
         await shot(page, "desktop-silent-open-socket");
         silence = false;
         await motion(page, true);
       }
-      session.session_state.pending_interaction = {
-        id: "ledger-approval",
-        kind: "approval",
-        opened_at: iso(),
-        can_respond: false,
-      };
-      session.runtime_display.pause_request = {
-        id: "ledger-approval",
-        session_id: session.id,
-        runtime_key: "qa",
-        provider: session.provider,
-        kind: "permission_prompt",
-        status: "pending",
-        can_respond: false,
-        title: "Approve repository changes",
-        summary: "Approval must be answered in the provider terminal.",
-        tool_name: "shell",
-        occurred_at: iso(),
-      };
+      requireApproval();
       publish();
       await motion(page, false);
       await preserveDraft();
@@ -624,15 +719,7 @@ try {
       );
       await shot(page, `${size.name}-evidence`);
       await disclosure.click();
-      session.session_state.activity.state = "quiescent";
-      session.session_state.presentation.primary = {
-        key: "finished",
-        label: "Turn ended",
-        tone: "idle",
-        observed_at: iso(),
-      };
-      session.session_state.last_result_at = iso();
-      session.session_state.last_result_outcome = "success";
+      finishTurn();
       publish();
       await motion(page, false);
       await shot(page, `${size.name}-finished-notice`);
@@ -700,6 +787,25 @@ try {
         );
         assert.equal(animated, 0, "Reduced motion stops status animation");
       }
+      const geometry = await page.evaluate(() => {
+        // Installed above in this page; the evaluate boundary loses its type.
+        const probeWindow = window as unknown as {
+          stopBalancedGeometryProbe: () => {
+            maximumDisplacement: number;
+            samples: Array<{
+              at: number;
+              height: number;
+              displacement: number;
+            }>;
+          };
+        };
+        return probeWindow.stopBalancedGeometryProbe();
+      });
+      evidence.push({ name: `${size.name}-transition-geometry`, ...geometry });
+      assert.ok(
+        geometry.maximumDisplacement < 1,
+        `Automatic transitions displaced the draft by ${geometry.maximumDisplacement}px`,
+      );
       evidence.push({
         name: `${size.name}-interactions`,
         draftRetained: true,

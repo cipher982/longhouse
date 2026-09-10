@@ -116,8 +116,9 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
       state: "executing",
       raw_kind: "running",
       tool: "exec_command",
+      source: "managed_local_transport",
       observed_at: now,
-      valid_until: null,
+      valid_until: "2026-04-15T16:26:35Z",
     },
     control: {
       ownership: "owned",

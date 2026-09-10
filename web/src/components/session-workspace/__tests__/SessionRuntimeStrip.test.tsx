@@ -116,6 +116,79 @@ describe("SessionRuntimeStrip connection presentation", () => {
     expect(state.heartbeatAgeMs).toBeNull();
     expect(state.receiptMarks).toHaveLength(0);
   });
+
+  it("removes the running clock when activity expires and freezes a confirmed turn duration", () => {
+    const started = Date.parse("2026-09-09T19:00:00.000Z");
+    const current = session("activity-clock", {
+      activity: "executing",
+      terminalAttached: true,
+      observedAt: new Date(started).toISOString(),
+    });
+    current.session_state.activity.valid_until = new Date(
+      started + 10_000,
+    ).toISOString();
+    expect(
+      buildSessionLedgerState(current, interaction, started + 5_000, true)
+        .elapsedSeconds,
+    ).toBe(5);
+    expect(
+      buildSessionLedgerState(current, interaction, started + 11_000, true)
+        .elapsedSeconds,
+    ).toBeNull();
+
+    current.session_state.activity.state = "quiescent";
+    expect(
+      buildSessionLedgerState(current, interaction, started + 12_000, true)
+        .elapsedSeconds,
+    ).toBeNull();
+    current.session_state.last_result_at = new Date(
+      started + 12_000,
+    ).toISOString();
+    current.last_turn = {
+      duration_ms: 12_000,
+      ended_at: current.session_state.last_result_at,
+    };
+    expect(
+      buildSessionLedgerState(current, interaction, started + 30_000, true)
+        .elapsedSeconds,
+    ).toBe(12);
+    expect(
+      buildSessionLedgerState(current, interaction, started + 60_000, true)
+        .elapsedSeconds,
+    ).toBe(12);
+  });
+
+  it("shows only a fresh literal command's first line, not an invented command from status prose", () => {
+    const started = Date.parse("2026-09-09T19:00:00.000Z");
+    const current = session("literal-command", {
+      activity: "executing",
+      terminalAttached: true,
+      observedAt: new Date(started).toISOString(),
+    });
+    current.transcript_preview = {
+      event_id: 1,
+      text: "",
+      tool_name: "Bash",
+      tool_input_json: { command: "  make test\nmake validate" },
+      event_origin: "tool",
+      is_provisional: true,
+      is_complete: false,
+      is_stale: false,
+    };
+    const fresh = buildSessionLedgerState(
+      current,
+      interaction,
+      started + 1000,
+      true,
+    );
+    expect(fresh.detail).toBe("$ make test");
+    expect(fresh.detailKind).toBe("literal");
+    current.transcript_preview.is_stale = true;
+    expect(
+      buildSessionLedgerState(current, interaction, started + 1000, true)
+        .detailKind,
+    ).toBe("explanation");
+  });
 });
 
 describe("SessionRuntimeStrip provider recovery notices", () => {
@@ -266,19 +339,35 @@ describe("withObservationAge", () => {
 
   it("uses minutes and days at the right scales", () => {
     expect(
-      withObservationAge("Last observed idle", stale("2026-09-09T23:48:00.000Z"), nowMs),
+      withObservationAge(
+        "Last observed idle",
+        stale("2026-09-09T23:48:00.000Z"),
+        nowMs,
+      ),
     ).toBe("Last observed idle \u00B7 12m ago");
     expect(
-      withObservationAge("Last observed idle", stale("2026-09-07T00:00:00.000Z"), nowMs),
+      withObservationAge(
+        "Last observed idle",
+        stale("2026-09-07T00:00:00.000Z"),
+        nowMs,
+      ),
     ).toBe("Last observed idle \u00B7 3d ago");
     expect(
-      withObservationAge("Last observed idle", stale("2026-09-09T23:59:40.000Z"), nowMs),
+      withObservationAge(
+        "Last observed idle",
+        stale("2026-09-09T23:59:40.000Z"),
+        nowMs,
+      ),
     ).toBe("Last observed idle \u00B7 just now");
   });
 
   it("leaves every other headline alone", () => {
     expect(
-      withObservationAge("Using Bash", { key: "executing", observed_at: "2026-09-09T21:00:00.000Z" }, nowMs),
+      withObservationAge(
+        "Using Bash",
+        { key: "executing", observed_at: "2026-09-09T21:00:00.000Z" },
+        nowMs,
+      ),
     ).toBe("Using Bash");
     expect(withObservationAge("Idle", null, nowMs)).toBe("Idle");
   });
@@ -287,12 +376,16 @@ describe("withObservationAge", () => {
     expect(withObservationAge("Last observed idle", stale(null), nowMs)).toBe(
       "Last observed idle",
     );
-    expect(withObservationAge("Last observed idle", stale("not a date"), nowMs)).toBe(
-      "Last observed idle",
-    );
+    expect(
+      withObservationAge("Last observed idle", stale("not a date"), nowMs),
+    ).toBe("Last observed idle");
     // A clock skewed into the future is not a negative age.
     expect(
-      withObservationAge("Last observed idle", stale("2026-09-10T00:05:00.000Z"), nowMs),
+      withObservationAge(
+        "Last observed idle",
+        stale("2026-09-10T00:05:00.000Z"),
+        nowMs,
+      ),
     ).toBe("Last observed idle");
   });
 });

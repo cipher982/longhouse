@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "react-hot-toast";
 import { buildTimelineModel } from "../../lib/sessionWorkspace";
 import type {
@@ -336,6 +336,20 @@ function mockWorkspaceState({
     };
   });
 }
+
+beforeEach(() => {
+  // jsdom has no layout engine; geometry and animation are exercised by the
+  // real-browser Ledger journeys, while these tests cover session controls.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe = vi.fn();
+      disconnect = vi.fn();
+    },
+  );
+});
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("SessionDetailPage", () => {
   beforeEach(() => {

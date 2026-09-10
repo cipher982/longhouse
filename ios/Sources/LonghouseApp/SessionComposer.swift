@@ -89,6 +89,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     let detail: SessionDetail
     @Binding var text: String
     @FocusState.Binding var focused: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
     let failedInputCount: Int
     let queuedInputCount: Int
     let lastSendOutcome: SessionInputOutcome?
@@ -235,7 +236,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                     actionMenu
 
                     TextField(detail.composerPlaceholder, text: $text, axis: .vertical)
-                        .lineLimit(1...6)
+                        .lineLimit(1...(typeSize.isAccessibilitySize ? 3 : 6))
                         .focused($focused)
                         .autocorrectionDisabled(true)
                         .padding(.horizontal, 12)

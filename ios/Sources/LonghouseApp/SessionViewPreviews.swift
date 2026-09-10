@@ -216,11 +216,15 @@ private func seededActivity(_ pattern: [(TimeInterval, ActivityPulse.Kind)]) -> 
 
 @MainActor
 private func codexBurst() -> ActivityPulseStore {
-    var pattern: [(TimeInterval, ActivityPulse.Kind)] = [(11.4, .toolStart), (6.1, .toolResult), (5.2, .message), (0.4, .toolStart)]
-    var t: TimeInterval = 11.1
-    while t > 6.4 { pattern.append((t, .textDelta)); t -= Double.random(in: 0.12...0.38) }
-    t = 5.0
-    while t > 3.6 { pattern.append((t, .textDelta)); t -= Double.random(in: 0.09...0.24) }
+    let pattern: [(TimeInterval, ActivityPulse.Kind)] = [
+        (11.4, .toolStart), (11.1, .textDelta), (10.7, .textDelta),
+        (10.3, .textDelta), (9.9, .textDelta), (9.5, .textDelta),
+        (8.9, .textDelta), (8.5, .textDelta), (8.0, .textDelta),
+        (7.3, .textDelta), (6.8, .textDelta), (6.1, .toolResult),
+        (5.2, .message), (5.0, .textDelta), (4.7, .textDelta),
+        (4.4, .textDelta), (4.0, .textDelta), (3.6, .textDelta),
+        (0.4, .toolStart)
+    ]
     return seededActivity(pattern)
 }
 
@@ -277,44 +281,39 @@ private struct SessionScreenPreview: View {
                 .padding(20)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(alignment: .leading, spacing: 8) {
-                    SessionRuntimeDock(detail: detail, activity: activity, realtimeConnection: connection)
-                    if SessionComposerControlState.isVisible(for: detail) {
-                        SessionComposer(
-                            detail: detail,
-                            text: $text,
-                            focused: $composerFocused,
-                            queuedInputCount: queuedInputCount,
-                            isSending: isSending,
-                            onQueueInstead: {},
-                            onDismissTurnEnded: {},
-                            onPauseRespond: { _, _, _, _ in false },
-                            onSend: { _ in },
-                            actionMenu: {
-                                SessionComposerActionMenu(
-                                    detail: detail,
-                                    attachmentSlotsLeft: ComposerAttachmentLimits.maxAttachments,
-                                    attachmentInputEnabled: SessionComposerControlState.attachmentInputEnabled(for: detail),
-                                    isProcessing: false,
-                                    isSending: isSending,
-                                    onAttach: {}
-                                )
-                            },
-                            attachmentTray: { EmptyView() }
-                        )
+                SessionSignalField(
+                    detail: detail,
+                    activity: activity,
+                    realtimeConnection: connection
+                ) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        SessionRuntimeDock(detail: detail, activity: activity, realtimeConnection: connection)
+                        if SessionComposerControlState.isVisible(for: detail) {
+                            SessionComposer(
+                                detail: detail,
+                                text: $text,
+                                focused: $composerFocused,
+                                queuedInputCount: queuedInputCount,
+                                isSending: isSending,
+                                onQueueInstead: {},
+                                onDismissTurnEnded: {},
+                                onPauseRespond: { _, _, _, _ in false },
+                                onSend: { _ in },
+                                actionMenu: {
+                                    SessionComposerActionMenu(
+                                        detail: detail,
+                                        attachmentSlotsLeft: ComposerAttachmentLimits.maxAttachments,
+                                        attachmentInputEnabled: SessionComposerControlState.attachmentInputEnabled(for: detail),
+                                        isProcessing: false,
+                                        isSending: isSending,
+                                        onAttach: {}
+                                    )
+                                },
+                                attachmentTray: { EmptyView() }
+                            )
+                        }
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                .strokeBorder(.white.opacity(0.10), lineWidth: 0.75)
-                        )
-                )
-                .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 10)
             }
@@ -581,6 +580,34 @@ private struct PreviewConnectionDrop: View {
     )
     .preferredColorScheme(.dark)
     .environment(\.dynamicTypeSize, .accessibility2)
+}
+
+#Preview("Balanced · Receipts · Narrow large type") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "codex",
+            canSteer: true,
+            canQueue: true,
+            executing: true,
+            placeholder: "Steer this turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "shell",
+                observedAt: isoDate(secondsAgo: 2),
+                validUntil: isoDate(secondsAgo: -30),
+                primaryKey: "executing",
+                primaryLabel: "Running command",
+                primaryTone: "running",
+                access: ("live_control", "Live control", "success")
+            )
+        ),
+        activity: codexBurst(),
+        transcript: ["The latest checkpoint is still being verified."],
+        draft: "Keep the draft anchored while checking the next result."
+    )
+    .preferredColorScheme(.light)
+    .environment(\.dynamicTypeSize, .accessibility3)
+    .frame(width: 320, height: 740)
 }
 
 #Preview("Activity uncertain · stream disconnected · Dark") {

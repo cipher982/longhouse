@@ -1094,7 +1094,7 @@
 
 .timeline-pane--with-dock .timeline-pane__list {
   flex: 1;
-  min-height: 120px;
+  min-height: 0;
   padding-bottom: var(--space-2);
 }
 

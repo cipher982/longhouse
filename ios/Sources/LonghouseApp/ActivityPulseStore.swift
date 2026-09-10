@@ -46,6 +46,11 @@ final class ActivityPulseStore: ObservableObject {
 
     @Published private(set) var pulses: [ActivityPulse] = []
 
+    /// The newest observed workspace arrival. The signal field uses this as
+    /// the receipt trigger; it is deliberately nil until a real stream frame
+    /// is classified, so a bootstrap snapshot cannot paint an arrival.
+    var latestPulseAt: Date? { pulses.last?.at }
+
     func record(_ kind: ActivityPulse.Kind, at now: Date = Date()) {
         pulses.append(ActivityPulse(at: now, kind: kind))
         let cutoff = now.addingTimeInterval(-(Self.window + 1))

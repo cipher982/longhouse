@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentSession } from "../../services/api/agents";
 import type { SessionInteractionCapabilities } from "../../lib/sessionWorkspace";
+import { getToolInputRecord } from "../../lib/sessionWorkspace";
 import type { SessionActivityFeed } from "../../lib/sessionActivityFeed";
 import { useWallClock } from "../../hooks/useWallClock";
 import { activityEvidenceIsLive } from "../../lib/activityEvidence";
@@ -158,7 +159,10 @@ export function advanceProviderEvidenceTransition(
  */
 export function withObservationAge(
   headline: string,
-  primary: { key?: string | null; observed_at?: string | null } | null | undefined,
+  primary:
+    | { key?: string | null; observed_at?: string | null }
+    | null
+    | undefined,
   nowMs: number,
 ): string {
   if (primary?.key !== "no_recent_activity" || !primary.observed_at)
@@ -168,7 +172,8 @@ export function withObservationAge(
   const seconds = Math.floor((nowMs - observedMs) / 1_000);
   if (seconds < 0) return headline;
   if (seconds < 60) return `${headline} \u00B7 just now`;
-  if (seconds < 3_600) return `${headline} \u00B7 ${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 3_600)
+    return `${headline} \u00B7 ${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86_400)
     return `${headline} \u00B7 ${Math.floor(seconds / 3_600)}h ago`;
   return `${headline} \u00B7 ${Math.floor(seconds / 86_400)}d ago`;
@@ -182,6 +187,7 @@ export function buildSessionLedgerState(
   streamConnected: boolean,
   activityFeed: SessionActivityFeed | null = null,
   initialConnectionGrace = false,
+  activityStartedMs?: number,
 ): SessionLedgerState {
   const runtime = resolveSessionRuntimeState(session);
   const facts = runtime.stateFacts;
@@ -231,21 +237,39 @@ export function buildSessionLedgerState(
     : tone === "unknown"
       ? "Activity uncertain"
       : interaction.isManagedLocalSession
-        ? withObservationAge(display.headline, facts.presentation.primary, nowMs)
+        ? withObservationAge(
+            display.headline,
+            facts.presentation.primary,
+            nowMs,
+          )
         : withObservationAge(
             getRuntimeOutcomeLabel(runtime),
             facts.presentation.primary,
             nowMs,
           );
-  const detail = pending
-    ? "A response is required before another message."
-    : tone === "unknown"
-      ? hostConcern
-        ? `Host is ${facts.host.state}; the agent may still be running.`
-        : transcriptConcern
-          ? "Transcript is lagging the observed session state."
-          : "Provider activity is unconfirmed."
-      : display.detail;
+  const preview = session.transcript_preview;
+  const input = getToolInputRecord(preview?.tool_input_json);
+  const inputDetail =
+    input?.command ?? input?.file_path ?? input?.path ?? input?.pattern;
+  const literalDetail =
+    rawProviderWorking &&
+    preview &&
+    !preview.is_stale &&
+    typeof inputDetail === "string" &&
+    inputDetail.trim()
+      ? `${typeof input?.command === "string" ? "$ " : ""}${inputDetail.trim().split(/\r?\n/, 1)[0]}`
+      : null;
+  const detail =
+    literalDetail ??
+    (pending
+      ? "A response is required before another message."
+      : tone === "unknown"
+        ? hostConcern
+          ? `Host is ${facts.host.state}; the agent may still be running.`
+          : transcriptConcern
+            ? "Transcript is lagging the observed session state."
+            : "Provider activity is unconfirmed."
+        : display.detail);
   const connection: SessionLedgerState["connection"] = !openSession
     ? "recorded"
     : streamConnected
@@ -270,6 +294,19 @@ export function buildSessionLedgerState(
         : tone === "unknown"
           ? "Updates disconnected · the agent may still be running"
           : "Updates disconnected";
+  const observedMs =
+    activityStartedMs ??
+    Date.parse(
+      facts.activity.observed_at ??
+        facts.presentation.primary?.observed_at ??
+        "",
+    );
+  const elapsedSeconds =
+    tone === "working" && Number.isFinite(observedMs)
+      ? Math.max(0, Math.floor((nowMs - observedMs) / 1_000))
+      : tone === "quiet" && facts.last_result_at && session.last_turn
+        ? Math.floor(session.last_turn.duration_ms / 1_000)
+        : null;
   const primary = facts.presentation.primary;
   const host = facts.host;
   const runtimeMeta = getRuntimeMetaLabel(runtime, nowMs);
@@ -277,10 +314,11 @@ export function buildSessionLedgerState(
     tone,
     headline,
     detail,
-    detailKind: "explanation",
+    detailKind: literalDetail ? "literal" : "explanation",
     observation,
     connection,
     animateWork: tone === "working" && providerWorking && streamConnected,
+    elapsedSeconds,
     outputAgeSeconds: null,
     heartbeatAgeMs: openSession
       ? (activityFeed?.heartbeatAgeMs() ?? null)
@@ -338,6 +376,22 @@ export function SessionRuntimeStrip({
     startup !== null &&
     !startup.connected &&
     nowMs - startup.startedAt < INITIAL_CONNECTION_GRACE_MS;
+  const facts = session.session_state;
+  const observedMs = Date.parse(
+    facts.activity.observed_at ?? facts.presentation.primary?.observed_at ?? "",
+  );
+  const activityKey = `${session.id}:${facts.activity.state}:${facts.activity.tool ?? ""}:${facts.last_result_at ?? ""}`;
+  const elapsedAnchor = useRef<{ key: string; start: number } | null>(null);
+  if (elapsedAnchor.current?.key !== activityKey) {
+    elapsedAnchor.current = Number.isFinite(observedMs)
+      ? { key: activityKey, start: observedMs }
+      : null;
+  } else if (Number.isFinite(observedMs)) {
+    elapsedAnchor.current.start = Math.min(
+      elapsedAnchor.current.start,
+      observedMs,
+    );
+  }
   const state = buildSessionLedgerState(
     session,
     interaction,
@@ -345,6 +399,7 @@ export function SessionRuntimeStrip({
     streamConnected,
     closed ? null : activityFeed,
     initialConnectionGrace,
+    elapsedAnchor.current?.start,
   );
   const runtimeEvidence =
     resolveSessionRuntimeState(session).stateFacts.activity;

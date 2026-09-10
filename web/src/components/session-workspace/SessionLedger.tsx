@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -31,6 +32,7 @@ export interface SessionLedgerState {
   observation: string;
   connection: LedgerConnection;
   animateWork: boolean;
+  elapsedSeconds?: number | null;
   outputAgeSeconds: number | null;
   heartbeatAgeMs: number | null;
   receiptMarks: LedgerReceiptMark[];
@@ -54,6 +56,31 @@ const RECEIPT_WINDOW_MS = 12_000;
 const CONNECTION_LABELS: Partial<Record<LedgerConnection, string>> = {
   reconnecting: "Updates disconnected",
 };
+const RECEIPT_ACCENT_MS = 1_300;
+
+function monotonicNow(): number {
+  return typeof performance !== "undefined" &&
+    typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function useSystemReducedMotion(): boolean {
+  const [matches, setMatches] = useState(false);
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function"
+    )
+      return;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, []);
+  return matches;
+}
 
 function ageText(seconds: number): string {
   const age = Math.max(0, Math.floor(seconds));
@@ -63,6 +90,11 @@ function ageText(seconds: number): string {
   if (age < 86_400)
     return `${Math.floor(age / 3_600)}h ${Math.floor((age % 3_600) / 60)}m ago`;
   return `${Math.floor(age / 86_400)}d ${Math.floor((age % 86_400) / 3_600)}h ago`;
+}
+
+function elapsedText(seconds: number): string {
+  const elapsed = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
 }
 
 function compactDetail(
@@ -123,29 +155,85 @@ export function SessionLedger({
   activityFeed = null,
   testId = "session-ledger",
 }: SessionLedgerProps) {
+  const systemReduceMotion = useSystemReducedMotion();
+  const effectiveReduceMotion = reduceMotion || systemReduceMotion;
   const clockedMotion = motionTimeMs !== undefined;
-  const workIsMoving =
-    state.tone === "working" && state.animateWork && !reduceMotion;
+  const workEvidence = state.tone === "working" && state.animateWork;
+  const workIsMoving = workEvidence && !effectiveReduceMotion;
   const workAngle = (((motionTimeMs ?? 0) % 7_200) / 7_200) * 360;
   const displayDetail = useMemo(
     () => compactDetail(state.detail, state.detailKind),
     [state.detail, state.detailKind],
   );
-  const contextRef = useRef<HTMLDivElement | null>(null);
-  const [contextHeight, setContextHeight] = useState(0);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [contentHeight, setContentHeight] = useState<number | undefined>();
+  const receiptRef = useRef<HTMLSpanElement | null>(null);
+  const receiptAnimation = useRef<Animation | null>(null);
+  const receiptTimer = useRef<number | undefined>(undefined);
+  const receiptUntil = useRef(0);
+
+  // Only this wrapper owns geometry. New wording is already committed inside
+  // it; resizing never fades old claims or changes the composer's dimensions.
   useLayoutEffect(() => {
-    const content = contextRef.current;
+    const content = contentRef.current;
     if (!content) return;
     const measure = () =>
-      setContextHeight(content.getBoundingClientRect().height);
+      setContentHeight(content.getBoundingClientRect().height);
     measure();
-    const observer =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(measure);
-    observer?.observe(content);
-    return () => observer?.disconnect();
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    return () => observer.disconnect();
   }, []);
+
+  useLayoutEffect(() => {
+    const node = receiptRef.current;
+    if (!node) return;
+    const stop = () => {
+      receiptAnimation.current?.cancel();
+      receiptAnimation.current = null;
+      window.clearTimeout(receiptTimer.current);
+      receiptUntil.current = 0;
+      node.style.opacity = "0";
+    };
+    if (!workEvidence) {
+      const opacity = getComputedStyle(node).opacity;
+      stop();
+      if (!effectiveReduceMotion && Number(opacity) > 0) {
+        receiptAnimation.current = node.animate([{ opacity }, { opacity: 0 }], {
+          duration: 120,
+          easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+        });
+      }
+      return;
+    }
+    // Changing the accessibility preference cancels the previous accent too.
+    stop();
+    return activityFeed?.subscribe((frame) => {
+      if (!frame || monotonicNow() < receiptUntil.current) return;
+      stop();
+      receiptUntil.current = monotonicNow() + RECEIPT_ACCENT_MS;
+      if (effectiveReduceMotion) {
+        node.style.opacity = "0.28";
+        receiptTimer.current = window.setTimeout(stop, RECEIPT_ACCENT_MS);
+      } else {
+        receiptAnimation.current = node.animate(
+          [{ opacity: 0 }, { opacity: 0.9, offset: 0.12 }, { opacity: 0 }],
+          {
+            duration: RECEIPT_ACCENT_MS,
+            easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+          },
+        );
+      }
+    });
+  }, [activityFeed, workEvidence, effectiveReduceMotion]);
+  useLayoutEffect(
+    () => () => {
+      receiptAnimation.current?.cancel();
+      window.clearTimeout(receiptTimer.current);
+    },
+    [],
+  );
+
   const connectionLabel = CONNECTION_LABELS[state.connection] ?? null;
   const showContext =
     state.tone === "unknown" ||
@@ -160,6 +248,7 @@ export function SessionLedger({
     state.heartbeatAgeMs === null
       ? "Viewer heartbeat is scoped to updates, not provider work"
       : `Last update heartbeat ${ageText(state.heartbeatAgeMs / 1_000)}`;
+  const showElapsed = state.elapsedSeconds != null && state.tone !== "unknown";
 
   return (
     <div
@@ -169,10 +258,57 @@ export function SessionLedger({
       data-work-motion={workIsMoving ? "active" : "off"}
       data-clocked-motion={clockedMotion ? "true" : "false"}
       data-connection={state.connection}
-      data-reduce-motion={reduceMotion ? "true" : "false"}
+      data-reduce-motion={effectiveReduceMotion ? "true" : "false"}
       data-surface={surface}
       data-prominence={prominence}
     >
+      <span className="session-ledger__work-sheen" aria-hidden="true">
+        <span />
+      </span>
+      <span
+        ref={receiptRef}
+        className="session-ledger__receipt-flash"
+        aria-hidden="true"
+      />
+      <div className="session-ledger__history" aria-hidden="true">
+        {activityFeed && state.connection !== "recorded" ? (
+          <ActivityStrip
+            feed={activityFeed}
+            tone="live"
+            height={76}
+            reduceMotion={effectiveReduceMotion}
+            showHistory={workEvidence}
+            label="Received updates"
+            title="Received updates, not proof of provider progress"
+          />
+        ) : workEvidence && state.connection !== "recorded" ? (
+          <span
+            className="session-ledger__receipts"
+            data-testid="receipt-trail"
+          >
+            {state.receiptMarks.map((mark) => {
+              if (mark.ageMs < 0 || mark.ageMs >= RECEIPT_WINDOW_MS)
+                return null;
+              const freshness = 1 - mark.ageMs / RECEIPT_WINDOW_MS;
+              const position = effectiveReduceMotion
+                ? (mark.sequence % 22) / 21
+                : 1 - freshness;
+              return (
+                <span
+                  key={mark.id}
+                  className="session-ledger__receipt"
+                  data-replay={mark.replay ? "true" : "false"}
+                  data-receipt-id={mark.id}
+                  style={{
+                    right: `${position * 100}%`,
+                    opacity: effectiveReduceMotion ? 1 : freshness,
+                  }}
+                />
+              );
+            })}
+          </span>
+        ) : null}
+      </div>
       <span
         className="sr-only"
         role="status"
@@ -181,141 +317,121 @@ export function SessionLedger({
       >
         {connectionLabel ? state.observation : ""}
       </span>
-      <details className="session-ledger__observation">
-        <summary
-          className="session-ledger__primary"
-          title="Inspect the observed session evidence"
-          aria-label={`Inspect evidence: ${state.headline}${connectionLabel ? `. ${connectionLabel}` : ""}.`}
-        >
-          <span
-            className="session-ledger__glyph"
-            style={
-              workIsMoving
-                ? { transform: `rotate(${workAngle}deg)` }
-                : undefined
-            }
-          >
-            <WorkGlyph tone={state.tone} />
-          </span>
-          <span
-            className="session-ledger__headline"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-            title={state.headline}
-          >
-            {state.headline}
-          </span>
-          {activityFeed && state.connection !== "recorded" ? (
-            <ActivityStrip
-              feed={activityFeed}
-              tone={
-                state.tone === "attention"
-                  ? "attention"
-                  : state.tone === "working"
-                    ? "live"
-                    : "idle"
-              }
-              label="Received updates"
-              title="Received updates, not proof of provider progress"
-            />
-          ) : (
-            <span
-              className="session-ledger__receipts"
-              data-testid="receipt-trail"
-              aria-hidden="true"
-            >
-              {state.connection !== "recorded"
-                ? state.receiptMarks.map((mark) => {
-                    if (mark.ageMs < 0 || mark.ageMs >= RECEIPT_WINDOW_MS)
-                      return null;
-                    const freshness = 1 - mark.ageMs / RECEIPT_WINDOW_MS;
-                    const position = reduceMotion
-                      ? (mark.sequence % 22) / 21
-                      : 1 - freshness;
-                    return (
-                      <span
-                        key={mark.id}
-                        className="session-ledger__receipt"
-                        data-replay={mark.replay ? "true" : "false"}
-                        data-receipt-id={mark.id}
-                        style={{
-                          right: `calc(${position * 100}% - ${position * 3}px)`,
-                          opacity: reduceMotion ? 1 : freshness,
-                        }}
-                      />
-                    );
-                  })
-                : null}
-            </span>
-          )}
-          <span className="session-ledger__link">
-            <span className="session-ledger__disclosure" aria-hidden="true">
-              ⌄
-            </span>
-          </span>
-        </summary>
-        <div className="session-ledger__evidence">
-          <dl className="session-ledger__facts">
-            <div>
-              <dt>Updates</dt>
-              <dd>{state.observation}</dd>
-            </div>
-            {state.outputAgeSeconds !== null ? (
-              <div>
-                <dt>Output received</dt>
-                <dd>{ageText(state.outputAgeSeconds)}</dd>
-              </div>
-            ) : null}
-            {state.detail ? (
-              <div>
-                <dt>Detail</dt>
-                <dd className="session-ledger__full-detail">{state.detail}</dd>
-              </div>
-            ) : null}
-            <div>
-              <dt>Heartbeat</dt>
-              <dd>{heartbeatDescription}</dd>
-            </div>
-            {state.facts.map((fact, index) => (
-              <div key={`${fact.label}-${index}`}>
-                <dt>{fact.label}</dt>
-                <dd>{fact.value}</dd>
-              </div>
-            ))}
-          </dl>
-          <p className="session-ledger__key">
-            Receipt marks show updates received over the last 12 seconds, not
-            work progress.
-          </p>
-        </div>
-      </details>
       <div
-        className="session-ledger__context"
-        style={{ height: prominence === "rest" ? 0 : contextHeight }}
-        aria-hidden={
-          surface !== "dock" && prominence === "rest" ? true : undefined
-        }
+        className="session-ledger__status-content"
+        style={{ height: contentHeight }}
       >
-        <div className="session-ledger__context-inner" ref={contextRef}>
-          {notice && surface !== "dock" ? (
-            <p className="session-ledger__note">{notice}</p>
-          ) : showContext && state.observation ? (
-            <p className="session-ledger__note">{state.observation}</p>
-          ) : state.detail &&
-            (showContext || state.detailKind === "explanation") ? (
-            <p
-              className={
-                state.detailKind === "literal"
-                  ? "session-ledger__command"
-                  : "session-ledger__note"
-              }
-              title={state.detail}
+        <div ref={contentRef} className="session-ledger__status-content-inner">
+          <details className="session-ledger__observation">
+            <summary
+              className="session-ledger__primary"
+              title="Inspect the observed session evidence"
+              aria-label={`Inspect evidence: ${state.headline}${connectionLabel ? `. ${connectionLabel}` : ""}.`}
             >
-              {displayDetail}
-            </p>
+              <span
+                className="session-ledger__glyph"
+                style={
+                  workIsMoving
+                    ? { transform: `rotate(${workAngle}deg)` }
+                    : undefined
+                }
+              >
+                <WorkGlyph tone={state.tone} />
+              </span>
+              <span className="session-ledger__operation">
+                <span
+                  className="session-ledger__headline"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  {state.headline}
+                </span>
+                {displayDetail && state.detailKind === "literal" ? (
+                  <span
+                    className="session-ledger__detail"
+                    title={state.detail ?? undefined}
+                  >
+                    {state.tone === "unknown" ? "Last observed: " : ""}
+                    {displayDetail}
+                  </span>
+                ) : null}
+              </span>
+              {showElapsed ? (
+                <span
+                  className="session-ledger__elapsed"
+                  aria-label={`Elapsed ${elapsedText(state.elapsedSeconds!)}`}
+                >
+                  {elapsedText(state.elapsedSeconds!)}
+                </span>
+              ) : (
+                <span />
+              )}
+              <span className="session-ledger__info" aria-hidden="true">
+                <svg viewBox="0 0 20 20" fill="none">
+                  <circle
+                    cx="10"
+                    cy="10"
+                    r="7"
+                    stroke="currentColor"
+                    strokeWidth="1.3"
+                  />
+                  <path
+                    d="M10 9v5m0-8v.2"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </span>
+            </summary>
+            <div className="session-ledger__evidence">
+              <dl className="session-ledger__facts">
+                <div>
+                  <dt>Updates</dt>
+                  <dd>{state.observation}</dd>
+                </div>
+                {state.outputAgeSeconds !== null ? (
+                  <div>
+                    <dt>Output received</dt>
+                    <dd>{ageText(state.outputAgeSeconds)}</dd>
+                  </div>
+                ) : null}
+                {state.detail ? (
+                  <div>
+                    <dt>Detail</dt>
+                    <dd className="session-ledger__full-detail">
+                      {state.detail}
+                    </dd>
+                  </div>
+                ) : null}
+                <div>
+                  <dt>Heartbeat</dt>
+                  <dd>{heartbeatDescription}</dd>
+                </div>
+                {state.facts.map((fact, index) => (
+                  <div key={`${fact.label}-${index}`}>
+                    <dt>{fact.label}</dt>
+                    <dd>{fact.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </details>
+          {prominence !== "rest" ? (
+            <div className="session-ledger__context">
+              {showContext ? (
+                <p className="session-ledger__note">
+                  {state.detailKind === "explanation" && state.detail
+                    ? state.detail
+                    : state.observation}
+                </p>
+              ) : notice && surface !== "dock" ? (
+                <p className="session-ledger__note">{notice}</p>
+              ) : null}
+              {actionSlot}
+            </div>
           ) : null}
-          {actionSlot}
         </div>
       </div>
     </div>

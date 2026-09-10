@@ -66,7 +66,7 @@ capture-live-status-frames: ## Capture replay states and motion (CAPTURE=<privat
 
 .PHONY: capture-ledger-journeys
 capture-ledger-journeys: ## Exercise production Ledger with isolated HTTP/SSE facts and private frames
-	@bun scripts/qa/capture-ledger-journeys.ts --url "http://127.0.0.1:$(LAB_PORT)" $(if $(CAPTURE),--capture "$(CAPTURE)",) $(if $(OUTPUT),--output "$(OUTPUT)",)
+	@bun scripts/qa/capture-ledger-journeys.ts --url "http://127.0.0.1:$(LAB_PORT)" $(if $(CAPTURE),--capture "$(CAPTURE)",) $(if $(OUTPUT),--output "$(OUTPUT)",) $(if $(INSPECT),--inspect,)
 
 demo-db: ## Build demo SQLite database
 	@uv run --project server python server/scripts/build_demo_db.py --force

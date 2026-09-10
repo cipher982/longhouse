@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import clsx from "clsx";
 import {
   ACTIVITY_FRAME_WEIGHT,
@@ -11,12 +11,13 @@ export type ActivityStripTone = "live" | "attention" | "idle";
 interface ActivityStripProps {
   feed: SessionActivityFeed | null | undefined;
   tone: ActivityStripTone;
-  /** CSS pixels. */
-  width?: number;
+  /** CSS pixels; width follows the containing field. */
   height?: number;
   className?: string;
   label?: string;
   title?: string;
+  reduceMotion?: boolean;
+  showHistory?: boolean;
 }
 
 const BAR_WIDTH = 1.5;
@@ -30,7 +31,7 @@ function monotonicNow(): number {
 }
 
 /**
- * A small canvas that draws one bar per stream frame and lets bars drift left
+ * A receipt canvas that draws one bar per stream frame and lets bars drift left
  * over a twelve-second window. Nothing loops on its own: the animation frame
  * loop runs only while a bar is still inside the window, so an idle strip
  * costs nothing and a wedged turn visibly flattens.
@@ -38,26 +39,33 @@ function monotonicNow(): number {
 export function ActivityStrip({
   feed,
   tone,
-  width = 28,
   height = 14,
   className,
   label,
   title,
+  reduceMotion: reduceMotionProp = false,
+  showHistory = true,
 }: ActivityStripProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     const reduceMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      reduceMotionProp ||
+      (typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches);
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
+    let width = canvas.getBoundingClientRect().width;
+    const resize = () => {
+      width = canvas.getBoundingClientRect().width;
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      draw();
+    };
 
     const styles = getComputedStyle(canvas);
     const barColor =
@@ -77,7 +85,7 @@ export function ActivityStrip({
       ctx.clearRect(0, 0, width, height);
       const baseY = height - PADDING;
 
-      const frames = feed?.snapshot() ?? [];
+      const frames = showHistory ? (feed?.snapshot() ?? []) : [];
       let visible = false;
       for (let index = frames.length - 1; index >= 0; index -= 1) {
         const frame = frames[index];
@@ -123,11 +131,15 @@ export function ActivityStrip({
       }
     };
 
-    wake();
-    const unsubscribe = feed ? feed.subscribe(wake) : null;
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(canvas);
+    if (showHistory) wake();
+    const unsubscribe = feed && showHistory ? feed.subscribe(wake) : null;
 
     return () => {
       disposed = true;
+      observer.disconnect();
       window.clearTimeout(expiryTimer);
       if (frameId) {
         window.cancelAnimationFrame(frameId);
@@ -135,7 +147,7 @@ export function ActivityStrip({
       }
       unsubscribe?.();
     };
-  }, [feed, tone, width, height]);
+  }, [feed, tone, height, reduceMotionProp, showHistory]);
 
   return (
     <canvas
@@ -145,7 +157,7 @@ export function ActivityStrip({
         `session-activity-strip--${tone}`,
         className,
       )}
-      style={{ width, height }}
+      style={{ width: "100%", height }}
       role="img"
       aria-label={label}
       title={title}

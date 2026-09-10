@@ -189,31 +189,25 @@ struct SessionView: View {
         }
     }
 
-    // The fused floating control card: status line + composer (or the
-    // unavailable row) in one translucent rounded surface, inset from the
-    // bezel so the transcript scrolls under it. liveActivity (a Lock-Screen
-    // failure, NOT runtime status) rides above as its own quiet pill.
+    // The fused Balanced signal field: status and composer share one anchored
+    // material. Semantic state changes are immediate; only that material and
+    // measured context settle. liveActivity (a Lock-Screen failure, NOT
+    // runtime status) rides above as its own quiet pill.
     @ViewBuilder
     private var bottomChrome: some View {
         VStack(spacing: 8) {
             liveActivityMessage
-            if isSessionInteractionReady {
-                VStack(alignment: .leading, spacing: 8) {
-                    runtimeDock
-                    composer
+            if isSessionInteractionReady, let detail = viewModel.detail {
+                SessionSignalField(
+                    detail: detail,
+                    activity: viewModel.activity,
+                    realtimeConnection: viewModel.realtimeConnection
+                ) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        runtimeDock
+                        composer
+                    }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                .strokeBorder(.white.opacity(0.10), lineWidth: 0.75)
-                        )
-                )
-                .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
-                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("session-chat-bottom-chrome-card")
             } else if viewModel.isInitialLoading || transcriptState == .restoring {
                 SessionLoadingDock()
