@@ -10,6 +10,7 @@ struct LonghouseApp: App {
 
     @StateObject private var appState = AppState()
     @UIApplicationDelegateAdaptor(LonghousePushAppDelegate.self) private var pushDelegate
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -26,7 +27,11 @@ struct LonghouseApp: App {
                         await appState.syncStoredAPNSTokenIfPossible()
                     }
                 }
+                .onChange(of: scenePhase) { _, phase in
+                    RunBreadcrumb.shared.updateScene(Self.sceneName(phase))
+                }
                 .task {
+                    await RunBreadcrumb.shared.begin(scene: Self.sceneName(scenePhase))
 #if DEBUG
                     MainThreadStallMonitor.shared.startIfEnabled()
 #endif
@@ -51,6 +56,15 @@ struct LonghouseApp: App {
                     }
                     logger.info("launch task finished elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
                 }
+        }
+    }
+
+    private static func sceneName(_ phase: ScenePhase) -> String {
+        switch phase {
+        case .active: return "active"
+        case .inactive: return "inactive"
+        case .background: return "background"
+        @unknown default: return "unknown"
         }
     }
 

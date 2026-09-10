@@ -211,6 +211,13 @@ final class LonghousePushAppDelegate: NSObject, UIApplicationDelegate, UNUserNot
         return true
     }
 
+    func applicationWillTerminate(_ application: UIApplication) {
+        // The only termination that means the process chose to stop. A
+        // watchdog kill, jetsam, or a force quit never reaches here, which is
+        // exactly why the marker is useful.
+        RunBreadcrumb.shared.markCleanExit()
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         _ = PushNotificationStore.saveDeviceToken(deviceToken)
         NotificationCenter.default.post(name: .longhouseAPNSDeviceTokenUpdated, object: nil)
