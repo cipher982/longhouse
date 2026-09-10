@@ -682,8 +682,14 @@ struct SessionViewModelTests {
         await firstModel.loadOlder(sessionId: "session-1", appState: appState)
 
         let secondAPI = FakeSessionWorkspaceClient(workspaces: [fresh])
+        await secondAPI.pauseNextTailResponse(offset: 0)
         let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, snapshotStore: cache)
         await secondModel.start(sessionId: "session-1", appState: appState)
+        await waitForCondition("cached history frame", sourceLocation: #_sourceLocation) {
+            secondModel.items.map(\.id) == ["user:1", "user:51"]
+        }
+        recordCurrentTranscriptFrame(secondModel)
+        await secondAPI.resumePausedTailResponses()
         await waitForCondition("preserved cached history reconcile", sourceLocation: #_sourceLocation) {
             secondModel.items.map(\.id) == ["user:1", "user:51", "user:52"]
         }
