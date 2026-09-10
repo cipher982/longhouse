@@ -321,8 +321,8 @@ struct SessionSignalField<Content: View>: View {
 
 /// The integrated Ledger status row of the control card: provider headline,
 /// elapsed observation and scoped stream state. Receipt history belongs to the
-/// enclosing Balanced signal field; literal tool/context details stay behind
-/// deliberate disclosure.
+/// enclosing Balanced signal field. Literal work context is visible at rest;
+/// detailed evidence remains behind deliberate disclosure.
 struct SessionRuntimeDock: View {
     let detail: SessionDetail
     @ObservedObject var activity: ActivityPulseStore
@@ -554,6 +554,7 @@ struct SessionRuntimeDock: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(headlineColor(for: state))
                         .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                         .transaction { $0.animation = nil }
                     if let operationLine = operationLine(for: state) {
                         Text(operationLine)
