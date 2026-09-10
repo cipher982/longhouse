@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { AgentSession } from "../../../services/api/agents";
+import { makeSessionStateFacts } from "../../../test/sessionState";
 
 import {
   advanceProviderEvidenceTransition,
+  buildSessionLedgerState,
   providerEvidenceIdentity,
 } from "../SessionRuntimeStrip";
 
@@ -29,6 +32,90 @@ function working(overrides: Partial<Transition> = {}): Transition {
     ...overrides,
   };
 }
+
+function session(
+  id: string,
+  options: Parameters<typeof makeSessionStateFacts>[0] = {},
+): AgentSession {
+  return {
+    id,
+    session_state: makeSessionStateFacts(options),
+    runtime_display: {} as AgentSession["runtime_display"],
+  } as AgentSession;
+}
+
+const interaction = {
+  mode: "managed_local" as const,
+  isManagedLocalSession: true,
+  capabilityLabel: "Live control",
+};
+
+describe("SessionRuntimeStrip connection presentation", () => {
+  it("does not imply work or a connection fault during startup grace", () => {
+    const state = buildSessionLedgerState(
+      session("open-work", {
+        activity: "executing",
+        terminalAttached: true,
+        observedAt: "2026-09-09T19:00:00.000Z",
+      }),
+      interaction,
+      0,
+      false,
+      null,
+      true,
+    );
+
+    expect(state.connection).toBe("checking");
+    expect(state.tone).toBe("quiet");
+    expect(state.animateWork).toBe(false);
+  });
+
+  it("keeps an open disconnected idle session as an exception, not a recording", () => {
+    const state = buildSessionLedgerState(
+      session("open-idle", {
+        activity: "quiescent",
+        terminalAttached: true,
+      }),
+      interaction,
+      0,
+      false,
+    );
+
+    expect(state.connection).toBe("reconnecting");
+    expect(state.tone).toBe("quiet");
+    expect(
+      state.facts.some(
+        (fact) => fact.label === "Transport" && fact.value === "reconnecting",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps an open history-set session recorded when no terminal is attached", () => {
+    const state = buildSessionLedgerState(
+      session("open-history", { activity: "quiescent" }),
+      interaction,
+      0,
+      false,
+    );
+
+    expect(state.connection).toBe("recorded");
+    expect(state.tone).toBe("quiet");
+    expect(state.heartbeatAgeMs).toBeNull();
+  });
+
+  it("keeps closed history recorded and free of live receipt input", () => {
+    const state = buildSessionLedgerState(
+      session("closed", { closed: true }),
+      interaction,
+      0,
+      false,
+    );
+
+    expect(state.connection).toBe("recorded");
+    expect(state.heartbeatAgeMs).toBeNull();
+    expect(state.receiptMarks).toHaveLength(0);
+  });
+});
 
 describe("SessionRuntimeStrip provider recovery notices", () => {
   it("does not announce initial, heartbeat-only, or stale reconnect states", () => {

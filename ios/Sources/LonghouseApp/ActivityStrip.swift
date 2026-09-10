@@ -3,8 +3,8 @@ import SwiftUI
 /// The dock's activity instrument: one bar per frame the phone received on
 /// the session stream, drifting left over a twelve-second window and fading
 /// as it ages. Height encodes the kind of frame (tool boundary, message,
-/// text delta). Nothing loops — when nothing arrives the strip goes flat,
-/// which is exactly the state a pulsing dot could never show.
+/// text delta). Nothing loops — when nothing arrives the reserved trace stays
+/// empty, which is exactly the state a pulsing dot could never show.
 ///
 /// Colour is the session tone (live green, attention orange, idle grey);
 /// the strip never introduces a colour of its own.
@@ -66,12 +66,25 @@ struct ActivityStrip: View {
         let barWidth: CGFloat = 2
         let usable = size.height - 2
 
+        // Keep the reserved frame for an empty trace, but do not paint a
+        // baseline that suggests receipt activity when there are no visible
+        // pulses (including after the evidence window expires).
+        guard includePulses else { return }
+        var hasVisiblePulse = false
+        for pulse in store.pulses.reversed() {
+            let age = now.timeIntervalSince(pulse.at)
+            if age >= 0, age <= window {
+                hasVisiblePulse = true
+                break
+            }
+        }
+        guard hasVisiblePulse else { return }
+
         ctx.fill(
             Path(CGRect(x: 0, y: baseY - 0.5, width: size.width, height: 1)),
             with: .color(tone.opacity(0.28))
         )
 
-        guard includePulses else { return }
         for pulse in store.pulses.reversed() {
             let age = now.timeIntervalSince(pulse.at)
             if age < 0 { continue }

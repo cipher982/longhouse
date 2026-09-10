@@ -348,6 +348,28 @@ private struct PreviewSubtitle: ViewModifier {
     }
 }
 
+/// A deterministic preview of a transport loss after the dock has observed a
+/// healthy stream. This exercises the same local transition as a real viewer,
+/// so it does not need a preview-only production flag.
+private struct PreviewConnectionDrop: View {
+    let detail: SessionDetail
+    let activity: ActivityPulseStore
+    var transcript: [String] = []
+    @State private var connection: SessionRealtimeConnection = .connected
+
+    var body: some View {
+        SessionScreenPreview(
+            detail: detail,
+            activity: activity,
+            transcript: transcript,
+            connection: connection
+        )
+        .onAppear {
+            connection = .disconnected
+        }
+    }
+}
+
 // MARK: - Previews
 
 #Preview("Working · Codex · strip busy · Dark") {
@@ -534,7 +556,8 @@ private struct PreviewSubtitle: ViewModifier {
 }
 
 #Preview("Activity uncertain · stream disconnected · Dark") {
-    SessionScreenPreview(
+
+    PreviewConnectionDrop(
         detail: .mock(
             provider: "claude",
             executing: true,
@@ -555,8 +578,73 @@ private struct PreviewSubtitle: ViewModifier {
             )
         ),
         activity: seededActivity([(2.0, .toolResult)]),
-        transcript: ["The session was working when this viewer lost updates."],
-        connection: .disconnected
+        transcript: ["The session was working when this viewer lost updates."]
+    )
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Idle · disconnected after connection · Dark") {
+    PreviewConnectionDrop(
+        detail: .mock(
+            provider: "codex",
+            executing: false,
+            stateFactsJSON: factsJSON(
+                activity: "quiescent",
+                observedAt: isoDate(secondsAgo: 24),
+                primaryKey: "idle",
+                primaryLabel: "Idle",
+                primaryTone: "idle",
+                access: ("live_control", "Live control", "success")
+            )
+        ),
+        activity: ActivityPulseStore(),
+        transcript: ["Restore complete: 9.4 GB, 0 errors. Checksums match the manifest."]
+    )
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Connecting startup · checking · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "claude",
+            executing: true,
+            placeholder: "Queue for next turn",
+            stateFactsJSON: factsJSON(
+                activity: "executing",
+                tool: "Bash",
+                observedAt: isoDate(secondsAgo: 1),
+                validUntil: isoDate(secondsAgo: -30),
+                primaryKey: "executing",
+                primaryLabel: "Using Bash",
+                primaryTone: "running"
+            )
+        ),
+        activity: seededActivity([(1.2, .toolStart)]),
+        transcript: ["The provider is starting; waiting for the first live update."],
+        connection: .connecting
+    )
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Approval · disconnected after connection · Dark") {
+    PreviewConnectionDrop(
+        detail: .mock(
+            provider: "claude",
+            executing: false,
+            stateFactsJSON: factsJSON(
+                activity: "blocked",
+                tool: "Bash",
+                observedAt: isoDate(secondsAgo: 8),
+                primaryKey: "needs_approval",
+                primaryLabel: "Needs approval",
+                primaryTone: "blocked",
+                access: ("live_control", "Live control", "success"),
+                pendingInteractionKind: "approval"
+            ),
+            pauseRequestJSON: approvalPreviewJSON()
+        ),
+        activity: seededActivity([(1.5, .toolStart)]),
+        transcript: ["The provider is waiting for approval before continuing."]
     )
     .preferredColorScheme(.dark)
 }

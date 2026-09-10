@@ -23,7 +23,8 @@ const BAR_WIDTH = 1.5;
 const PADDING = 1;
 
 function monotonicNow(): number {
-  return typeof performance !== "undefined" && typeof performance.now === "function"
+  return typeof performance !== "undefined" &&
+    typeof performance.now === "function"
     ? performance.now()
     : Date.now();
 }
@@ -59,9 +60,12 @@ export function ActivityStrip({
     canvas.height = Math.round(height * dpr);
 
     const styles = getComputedStyle(canvas);
-    const barColor = styles.getPropertyValue("--activity-strip-color").trim() || "currentColor";
+    const barColor =
+      styles.getPropertyValue("--activity-strip-color").trim() ||
+      "currentColor";
     const stateColor =
-      styles.getPropertyValue("--activity-strip-state-color").trim() || barColor;
+      styles.getPropertyValue("--activity-strip-state-color").trim() ||
+      barColor;
 
     let frameId = 0;
     let expiryTimer = 0;
@@ -72,9 +76,6 @@ export function ActivityStrip({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
       const baseY = height - PADDING;
-      ctx.globalAlpha = 0.28;
-      ctx.fillStyle = barColor;
-      ctx.fillRect(0, baseY - 0.5, width, 1);
 
       const frames = feed?.snapshot() ?? [];
       let visible = false;
@@ -85,7 +86,10 @@ export function ActivityStrip({
         visible = true;
         const progress = age / ACTIVITY_STRIP_WINDOW_MS;
         const x = width - progress * width;
-        const barHeight = Math.max(2, (height - PADDING * 2) * ACTIVITY_FRAME_WEIGHT[frame.kind]);
+        const barHeight = Math.max(
+          2,
+          (height - PADDING * 2) * ACTIVITY_FRAME_WEIGHT[frame.kind],
+        );
         ctx.globalAlpha = 0.25 + 0.75 * (1 - progress);
         ctx.fillStyle = frame.kind === "state" ? stateColor : barColor;
         ctx.fillRect(x - BAR_WIDTH, baseY - barHeight, BAR_WIDTH, barHeight);
@@ -136,7 +140,11 @@ export function ActivityStrip({
   return (
     <canvas
       ref={canvasRef}
-      className={clsx("session-activity-strip", `session-activity-strip--${tone}`, className)}
+      className={clsx(
+        "session-activity-strip",
+        `session-activity-strip--${tone}`,
+        className,
+      )}
       style={{ width, height }}
       role="img"
       aria-label={label}

@@ -102,18 +102,6 @@
   color: var(--color-text-muted);
   white-space: nowrap;
 }
-.session-ledger__heartbeat {
-  width: 7px;
-  height: 7px;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  opacity: 0.85;
-}
-.session-ledger[data-connection="connected"] .session-ledger__heartbeat {
-  border-color: var(--color-intent-success);
-  box-shadow: 0 0 calc(8px * var(--ledger-heartbeat-glint, 0))
-    var(--color-intent-success);
-}
 .session-ledger__disclosure {
   font-size: 15px;
   line-height: 1;

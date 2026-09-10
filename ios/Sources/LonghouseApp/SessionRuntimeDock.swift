@@ -68,6 +68,10 @@ struct SessionRuntimeDock: View {
     @State private var elapsedAnchor: ElapsedAnchor?
     @State private var evidenceNow = Date()
     @State private var evidenceDisclosure = false
+    @State private var startupGraceExpired = false
+    @State private var hasObservedConnection = false
+
+    private static let startupGrace: TimeInterval = 2
 
     private struct ElapsedAnchor: Equatable {
         let key: String
@@ -88,13 +92,23 @@ struct SessionRuntimeDock: View {
         .onAppear {
             evidenceNow = Date()
             noticeNow = Date()
+            startupGraceExpired = false
+            hasObservedConnection = realtimeConnection == .connected
             observeStatus()
             reanchorElapsed()
         }
         .onChange(of: detail.activityStartedAt) { _, _ in reanchorElapsed() }
         .onChange(of: detail.id) { _, _ in
             evidenceDisclosure = false
+            startupGraceExpired = false
+            hasObservedConnection = realtimeConnection == .connected
             transition = SessionLedgerNoticeState()
+            observeStatus()
+        }
+        .onChange(of: realtimeConnection) { _, connection in
+            if connection == .connected {
+                hasObservedConnection = true
+            }
             observeStatus()
         }
         .onChange(of: elapsedAnchorKey) { _, _ in reanchorElapsed() }
@@ -124,8 +138,19 @@ struct SessionRuntimeDock: View {
                 noticeNow = Date()
             }
         }
+        // A newly opened screen starts with an intentionally quiet transport
+        // grace period. The timer only allows an exception to become visible;
+        // it never turns uncertain provider evidence into a healthy claim.
+        .task(id: startupGraceTaskKey) {
+            startupGraceExpired = false
+            try? await Task.sleep(nanoseconds: UInt64(Self.startupGrace * 1_000_000_000))
+            if !Task.isCancelled {
+                startupGraceExpired = true
+            }
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: evidenceDisclosure)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: noticeIsVisible)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: connectionLabel(for: ledger(asOf: evidenceNow)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
     }
@@ -157,6 +182,10 @@ struct SessionRuntimeDock: View {
         ].joined(separator: "|")
     }
 
+
+    private var startupGraceTaskKey: String {
+        "\(detail.id):transport-startup"
+    }
     private var noticeTaskKey: String {
         "\(transition.notice.map { String(describing: $0) } ?? "none"):\(transition.until?.timeIntervalSince1970 ?? 0)"
     }
@@ -193,15 +222,17 @@ struct SessionRuntimeDock: View {
     }
 
     private var elapsedStart: Date? {
+        guard isOpen else { return nil }
         if let anchor = elapsedAnchor, anchor.key == elapsedAnchorKey {
             return anchor.start
         }
         return detail.activityStartedAt
     }
 
-    private var isExecuting: Bool { detail.isSessionExecuting }
+    private var isExecuting: Bool { isOpen && detail.isSessionExecuting }
     private func ledger(asOf now: Date) -> SessionLedgerEvidence {
-        detail.ledgerEvidence(connection: realtimeConnection, asOf: now)
+        guard isOpen else { return .quiet }
+        return detail.ledgerEvidence(connection: realtimeConnection, asOf: now)
     }
 
     private func evidenceIsLive(asOf now: Date) -> Bool {
@@ -236,7 +267,7 @@ struct SessionRuntimeDock: View {
                     tone: tone(for: state),
                     evidenceLive: evidenceIsLive(asOf: now)
                 )
-                if state == .uncertain || realtimeConnection == .connected || shouldExpand || evidenceDisclosure {
+                if isOpen || detail.runtimeTailLine != nil || detail.runtimeCapabilityLabel != nil {
                     Button {
                         evidenceDisclosure.toggle()
                     } label: {
@@ -257,6 +288,10 @@ struct SessionRuntimeDock: View {
             }
         }
     }
+    private var isOpen: Bool {
+        !detail.isClosed && detail.stateFacts.workingSet == "open"
+    }
+
     private var shouldExpand: Bool {
         ledger(asOf: evidenceNow) == .uncertain
             || detail.activePauseRequest != nil
@@ -275,14 +310,21 @@ struct SessionRuntimeDock: View {
         }
     }
 
+    private var transportFailureVisible: Bool {
+        isOpen
+            && (hasObservedConnection || startupGraceExpired)
+            && realtimeConnection != .connected
+    }
+
     private func connectionLabel(for state: SessionLedgerEvidence) -> String? {
+        guard isOpen, startupGraceExpired || hasObservedConnection else { return nil }
         switch realtimeConnection {
         case .connected:
-            return "Updates connected"
+            return nil
         case .connecting:
             return "Updates connecting"
         case .disconnected:
-            return state == .uncertain ? "Updates disconnected" : nil
+            return "Updates disconnected"
         }
     }
 
@@ -316,7 +358,8 @@ struct SessionRuntimeDock: View {
             if let pauseRequest = detail.activePauseRequest {
                 Text(pauseRequest.canRespond ? "Answer in the session card below." : "Answer in the provider terminal.")
                     .foregroundStyle(.secondary)
-            } else {
+            }
+            if shouldShowConnectionEvidence(state: state) {
                 HStack(spacing: 6) {
                     Image(systemName: state == .uncertain ? "questionmark.circle" : "antenna.radiowaves.left.and.right")
                         .font(.caption)
@@ -353,6 +396,10 @@ struct SessionRuntimeDock: View {
         .padding(.leading, 24)
     }
 
+    private func shouldShowConnectionEvidence(state: SessionLedgerEvidence) -> Bool {
+        evidenceDisclosure || state == .uncertain || transportFailureVisible
+    }
+
     private func evidenceLabel(_ state: SessionLedgerEvidence) -> String {
         switch realtimeConnection {
         case .connected:
@@ -361,8 +408,11 @@ struct SessionRuntimeDock: View {
             }
             return "Updates connected"
         case .connecting:
-            return "Updates connecting"
+            return startupGraceExpired || hasObservedConnection ? "Updates connecting" : "Checking for updates…"
         case .disconnected:
+            if !startupGraceExpired && !hasObservedConnection {
+                return "Checking for updates…"
+            }
             if state == .uncertain {
                 return "Updates disconnected; the agent may still be running"
             }
@@ -370,12 +420,32 @@ struct SessionRuntimeDock: View {
         }
     }
     private var launchSetupLine: some View {
-        HStack(spacing: 8) {
-            ActivityStrip(store: activity, tone: RuntimeSignal.live.color, evidenceLive: false)
-            Text(detail.launchSetupStatusLabel)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                ActivityStrip(store: activity, tone: RuntimeSignal.live.color, evidenceLive: false)
+                Text(detail.launchSetupStatusLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if isOpen {
+                    Button {
+                        evidenceDisclosure.toggle()
+                    } label: {
+                        Image(systemName: evidenceDisclosure ? "chevron.up" : "info.circle")
+                            .font(.caption.weight(.semibold))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(evidenceDisclosure ? "Hide status evidence" : "Show status evidence")
+                    .accessibilityIdentifier("session-runtime-evidence-toggle")
+                }
+            }
+            if evidenceDisclosure {
+                evidenceContext(state: ledger(asOf: evidenceNow))
+            }
         }
     }
 
@@ -441,8 +511,9 @@ struct SessionRuntimeDock: View {
         }
         if let detailLabel = detail.runtimeDetail { parts.append(detailLabel) }
         if style.capability != .live, let label = detail.runtimeCapabilityLabel { parts.append(label) }
-        if let connectionLabel = connectionLabel(for: state) { parts.append(connectionLabel) }
-        if state == .uncertain { parts.append(evidenceLabel(state)) }
+        if evidenceDisclosure || state == .uncertain || transportFailureVisible {
+            parts.append(evidenceLabel(state))
+        }
         if noticeIsVisible, let notice = transition.notice {
             parts.append(notice == .finished ? "Turn finished" : "Activity evidence restored")
         }

@@ -26,6 +26,8 @@ interface SessionRuntimeStripProps {
   streamConnected?: boolean;
 }
 
+const INITIAL_CONNECTION_GRACE_MS = 2_000;
+
 type ProviderEvidence = Pick<SessionLedgerState, "tone"> & {
   sessionId: string;
   resultAt: string | null | undefined;
@@ -156,15 +158,19 @@ export function buildSessionLedgerState(
   nowMs: number,
   streamConnected: boolean,
   activityFeed: SessionActivityFeed | null = null,
+  initialConnectionGrace = false,
 ): SessionLedgerState {
   const runtime = resolveSessionRuntimeState(session);
   const facts = runtime.stateFacts;
   const display = getRuntimeDisplayCopy(runtime);
-  const evidenceLive = activityEvidenceIsLive(facts.activity, nowMs);
-  const pending = facts.pending_interaction != null;
+  const closedSession = facts.disposition.state === "closed";
   const rawProviderWorking =
     facts.activity.state === "thinking" || facts.activity.state === "executing";
-  const openSession = facts.working_set === "open";
+  const openSession = !closedSession && facts.working_set === "open";
+  const pending = openSession && facts.pending_interaction != null;
+  const inInitialConnectionGrace = initialConnectionGrace && openSession;
+  const evidenceLive =
+    !inInitialConnectionGrace && activityEvidenceIsLive(facts.activity, nowMs);
   const hostConcern =
     openSession &&
     (facts.host.state === "offline" || facts.host.state === "stale");
@@ -172,26 +178,31 @@ export function buildSessionLedgerState(
     openSession && facts.transcript.convergence === "lagging";
   const providerWorking = evidenceLive && rawProviderWorking;
   const viewerNeedsDisclosure =
-    (!streamConnected &&
+    openSession &&
+    ((!streamConnected &&
       (rawProviderWorking ||
         pending ||
         facts.activity.state === "blocked" ||
         facts.activity.state === "stalled")) ||
-    hostConcern ||
-    transcriptConcern ||
-    (rawProviderWorking && !evidenceLive);
-  const tone: SessionLedgerState["tone"] = pending
-    ? "attention"
-    : viewerNeedsDisclosure
-      ? "unknown"
-      : evidenceLive &&
-          (runtime.tone === "blocked" || runtime.tone === "stalled")
-        ? "attention"
-        : providerWorking
-          ? "working"
-          : rawProviderWorking && !evidenceLive
-            ? "unknown"
-            : "quiet";
+      hostConcern ||
+      transcriptConcern ||
+      (rawProviderWorking && !evidenceLive));
+  const tone: SessionLedgerState["tone"] = !openSession
+    ? "quiet"
+    : pending
+      ? "attention"
+      : inInitialConnectionGrace && !hostConcern && !transcriptConcern
+        ? "quiet"
+        : viewerNeedsDisclosure
+          ? "unknown"
+          : evidenceLive &&
+              (runtime.tone === "blocked" || runtime.tone === "stalled")
+            ? "attention"
+            : providerWorking
+              ? "working"
+              : rawProviderWorking && !evidenceLive
+                ? "unknown"
+                : "quiet";
   const headline = pending
     ? "Needs your response"
     : tone === "unknown"
@@ -208,24 +219,30 @@ export function buildSessionLedgerState(
           ? "Transcript is lagging the observed session state."
           : "Provider activity is unconfirmed."
       : display.detail;
-  const connection: SessionLedgerState["connection"] = streamConnected
-    ? "connected"
-    : tone === "unknown" || tone === "attention"
-      ? "reconnecting"
-      : "recorded";
-  const observation = streamConnected
-    ? pending
-      ? "Updates connected · waiting for your response"
-      : hostConcern
-        ? `Updates connected · host is ${facts.host.state}`
-        : transcriptConcern
-          ? "Updates connected · transcript is lagging"
-          : tone === "working"
-            ? "Updates connected · provider evidence is still valid"
-            : "Updates connected · provider activity is unconfirmed"
-    : tone === "unknown"
-      ? "Updates disconnected · the agent may still be running"
-      : "Saved session state · no live updates claimed";
+  const connection: SessionLedgerState["connection"] = !openSession
+    ? "recorded"
+    : streamConnected
+      ? "connected"
+      : inInitialConnectionGrace
+        ? "checking"
+        : "reconnecting";
+  const observation = !openSession
+    ? "Recorded snapshot · no live updates"
+    : inInitialConnectionGrace
+      ? "Checking updates"
+      : streamConnected
+        ? pending
+          ? "Waiting for your response"
+          : hostConcern
+            ? `Host is ${facts.host.state}`
+            : transcriptConcern
+              ? "Transcript is lagging"
+              : tone === "working"
+                ? "Provider evidence is still valid"
+                : "Provider activity is unconfirmed"
+        : tone === "unknown"
+          ? "Updates disconnected · the agent may still be running"
+          : "Updates disconnected";
   const primary = facts.presentation.primary;
   const host = facts.host;
   const runtimeMeta = getRuntimeMetaLabel(runtime, nowMs);
@@ -238,10 +255,16 @@ export function buildSessionLedgerState(
     connection,
     animateWork: tone === "working" && providerWorking && streamConnected,
     outputAgeSeconds: null,
-    heartbeatAgeMs: activityFeed?.heartbeatAgeMs() ?? null,
+    heartbeatAgeMs: openSession
+      ? (activityFeed?.heartbeatAgeMs() ?? null)
+      : null,
 
     receiptMarks: [],
     facts: [
+      {
+        label: "Transport",
+        value: connection,
+      },
       {
         label: "Provider evidence",
         value: `${primary?.label ?? "Activity unknown"} · ${facts.activity.state}; valid until ${facts.activity.valid_until ?? "not bounded"}`,
@@ -266,12 +289,35 @@ export function SessionRuntimeStrip({
 }: SessionRuntimeStripProps) {
   const closed = session.session_state.disposition.state === "closed";
   const nowMs = useWallClock(!closed, 1_000);
+  const startupRef = useRef<{
+    sessionId: string;
+    startedAt: number;
+    connected: boolean;
+  } | null>(null);
+  if (startupRef.current?.sessionId !== session.id) {
+    startupRef.current = {
+      sessionId: session.id,
+      startedAt: nowMs,
+      connected: streamConnected,
+    };
+  } else if (streamConnected && startupRef.current) {
+    startupRef.current.connected = true;
+  }
+  const startup = startupRef.current;
+  const initialConnectionGrace =
+    !closed &&
+    session.session_state.working_set === "open" &&
+    !streamConnected &&
+    startup !== null &&
+    !startup.connected &&
+    nowMs - startup.startedAt < INITIAL_CONNECTION_GRACE_MS;
   const state = buildSessionLedgerState(
     session,
     interaction,
     nowMs,
     streamConnected,
-    activityFeed,
+    closed ? null : activityFeed,
+    initialConnectionGrace,
   );
   const runtimeEvidence =
     resolveSessionRuntimeState(session).stateFacts.activity;
@@ -329,7 +375,7 @@ export function SessionRuntimeStrip({
         state={state}
         surface="ledger"
         notice={notice}
-        activityFeed={activityFeed}
+        activityFeed={state.connection === "recorded" ? null : activityFeed}
         testId="live-work-ribbon"
       />
     </div>

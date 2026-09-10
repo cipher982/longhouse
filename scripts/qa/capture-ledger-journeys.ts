@@ -324,7 +324,9 @@ async function shot(page: Page, name: string) {
     workMotion: await ribbon.getAttribute("data-work-motion"),
     ribbonBounds: await ribbon.boundingBox(),
     dockBounds: await page.getByTestId("session-control-dock").boundingBox(),
-    draftBounds: await page.locator(".session-chat textarea").boundingBox(),
+    draftBounds: (await page.locator(".session-chat textarea").count())
+      ? await page.locator(".session-chat textarea").boundingBox()
+      : null,
     horizontalOverflow: overflow,
   });
 }
@@ -380,7 +382,30 @@ try {
       await page.getByTestId("live-work-ribbon").waitFor();
       await motion(page, true);
       await page.waitForTimeout(4_200);
+      publish();
+      await page.waitForFunction(() => {
+        const canvas = document.querySelector<HTMLCanvasElement>(
+          '[data-testid="session-activity-strip"]',
+        );
+        const context = canvas?.getContext("2d");
+        return (
+          canvas &&
+          context &&
+          Array.from(
+            context.getImageData(0, 0, canvas.width, canvas.height).data,
+          ).some((value, index) => index % 4 === 3 && value > 0)
+        );
+      });
       await shot(page, `${size.name}-working`);
+      assert.equal(
+        await page
+          .getByTestId("live-work-ribbon")
+          .locator("summary")
+          .getByText("Updates connected", { exact: true })
+          .isVisible(),
+        false,
+        "Healthy transport stays out of the normal status row",
+      );
       assert.equal(
         await page
           .getByText("Fresh provider evidence restored.", { exact: true })
@@ -553,6 +578,30 @@ try {
       await motion(page, false);
       await preserveDraft();
       await shot(page, `${size.name}-approval-draft`);
+      refuseStream = true;
+      for (const stream of streams) stream.end();
+      streams.clear();
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-testid="live-work-ribbon"]')
+            ?.getAttribute("data-connection") === "reconnecting",
+      );
+      assert.equal(
+        await page
+          .getByTestId("live-work-ribbon")
+          .getAttribute("data-work-state"),
+        "attention",
+        "Transport loss must not hide the pending approval",
+      );
+      await shot(page, `${size.name}-approval-disconnected`);
+      refuseStream = false;
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-testid="live-work-ribbon"]')
+            ?.getAttribute("data-connection") === "connected",
+      );
       assert.equal(
         await page.getByRole("button", { name: /allow once/i }).count(),
         0,
@@ -595,6 +644,30 @@ try {
         "rest",
       );
       await shot(page, `${size.name}-finished-settled`);
+      refuseStream = true;
+      for (const stream of streams) stream.end();
+      streams.clear();
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-testid="live-work-ribbon"]')
+            ?.getAttribute("data-connection") === "reconnecting",
+      );
+      assert.equal(
+        await page
+          .getByTestId("live-work-ribbon")
+          .getAttribute("data-work-state"),
+        "quiet",
+        "Idle transport loss is not provider activity or archival",
+      );
+      await shot(page, `${size.name}-idle-disconnected`);
+      refuseStream = false;
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-testid="live-work-ribbon"]')
+            ?.getAttribute("data-connection") === "connected",
+      );
       restoreWork();
       await motion(page, true);
       const scroll = page.locator(".timeline-events");
@@ -633,6 +706,31 @@ try {
         focusRetained: true,
         scrollRetained: true,
       });
+      session.session_state.disposition = {
+        state: "closed",
+        closed_at: iso(),
+        close_reason: null,
+      };
+      session.session_state.working_set = "history";
+      session.session_state.run.lifecycle = "ended";
+      session.session_state.run.ended_at = iso();
+      session.session_state.activity.state = "quiescent";
+      publish();
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-testid="live-work-ribbon"]')
+            ?.getAttribute("data-connection") === "recorded",
+      );
+      assert.equal(
+        await page
+          .getByTestId("live-work-ribbon")
+          .getByTestId("session-activity-strip")
+          .isVisible(),
+        false,
+        "Historical sessions do not advertise incoming traffic",
+      );
+      await shot(page, `${size.name}-historical`);
     } catch (error) {
       const failedPage = context.pages()[0];
       if (failedPage) {

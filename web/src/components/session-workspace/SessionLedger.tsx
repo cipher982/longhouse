@@ -3,7 +3,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import type { SessionActivityFeed } from "../../lib/sessionActivityFeed";
@@ -52,12 +51,8 @@ export interface SessionLedgerProps {
 }
 
 const RECEIPT_WINDOW_MS = 12_000;
-const HEARTBEAT_GLINT_MS = 420;
-const CONNECTION_LABELS: Record<LedgerConnection, string> = {
-  connected: "Updates connected",
-  reconnecting: "Updates reconnecting",
-  checking: "Checking updates",
-  recorded: "Recorded snapshot",
+const CONNECTION_LABELS: Partial<Record<LedgerConnection, string>> = {
+  reconnecting: "Updates disconnected",
 };
 
 function ageText(seconds: number): string {
@@ -132,12 +127,6 @@ export function SessionLedger({
   const workIsMoving =
     state.tone === "working" && state.animateWork && !reduceMotion;
   const workAngle = (((motionTimeMs ?? 0) % 7_200) / 7_200) * 360;
-  const heartbeatGlint =
-    !reduceMotion &&
-    state.connection === "connected" &&
-    state.heartbeatAgeMs !== null
-      ? Math.max(0, 1 - Math.max(0, state.heartbeatAgeMs) / HEARTBEAT_GLINT_MS)
-      : 0;
   const displayDetail = useMemo(
     () => compactDetail(state.detail, state.detailKind),
     [state.detail, state.detailKind],
@@ -157,8 +146,11 @@ export function SessionLedger({
     observer?.observe(content);
     return () => observer?.disconnect();
   }, []);
-  const connectionLabel = CONNECTION_LABELS[state.connection];
-  const showContext = state.tone === "unknown" || state.tone === "attention";
+  const connectionLabel = CONNECTION_LABELS[state.connection] ?? null;
+  const showContext =
+    state.tone === "unknown" ||
+    state.tone === "attention" ||
+    connectionLabel !== null;
   const prominence = showContext
     ? "expanded"
     : notice && surface !== "dock"
@@ -185,7 +177,7 @@ export function SessionLedger({
         <summary
           className="session-ledger__primary"
           title="Inspect the observed session evidence"
-          aria-label={`Inspect evidence: ${state.headline}. ${connectionLabel}.`}
+          aria-label={`Inspect evidence: ${state.headline}${connectionLabel ? `. ${connectionLabel}` : ""}.`}
         >
           <span
             className="session-ledger__glyph"
@@ -206,7 +198,7 @@ export function SessionLedger({
           >
             {state.headline}
           </span>
-          {activityFeed ? (
+          {activityFeed && state.connection !== "recorded" ? (
             <ActivityStrip
               feed={activityFeed}
               tone={
@@ -225,37 +217,32 @@ export function SessionLedger({
               data-testid="receipt-trail"
               aria-hidden="true"
             >
-              {state.receiptMarks.map((mark) => {
-                if (mark.ageMs < 0 || mark.ageMs >= RECEIPT_WINDOW_MS)
-                  return null;
-                const freshness = 1 - mark.ageMs / RECEIPT_WINDOW_MS;
-                const position = reduceMotion
-                  ? (mark.sequence % 22) / 21
-                  : 1 - freshness;
-                return (
-                  <span
-                    key={mark.id}
-                    className="session-ledger__receipt"
-                    data-replay={mark.replay ? "true" : "false"}
-                    data-receipt-id={mark.id}
-                    style={{
-                      right: `calc(${position * 100}% - ${position * 3}px)`,
-                      opacity: reduceMotion ? 1 : freshness,
-                    }}
-                  />
-                );
-              })}
+              {state.connection !== "recorded"
+                ? state.receiptMarks.map((mark) => {
+                    if (mark.ageMs < 0 || mark.ageMs >= RECEIPT_WINDOW_MS)
+                      return null;
+                    const freshness = 1 - mark.ageMs / RECEIPT_WINDOW_MS;
+                    const position = reduceMotion
+                      ? (mark.sequence % 22) / 21
+                      : 1 - freshness;
+                    return (
+                      <span
+                        key={mark.id}
+                        className="session-ledger__receipt"
+                        data-replay={mark.replay ? "true" : "false"}
+                        data-receipt-id={mark.id}
+                        style={{
+                          right: `calc(${position * 100}% - ${position * 3}px)`,
+                          opacity: reduceMotion ? 1 : freshness,
+                        }}
+                      />
+                    );
+                  })
+                : null}
             </span>
           )}
           <span className="session-ledger__link">
-            <span
-              className="session-ledger__heartbeat"
-              aria-hidden="true"
-              style={
-                { "--ledger-heartbeat-glint": heartbeatGlint } as CSSProperties
-              }
-            />
-            <span>{connectionLabel}</span>
+            {connectionLabel ? <span>{connectionLabel}</span> : null}
             <span className="session-ledger__disclosure" aria-hidden="true">
               ⌄
             </span>
@@ -304,11 +291,17 @@ export function SessionLedger({
         }
       >
         <div className="session-ledger__context-inner" ref={contextRef}>
-          {showContext && state.observation !== connectionLabel ? (
-            <p className="session-ledger__note">{state.observation}</p>
-          ) : null}
-          {!showContext && notice && surface !== "dock" ? (
+          {notice && surface !== "dock" ? (
             <p className="session-ledger__note">{notice}</p>
+          ) : showContext && state.observation ? (
+            <p
+              className="session-ledger__note"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {state.observation}
+            </p>
           ) : state.detail &&
             (showContext || state.detailKind === "explanation") ? (
             <p
@@ -321,8 +314,6 @@ export function SessionLedger({
             >
               {displayDetail}
             </p>
-          ) : surface !== "dock" ? (
-            <p className="session-ledger__note">{state.observation}</p>
           ) : null}
           {actionSlot}
         </div>
