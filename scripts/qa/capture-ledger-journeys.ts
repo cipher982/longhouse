@@ -326,6 +326,7 @@ const server = createServer(async (request, response) => {
           session,
           projection: workspace.projection,
           snapshot_event_id: null,
+          workspace_revision: workspace.workspace_revision,
         });
         return;
       }

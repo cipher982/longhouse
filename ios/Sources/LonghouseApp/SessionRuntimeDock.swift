@@ -544,7 +544,8 @@ struct SessionRuntimeDock: View {
                             .font(.caption.monospaced())
                             .foregroundStyle(state == .uncertain ? Color.secondary : Color.primary.opacity(0.78))
                             .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
-                            .truncationMode(.middle)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
                             .transaction { $0.animation = nil }
                             .accessibilityIdentifier("session-runtime-operation")
                     }
@@ -582,6 +583,7 @@ struct SessionRuntimeDock: View {
             }
             if shouldExpand || evidenceDisclosure || noticeIsVisible {
                 evidenceContext(state: state)
+                    .transition(.identity)
             }
         }
     }
@@ -684,6 +686,7 @@ struct SessionRuntimeDock: View {
             }
             if let pauseRequest = detail.activePauseRequest {
                 Text(pauseRequest.canRespond ? "Answer in the session card below." : "Answer in the provider terminal.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if evidenceDisclosure {

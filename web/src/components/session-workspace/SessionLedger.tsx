@@ -326,7 +326,7 @@ export function SessionLedger({
             <summary
               className="session-ledger__primary"
               title="Inspect the observed session evidence"
-              aria-label={`Inspect evidence: ${state.headline}${connectionLabel ? `. ${connectionLabel}` : ""}.`}
+              aria-label={`Inspect evidence: ${state.headline}${connectionLabel ? `. ${connectionLabel}` : ""}${showElapsed ? `. Elapsed ${elapsedText(state.elapsedSeconds!)}` : ""}.`}
             >
               <span
                 className="session-ledger__glyph"
@@ -358,10 +358,7 @@ export function SessionLedger({
                 ) : null}
               </span>
               {showElapsed ? (
-                <span
-                  className="session-ledger__elapsed"
-                  aria-label={`Elapsed ${elapsedText(state.elapsedSeconds!)}`}
-                >
+                <span className="session-ledger__elapsed" aria-hidden="true">
                   {elapsedText(state.elapsedSeconds!)}
                 </span>
               ) : (
