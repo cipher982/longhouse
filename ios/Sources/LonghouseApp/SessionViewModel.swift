@@ -1818,6 +1818,18 @@ final class SessionViewModel: ObservableObject {
         activeTailRefreshToken = token
         let task = Task { [weak self] in
             guard let self else { return }
+            // The refresh owns its own handle. Clearing it from this caller's
+            // `defer` instead let a *finished* task stay in `tailRefreshTask`
+            // whenever a joiner resumed from `await value` first — and a
+            // non-nil handle is what tells the realtime wake loop a refresh is
+            // still in flight. It then re-armed on every pass, joining a
+            // completed task without ever suspending, and spun the main actor.
+            defer {
+                if self.activeTailRefreshToken == token {
+                    self.tailRefreshTask = nil
+                    self.activeTailRefreshToken = nil
+                }
+            }
             try await self.performRefreshTail(
                 api: api,
                 sessionId: sessionId,
@@ -1825,12 +1837,6 @@ final class SessionViewModel: ObservableObject {
             )
         }
         tailRefreshTask = task
-        defer {
-            if activeTailRefreshToken == token {
-                tailRefreshTask = nil
-                activeTailRefreshToken = nil
-            }
-        }
 
         do {
             try await task.value
