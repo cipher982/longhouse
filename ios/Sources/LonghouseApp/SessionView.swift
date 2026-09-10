@@ -38,11 +38,6 @@ struct SessionView: View {
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
-    private var attachmentInputEnabled: Bool {
-        guard let detail = viewModel.detail else { return false }
-        return SessionComposerControlState.attachmentInputEnabled(for: detail)
-    }
-
     var body: some View {
         // Let SwiftUI's safe-area inset own both composer clearance and keyboard
         // avoidance. The previous GeometryReader -> safe-area -> DOM-padding
