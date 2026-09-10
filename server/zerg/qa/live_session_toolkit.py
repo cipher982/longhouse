@@ -27,6 +27,7 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import tempfile
 import termios
 import time
 import urllib.error
@@ -47,6 +48,15 @@ QUALIFICATION_HOME_ENV = "LONGHOUSE_QUALIFICATION_HOME"
 
 
 QUALIFICATION_SANDBOX_PROFILE = "provider-qualification-bwrap-v3"
+
+
+def new_qualification_isolation_root(prefix: str) -> Path:
+    """Create unique runtime state under the sandbox's short visible alias."""
+
+    qualification_home = os.environ.get(QUALIFICATION_HOME_ENV, "").strip()
+    if qualification_home:
+        return Path(tempfile.mkdtemp(prefix=f"lh-{prefix}-", dir=qualification_home))
+    return Path(tempfile.mkdtemp(prefix=f"longhouse-{prefix}-", dir="/tmp"))
 
 
 _ANSI_CONTROL_RE = re.compile(r"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-_]|.)")

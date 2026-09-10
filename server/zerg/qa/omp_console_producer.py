@@ -77,6 +77,7 @@ REGISTRATION = ProducerRegistration(
 )
 _VARIANT = execution_variant_key(provider="omp", assertion_id=ASSERTION_ID, scenario_id=SCENARIO_ID, variant=None)
 PROFILE = "omp_print_v1"
+_MAX_NATIVE_MODEL_SOURCE_BYTES = 16 * 1024 * 1024
 _PROFILE = identity.IdentityProfile(
     provider="omp",
     profile=PROFILE,
@@ -415,12 +416,7 @@ def _first_turn_source_window_from_response_binding(
     source_kind = binding.get("provider_response_source_kind")
     source_ref = binding.get("provider_response_source_path")
     source_digest = binding.get("provider_response_source_sha256")
-    if (
-        source_kind not in {"source_path", "stdout_path"}
-        or not isinstance(source_ref, str)
-        or not source_ref
-        or not isinstance(source_digest, str)
-    ):
+    if source_kind != "source_path" or not isinstance(source_ref, str) or not source_ref or not isinstance(source_digest, str):
         return None
     matching_rows = [
         item
@@ -437,15 +433,18 @@ def _first_turn_source_window_from_response_binding(
     if source_path is None:
         return None
     try:
-        source_bytes = source_path.read_bytes()
+        with source_path.open("rb") as stream:
+            source_bytes = stream.read(_MAX_NATIVE_MODEL_SOURCE_BYTES + 1)
     except OSError:
+        return None
+    if len(source_bytes) > _MAX_NATIVE_MODEL_SOURCE_BYTES:
         return None
     if f"sha256:{hashlib.sha256(source_bytes).hexdigest()}" != source_digest:
         return None
     events, malformed = _parse_native_events(source_bytes)
-    if malformed or (
-        expected_native_id and not any(event.get("type") == "session" and event.get("id") == expected_native_id for event in events)
-    ):
+    if malformed or not expected_native_id:
+        return None
+    if sum(event.get("type") == "session" and event.get("id") == expected_native_id for event in events) != 1:
         return None
     return source_path, source_path.relative_to(root.resolve()).as_posix(), source_bytes, events
 

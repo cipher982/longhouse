@@ -69,6 +69,10 @@ def test_opencode_is_covered_because_the_engine_emits_its_bindings() -> None:
     assert "opencode" in MISSING_UNBOUND_UNMANAGED_PROVIDERS
 
 
+def test_omp_is_covered_because_the_engine_emits_its_bindings() -> None:
+    assert "omp" in MISSING_UNBOUND_UNMANAGED_PROVIDERS
+
+
 def test_managed_lease_metric_labels_cover_every_provider() -> None:
     """Lease metrics bucketed Cursor as "other" for 31 days."""
 

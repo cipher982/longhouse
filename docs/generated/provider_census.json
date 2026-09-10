@@ -1677,6 +1677,7 @@
       "path": "server/tests_lite/test_unmanaged_snapshot_coverage.py",
       "providers": [
         "cursor",
+        "omp",
         "opencode"
       ]
     },

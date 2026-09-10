@@ -16,7 +16,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 from pathlib import Path
@@ -26,6 +25,7 @@ from urllib.request import urlopen
 
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import event_text
+from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.pi_native import pi_native_shadow_taxonomy
@@ -1066,32 +1066,36 @@ def _parser() -> argparse.ArgumentParser:
 def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
-    isolation = Path(tempfile.mkdtemp(prefix="longhouse-pi-helm-", dir="/tmp"))
+    isolation = new_qualification_isolation_root("pi-helm")
     provider_home = isolation / "provider-home"
     home = isolation / "longhouse"
     workspace = isolation / "workspace"
-    workspace.mkdir(mode=0o700)
-    provider_home.mkdir(mode=0o700, parents=True)
-    (provider_home / ".pi" / "agent" / "sessions").mkdir(mode=0o700, parents=True)
-    proof_file = workspace / "pi-tool-proof.txt"
-    proof_marker = f"PI_HELM_TOOL_{os.urandom(8).hex()}"
-    context_phrase = f"PI_HELM_CONTEXT_{os.urandom(8).hex()}"
-    proof_file.write_text(proof_marker + "\n", encoding="utf-8")
-    env = dict(os.environ)
-    env.update(
-        {
-            "HOME": str(provider_home),
-            "LONGHOUSE_HOME": str(home),
-            "PI_CODING_AGENT_DIR": str(provider_home / ".pi"),
-            "LONGHOUSE_ENGINE_BIN": str(args.engine),
-            "LONGHOUSE_PI_BIN": str(args.provider_bin),
-            "LONGHOUSE_PI_HELM_URL": str(args.api_url or os.environ.get("LONGHOUSE_RUNTIME_API_URL") or ""),
-            "LONGHOUSE_PI_HELM_TOKEN": str(args.agents_token or os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN") or ""),
-            "LONGHOUSE_ORIGIN_KIND": "test_or_canary",
-            "LONGHOUSE_LAUNCH_ACTOR": "automation",
-            "LONGHOUSE_LAUNCH_SURFACE": "qa",
-        }
-    )
+    try:
+        workspace.mkdir(mode=0o700)
+        provider_home.mkdir(mode=0o700, parents=True)
+        (provider_home / ".pi" / "agent" / "sessions").mkdir(mode=0o700, parents=True)
+        proof_file = workspace / "pi-tool-proof.txt"
+        proof_marker = f"PI_HELM_TOOL_{os.urandom(8).hex()}"
+        context_phrase = f"PI_HELM_CONTEXT_{os.urandom(8).hex()}"
+        proof_file.write_text(proof_marker + "\n", encoding="utf-8")
+        env = dict(os.environ)
+        env.update(
+            {
+                "HOME": str(provider_home),
+                "LONGHOUSE_HOME": str(home),
+                "PI_CODING_AGENT_DIR": str(provider_home / ".pi"),
+                "LONGHOUSE_ENGINE_BIN": str(args.engine),
+                "LONGHOUSE_PI_BIN": str(args.provider_bin),
+                "LONGHOUSE_PI_HELM_URL": str(args.api_url or os.environ.get("LONGHOUSE_RUNTIME_API_URL") or ""),
+                "LONGHOUSE_PI_HELM_TOKEN": str(args.agents_token or os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN") or ""),
+                "LONGHOUSE_ORIGIN_KIND": "test_or_canary",
+                "LONGHOUSE_LAUNCH_ACTOR": "automation",
+                "LONGHOUSE_LAUNCH_SURFACE": "qa",
+            }
+        )
+    except BaseException:
+        shutil.rmtree(isolation)
+        raise
     observations: dict[str, Any] = {"proof_marker": proof_marker, "provider": "pi"}
     sessions: list[ProviderPtySession] = []
     owned_processes: list[dict[str, Any]] = []
@@ -2074,6 +2078,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         if not observations["scratch_removed"]:
             observations.setdefault("cleanup_errors", []).append("scratch isolation directory remains")
         observations["cleanup"]["scratch_removed"] = observations["scratch_removed"]
+        observations["cleanup"]["isolation_path"] = str(isolation)
         cleanup_errors = observations.get("cleanup_errors") if isinstance(observations.get("cleanup_errors"), list) else []
         observations["cleanup"]["cleanup_errors"] = list(cleanup_errors)
         observations["cleanup"]["status"] = (

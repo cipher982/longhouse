@@ -23,6 +23,7 @@ from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import event_text
+from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
@@ -1246,28 +1247,32 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
     # may contain the disposable machine token until owned processes are dead;
     # the evidence scanner must never have to choose between preserving it and
     # accepting a secret-bearing artifact.
-    isolation = root.parent / f"{root.name}-isolation"
+    isolation = new_qualification_isolation_root("omp-helm")
     provider_home = isolation / "home"
     longhouse_home = provider_home / ".longhouse"
     workspace = isolation / "workspace"
-    provider_home.mkdir(mode=0o700, parents=True)
-    workspace.mkdir(mode=0o700, parents=True)
-    env = dict(os.environ)
-    env.update(
-        {
-            "HOME": str(provider_home),
-            "LONGHOUSE_HOME": str(longhouse_home),
-            "LONGHOUSE_OMP_BIN": str(args.provider_bin),
-            "LONGHOUSE_OMP_HELM_URL": str(args.api_url),
-            "LONGHOUSE_OMP_HELM_TOKEN": str(args.agents_token),
-            "LONGHOUSE_ORIGIN_KIND": "test_or_canary",
-            "LONGHOUSE_LAUNCH_ACTOR": "automation",
-            "LONGHOUSE_LAUNCH_SURFACE": "qa",
-            "XDG_DATA_HOME": str(provider_home / ".local" / "share"),
-            "LONGHOUSE_OMP_DATA_DIR": str(provider_home / ".local" / "share" / "omp"),
-            "LONGHOUSE_OMP_SESSION_DIR": str(provider_home / ".local" / "share" / "omp" / "sessions"),
-        }
-    )
+    try:
+        provider_home.mkdir(mode=0o700, parents=True)
+        workspace.mkdir(mode=0o700, parents=True)
+        env = dict(os.environ)
+        env.update(
+            {
+                "HOME": str(provider_home),
+                "LONGHOUSE_HOME": str(longhouse_home),
+                "LONGHOUSE_OMP_BIN": str(args.provider_bin),
+                "LONGHOUSE_OMP_HELM_URL": str(args.api_url),
+                "LONGHOUSE_OMP_HELM_TOKEN": str(args.agents_token),
+                "LONGHOUSE_ORIGIN_KIND": "test_or_canary",
+                "LONGHOUSE_LAUNCH_ACTOR": "automation",
+                "LONGHOUSE_LAUNCH_SURFACE": "qa",
+                "XDG_DATA_HOME": str(provider_home / ".local" / "share"),
+                "LONGHOUSE_OMP_DATA_DIR": str(provider_home / ".local" / "share" / "omp"),
+                "LONGHOUSE_OMP_SESSION_DIR": str(provider_home / ".local" / "share" / "omp" / "sessions"),
+            }
+        )
+    except BaseException:
+        shutil.rmtree(isolation)
+        raise
 
     sessions: list[ProviderPtySession] = []
     shipper = None
@@ -2043,6 +2048,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         cleanup["cleanup_flush"] = cleanup_flush
         cleanup["cleanup_errors"] = cleanup_errors
+        cleanup["isolation_path"] = str(isolation)
         if not cleanup["shipper_stop_verified"] or cleanup_errors:
             cleanup["status"] = "fail"
         cleanup["canary_session_hidden"] = _exact_session_retirement(session_retirement, current_session_id)

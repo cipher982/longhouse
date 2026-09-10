@@ -37,6 +37,7 @@ from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
 from zerg.qa.omp_helm_lifecycle import _runtime_convergence
 from zerg.qa.omp_helm_lifecycle import _served_projection_evidence
 from zerg.qa.omp_helm_lifecycle import omp_helm_lifecycle_assertions
+from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
 from zerg.qa.provider_qualification import _PROFILES
 
@@ -65,6 +66,33 @@ def test_omp_stock_version_line_is_prefixed_for_both_release_profiles() -> None:
     assert HELM_PROFILE.version_line.fullmatch("omp/18.1.14")
     assert CONSOLE_PROFILE.version_line.fullmatch("18.1.14") is None
     assert HELM_PROFILE.version_line.fullmatch("18.1.14") is None
+
+
+def test_qualification_isolation_root_uses_short_sandbox_alias(monkeypatch, tmp_path) -> None:
+    sandbox_home = tmp_path / "sandbox-home"
+    sandbox_home.mkdir()
+    monkeypatch.setenv("LONGHOUSE_QUALIFICATION_HOME", str(sandbox_home))
+
+    first = new_qualification_isolation_root("omp-helm")
+    second = new_qualification_isolation_root("pi-helm")
+
+    assert first.parent == sandbox_home
+    assert second.parent == sandbox_home
+    assert first != second
+    assert str(first / "home" / ".longhouse" / "agent" / "transcript-wake.sock").startswith(str(sandbox_home))
+    first.rmdir()
+    second.rmdir()
+
+
+def test_qualification_isolation_root_keeps_unique_tmp_behavior_outside_sandbox(monkeypatch) -> None:
+    monkeypatch.delenv("LONGHOUSE_QUALIFICATION_HOME", raising=False)
+
+    isolation = new_qualification_isolation_root("pi-helm")
+
+    try:
+        assert isolation.parent == Path("/tmp")
+    finally:
+        isolation.rmdir()
 
 
 @pytest.mark.parametrize(
@@ -240,29 +268,16 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
     assert evidence["result_event"]["model_source"] == "provider_event"
 
 
-def test_omp_native_model_evidence_uses_bound_response_without_continuation_receipt(tmp_path) -> None:
+def test_omp_native_model_evidence_rejects_stream_stdout_without_native_usage(tmp_path) -> None:
     _write_omp_console_settlement_fixture(
         tmp_path,
         first_turn_events=[{"type": "session", "id": "native-1"}],
     )
     stdout_source = tmp_path / "provider-sources" / "stdout.jsonl"
     stdout_source.write_text(
-        "\n".join(
-            json.dumps(event)
-            for event in [
-                {"type": "session", "id": "native-1"},
-                {
-                    "type": "message",
-                    "model": "openrouter/fixture-model",
-                    "message": {
-                        "role": "assistant",
-                        "model": "openrouter/fixture-model",
-                        "stopReason": "stop",
-                        "usage": {"input": 3, "output": 2, "cost": {"total": 0.0001}},
-                    },
-                },
-            ]
-        )
+        json.dumps({"type": "assistant", "text": "stream-shaped output"})
+        + "\n"
+        + json.dumps({"type": "agent_end"})
         + "\n",
         encoding="utf-8",
     )
@@ -274,6 +289,47 @@ def test_omp_native_model_evidence_uses_bound_response_without_continuation_rece
                 "provider_response_source_kind": "stdout_path",
                 "provider_response_source_path": "/stdout/provider.jsonl",
                 "provider_response_source_sha256": f"sha256:{hashlib.sha256(stdout_source.read_bytes()).hexdigest()}",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = omp_native_model_evidence(
+        tmp_path,
+        source_canary="omp_console_lifecycle",
+        qualification_model="openrouter/fixture-model",
+        api_key_configured=True,
+        first_turn_only=True,
+    )
+
+    assert evidence is None
+
+
+def test_omp_native_model_evidence_uses_bound_retained_native_source(tmp_path) -> None:
+    native_source, _ = _write_omp_console_settlement_fixture(
+        tmp_path,
+        first_turn_events=[
+            {"type": "session", "id": "native-1"},
+            {
+                "type": "message",
+                "model": "openrouter/fixture-model",
+                "message": {
+                    "role": "assistant",
+                    "model": "openrouter/fixture-model",
+                    "stopReason": "stop",
+                    "usage": {"input": 3, "output": 2, "cost": {"total": 0.0001}},
+                },
+            },
+        ],
+    )
+    (tmp_path / "console-continuation-receipt.json").unlink()
+    (tmp_path / "provider-response-binding-receipt.json").write_text(
+        json.dumps(
+            {
+                "provider_thread_id": "native-1",
+                "provider_response_source_kind": "source_path",
+                "provider_response_source_path": "/native/session.jsonl",
+                "provider_response_source_sha256": f"sha256:{hashlib.sha256(native_source.read_bytes()).hexdigest()}",
             }
         ),
         encoding="utf-8",
