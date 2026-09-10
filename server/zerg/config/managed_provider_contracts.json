@@ -3539,6 +3539,17 @@
               "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
             },
             {
+              "id": "omp_helm_follow_up_native",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 4,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+            },
+            {
               "id": "omp_helm_steer_active",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",

@@ -2217,6 +2217,8 @@ providers:
       - <<: *omp_helm_lifecycle_assertion
         id: omp_helm_send_idle
       - <<: *omp_helm_lifecycle_assertion
+        id: omp_helm_follow_up_native
+      - <<: *omp_helm_lifecycle_assertion
         id: omp_helm_steer_active
       - <<: *omp_helm_lifecycle_assertion
         id: omp_helm_abort_native
