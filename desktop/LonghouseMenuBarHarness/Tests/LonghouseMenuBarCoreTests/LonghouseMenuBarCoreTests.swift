@@ -78,6 +78,47 @@ private final class CountingHealthSnapshotSource: HealthSnapshotSource, @uncheck
     }
 }
 
+private final class StalledStreamRequestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests = 0
+
+    func increment() {
+        lock.withLock { requests += 1 }
+    }
+
+    var value: Int {
+        lock.withLock { requests }
+    }
+}
+
+private final class StalledStreamURLProtocol: URLProtocol, @unchecked Sendable {
+    static let requestCounter = StalledStreamRequestCounter()
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.scheme == "stalled"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        Self.requestCounter.increment()
+        guard let client, let url = request.url else { return }
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "text/event-stream"]
+        )!
+        client.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        // Send one complete server frame, then leave the body open forever.
+        client.urlProtocol(self, didLoad: Data(": heartbeat\n".utf8))
+    }
+
+    override func stopLoading() {}
+}
+
 private func watchingAttentionSnapshot() -> HealthSnapshot {
     HealthSnapshot(
         schemaVersion: 1,
@@ -737,6 +778,50 @@ struct LonghouseMenuBarCoreTests {
         #expect(atInterval)
         #expect(!immediatelyAfter)
         #expect(nextInterval)
+    }
+
+    @Test
+    func realtimeStreamRetriesWhenResponseBodyStalls() async throws {
+        let tokenURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-stream-token-\(UUID().uuidString)")
+        try Data("test-token".utf8).write(to: tokenURL)
+        defer { try? FileManager.default.removeItem(at: tokenURL) }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StalledStreamURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+
+        let connection = RealtimeConnectionSnapshot(
+            runtimeUrl: "stalled://runtime.example",
+            machineName: nil,
+            tokenPath: tokenURL.path
+        )
+        let stream = SessionProjectionStream.projections(
+            connection: connection,
+            sessionIds: ["session-1"],
+            session: session,
+            idleTimeout: 0.25
+        )
+
+        let sawFailure = await withTaskGroup(of: Bool.self) { group -> Bool in
+            group.addTask {
+                for await event in stream {
+                    if case .failed = event { return true }
+                }
+                return false
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(3))
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        #expect(sawFailure)
+        #expect(StalledStreamURLProtocol.requestCounter.value >= 2)
     }
 
     @Test

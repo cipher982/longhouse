@@ -168,6 +168,25 @@ enum SessionProjectionStream {
         category: "session-projection-stream"
     )
 
+    private actor StreamIdleDeadline {
+        let timeoutSeconds: TimeInterval
+        let sleepDuration: Duration
+        private var lastFrameAt = Date()
+
+        init(timeout: TimeInterval) {
+            timeoutSeconds = timeout
+            sleepDuration = .milliseconds(max(1, Int(timeout * 1_000)))
+        }
+
+        func markFrame(at date: Date = Date()) {
+            lastFrameAt = date
+        }
+
+        func hasExpired(at date: Date = Date()) -> Bool {
+            date.timeIntervalSince(lastFrameAt) >= timeoutSeconds
+        }
+    }
+
     private struct Delta: Decodable {
         let sessionId: String
         let timelineTitle: String?
@@ -208,12 +227,34 @@ enum SessionProjectionStream {
         }
     }
 
+    /// - Parameter session: Optional caller-owned URLSession override. A
+    ///   supplied session must be dedicated to this stream because the stale
+    ///   watchdog cancels every task on it.
     static func projections(
         connection: RealtimeConnectionSnapshot,
-        sessionIds: [String]
+        sessionIds: [String],
+        session: URLSession? = nil,
+        idleTimeout: TimeInterval = 45
     ) -> AsyncStream<SessionProjectionEvent> {
-        AsyncStream { continuation in
+        let ownsSession = session == nil
+        let session = session ?? makeStreamSession()
+        return AsyncStream { continuation in
+            continuation.onTermination = { _ in
+                // The consumer stopped. The producer's own defer only runs once
+                // its drain actually unwinds, and a stalled body read is exactly
+                // what this stream is built to survive, so tear the owned
+                // session down from here as well: `finishTasksAndInvalidate` in
+                // the defer is then a no-op.
+                if ownsSession {
+                    session.invalidateAndCancel()
+                }
+            }
             let task = Task.detached(priority: .userInitiated) {
+                defer {
+                    if ownsSession {
+                        session.finishTasksAndInvalidate()
+                    }
+                }
                 var backoff = Duration.milliseconds(250)
                 let allowedSessionIds = Set(sessionIds)
                 var retryPolicy = ProjectionRetryPolicy()
@@ -223,9 +264,11 @@ enum SessionProjectionStream {
                     do {
                         try await drain(
                             connection: connection,
+                            session: session,
                             allowedSessionIds: allowedSessionIds,
                             continuation: continuation,
-                            liveness: liveness
+                            liveness: liveness,
+                            idleTimeout: idleTimeout
                         )
                     } catch is CancellationError {
                         break
@@ -253,11 +296,21 @@ enum SessionProjectionStream {
         }
     }
 
+    private static func makeStreamSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        // Runtime Host emits heartbeat frames well inside 45 seconds; matching
+        // the iOS stream's deadline avoids firing on a healthy connection.
+        configuration.timeoutIntervalForRequest = 45
+        return URLSession(configuration: configuration)
+    }
+
     private static func drain(
         connection: RealtimeConnectionSnapshot,
+        session: URLSession,
         allowedSessionIds: Set<String>,
         continuation: AsyncStream<SessionProjectionEvent>.Continuation,
-        liveness: LivenessFlag
+        liveness: LivenessFlag,
+        idleTimeout: TimeInterval
     ) async throws {
         guard let rawURL = connection.runtimeUrl,
               let baseURL = URL(string: rawURL),
@@ -283,7 +336,7 @@ enum SessionProjectionStream {
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue(token, forHTTPHeaderField: "X-Agents-Token")
 
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
@@ -292,6 +345,27 @@ enum SessionProjectionStream {
         // replay hydrates the known sessions before live deltas continue on
         // the same connection, avoiding a second per-session read path.
         continuation.yield(.connected)
+        let deadline = StreamIdleDeadline(timeout: idleTimeout)
+        let watchdog = Task {
+            do {
+                while !Task.isCancelled {
+                    try await Task.sleep(for: deadline.sleepDuration)
+                    if await deadline.hasExpired() {
+                        logger.info("Runtime Host session stream stalled; forcing reconnect")
+                        session.getAllTasks { tasks in
+                            for task in tasks { task.cancel() }
+                        }
+                        break
+                    }
+                }
+            } catch is CancellationError {
+                // The stream ended or the consumer cancelled before stalling.
+            } catch {
+                // A watchdog cancellation is advisory; the byte loop owns the
+                // stream error reported to the existing retry path.
+            }
+        }
+        defer { watchdog.cancel() }
 
         var eventName = ""
         var dataLines: [String] = []
@@ -299,10 +373,12 @@ enum SessionProjectionStream {
         var leasePulse = ProjectionLeasePulse(lastEmittedAt: Date())
         for try await byte in bytes {
             guard let line = lineDecoder.append(byte) else { continue }
-            // Any line, including an SSE keepalive comment, is liveness
-            // evidence for connection retry policy. Projection lease updates are
-            // coalesced separately so protocol framing cannot become a UI render
-            // loop; deltas also renew the lease in SnapshotStore.
+            // Every complete line from the peer is liveness, keepalive
+            // comments included: the deadline asks whether the connection is
+            // still delivering, not whether the parser found anything in it.
+            // The `.alive` pulses this code emits itself are the opposite case
+            // and deliberately never reset it.
+            await deadline.markFrame()
             await liveness.markObserved()
             if leasePulse.shouldEmit(at: Date()) {
                 continuation.yield(.alive)
