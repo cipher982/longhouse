@@ -228,12 +228,7 @@ mod tests {
         identity
             .apply_to_pairs(pairs(inherited).into_iter(), &[])
             .into_iter()
-            .map(|(k, v)| {
-                (
-                    String::from_utf8(k).unwrap(),
-                    String::from_utf8(v).unwrap(),
-                )
-            })
+            .map(|(k, v)| (String::from_utf8(k).unwrap(), String::from_utf8(v).unwrap()))
             .collect()
     }
 
@@ -267,7 +262,10 @@ mod tests {
             let inherited_survived = env.get(*key).map(String::as_str) == Some("parent-value");
             assert!(!inherited_survived, "{key} was inherited from the parent");
         }
-        assert!(!env.contains_key("LONGHOUSE_SESSION_ID"), "retired key was set");
+        assert!(
+            !env.contains_key("LONGHOUSE_SESSION_ID"),
+            "retired key was set"
+        );
         assert_eq!(env["PATH"], "/usr/bin");
     }
 
@@ -322,13 +320,22 @@ mod tests {
         let mut sink = RecordingSink::default();
         ManagedIdentity::new(ManagedProvider::Antigravity, "session-123").apply(&mut sink, &[]);
         for key in never_inherited_keys() {
-            assert!(sink.unset.contains(&(*key).to_string()), "{key} not scrubbed");
+            assert!(
+                sink.unset.contains(&(*key).to_string()),
+                "{key} not scrubbed"
+            );
         }
         assert_eq!(
             sink.set,
             vec![
-                ("LONGHOUSE_MANAGED_SESSION_ID".to_string(), "session-123".to_string()),
-                ("LONGHOUSE_MANAGED_PROVIDER".to_string(), "antigravity".to_string()),
+                (
+                    "LONGHOUSE_MANAGED_SESSION_ID".to_string(),
+                    "session-123".to_string()
+                ),
+                (
+                    "LONGHOUSE_MANAGED_PROVIDER".to_string(),
+                    "antigravity".to_string()
+                ),
             ]
         );
     }
@@ -351,7 +358,9 @@ mod tests {
         assert_eq!(final_value["LONGHOUSE_HOOK_TOKEN"], "token");
         // Both are in NEVER_INHERITED, so a scrub running after them would have
         // erased them. The last write wins and it is the launcher's.
-        assert!(sink.unset.contains(&"LONGHOUSE_CHANNEL_SESSION_ID".to_string()));
+        assert!(sink
+            .unset
+            .contains(&"LONGHOUSE_CHANNEL_SESSION_ID".to_string()));
         let scrub_index = sink.unset.len();
         assert!(scrub_index > 0, "scrub must happen");
     }

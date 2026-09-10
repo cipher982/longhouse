@@ -164,6 +164,11 @@ def test_a_device_token_cannot_steer_a_session_another_owner_owns(live, client):
         headers = {"X-Agents-Token": token}
         return {
             "send": client.post(f"/agents/sessions/{target}/send-live", json={"message": "whoami"}, headers=headers),
+            "input": client.post(
+                f"/agents/sessions/{target}/input",
+                json={"text": "whoami", "intent": "steer", "client_request_id": "machine-input-security"},
+                headers=headers,
+            ),
             "interrupt": client.post(f"/agents/sessions/{target}/interrupt-live", headers=headers),
             "terminate": client.post(f"/agents/sessions/{target}/terminate-live", headers=headers),
             "pauses": client.get(f"/agents/sessions/{target}/pause-requests", headers=headers),

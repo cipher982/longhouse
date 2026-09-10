@@ -372,7 +372,10 @@ fn golden_claude_recap_and_title_facts() {
         &base.join("recap_title.facts.expected.json"),
     );
     let events = parse_to_snapshot(&base.join("recap_title.jsonl"));
-    assert_eq!(events.event_count, 2, "only the user and assistant rows are events");
+    assert_eq!(
+        events.event_count, 2,
+        "only the user and assistant rows are events"
+    );
 }
 
 /// Codex closes a turn on `task_complete` (or `turn_aborted`, which unlike
@@ -390,21 +393,26 @@ fn golden_codex_turn_signal_facts() {
     );
     let events = parse_to_snapshot(&base.join("rollout-turn_signals.jsonl"));
     assert!(
-        events
-            .events
-            .iter()
-            .all(|event| !matches!(
-                event.raw_type.as_str(),
-                "task_complete" | "token_count" | "turn_context" | "compacted" | "stream_error"
-            )),
+        events.events.iter().all(|event| !matches!(
+            event.raw_type.as_str(),
+            "task_complete" | "token_count" | "turn_context" | "compacted" | "stream_error"
+        )),
         "signal lines must not become render events"
     );
     // The third turn was stopped before any model call reported tokens: it
     // closes with a duration and no usage, never the previous turn's counts
     // relabelled with this turn's model.
     let facts = parse_to_facts_snapshot(&base.join("rollout-turn_signals.jsonl"));
-    let durations = facts.facts.iter().filter(|f| f.kind == "turn.duration").count();
-    let usages = facts.facts.iter().filter(|f| f.kind == "turn.usage").count();
+    let durations = facts
+        .facts
+        .iter()
+        .filter(|f| f.kind == "turn.duration")
+        .count();
+    let usages = facts
+        .facts
+        .iter()
+        .filter(|f| f.kind == "turn.usage")
+        .count();
     assert_eq!((durations, usages), (3, 2));
     let stopped = facts
         .facts
@@ -412,7 +420,10 @@ fn golden_codex_turn_signal_facts() {
         .find(|f| f.kind == "turn.duration" && f.payload["duration_ms"] == 4800)
         .expect("the stopped third turn has a duration");
     assert!(
-        !facts.facts.iter().any(|f| f.kind == "turn.usage" && f.source_offset == stopped.source_offset),
+        !facts
+            .facts
+            .iter()
+            .any(|f| f.kind == "turn.usage" && f.source_offset == stopped.source_offset),
         "a turn without token_count yields no usage fact"
     );
 }
@@ -471,7 +482,10 @@ fn golden_claude_usage_error_and_compaction_facts() {
     );
     let events = parse_to_snapshot(&base.join("usage_errors_compaction.jsonl"));
     assert!(
-        events.events.iter().any(|event| event.raw_type == "compact_boundary"),
+        events
+            .events
+            .iter()
+            .any(|event| event.raw_type == "compact_boundary"),
         "the compaction boundary stays a visible system event"
     );
 }

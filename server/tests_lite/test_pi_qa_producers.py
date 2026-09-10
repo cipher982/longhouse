@@ -92,6 +92,7 @@ def test_pi_native_taxonomy_rejects_reordered_or_mismatched_tool_pairs(rows) -> 
 def test_pi_console_tool_oracle_requires_complete_generic_lifecycle() -> None:
     assert pi_console_tool_assertions({"pi_tool_enabled": True})["pi_console_tool_enabled"] is False
 
+
 def test_pi_console_tool_oracle_requires_context_recall() -> None:
     observation = {
         "adapter_dispatch_started": True,
@@ -518,10 +519,10 @@ def test_pi_helm_cold_resume_oracle_requires_remembered_context_evidence() -> No
                 "source": "pre_termination_replacement_turn",
                 "resume_prompt": "Reply with the context you remember followed by PI_HELM_RESUME_fixture.",
                 "pre_termination": {
-                        "source": "pre_termination_replacement_turn",
-                        "prompt": "Remember PI_HELM_CONTEXT_fixture.",
-                        "native_user_marker_rows": 1,
-                        "native_user_marker_occurrences": 1,
+                    "source": "pre_termination_replacement_turn",
+                    "prompt": "Remember PI_HELM_CONTEXT_fixture.",
+                    "native_user_marker_rows": 1,
+                    "native_user_marker_occurrences": 1,
                 },
                 "post_resume_native": {
                     "marker": "PI_HELM_CONTEXT_fixture",

@@ -1910,6 +1910,34 @@ async def create_session_input_endpoint(
     )
 
 
+@agents_router.post("/{session_id}/input", response_model=SessionInputResponse)
+async def create_session_input_agents_endpoint(
+    session_id: str,
+    body: SessionInputRequest,
+    request: Request,
+    db: Session = Depends(_catalog_control_db_dependency),
+    device_token: DeviceToken | None = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> SessionInputResponse:
+    """Machine-facing explicit input path with auto, queue, and steer intent."""
+    settings = get_settings()
+    principal = caller_principal(device_token)
+    resolved_device_token = principal if isinstance(principal, DeviceToken) else None
+    _authorize_live_send(
+        request=request,
+        device_token=resolved_device_token,
+        auth_disabled=settings.auth_disabled,
+    )
+    owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    source_session = _load_session_for_continuation(db, session_id, owner_id=owner_id)
+    return await _create_session_input_response(
+        source_session=source_session,
+        owner_id=owner_id,
+        body=body,
+        db=db,
+    )
+
+
 @router.get("/{session_id}/inputs")
 async def list_session_inputs_endpoint(
     session_id: str,

@@ -142,7 +142,11 @@ fn normalize_token(value: Option<&str>) -> Option<String> {
 
 fn env_truthy(value: Option<&str>) -> bool {
     matches!(
-        value.unwrap_or_default().trim().to_ascii_lowercase().as_str(),
+        value
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
         "1" | "true" | "yes" | "on"
     )
 }
@@ -207,7 +211,11 @@ pub fn git_context(cwd: &Path) -> (Option<String>, Option<String>) {
 }
 
 fn git_output(cwd: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git").args(args).current_dir(cwd).output().ok()?;
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -264,7 +272,10 @@ mod tests {
             let payload = registration(provider, vec![]);
             let map: &JsonMap<String, Value> = payload.as_object().unwrap();
             for key in REQUIRED_REGISTRATION_KEYS {
-                assert!(map.contains_key(*key), "{provider} payload is missing {key}");
+                assert!(
+                    map.contains_key(*key),
+                    "{provider} payload is missing {key}"
+                );
             }
             assert_eq!(map["provider"], provider);
         }
@@ -295,9 +306,8 @@ mod tests {
 
     #[test]
     fn human_shell_provenance_requires_visible_terminal_and_no_hidden_origin() {
-        let human = ManagedLaunchProvenance::for_terminal_context(
-            true, true, None, false, None, None,
-        );
+        let human =
+            ManagedLaunchProvenance::for_terminal_context(true, true, None, false, None, None);
         assert_eq!(human.launch_actor, Some("human_shell"));
         assert_eq!(human.launch_surface, Some("terminal"));
         for (stdin_is_terminal, stdout_is_terminal) in [(false, true), (true, false)] {

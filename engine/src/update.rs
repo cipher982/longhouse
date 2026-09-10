@@ -359,7 +359,11 @@ pub async fn resolve_latest_version(client: &reqwest::Client) -> Result<String> 
 ///
 /// Never returns `Err`: a check failure is a recorded fact about this machine,
 /// not a reason to fail the tick that called it.
-pub async fn check(client: &reqwest::Client, policy: UpdatePolicy, pin: Option<String>) -> UpdateStatus {
+pub async fn check(
+    client: &reqwest::Client,
+    policy: UpdatePolicy,
+    pin: Option<String>,
+) -> UpdateStatus {
     let mut status = UpdateStatus::unchecked(policy);
     status.pinned_version = pin.clone();
     if !policy.checks_enabled() {
@@ -411,9 +415,9 @@ pub fn write_status(status: &UpdateStatus) -> Result<()> {
     let body = serde_json::to_vec_pretty(status).context("serialize update status")?;
     // Write-then-rename so a reader never observes a half-written file.
     let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, &body)
-        .with_context(|| format!("write {}", temporary.display()))?;
-    std::fs::rename(&temporary, &path).with_context(|| format!("rename into {}", path.display()))?;
+    std::fs::write(&temporary, &body).with_context(|| format!("write {}", temporary.display()))?;
+    std::fs::rename(&temporary, &path)
+        .with_context(|| format!("rename into {}", path.display()))?;
     Ok(())
 }
 
@@ -712,9 +716,8 @@ fn definition_restarts_clean_exit(body: &str) -> bool {
             .map(|rest| rest.trim_start().starts_with("<true/>"))
             .unwrap_or(false);
     }
-    body.lines().any(|line| {
-        matches!(line.trim(), "Restart=always" | "Restart=on-success")
-    })
+    body.lines()
+        .any(|line| matches!(line.trim(), "Restart=always" | "Restart=on-success"))
 }
 
 /// Version of an installed `Longhouse.app`, when one is present.
@@ -785,11 +788,17 @@ pub fn describe_status(status: &UpdateStatus) -> String {
         return message;
     }
     if let Some(error) = status.last_apply_error.as_deref() {
-        return format!("Update {} could not be installed: {error}", status.installed_version);
+        return format!(
+            "Update {} could not be installed: {error}",
+            status.installed_version
+        );
     }
     match status.update_available {
         Some(true) => {
-            let latest = status.latest_version.as_deref().unwrap_or("a newer version");
+            let latest = status
+                .latest_version
+                .as_deref()
+                .unwrap_or("a newer version");
             match status.apply_blocked_reason.as_deref() {
                 Some("non_release_build") => format!(
                     "{latest} is available; this is a {} build, so it will not be replaced automatically.",
@@ -818,7 +827,10 @@ pub fn describe_status(status: &UpdateStatus) -> String {
         }
         Some(false) => format!("Up to date ({}).", status.installed_version),
         None => {
-            let reason = status.last_error.as_deref().unwrap_or("no check has completed");
+            let reason = status
+                .last_error
+                .as_deref()
+                .unwrap_or("no check has completed");
             format!(
                 "Update state unknown for {}: {reason}",
                 status.installed_version
@@ -988,10 +1000,12 @@ pub async fn stage_release(client: &reqwest::Client, version: &str) -> Result<st
     let staging = release_dir.with_extension("staging");
     // A previous interrupted attempt must not contribute files to this one.
     std::fs::remove_dir_all(&staging).ok();
-    std::fs::create_dir_all(&staging)
-        .with_context(|| format!("create {}", staging.display()))?;
+    std::fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
 
-    for (asset, filename) in [(&facade_asset, "longhouse"), (&engine_asset, "longhouse-engine")] {
+    for (asset, filename) in [
+        (&facade_asset, "longhouse"),
+        (&engine_asset, "longhouse-engine"),
+    ] {
         let response = client
             .get(format!("{base}/{asset}"))
             .timeout(DOWNLOAD_TIMEOUT)
@@ -1174,8 +1188,7 @@ fn ensure_bin_symlinks() -> Result<()> {
         }
         let staging = bin_dir.join(format!(".{name}-incoming-{}", std::process::id()));
         std::fs::remove_file(&staging).ok();
-        symlink(&target, &staging)
-            .with_context(|| format!("stage {}", staging.display()))?;
+        symlink(&target, &staging).with_context(|| format!("stage {}", staging.display()))?;
         std::fs::rename(&staging, &destination).with_context(|| {
             let _ = std::fs::remove_file(&staging);
             format!("link {}", destination.display())
@@ -1337,10 +1350,7 @@ mod tests {
         /// `verify-pair` on demand, so the swap boundaries can be exercised
         /// without real 17MB artifacts.
         fn release(&self, name: &str, complete: bool, verifies: bool) -> std::path::PathBuf {
-            let dir = self
-                .root
-                .join(".local/share/longhouse/releases")
-                .join(name);
+            let dir = self.root.join(".local/share/longhouse/releases").join(name);
             std::fs::create_dir_all(&dir).unwrap();
             let script = if verifies {
                 "#!/bin/sh\nexit 0\n"
@@ -1804,7 +1814,10 @@ mod tests {
     #[test]
     fn checksum_lookup_matches_installer_parsing() {
         let file = "abc123  longhouse-darwin-arm64\ndef456 *longhouse-engine-darwin-arm64\n";
-        assert_eq!(expected_digest(file, "longhouse-darwin-arm64"), Some("abc123"));
+        assert_eq!(
+            expected_digest(file, "longhouse-darwin-arm64"),
+            Some("abc123")
+        );
         // The `*` binary-mode marker sha256sum emits must not defeat the match.
         assert_eq!(
             expected_digest(file, "longhouse-engine-darwin-arm64"),
@@ -1849,7 +1862,11 @@ mod tests {
     fn local_release_versions_sort_numerically_newest_first() {
         // Guards the same lexical-vs-numeric trap as version comparison: a
         // rollback offering "0.1.9" as newer than "0.1.10" would downgrade.
-        let mut versions = vec!["0.1.9".to_string(), "0.1.10".to_string(), "0.2.0".to_string()];
+        let mut versions = vec![
+            "0.1.9".to_string(),
+            "0.1.10".to_string(),
+            "0.2.0".to_string(),
+        ];
         versions.sort_by_key(|value| version_tuple(value));
         versions.reverse();
         assert_eq!(versions, vec!["0.2.0", "0.1.10", "0.1.9"]);
@@ -1860,7 +1877,10 @@ mod tests {
         // Names must equal scripts/install.sh native_target(), or the engine
         // downloads assets that were never published under those names.
         if let Some(target) = native_target() {
-            assert!(matches!(target, "darwin-arm64" | "linux-x64" | "linux-arm64"));
+            assert!(matches!(
+                target,
+                "darwin-arm64" | "linux-x64" | "linux-arm64"
+            ));
         }
     }
 

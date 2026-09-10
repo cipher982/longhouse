@@ -125,6 +125,8 @@ def _pi_event(
         dedupe_key=dedupe_key or f"pi:stream:{session_id}:{seq}:{item_id}",
         payload=payload,
     )
+
+
 def _omp_event(
     *,
     session_id,

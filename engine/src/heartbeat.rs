@@ -29,9 +29,9 @@ use crate::managed_antigravity_scan::AntigravityHookObservation;
 use crate::managed_bridge_scan::CodexBridgeObservation;
 use crate::managed_claude_scan::ClaudeChannelObservation;
 use crate::managed_cursor_helm_scan::CursorHelmObservation;
+use crate::managed_omp_helm_scan::OmpHelmObservation;
 use crate::managed_opencode_scan::OpenCodeServerObservation;
 use crate::managed_pi_helm_scan::PiHelmObservation;
-use crate::managed_omp_helm_scan::OmpHelmObservation;
 
 /// Captured once per daemon process at the first write_status_file call.
 /// Compared against the on-disk binary mtime to detect "restart pending".
@@ -1156,7 +1156,9 @@ pub(crate) fn leases_from_omp_helm_observations(
     let observed_at = now.to_rfc3339();
     let mut leases = Vec::new();
     for obs in observations {
-        if !obs.live { continue; }
+        if !obs.live {
+            continue;
+        }
         leases.push(ManagedSessionLease {
             session_id: obs.session_id.clone(),
             provider: "omp".to_string(),

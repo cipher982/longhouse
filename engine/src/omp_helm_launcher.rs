@@ -961,13 +961,23 @@ fn read_resume_state(session_id: &str, cwd: &Path, binary: &str) -> Result<OmpHe
     Ok(state)
 }
 
+fn effective_profile(config: &LaunchConfig) -> Option<String> {
+    let profile = config
+        .profile
+        .clone()
+        .or_else(|| std::env::var("OMP_PROFILE").ok());
+    profile
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
 fn effective_resume_settings(
     config: &LaunchConfig,
     resume_state: Option<&OmpHelmStateFile>,
 ) -> (Option<String>, Option<String>) {
     match resume_state {
         Some(state) => (state.model.clone(), state.profile.clone()),
-        None => (config.model.clone(), config.profile.clone()),
+        None => (config.model.clone(), effective_profile(config)),
     }
 }
 
@@ -1281,8 +1291,10 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .env_remove("PI_CONFIG_DIR")
         .env_remove("PI_CODING_AGENT_DIR")
         .env_remove("PI_CODING_AGENT_SESSION_DIR")
-        .env_remove("PI_PROFILE");
+        .env_remove("PI_PROFILE")
+        .env_remove("OMP_PROFILE");
     if let Some(profile) = profile.as_deref() {
+        command.env("OMP_PROFILE", profile);
         command.arg("--profile").arg(profile);
     }
     if let Some(model) = model.as_deref() {
@@ -1557,6 +1569,28 @@ mod tests {
         assert_eq!(session_file, PathBuf::from(&retained.session_file));
         assert!(!temp.path().join("original-sessions").exists());
         assert!(!temp.path().join("new-sessions").exists());
+    }
+
+    #[test]
+    fn fresh_launch_captures_ambient_omp_profile_for_resume() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = LaunchConfig {
+            cwd: temp.path().to_path_buf(),
+            prompt: None,
+            model: None,
+            profile: None,
+            session_dir: None,
+            resume_session: None,
+            omp_bin: None,
+            url: None,
+            token: None,
+        };
+
+        temp_env::with_var("OMP_PROFILE", Some("work"), || {
+            let (model, profile) = effective_resume_settings(&config, None);
+            assert_eq!(model, None);
+            assert_eq!(profile.as_deref(), Some("work"));
+        });
     }
 
     #[test]

@@ -46,10 +46,10 @@ mod managed_identity;
 mod managed_identity_contract;
 mod managed_launch_lifecycle;
 mod managed_launch_payload;
+mod managed_omp_helm_scan;
 mod managed_opencode_scan;
 mod managed_phase_contract;
 mod managed_pi_helm_scan;
-mod managed_omp_helm_scan;
 mod managed_process_janitor;
 mod managed_resume_scan;
 mod managed_scan;
@@ -57,14 +57,14 @@ mod managed_terminal;
 mod media_redaction;
 mod media_upload;
 mod observability;
-mod omp_session;
 mod omp_helm_control;
 mod omp_helm_launcher;
+mod omp_print;
+mod omp_session;
 mod opencode_bridge;
 mod opencode_control;
 mod opencode_db;
 mod opencode_run;
-mod omp_print;
 mod outbox;
 mod permission_gate;
 mod pi_helm_control;
@@ -2361,25 +2361,117 @@ fn main() -> anyhow::Result<()> {
         Commands::OmpHelm { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
-                OmpHelmCommands::Launch { cwd, prompt, model, profile, session_dir, resume_session, omp_bin, url, token } => {
-                    let exit = omp_helm_launcher::launch(omp_helm_launcher::LaunchConfig { cwd, prompt, model, profile, session_dir, resume_session, omp_bin, url, token })?;
-                    if exit != 0 { std::process::exit(exit); }
+                OmpHelmCommands::Launch {
+                    cwd,
+                    prompt,
+                    model,
+                    profile,
+                    session_dir,
+                    resume_session,
+                    omp_bin,
+                    url,
+                    token,
+                } => {
+                    let exit = omp_helm_launcher::launch(omp_helm_launcher::LaunchConfig {
+                        cwd,
+                        prompt,
+                        model,
+                        profile,
+                        session_dir,
+                        resume_session,
+                        omp_bin,
+                        url,
+                        token,
+                    })?;
+                    if exit != 0 {
+                        std::process::exit(exit);
+                    }
                 }
-                OmpHelmCommands::Send { session_id, text, state_root } => {
-                    let summary = rt.block_on(omp_helm_control::dispatch(&session_id, omp_helm_control::CommandKind::Send, Some(&text), state_root.as_deref(), None)).map_err(|error| anyhow::anyhow!(error))?;
-                    println!("{}", serde_json::to_string_pretty(&json!({"ok": true, "native_session_id": summary.native_session_id, "status": summary.status}))?);
+                OmpHelmCommands::Send {
+                    session_id,
+                    text,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(omp_helm_control::dispatch(
+                            &session_id,
+                            omp_helm_control::CommandKind::Send,
+                            Some(&text),
+                            state_root.as_deref(),
+                            None,
+                        ))
+                        .map_err(|error| anyhow::anyhow!(error))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &json!({"ok": true, "native_session_id": summary.native_session_id, "status": summary.status})
+                        )?
+                    );
                 }
-                OmpHelmCommands::Steer { session_id, text, state_root } => {
-                    let summary = rt.block_on(omp_helm_control::dispatch(&session_id, omp_helm_control::CommandKind::Steer, Some(&text), state_root.as_deref(), None)).map_err(|error| anyhow::anyhow!(error))?;
-                    println!("{}", serde_json::to_string_pretty(&json!({"ok": true, "native_session_id": summary.native_session_id, "status": summary.status}))?);
+                OmpHelmCommands::Steer {
+                    session_id,
+                    text,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(omp_helm_control::dispatch(
+                            &session_id,
+                            omp_helm_control::CommandKind::Steer,
+                            Some(&text),
+                            state_root.as_deref(),
+                            None,
+                        ))
+                        .map_err(|error| anyhow::anyhow!(error))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &json!({"ok": true, "native_session_id": summary.native_session_id, "status": summary.status})
+                        )?
+                    );
                 }
-                OmpHelmCommands::Abort { session_id, state_root } => {
-                    rt.block_on(omp_helm_control::dispatch(&session_id, omp_helm_control::CommandKind::Abort, None, state_root.as_deref(), None)).map_err(|error| anyhow::anyhow!(error))?;
-                    println!("{{\"ok\":true}}");
+                OmpHelmCommands::Abort {
+                    session_id,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(omp_helm_control::dispatch(
+                            &session_id,
+                            omp_helm_control::CommandKind::Abort,
+                            None,
+                            state_root.as_deref(),
+                            None,
+                        ))
+                        .map_err(|error| anyhow::anyhow!(error))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "ok": true,
+                            "native_session_id": summary.native_session_id,
+                            "status": summary.status,
+                        }))?
+                    );
                 }
-                OmpHelmCommands::Terminate { session_id, state_root } => {
-                    rt.block_on(omp_helm_control::dispatch(&session_id, omp_helm_control::CommandKind::Terminate, None, state_root.as_deref(), None)).map_err(|error| anyhow::anyhow!(error))?;
-                    println!("{{\"ok\":true}}");
+                OmpHelmCommands::Terminate {
+                    session_id,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(omp_helm_control::dispatch(
+                            &session_id,
+                            omp_helm_control::CommandKind::Terminate,
+                            None,
+                            state_root.as_deref(),
+                            None,
+                        ))
+                        .map_err(|error| anyhow::anyhow!(error))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "ok": true,
+                            "native_session_id": summary.native_session_id,
+                            "status": summary.status,
+                        }))?
+                    );
                 }
             }
         }

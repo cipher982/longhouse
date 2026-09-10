@@ -33,10 +33,7 @@ impl ProcessFact {
     /// rather than a backgrounded or detached process.
     pub fn is_foreground_tty(&self) -> bool {
         let tty = self.tty.trim();
-        !tty.is_empty()
-            && tty != "??"
-            && !self.is_stopped_or_zombie()
-            && self.stat.contains('+')
+        !tty.is_empty() && tty != "??" && !self.is_stopped_or_zombie() && self.stat.contains('+')
     }
 
     /// A stopped provider is still present in `ps`, but it cannot make
@@ -444,11 +441,10 @@ mod tests {
                 .1;
         assert!(!background.is_foreground_tty());
 
-        let stopped = parse_process_fact(
-            "  104 ttys003  T+   Mon May  5 11:58:00 2026 claude --resume",
-        )
-        .unwrap()
-        .1;
+        let stopped =
+            parse_process_fact("  104 ttys003  T+   Mon May  5 11:58:00 2026 claude --resume")
+                .unwrap()
+                .1;
         assert!(stopped.is_stopped_or_zombie());
         assert!(!stopped.is_foreground_tty());
     }
@@ -534,9 +530,10 @@ mod tests {
 
     #[test]
     fn parse_process_lineage_keeps_command_with_spaces() {
-        let entry =
-            parse_process_lineage("17210     1 16956 Ts   /bin/zsh -lc for n in {1..10}; do x; done")
-                .unwrap();
+        let entry = parse_process_lineage(
+            "17210     1 16956 Ts   /bin/zsh -lc for n in {1..10}; do x; done",
+        )
+        .unwrap();
         assert_eq!(entry.pid, 17210);
         assert_eq!(entry.ppid, 1);
         assert_eq!(entry.pgid, 16956);

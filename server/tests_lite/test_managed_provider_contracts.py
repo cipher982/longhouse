@@ -758,13 +758,7 @@ def test_every_contract_provider_resolves_a_harness_adapter() -> None:
     # other test already called adapter_registry() first).
     load_all()
     contracts = {contract.provider: contract for contract in all_managed_provider_contracts()}
-    expected = tuple(
-        sorted(
-            provider
-            for provider in factory_provider_names(include_maintenance=True)
-            if contracts[provider].launch_local
-        )
-    )
+    expected = tuple(sorted(provider for provider in factory_provider_names(include_maintenance=True) if contracts[provider].launch_local))
     assert SUPPORTED_PROVIDERS == expected
     missing_adapters = [provider for provider in expected if provider not in ADAPTER_CLASS_BY_PROVIDER]
     assert missing_adapters == []

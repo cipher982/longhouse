@@ -155,9 +155,7 @@ def test_native_source_digest_refresh_rebases_semantic_evidence_paths(tmp_path: 
         source_root=evidence_root,
     )
 
-    assert refreshed["live_model_evidence"]["source_artifacts"][0]["path"] == (
-        "qualification-v2/semantic-evidence/native.jsonl"
-    )
+    assert refreshed["live_model_evidence"]["source_artifacts"][0]["path"] == ("qualification-v2/semantic-evidence/native.jsonl")
 
 
 @pytest.fixture(autouse=True)

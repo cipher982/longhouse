@@ -109,7 +109,9 @@ fn scan_git_remote(blob: &[u8]) -> Option<String> {
 }
 
 fn from_conversation_db(root: &Path, conversation_id: &str) -> Option<AntigravityWorkspace> {
-    let db = root.join("conversations").join(format!("{conversation_id}.db"));
+    let db = root
+        .join("conversations")
+        .join(format!("{conversation_id}.db"));
     if !db.is_file() {
         return None;
     }
@@ -182,7 +184,10 @@ mod tests {
             store_root_from_transcript(&transcript).as_deref(),
             Some(temp.path())
         );
-        assert_eq!(store_root_from_transcript(Path::new("/tmp/elsewhere.jsonl")), None);
+        assert_eq!(
+            store_root_from_transcript(Path::new("/tmp/elsewhere.jsonl")),
+            None
+        );
     }
 
     #[test]
@@ -200,7 +205,10 @@ mod tests {
 
         let facts = scan_metadata_blob(&blob).unwrap();
         assert_eq!(facts.cwd, "/Users/davidrose/git/g55");
-        assert_eq!(facts.git_repo.as_deref(), Some("git@github.com:cipher982/g55.git"));
+        assert_eq!(
+            facts.git_repo.as_deref(),
+            Some("git@github.com:cipher982/g55.git")
+        );
     }
 
     #[test]
@@ -213,7 +221,10 @@ mod tests {
 
     #[test]
     fn a_bare_link_is_not_mistaken_for_a_remote() {
-        assert_eq!(scan_git_remote(b"see https://antigravity.google/docs"), None);
+        assert_eq!(
+            scan_git_remote(b"see https://antigravity.google/docs"),
+            None
+        );
         assert_eq!(
             scan_git_remote(b"https://github.com/cipher982/g55.git and more").as_deref(),
             Some("https://github.com/cipher982/g55.git")

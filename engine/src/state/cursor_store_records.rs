@@ -359,14 +359,16 @@ mod tests {
         // (a) ended and fully receipted — safe to drain.
         let drained = Uuid::new_v4();
         seed_epoch(&conn, drained);
-        append_unseen_cursor_records(&mut conn, drained, &[b"a0".to_vec(), b"a1".to_vec()]).unwrap();
+        append_unseen_cursor_records(&mut conn, drained, &[b"a0".to_vec(), b"a1".to_vec()])
+            .unwrap();
         set_durable_cursor(&conn, drained, 2);
         end_epoch(&conn, drained);
 
         // (b) ended, but one record sits at the cursor — never shipped.
         let partial = Uuid::new_v4();
         seed_epoch(&conn, partial);
-        append_unseen_cursor_records(&mut conn, partial, &[b"b0".to_vec(), b"b1".to_vec()]).unwrap();
+        append_unseen_cursor_records(&mut conn, partial, &[b"b0".to_vec(), b"b1".to_vec()])
+            .unwrap();
         set_durable_cursor(&conn, partial, 1);
         end_epoch(&conn, partial);
 
@@ -399,7 +401,11 @@ mod tests {
         assert_eq!(cursor_record_count(&conn, drained).unwrap(), 2);
         assert_eq!(cursor_record_count(&conn, partial).unwrap(), 2, "unshipped");
         assert_eq!(cursor_record_count(&conn, pending).unwrap(), 1, "pending");
-        assert_eq!(cursor_record_count(&conn, open).unwrap(), 1, "identity retained");
+        assert_eq!(
+            cursor_record_count(&conn, open).unwrap(),
+            1,
+            "identity retained"
+        );
         let payload_bytes = |epoch: Uuid| -> i64 {
             conn.query_row(
                 "SELECT COALESCE(SUM(length(record_bytes)), 0)
@@ -418,12 +424,8 @@ mod tests {
         // durable cursor rather than restarting at position zero. The compact
         // hash row also prevents a fresh snapshot from re-adding d0.
         assert_eq!(
-            append_unseen_cursor_records(
-                &mut conn,
-                open,
-                &[b"d0".to_vec(), b"d1".to_vec()]
-            )
-            .unwrap(),
+            append_unseen_cursor_records(&mut conn, open, &[b"d0".to_vec(), b"d1".to_vec()])
+                .unwrap(),
             2
         );
         assert_eq!(
@@ -555,11 +557,7 @@ mod tests {
         let second = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
         for (epoch, created_at, ended_at) in [
-            (
-                first,
-                "2026-07-21T00:00:00Z",
-                Some("2026-07-21T00:00:30Z"),
-            ),
+            (first, "2026-07-21T00:00:00Z", Some("2026-07-21T00:00:30Z")),
             (second, "2026-07-21T00:01:00Z", None),
         ] {
             conn.execute(

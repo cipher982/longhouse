@@ -167,7 +167,10 @@ pub fn configured_session_roots(cwd: &Path) -> Vec<PathBuf> {
         roots.extend(profile_session_roots(&data_root));
     }
     for config_root in configured_config_roots(cwd) {
-        roots.extend(legacy_profile_session_roots(&config_root, profile.as_deref()));
+        roots.extend(legacy_profile_session_roots(
+            &config_root,
+            profile.as_deref(),
+        ));
     }
     roots.sort();
     roots.dedup();
@@ -335,7 +338,8 @@ pub fn is_session_path(root: &Path, path: &Path) -> bool {
     // is only an additional check for its generated archive names, not a
     // requirement for a valid exact source.
     let generated_name = parent.and_then(Path::parent) == Some(root);
-    !generated_name || native_filename_id(path).is_none_or(|filename_id| filename_id == header.native_id)
+    !generated_name
+        || native_filename_id(path).is_none_or(|filename_id| filename_id == header.native_id)
 }
 
 /// Longhouse identity is derived from OMP's opaque native id only. A native
@@ -412,8 +416,12 @@ pub fn verify_exact_session_file(
         if line.trim().is_empty() {
             bail!("OMP resume history contains a blank record");
         }
-        let value: Value = serde_json::from_str(line.trim())
-            .with_context(|| format!("OMP resume history contains malformed JSON: {}", path.display()))?;
+        let value: Value = serde_json::from_str(line.trim()).with_context(|| {
+            format!(
+                "OMP resume history contains malformed JSON: {}",
+                path.display()
+            )
+        })?;
         let object = value
             .as_object()
             .context("OMP resume history contains a non-object record")?;
@@ -576,7 +584,6 @@ pub fn reserve_source_for_thread(
     )
 }
 
-
 /// Resolve OMP ownership before parsing. A missing/partial native header is
 /// always pending, including when a managed claim has already written early
 /// state, so it cannot mint a provisional Shadow identity.
@@ -737,21 +744,27 @@ mod tests {
 
         let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
-                temp_env::with_var(OMP_CONFIG_DIR_ENV, Some(omp_config.to_str().unwrap()), || {
-                    temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
-                        temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
-                            temp_env::with_var("PI_PROFILE", Some("pi"), || {
-                                temp_env::with_var("OMP_PROFILE", Some("work"), || {
-                                    temp_env::with_var(OMP_DATA_DIR_ENV, None::<&str>, || {
-                                        temp_env::with_var(OMP_SESSION_DIR_ENV, None::<&str>, || {
-                                            configured_session_roots(&cwd)
+                temp_env::with_var(
+                    OMP_CONFIG_DIR_ENV,
+                    Some(omp_config.to_str().unwrap()),
+                    || {
+                        temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
+                            temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
+                                temp_env::with_var("PI_PROFILE", Some("pi"), || {
+                                    temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                                        temp_env::with_var(OMP_DATA_DIR_ENV, None::<&str>, || {
+                                            temp_env::with_var(
+                                                OMP_SESSION_DIR_ENV,
+                                                None::<&str>,
+                                                || configured_session_roots(&cwd),
+                                            )
                                         })
                                     })
                                 })
                             })
                         })
-                    })
-                })
+                    },
+                )
             })
         });
 
@@ -774,9 +787,15 @@ mod tests {
 
         let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", None::<&str>, || {
-                temp_env::with_var(OMP_CONFIG_DIR_ENV, Some(omp_config.to_str().unwrap()), || {
-                    temp_env::with_var("OMP_PROFILE", None::<&str>, || configured_session_roots(&cwd))
-                })
+                temp_env::with_var(
+                    OMP_CONFIG_DIR_ENV,
+                    Some(omp_config.to_str().unwrap()),
+                    || {
+                        temp_env::with_var("OMP_PROFILE", None::<&str>, || {
+                            configured_session_roots(&cwd)
+                        })
+                    },
+                )
             })
         });
 
@@ -831,7 +850,10 @@ mod tests {
         let malformed = dir.path().join("malformed.jsonl");
         fs::write(
             &malformed,
-            format!("{}\n{{\"type\":\"message\",\"message\":", session_line("native-id")),
+            format!(
+                "{}\n{{\"type\":\"message\",\"message\":",
+                session_line("native-id")
+            ),
         )
         .unwrap();
         assert!(verify_exact_session_file(&malformed, "native-id", Some("/workspace")).is_err());
@@ -861,17 +883,21 @@ mod tests {
 
         let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", None::<&str>, || {
-            temp_env::with_var(OMP_CONFIG_DIR_ENV, Some(omp_config.to_str().unwrap()), || {
-                    temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
-                        temp_env::with_var("PI_CODING_AGENT_DIR", Some("omp-agent"), || {
-                            temp_env::with_var("OMP_PROFILE", Some("work"), || {
-                                temp_env::with_var("PI_PROFILE", Some("work"), || {
-                                    configured_session_roots(&cwd)
+                temp_env::with_var(
+                    OMP_CONFIG_DIR_ENV,
+                    Some(omp_config.to_str().unwrap()),
+                    || {
+                        temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
+                            temp_env::with_var("PI_CODING_AGENT_DIR", Some("omp-agent"), || {
+                                temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                                    temp_env::with_var("PI_PROFILE", Some("work"), || {
+                                        configured_session_roots(&cwd)
+                                    })
                                 })
                             })
                         })
-                    })
-                })
+                    },
+                )
             })
         });
 
@@ -880,16 +906,22 @@ mod tests {
         assert!(!roots.iter().any(|root| root.starts_with("/pi")));
 
         let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
-            temp_env::with_var(OMP_CONFIG_DIR_ENV, Some(omp_config.to_str().unwrap()), || {
-                temp_env::with_var("OMP_PROFILE", Some("work"), || {
-                    temp_env::with_var("PI_PROFILE", Some("other"), || {
-                        configured_session_roots(&cwd)
+            temp_env::with_var(
+                OMP_CONFIG_DIR_ENV,
+                Some(omp_config.to_str().unwrap()),
+                || {
+                    temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                        temp_env::with_var("PI_PROFILE", Some("other"), || {
+                            configured_session_roots(&cwd)
+                        })
                     })
-                })
-            })
+                },
+            )
         });
         assert!(roots.contains(&omp_config.join("profiles/work/agent/sessions")));
-        assert!(!roots.iter().any(|root| root.ends_with("profiles/other/agent/sessions")));
+        assert!(!roots
+            .iter()
+            .any(|root| root.ends_with("profiles/other/agent/sessions")));
     }
 
     #[test]

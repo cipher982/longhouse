@@ -90,10 +90,17 @@ impl ProviderReadiness {
 
 /// What the manifest says about asking this provider.
 enum ProbePlan<'a> {
-    ExitCode { argv: Vec<&'a str> },
-    Json { argv: Vec<&'a str>, fields: JsonFields<'a> },
+    ExitCode {
+        argv: Vec<&'a str>,
+    },
+    Json {
+        argv: Vec<&'a str>,
+        fields: JsonFields<'a>,
+    },
     /// No probe to run, and the manifest's stated reason why.
-    Unavailable { reason: Option<&'a str> },
+    Unavailable {
+        reason: Option<&'a str>,
+    },
 }
 
 struct JsonFields<'a> {
@@ -132,7 +139,9 @@ fn probe_plan(contract: &Value) -> ProbePlan<'_> {
                 fields: JsonFields {
                     logged_in,
                     plan: probe.get("plan_field").and_then(Value::as_str),
-                    credential_override: probe.get("credential_override_field").and_then(Value::as_str),
+                    credential_override: probe
+                        .get("credential_override_field")
+                        .and_then(Value::as_str),
                 },
             }
         }
@@ -145,7 +154,10 @@ fn probe_plan(contract: &Value) -> ProbePlan<'_> {
 /// Deliberately never returns the raw document. `claude auth status` includes
 /// the account email and organization id, and a probe result is fanned out to
 /// the Runtime Host -- only the derived facts leave this function.
-fn interpret_json(fields: &JsonFields<'_>, stdout: &str) -> (ReadinessState, Option<String>, Option<String>) {
+fn interpret_json(
+    fields: &JsonFields<'_>,
+    stdout: &str,
+) -> (ReadinessState, Option<String>, Option<String>) {
     let Ok(payload) = serde_json::from_str::<Value>(stdout.trim()) else {
         return (ReadinessState::Unknown, None, None);
     };
@@ -170,7 +182,9 @@ fn interpret_json(fields: &JsonFields<'_>, stdout: &str) -> (ReadinessState, Opt
             // "ready" would tell someone they were spending a plan they were
             // not. Say which credential actually wins.
             let detail = match (&credential_override, &plan) {
-                (Some(name), _) => Some(format!("billing to {name}, overriding the signed-in account")),
+                (Some(name), _) => Some(format!(
+                    "billing to {name}, overriding the signed-in account"
+                )),
                 (None, Some(plan)) => Some(format!("{plan} plan")),
                 (None, None) => None,
             };
@@ -362,7 +376,10 @@ mod tests {
         });
         match probe_plan(&contract) {
             ProbePlan::Unavailable { reason } => {
-                assert_eq!(reason, Some("the agy CLI has no auth/login/status subcommand"));
+                assert_eq!(
+                    reason,
+                    Some("the agy CLI has no auth/login/status subcommand")
+                );
             }
             _ => panic!("a provider without an implemented probe must not be run"),
         }
@@ -380,7 +397,10 @@ mod tests {
                 "reason": "pi's only auth surface prints the credential to stdout",
             },
         });
-        assert!(matches!(probe_plan(&contract), ProbePlan::Unavailable { .. }));
+        assert!(matches!(
+            probe_plan(&contract),
+            ProbePlan::Unavailable { .. }
+        ));
     }
 
     #[tokio::test]
@@ -396,7 +416,8 @@ mod tests {
                 "owner_action": "observe `opencode auth list` with an empty credential store",
             },
         });
-        let readiness = readiness_for_contract(&contract, Some(OsString::from("opencode")), true).await;
+        let readiness =
+            readiness_for_contract(&contract, Some(OsString::from("opencode")), true).await;
         assert_eq!(readiness.state, ReadinessState::Unknown);
         assert!(readiness.detail.unwrap().contains("empty credential store"));
         assert_eq!(readiness.remediation, None);

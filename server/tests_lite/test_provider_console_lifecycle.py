@@ -504,6 +504,7 @@ def test_archive_convergence_rejects_duplicate_markers_within_one_reply(monkeypa
     with pytest.raises(RuntimeError, match="exactly one occurrence"):
         lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
 
+
 def test_served_run_inventory_accepts_canonical_ended_terminal_state(monkeypatch):
     monkeypatch.setattr(
         lifecycle,
@@ -528,13 +529,12 @@ def test_served_run_inventory_accepts_canonical_ended_terminal_state(monkeypatch
     assert evidence["retired"] is True
     assert evidence["active_run_count"] == 0
 
+
 @pytest.mark.parametrize(
     ("served_session_id", "served_run_id"),
     [("other-session", "run-1"), ("session-1", "old-run")],
 )
-def test_served_run_inventory_rejects_wrong_session_or_run_identity(
-    monkeypatch, served_session_id, served_run_id
-):
+def test_served_run_inventory_rejects_wrong_session_or_run_identity(monkeypatch, served_session_id, served_run_id):
     monkeypatch.setattr(
         lifecycle,
         "_request",
@@ -557,6 +557,7 @@ def test_served_run_inventory_rejects_wrong_session_or_run_identity(
 
     assert evidence["retired"] is False
     assert evidence["active_run_count"] is None
+
 
 @pytest.mark.parametrize("projected_id", ["longhouse-event-9", "pi-message-42"])
 def test_pi_continuation_linkage_accepts_native_projection_identity_relationships(tmp_path, projected_id):
@@ -595,6 +596,7 @@ def test_pi_continuation_linkage_accepts_native_projection_identity_relationship
     assert linkage["projected_assistant_event_id_present"] is True
     assert linkage["native_and_projected_ids_bound"] is True
     assert linkage["proven"] is True
+
 
 def test_pi_native_marker_evidence_stops_at_the_pre_interrupt_boundary(tmp_path):
     marker = "PI_RESUME_MARKER"

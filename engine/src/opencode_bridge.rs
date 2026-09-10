@@ -124,7 +124,8 @@ pub fn start(config: StartConfig) -> Result<StartResult> {
     // This process is the paired engine binary, so the registered command is
     // absolute and remains valid even when the facade is not on PATH.
     let model = configured_model(config.model.as_deref());
-    let mcp_config = opencode_mcp_config(&engine, &session_id, coordination_token, model.as_deref());
+    let mcp_config =
+        opencode_mcp_config(&engine, &session_id, coordination_token, model.as_deref());
     // OpenCode 1.18.x treats `--port 0` as the default server port (4096)
     // instead of asking the OS for an ephemeral port. A Resume can therefore
     // reconnect to a dead/stale server or collide with another factory case.
@@ -319,8 +320,11 @@ pub fn attach(
     // An attached TUI is a real interactive provider process on a managed
     // session, so it carries the same identity as the launch. Codex's attach
     // always did; this one did not.
-    ManagedIdentity::new(ManagedProvider::Opencode, normalize_uuid(session_id, "session_id")?)
-        .apply(&mut command, &[]);
+    ManagedIdentity::new(
+        ManagedProvider::Opencode,
+        normalize_uuid(session_id, "session_id")?,
+    )
+    .apply(&mut command, &[]);
     command
         .env("OPENCODE_SERVER_USERNAME", &state.username)
         .env("OPENCODE_SERVER_PASSWORD", &state.password);
@@ -365,7 +369,10 @@ fn configured_model(explicit: Option<&str>) -> Option<String> {
     configured_model_with_fallback(explicit, fallback.as_deref())
 }
 
-fn configured_model_with_fallback(explicit: Option<&str>, fallback: Option<&str>) -> Option<String> {
+fn configured_model_with_fallback(
+    explicit: Option<&str>,
+    fallback: Option<&str>,
+) -> Option<String> {
     explicit
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1025,10 +1032,7 @@ mod tests {
             Some("session-secret"),
             Some("openrouter/deepseek/deepseek-v4-flash"),
         );
-        assert_eq!(
-            configured["model"],
-            "openrouter/deepseek/deepseek-v4-flash"
-        );
+        assert_eq!(configured["model"], "openrouter/deepseek/deepseek-v4-flash");
 
         let mut command = Command::new("opencode");
         command.env("LONGHOUSE_COORDINATION_TOKEN", "ambient-parent-secret");

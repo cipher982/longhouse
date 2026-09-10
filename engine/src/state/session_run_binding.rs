@@ -50,9 +50,10 @@ impl RunWindowIndex {
     /// start does not postdate the observation. Returns None when every known
     /// run began after it, which correctly drops a phase we cannot attribute.
     pub fn resolve(&self, session_id: &str, at: DateTime<Utc>) -> Option<&str> {
-        self.by_session.get(session_id)?.iter().find_map(|(started_at, run_id)| {
-            (*started_at <= at).then_some(run_id.as_str())
-        })
+        self.by_session
+            .get(session_id)?
+            .iter()
+            .find_map(|(started_at, run_id)| (*started_at <= at).then_some(run_id.as_str()))
     }
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
@@ -154,7 +155,9 @@ mod tests {
     }
 
     fn at(value: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(value).unwrap().with_timezone(&Utc)
+        DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     fn window(run_id: &str, run_started_at: &str, observed_at: &str) -> SessionRunWindow {
@@ -174,7 +177,11 @@ mod tests {
         let conn = conn();
         let store = SessionRunWindowStore::new(&conn);
         store
-            .record(&window("run-a", "2026-08-01T13:10:00Z", "2026-08-01T13:11:00Z"))
+            .record(&window(
+                "run-a",
+                "2026-08-01T13:10:00Z",
+                "2026-08-01T13:11:00Z",
+            ))
             .unwrap();
         let index = store.index(at("2026-08-01T13:25:00Z")).unwrap();
         assert_eq!(
@@ -191,10 +198,18 @@ mod tests {
         let conn = conn();
         let store = SessionRunWindowStore::new(&conn);
         store
-            .record(&window("run-a", "2026-08-01T13:00:00Z", "2026-08-01T13:05:00Z"))
+            .record(&window(
+                "run-a",
+                "2026-08-01T13:00:00Z",
+                "2026-08-01T13:05:00Z",
+            ))
             .unwrap();
         store
-            .record(&window("run-b", "2026-08-01T13:10:00Z", "2026-08-01T13:11:00Z"))
+            .record(&window(
+                "run-b",
+                "2026-08-01T13:10:00Z",
+                "2026-08-01T13:11:00Z",
+            ))
             .unwrap();
         let index = store.index(at("2026-08-01T13:12:00Z")).unwrap();
 
@@ -215,7 +230,11 @@ mod tests {
         let conn = conn();
         let store = SessionRunWindowStore::new(&conn);
         store
-            .record(&window("run-a", "2026-08-01T13:10:00Z", "2026-08-01T13:11:00Z"))
+            .record(&window(
+                "run-a",
+                "2026-08-01T13:10:00Z",
+                "2026-08-01T13:11:00Z",
+            ))
             .unwrap();
         let index = store.index(at("2026-08-01T13:12:00Z")).unwrap();
         assert_eq!(index.resolve("sess-1", at("2026-08-01T12:00:00Z")), None);
@@ -226,12 +245,20 @@ mod tests {
         let conn = conn();
         let store = SessionRunWindowStore::new(&conn);
         store
-            .record(&window("run-a", "2026-08-01T13:10:00Z", "2026-08-01T13:11:00Z"))
+            .record(&window(
+                "run-a",
+                "2026-08-01T13:10:00Z",
+                "2026-08-01T13:11:00Z",
+            ))
             .unwrap();
         // A later scan reports the same run; the window start must not drift
         // forward past phases that already belong to it.
         store
-            .record(&window("run-a", "2026-08-01T13:20:00Z", "2026-08-01T13:21:00Z"))
+            .record(&window(
+                "run-a",
+                "2026-08-01T13:20:00Z",
+                "2026-08-01T13:21:00Z",
+            ))
             .unwrap();
         let index = store.index(at("2026-08-01T13:22:00Z")).unwrap();
         assert_eq!(
@@ -245,7 +272,11 @@ mod tests {
         let conn = conn();
         let store = SessionRunWindowStore::new(&conn);
         store
-            .record(&window("run-a", "2026-08-01T13:10:00Z", "2026-08-01T13:11:00Z"))
+            .record(&window(
+                "run-a",
+                "2026-08-01T13:10:00Z",
+                "2026-08-01T13:11:00Z",
+            ))
             .unwrap();
         let now = at("2026-08-03T13:11:00Z");
         assert_eq!(store.prune(now).unwrap(), 1);

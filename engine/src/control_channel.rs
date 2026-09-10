@@ -37,8 +37,8 @@ use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
 use crate::config::ShipperConfig;
 use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_print::{start_cursor_print_turn, CursorPrintRunConfig, CURSOR_PRINT_ADAPTER};
-use crate::opencode_run::{start_opencode_run_turn, OpenCodeRunConfig, OPENCODE_RUN_ADAPTER};
 use crate::omp_print::{start_omp_print_turn, OmpPrintRunConfig, OMP_PRINT_ADAPTER};
+use crate::opencode_run::{start_opencode_run_turn, OpenCodeRunConfig, OPENCODE_RUN_ADAPTER};
 use crate::pi_print::{start_pi_print_turn, PiPrintRunConfig, PI_PRINT_ADAPTER};
 use crate::turn_claims::{
     default_registry as default_turn_claim_registry, process_start_time_for_pid, ClaimOutcome,
@@ -693,8 +693,11 @@ pub fn spawn_control_channel(
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "Failed to reconcile Pi Console turn claims"),
         }
-        match crate::omp_print::recover_omp_print_turns(&config.machine_name, config.db_path.clone())
-            .await
+        match crate::omp_print::recover_omp_print_turns(
+            &config.machine_name,
+            config.db_path.clone(),
+        )
+        .await
         {
             Ok(count) if count > 0 => {
                 tracing::info!(count, "Recovered OMP Console turn monitors")
@@ -1265,11 +1268,20 @@ async fn execute_command(
                     crate::omp_helm_control::CommandKind::Send,
                     Some(&text),
                     None,
-                    Some(payload.get("longhouse_control_grant").unwrap_or(&Value::Null)),
+                    Some(
+                        payload
+                            .get("longhouse_control_grant")
+                            .unwrap_or(&Value::Null),
+                    ),
                 )
                 .await
-                .map_err(|error| CommandError { code: error.code().to_string(), message: error.message().to_string() })?;
-                return Ok(json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id,"status":summary.status}));
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                })?;
+                return Ok(
+                    json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id,"status":summary.status}),
+                );
             }
             let attachments = crate::codex_attachments::parse_attachments(&payload)
                 .map_err(CommandError::command_failed)?;
@@ -1375,11 +1387,20 @@ async fn execute_command(
                     crate::omp_helm_control::CommandKind::Abort,
                     None,
                     None,
-                    Some(payload.get("longhouse_control_grant").unwrap_or(&Value::Null)),
+                    Some(
+                        payload
+                            .get("longhouse_control_grant")
+                            .unwrap_or(&Value::Null),
+                    ),
                 )
                 .await
-                .map_err(|error| CommandError { code: error.code().to_string(), message: error.message().to_string() })?;
-                return Ok(json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id}));
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                })?;
+                return Ok(
+                    json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id}),
+                );
             }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
@@ -1461,11 +1482,20 @@ async fn execute_command(
                     crate::omp_helm_control::CommandKind::Terminate,
                     None,
                     None,
-                    Some(payload.get("longhouse_control_grant").unwrap_or(&Value::Null)),
+                    Some(
+                        payload
+                            .get("longhouse_control_grant")
+                            .unwrap_or(&Value::Null),
+                    ),
                 )
                 .await
-                .map_err(|error| CommandError { code: error.code().to_string(), message: error.message().to_string() })?;
-                return Ok(json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id}));
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                })?;
+                return Ok(
+                    json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id}),
+                );
             }
             Err(CommandError {
                 code: "unsupported_command".to_string(),
@@ -1527,11 +1557,20 @@ async fn execute_command(
                     crate::omp_helm_control::CommandKind::Steer,
                     Some(&text),
                     None,
-                    Some(payload.get("longhouse_control_grant").unwrap_or(&Value::Null)),
+                    Some(
+                        payload
+                            .get("longhouse_control_grant")
+                            .unwrap_or(&Value::Null),
+                    ),
                 )
                 .await
-                .map_err(|error| CommandError { code: error.code().to_string(), message: error.message().to_string() })?;
-                return Ok(json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id}));
+                .map_err(|error| CommandError {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                })?;
+                return Ok(
+                    json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id}),
+                );
             }
             if provider == "antigravity" {
                 return Err(CommandError {

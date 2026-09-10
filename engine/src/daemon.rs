@@ -3794,13 +3794,25 @@ fn maybe_start_managed_observation_scan(
         let omp_started = Instant::now();
         let mut omp_observations = if full_reconciliation {
             managed_omp_helm_scan::default_omp_helm_state_dir()
-                .map(|state_dir| managed_omp_helm_scan::collect_observations_from_processes(&state_dir, &process_facts))
+                .map(|state_dir| {
+                    managed_omp_helm_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    )
+                })
                 .unwrap_or_default()
         } else {
-            let paths = previous.omp.iter().map(|row| row.state_file.clone()).collect::<Vec<_>>();
+            let paths = previous
+                .omp
+                .iter()
+                .map(|row| row.state_file.clone())
+                .collect::<Vec<_>>();
             managed_omp_helm_scan::collect_observations_from_paths(&paths, &process_facts)
         };
-        let retained_omp = retain_existing_observations(&mut omp_observations, &previous.omp, |observation| &observation.state_file);
+        let retained_omp =
+            retain_existing_observations(&mut omp_observations, &previous.omp, |observation| {
+                &observation.state_file
+            });
         let omp_elapsed_ms = omp_started.elapsed().as_millis() as u64;
         // Sweep contracts left behind by teardown paths that exited early or
         // by abrupt process death. Provider-neutral: Codex and Claude leak

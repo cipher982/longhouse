@@ -791,9 +791,21 @@ pub fn parse_session_file_with_provider(
     let cursor_order_anchor = cursor_timestamps.map(|(started_at, _)| started_at);
     // JSONL: choose strategy based on file size
     let mut result = if file_size > MMAP_THRESHOLD {
-        parse_mmap(path, offset, &session_id, cursor_order_anchor, native_flavor)?
+        parse_mmap(
+            path,
+            offset,
+            &session_id,
+            cursor_order_anchor,
+            native_flavor,
+        )?
     } else {
-        parse_buffered(path, offset, &session_id, cursor_order_anchor, native_flavor)?
+        parse_buffered(
+            path,
+            offset,
+            &session_id,
+            cursor_order_anchor,
+            native_flavor,
+        )?
     };
     if let Some((started_at, last_activity_at)) = cursor_timestamps {
         result.metadata.started_at = Some(
@@ -830,7 +842,8 @@ pub fn parse_session_file_with_provider(
         {
             result.metadata.parent_provider_session_id = scanned.parent_session.clone();
         }
-        if native_flavor != Some(NativeFlavor::Omp) && Uuid::parse_str(&scanned.session_id).is_ok() {
+        if native_flavor != Some(NativeFlavor::Omp) && Uuid::parse_str(&scanned.session_id).is_ok()
+        {
             result.metadata.session_id = scanned.session_id.clone();
         }
     }
@@ -993,7 +1006,10 @@ fn antigravity_session_id_from_path(path: &Path) -> Option<String> {
     None
 }
 fn cursor_session_id_from_path(path: &Path) -> Option<String> {
-    if !path.components().any(|part| part.as_os_str() == "agent-transcripts") {
+    if !path
+        .components()
+        .any(|part| part.as_os_str() == "agent-transcripts")
+    {
         return None;
     }
     path.file_stem()
@@ -1001,7 +1017,6 @@ fn cursor_session_id_from_path(path: &Path) -> Option<String> {
         .and_then(|stem| Uuid::parse_str(stem).ok())
         .map(|uuid| uuid.to_string())
 }
-
 
 /// Scan the start of a JSONL file for Codex `session_meta` identity fields.
 ///
@@ -1703,12 +1718,7 @@ fn parse_mmap(
             Err(e) => {
                 tracing::debug!(offset = line_offset, error = %e, "Failed to parse JSON line");
                 if native_flavor == Some(NativeFlavor::Omp) {
-                    push_omp_malformed_event(
-                        session_id,
-                        line_offset,
-                        &redacted_line,
-                        &mut events,
-                    );
+                    push_omp_malformed_event(session_id, line_offset, &redacted_line, &mut events);
                 }
                 // Still advance — the line is complete, just malformed
                 last_good_offset = after_line;
@@ -1849,12 +1859,7 @@ fn parse_buffered(
             Err(e) => {
                 tracing::debug!(offset = line_offset, error = %e, "Failed to parse JSON line");
                 if native_flavor == Some(NativeFlavor::Omp) {
-                    push_omp_malformed_event(
-                        session_id,
-                        line_offset,
-                        &redacted_line,
-                        &mut events,
-                    );
+                    push_omp_malformed_event(session_id, line_offset, &redacted_line, &mut events);
                 }
                 continue;
             }
@@ -1924,7 +1929,8 @@ fn finalize_workspace_metadata(metadata: &mut SessionMetadata, path: &Path) {
                 }
             }
         } else if let Some(conversation_id) = cursor_session_id_from_path(path) {
-            if let Some(store) = crate::cursor_visibility::configured_cursor_store(&conversation_id) {
+            if let Some(store) = crate::cursor_visibility::configured_cursor_store(&conversation_id)
+            {
                 if let Some(facts) = crate::cursor_store::cursor_workspace_facts(&store) {
                     metadata.cwd = Some(facts.0);
                     if metadata.project.is_none() {
@@ -3088,14 +3094,10 @@ fn extract_omp_events(
     if events.len() == start {
         let event_type = obj.r#type.as_deref();
         let is_valid_header = match event_type {
-            Some("session") => obj
-                .id
-                .as_deref()
-                .is_some_and(|id| !id.trim().is_empty())
-                && obj
-                    .cwd
-                    .as_deref()
-                    .is_some_and(|cwd| !cwd.trim().is_empty()),
+            Some("session") => {
+                obj.id.as_deref().is_some_and(|id| !id.trim().is_empty())
+                    && obj.cwd.as_deref().is_some_and(|cwd| !cwd.trim().is_empty())
+            }
             Some("title") => obj
                 .title
                 .as_deref()
@@ -3118,14 +3120,7 @@ fn extract_omp_events(
         } else if lifecycle_record {
             push_omp_record_event(obj, session_id, line_offset, raw_line, false, events);
         } else {
-            push_omp_record_event(
-                obj,
-                session_id,
-                line_offset,
-                raw_line,
-                true,
-                events,
-            );
+            push_omp_record_event(obj, session_id, line_offset, raw_line, true, events);
         }
     }
     for event in &mut events[start..] {
@@ -3288,10 +3283,19 @@ fn extract_pi_provider_facts(obj: &RawLine, line_offset: u64, facts: &mut Vec<Pa
         _ => {}
     }
 }
-fn extract_omp_provider_facts(obj: &RawLine, line_offset: u64, facts: &mut Vec<ParsedProviderFact>) {
+fn extract_omp_provider_facts(
+    obj: &RawLine,
+    line_offset: u64,
+    facts: &mut Vec<ParsedProviderFact>,
+) {
     let start = facts.len();
     if matches!(obj.r#type.as_deref(), Some("title") | Some("title_change")) {
-        if let Some(title) = obj.title.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(title) = obj
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             facts.push(ParsedProviderFact {
                 kind: "session.title".to_string(),
                 at: if obj.r#type.as_deref() == Some("title") {
@@ -3567,7 +3571,10 @@ const CURSOR_INJECTION_TAGS: [(&str, &str); 10] = [
     ("<attached_files>", "</attached_files>"),
     ("<system_notification>", "</system_notification>"),
     ("<available_subagent_types>", "</available_subagent_types>"),
-    ("<available_subagent_models>", "</available_subagent_models>"),
+    (
+        "<available_subagent_models>",
+        "</available_subagent_models>",
+    ),
     ("<dynamic_tool_catalog>", "</dynamic_tool_catalog>"),
     ("<dynamic_tool_namespaces>", "</dynamic_tool_namespaces>"),
 ];
@@ -5483,10 +5490,7 @@ mod tests {
         );
         assert_eq!(messages[0].role, Role::User);
         assert_eq!(messages[1].role, Role::Assistant);
-        assert_eq!(
-            messages[1].content_text.as_deref(),
-            Some("LH_SERVED_pi")
-        );
+        assert_eq!(messages[1].content_text.as_deref(), Some("LH_SERVED_pi"));
     }
 
     #[test]
@@ -5504,22 +5508,28 @@ mod tests {
             result.metadata.provider_session_id.as_deref(),
             Some("omp-native-18-1-14")
         );
-        assert_ne!(
-            result.metadata.session_id,
-            "omp-native-18-1-14"
-        );
+        assert_ne!(result.metadata.session_id, "omp-native-18-1-14");
         assert_eq!(
             result.metadata.session_id,
             crate::omp_session::deterministic_session_id("omp-native-18-1-14")
         );
         assert!(Uuid::parse_str(&result.metadata.session_id).is_ok());
-        assert!(result.events.iter().any(|event| event.raw_type == "omp_tool_call"));
-        assert!(result.events.iter().any(|event| event.raw_type == "omp_tool_result"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "omp_tool_call"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "omp_tool_result"));
         assert!(result
             .events
             .iter()
             .any(|event| event.raw_type == "omp_unknown_unknown_future_record"));
-        assert!(result.events.iter().all(|event| !event.raw_type.starts_with("pi_")));
+        assert!(result
+            .events
+            .iter()
+            .all(|event| !event.raw_type.starts_with("pi_")));
         assert!(result
             .events
             .iter()
@@ -5545,7 +5555,10 @@ mod tests {
         assert!(result.provider_facts.iter().any(|fact| {
             fact.kind == "session.title" && fact.payload["title"] == "Updated OMP title"
         }));
-        assert!(result.events.iter().any(|event| event.raw_type == "omp_reset_boundary"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "omp_reset_boundary"));
         let compaction = result
             .provider_facts
             .iter()
@@ -5561,7 +5574,10 @@ mod tests {
         );
         assert_eq!(compaction.payload["provider"], "omp");
         assert_eq!(compaction.payload["pre_tokens"], 1200);
-        assert!(result.events.iter().any(|event| event.raw_type == "omp_model_change"));
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.raw_type == "omp_model_change"));
         assert_eq!(result.source_lines.len(), 11);
     }
 
@@ -5583,7 +5599,11 @@ mod tests {
         .unwrap();
 
         let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
-        let raw_types: Vec<&str> = result.events.iter().map(|event| event.raw_type.as_str()).collect();
+        let raw_types: Vec<&str> = result
+            .events
+            .iter()
+            .map(|event| event.raw_type.as_str())
+            .collect();
         assert!(raw_types.contains(&"omp_unknown_assistant"));
         assert!(raw_types.contains(&"omp_title_change"));
         assert!(raw_types.contains(&"omp_mode_change"));
@@ -5600,7 +5620,10 @@ mod tests {
                 && !event.raw_type.starts_with("claude_")
                 && !event.raw_type.starts_with("codex_")
                 && !event.raw_type.starts_with("antigravity_")));
-        assert!(result.source_lines.iter().any(|line| line.raw_line == "not-json"));
+        assert!(result
+            .source_lines
+            .iter()
+            .any(|line| line.raw_line == "not-json"));
     }
 
     #[test]

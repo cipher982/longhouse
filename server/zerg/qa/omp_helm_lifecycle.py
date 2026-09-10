@@ -70,9 +70,9 @@ _CELL_BY_VARIANT = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
-    producer_revision=5,
+    producer_revision=6,
     scenario_id=SCENARIO_ID,
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -193,6 +193,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and observation.get("omp_transcript_shipper_started") is True
             and observation.get("omp_transcript_flush_completed") is True
             and observation.get("omp_runtime_transcript_converged") is True
+            and observation.get("runtime_agents_api_controls") is True
             and settlement_ok
         ),
         "omp_helm_send_idle": (
@@ -863,20 +864,93 @@ def _stale_frame(old_state: Mapping[str, Any], *, text: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _run_engine(engine: Path, command: str, session_id: str, env: Mapping[str, str], *, text: str | None = None) -> dict[str, object]:
-    argv = [str(engine), "omp-helm", command, "--session-id", session_id]
-    if text is not None:
-        argv.extend(("--text", text))
-    completed = subprocess.run(argv, env=dict(env), capture_output=True, text=True, timeout=20, check=False)
+def _runtime_post(api_url: str, token: str, path: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    body = None if payload is None else json.dumps(dict(payload)).encode("utf-8")
+    headers = {
+        "X-Agents-Token": token,
+        "Accept": "application/json",
+        "User-Agent": "LonghouseProviderFactory/1.0",
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}{path}",
+        data=body,
+        method="POST",
+        headers=headers,
+    )
     try:
-        payload = json.loads(completed.stdout or "{}")
-    except json.JSONDecodeError:
-        payload = {}
+        with urllib.request.urlopen(request, timeout=20) as response:
+            value = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Runtime Host HTTP {exc.code}: {detail[:500]}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("Runtime Host returned a non-object control response")
+    return value
+
+
+def _run_engine(
+    engine: Path,
+    command: str,
+    session_id: str,
+    env: Mapping[str, str],
+    *,
+    text: str | None = None,
+) -> dict[str, object]:
+    """Dispatch OMP controls through the Runtime Host machine API.
+
+    The ``engine`` argument remains part of the producer call contract so
+    older invocation code cannot accidentally turn this proof back into a
+    local-engine-only test.  It is intentionally not executed: the Runtime
+    Host is the authority for remote control, and the disposable Machine Agent
+    is the only process that talks to the provider.
+    """
+    del engine
+    api_url = str(env.get("LONGHOUSE_OMP_HELM_URL") or "").strip()
+    token = str(env.get("LONGHOUSE_OMP_HELM_TOKEN") or "").strip()
+    if not api_url or not token:
+        raise RuntimeError("OMP Helm control requires Runtime Host URL and token")
+
+    if command in {"send", "steer"}:
+        if not text:
+            raise RuntimeError(f"OMP Helm {command} requires text")
+        path = f"/api/agents/sessions/{session_id}/input"
+        payload = {
+            "text": text,
+            "intent": "steer" if command == "steer" else "auto",
+            "client_request_id": f"omp-helm-{command}-{os.urandom(8).hex()}",
+        }
+    elif command == "abort":
+        path = f"/api/agents/sessions/{session_id}/interrupt-live"
+        payload = None
+    elif command == "terminate":
+        path = f"/api/agents/sessions/{session_id}/terminate-live"
+        payload = None
+    else:
+        raise RuntimeError(f"unsupported OMP Helm control command: {command}")
+
+    response = _runtime_post(api_url, token, path, payload)
+    local_state = _read_state(Path(str(env.get("LONGHOUSE_HOME") or "")) / "managed-local" / "omp-helm" / f"{session_id}.json")
+    if local_state:
+        response.setdefault("native_session_id", local_state.get("native_session_id"))
+        response.setdefault(
+            "status",
+            "active" if local_state.get("phase") in {"running", "thinking"} else "idle",
+        )
+    if command in {"send", "steer"}:
+        accepted = response.get("outcome") in {"sent", "queued"}
+    elif command == "abort":
+        accepted = response.get("interrupt_dispatched") is True
+    else:
+        accepted = response.get("terminate_dispatched") is True
     return {
-        "argv": argv,
-        "returncode": completed.returncode,
-        "accepted": completed.returncode == 0 and isinstance(payload, Mapping) and payload.get("ok") is True,
-        "payload": payload,
+        "argv": [path],
+        "returncode": 0,
+        "accepted": accepted,
+        "payload": response,
+        "transport": "runtime_host_agents_api",
+        "path": path,
     }
 
 
@@ -1179,6 +1253,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         "follow_up_native": False,
         "steer_active": False,
         "abort_native": False,
+        "runtime_agents_api_controls": False,
         "terminate_owned": False,
         "cold_resume_exact_file": False,
         "stale_owner_refused": False,
@@ -1867,6 +1942,17 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         observation["native_source_generations"] = source_generations
         observation["provider_source_retention"] = retained_sources
         observation["settlement"] = settlement
+
+    runtime_control_labels = ("send", "follow_up", "steer", "abort", "replacement", "terminate", "final_terminate")
+    runtime_control_paths: dict[str, str | None] = {}
+    for label in runtime_control_labels:
+        record = controls.get(label)
+        command = record.get("command") if isinstance(record, dict) else None
+        runtime_control_paths[label] = command.get("transport") if isinstance(command, dict) else None
+    observation["runtime_agents_api_controls"] = bool(runtime_control_paths) and all(
+        path == "runtime_host_agents_api" for path in runtime_control_paths.values()
+    )
+    observation["runtime_agents_api_control_paths"] = runtime_control_paths
 
     observation["omp_owned_processes_dead"] = cleanup.get("provider_process_dead") is True and cleanup.get("process_group_dead") is True
     binary_receipt = {

@@ -2602,14 +2602,28 @@ fn launch_managed_omp(args: OmpLaunchArgs) -> anyhow::Result<()> {
         .arg(args.cwd)
         .env("LONGHOUSE_OMP_HELM_URL", &url)
         .env("LONGHOUSE_OMP_HELM_TOKEN", &token);
-    if let Some(prompt) = args.prompt { command.arg("--prompt").arg(prompt); }
-    if let Some(model) = args.model { command.arg("--model").arg(model); }
-    if let Some(profile) = args.profile { command.arg("--profile").arg(profile); }
-    if let Some(session_dir) = args.session_dir { command.arg("--session-dir").arg(session_dir); }
-    if let Some(resume_session) = args.resume_session { command.arg("--resume-session").arg(resume_session); }
-    if let Some(omp_bin) = args.omp_bin { command.arg("--omp-bin").arg(omp_bin); }
+    if let Some(prompt) = args.prompt {
+        command.arg("--prompt").arg(prompt);
+    }
+    if let Some(model) = args.model {
+        command.arg("--model").arg(model);
+    }
+    if let Some(profile) = args.profile {
+        command.arg("--profile").arg(profile);
+    }
+    if let Some(session_dir) = args.session_dir {
+        command.arg("--session-dir").arg(session_dir);
+    }
+    if let Some(resume_session) = args.resume_session {
+        command.arg("--resume-session").arg(resume_session);
+    }
+    if let Some(omp_bin) = args.omp_bin {
+        command.arg("--omp-bin").arg(omp_bin);
+    }
     let status = command.status().context("run native OMP Helm launcher")?;
-    if !status.success() { std::process::exit(status.code().unwrap_or(1)); }
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
     Ok(())
 }
 

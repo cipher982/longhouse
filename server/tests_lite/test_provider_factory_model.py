@@ -238,6 +238,7 @@ def test_omp_release_poll_runs_both_staged_profiles_and_full_column(facts) -> No
         "LONGHOUSE_RUNTIME_AGENTS_TOKEN",
     )
 
+
 def test_antigravity_release_poll_runs_like_every_other_launch_provider(facts) -> None:
     # It was manual-only while maintenance tier. A release lane that only runs
     # when someone remembers to run it cannot gate a release, which is the

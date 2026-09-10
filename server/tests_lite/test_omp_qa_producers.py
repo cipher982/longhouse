@@ -38,8 +38,8 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
     assert CONSOLE_REGISTRATION.scenario_revision == 5
     assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
-    assert HELM_REGISTRATION.producer_revision == 5
-    assert HELM_REGISTRATION.scenario_revision == 5
+    assert HELM_REGISTRATION.producer_revision == 6
+    assert HELM_REGISTRATION.scenario_revision == 6
     assert HELM_REGISTRATION.providers == ("omp",)
     assert HELM_REGISTRATION.scenario_id == "omp_helm_lifecycle"
     assert "transcript_flush_receipt" in HELM_REGISTRATION.required_artifacts
@@ -47,6 +47,8 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
     assert "runtime_convergence_receipt" in HELM_REGISTRATION.required_artifacts
     assert ("omp", "omp_print_v1") in _PROFILES
     assert ("omp", "omp_helm_v1") in _PROFILES
+
+
 def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_path) -> None:
     source = tmp_path / "omp-native.jsonl"
     source.write_text(
@@ -118,6 +120,53 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
     assert artifact["sha256"].startswith("sha256:") and len(artifact["sha256"]) == 71
     assert artifact["native_event_sha256"].startswith("sha256:") and len(artifact["native_event_sha256"]) == 71
 
+
+def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None:
+    from zerg.qa.omp_helm_lifecycle import _run_engine
+
+    session_id = "session-1"
+    state_dir = tmp_path / "home" / "managed-local" / "omp-helm"
+    state_dir.mkdir(parents=True)
+    (state_dir / f"{session_id}.json").write_text(
+        json.dumps({"native_session_id": "native-1", "phase": "running"}),
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"outcome": "sent"}).encode("utf-8")
+
+    def _urlopen(request, timeout):
+        seen["request"] = request
+        seen["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    result = _run_engine(
+        Path("/unused/longhouse-engine"),
+        "steer",
+        session_id,
+        {
+            "LONGHOUSE_OMP_HELM_URL": "https://runtime.test",
+            "LONGHOUSE_OMP_HELM_TOKEN": "agent-token",
+            "LONGHOUSE_HOME": str(tmp_path / "home"),
+        },
+        text="redirect now",
+    )
+
+    request = seen["request"]
+    assert request.get_header("X-agents-token") == "agent-token"
+    body = json.loads(request.data)
+    assert body["text"] == "redirect now"
+    assert body["intent"] == "steer"
+    assert body["client_request_id"].startswith("omp-helm-steer-")
 
 
 def test_omp_helm_settlement_requires_terminal_channel_evidence(tmp_path) -> None:
@@ -207,16 +256,19 @@ def test_omp_helm_zero_delta_flush_is_accepted_only_before_independent_marker_pr
 
 def test_omp_runtime_convergence_does_not_prove_an_incomplete_events_page() -> None:
     assert _events_page_metadata({"events": [], "total": 1, "has_more": True, "next_cursor": "cursor-1"})["complete"] is False
-    assert _events_page_metadata(
-        {
-            "events": [],
-            "total": 0,
-            "generation_id": "generation-1",
-            "branch_mode": "head",
-            "has_more": False,
-            "next_cursor": None,
-        }
-    )["complete"] is True
+    assert (
+        _events_page_metadata(
+            {
+                "events": [],
+                "total": 0,
+                "generation_id": "generation-1",
+                "branch_mode": "head",
+                "has_more": False,
+                "next_cursor": None,
+            }
+        )["complete"]
+        is True
+    )
 
 
 def test_omp_runtime_convergence_retains_unproven_page_metadata(monkeypatch) -> None:
@@ -329,11 +381,14 @@ def test_omp_keeps_isolation_when_complete_source_retention_fails(tmp_path) -> N
 
     assert retained[0]["complete"] is True
     assert (tmp_path / str(retained[0]["path"])).read_bytes() == source.read_bytes()
-    assert _remove_isolation_after_source_retention(
-        isolation,
-        source_retention_verified=False,
-        cleanup=cleanup,
-    ) is False
+    assert (
+        _remove_isolation_after_source_retention(
+            isolation,
+            source_retention_verified=False,
+            cleanup=cleanup,
+        )
+        is False
+    )
     assert isolation.exists()
     assert cleanup["authoritative_source_evidence_retained"] is True
 
@@ -344,7 +399,6 @@ def test_omp_selected_assertion_status_ignores_unrelated_sibling_failures() -> N
 
     assert _assertion_result_status(assertions, selected) == "pass"
     assert _assertion_result_status(assertions, "not-a-cell") == "fail"
-
 
 
 def test_omp_console_settlement_and_context_recall_are_required() -> None:
@@ -383,6 +437,7 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
     observation["omp_settlement"]["agent_end_terminal"] = False
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
 
+
 def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
     observation = {
         "observation_scope": "scenario",
@@ -392,6 +447,7 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
         "omp_transcript_shipper_started": True,
         "omp_transcript_flush_completed": True,
         "omp_runtime_transcript_converged": True,
+        "runtime_agents_api_controls": True,
         "send_idle": True,
         "follow_up_native": True,
         "steer_active": True,

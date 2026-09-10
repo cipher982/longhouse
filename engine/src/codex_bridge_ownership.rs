@@ -303,7 +303,10 @@ mod tests {
         assert!(!watch.observe(tui(false, false)));
         assert!(!watch.observe(tui(false, false)));
         watch.observation_failed();
-        assert_eq!(watch.consecutive_unowned(), UNOWNED_OBSERVATIONS_BEFORE_EXIT - 1);
+        assert_eq!(
+            watch.consecutive_unowned(),
+            UNOWNED_OBSERVATIONS_BEFORE_EXIT - 1
+        );
         // The next real confirmation completes the count.
         assert!(watch.observe(tui(false, false)));
     }

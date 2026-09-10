@@ -397,7 +397,11 @@ mod tests {
         fs::write(dir.path().join("runtime.json"), b"{}{}").unwrap();
         fs::write(dir.path().join(".runtime.tmp"), b"ignored").unwrap();
         fs::create_dir(dir.path().join("dead-letter")).unwrap();
-        fs::write(dir.path().join("dead-letter").join("rejected.json"), b"ignored").unwrap();
+        fs::write(
+            dir.path().join("dead-letter").join("rejected.json"),
+            b"ignored",
+        )
+        .unwrap();
 
         let snapshot = runtime_event_outbox_snapshot(dir.path());
 

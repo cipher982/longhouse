@@ -58,11 +58,8 @@ mod tests {
             spool
                 .enqueue("claude", source.to_str().unwrap(), 0, 1, None)
                 .unwrap();
-            conn.execute(
-                "UPDATE spool_queue SET status = ?1",
-                params![status],
-            )
-            .unwrap();
+            conn.execute("UPDATE spool_queue SET status = ?1", params![status])
+                .unwrap();
 
             let reachable = match *status {
                 // Selected directly by the shipper.

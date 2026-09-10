@@ -295,7 +295,9 @@ mod tests {
 
         let mine = generate_auth_token();
         let theirs = generate_auth_token();
-        let relay_url = spawn(&format!("ws://{upstream_addr}"), &mine).await.unwrap();
+        let relay_url = spawn(&format!("ws://{upstream_addr}"), &mine)
+            .await
+            .unwrap();
         let relay_addr = relay_url.strip_prefix("ws://").unwrap().to_string();
 
         let mut foreign = TcpStream::connect(&relay_addr).await.unwrap();

@@ -204,7 +204,10 @@ mod tests {
             observation.run_id.as_deref(),
             Some("8c5f2301-13f1-5783-a3fc-24ea4d18d43f")
         );
-        assert_eq!(observation.provider_session_id.as_deref(), Some("conv-live-1"));
+        assert_eq!(
+            observation.provider_session_id.as_deref(),
+            Some("conv-live-1")
+        );
         assert_eq!(observation.state.as_deref(), Some("thinking"));
     }
 

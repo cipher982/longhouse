@@ -31,7 +31,7 @@ pub fn run() -> anyhow::Result<()> {
     let session_id = crate::managed_identity::managed_session_id_for(
         crate::managed_identity_contract::ManagedProvider::Claude,
     )
-        .or_else(|| input.get("session_id").and_then(trimmed_value_string));
+    .or_else(|| input.get("session_id").and_then(trimmed_value_string));
     let tool_use_id = input.get("tool_use_id").and_then(trimmed_value_string);
     let tool_name = input
         .get("tool_name")

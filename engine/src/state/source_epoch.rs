@@ -535,7 +535,8 @@ pub fn resync_to_host_watermark(
          SET last_position = ?1, updated_at = ?2
          WHERE source_epoch = ?3 AND lane = ?4 AND last_position = ?5",
         params![
-            i64::try_from(host_accepted_through).context("host watermark exceeds SQLite INTEGER")?,
+            i64::try_from(host_accepted_through)
+                .context("host watermark exceeds SQLite INTEGER")?,
             Utc::now().to_rfc3339(),
             source_epoch.to_string(),
             lane.as_str(),
@@ -789,7 +790,10 @@ mod tests {
         let previous =
             resync_to_host_watermark(&mut conn, epoch, SourceLane::Durable, 3081).unwrap();
         assert_eq!(previous, 4000);
-        assert_eq!(lane_position(&conn, epoch, SourceLane::Durable).unwrap(), 3081);
+        assert_eq!(
+            lane_position(&conn, epoch, SourceLane::Durable).unwrap(),
+            3081
+        );
     }
 
     #[test]
@@ -800,7 +804,10 @@ mod tests {
         let (mut conn, epoch) = epoch_at(dir.path(), 100);
         assert!(resync_to_host_watermark(&mut conn, epoch, SourceLane::Durable, 500).is_err());
         assert!(resync_to_host_watermark(&mut conn, epoch, SourceLane::Durable, 100).is_err());
-        assert_eq!(lane_position(&conn, epoch, SourceLane::Durable).unwrap(), 100);
+        assert_eq!(
+            lane_position(&conn, epoch, SourceLane::Durable).unwrap(),
+            100
+        );
     }
 
     #[test]
@@ -811,7 +818,10 @@ mod tests {
         let (mut conn, epoch) = epoch_at(dir.path(), 900);
         resync_to_host_watermark(&mut conn, epoch, SourceLane::Durable, 500).unwrap();
         acknowledge_position(&mut conn, epoch, SourceLane::Durable, 500, 900).unwrap();
-        assert_eq!(lane_position(&conn, epoch, SourceLane::Durable).unwrap(), 900);
+        assert_eq!(
+            lane_position(&conn, epoch, SourceLane::Durable).unwrap(),
+            900
+        );
     }
 
     #[test]
