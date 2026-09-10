@@ -3244,6 +3244,7 @@ fn cursor_render_records(
     started_at_us: i64,
     visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
     witness: Option<&CursorPromptHistory>,
+    provider_error: Option<&str>,
 ) -> Result<Vec<StorageV2RenderRecord>> {
     let cursor_store::RootMessageBlobIds::Parsed(root_ids) = &snapshot.root_message_blob_ids else {
         return Ok(Vec::new());
@@ -3396,7 +3397,12 @@ fn cursor_render_records(
         }
     }
     if carries_conversation_tail {
-        append_cursor_turn_failure(&mut records, visibility_evidence, started_at_us);
+        append_cursor_turn_failure(
+            &mut records,
+            visibility_evidence,
+            started_at_us,
+            provider_error,
+        );
     }
     Ok(records)
 }
@@ -3415,6 +3421,7 @@ fn append_cursor_turn_failure(
     records: &mut Vec<StorageV2RenderRecord>,
     visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
     started_at_us: i64,
+    provider_error: Option<&str>,
 ) {
     let Some(failure) = visibility_evidence.and_then(|evidence| evidence.unsuperseded_failure())
     else {
@@ -3434,10 +3441,20 @@ fn append_cursor_turn_failure(
         return;
     };
     let event_id_material = format!("cursor:turn-failed:{}", failure.generation_id);
-    let label = if failure.status == "aborted" {
-        "Cursor stopped this turn before it finished."
-    } else {
-        "Cursor reported this turn failed. Its output was not committed as a reply."
+    // Prefer the provider's own words. Without them the row still has to say
+    // something a reader can act on, so it says what is certain: the turn
+    // failed, and nothing it produced became a reply.
+    let label = match provider_error {
+        Some(message) if failure.status == "aborted" => {
+            format!("Cursor stopped this turn before it finished: {message}")
+        }
+        Some(message) => format!("Cursor reported this turn failed: {message}"),
+        None if failure.status == "aborted" => {
+            "Cursor stopped this turn before it finished.".to_string()
+        }
+        None => {
+            "Cursor reported this turn failed. Its output was not committed as a reply.".to_string()
+        }
     };
     records.push(StorageV2RenderRecord {
         event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, event_id_material.as_bytes()).to_string(),
@@ -3446,7 +3463,7 @@ fn append_cursor_turn_failure(
         source_position,
         event_subordinal: 0,
         role: "system".to_string(),
-        content_text: Some(label.to_string()),
+        content_text: Some(label),
         tool_name: None,
         tool_input_json: None,
         tool_output_text: None,
@@ -3977,12 +3994,20 @@ fn prepare_next_cursor_envelope_outcome_with_limit(
         (opened_at, opened_at)
     });
     let prompt_witness = cursor_human_prompt_witness(&store_snapshot, db_path);
+    // Only worth reading when a failure is actually going to be reported.
+    let provider_error = visibility_evidence
+        .as_ref()
+        .and_then(|evidence| evidence.unsuperseded_failure())
+        .and_then(|_| {
+            crate::cursor_visibility::cursor_projection_turn_error(&snapshot.conversation_uuid)
+        });
     let mut render_records = cursor_render_records(
         &store_snapshot,
         &selected,
         started_at.timestamp_micros(),
         visibility_evidence.as_ref(),
         prompt_witness.as_ref(),
+        provider_error.as_deref(),
     )?;
     let previous_provider_session_id = if range_start == 0 {
         if let Some(managed_session_id) = managed_session_id.as_deref() {
@@ -6084,7 +6109,7 @@ mod tests {
         };
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         let head = rendered
             .iter()
             .filter(|record| record.branch_kind.as_deref() != Some("abandoned"))
@@ -6138,7 +6163,7 @@ mod tests {
         };
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         assert_eq!(rendered.len(), 4);
         assert_eq!(rendered[0].role, "user");
         assert_eq!(rendered[1].role, "assistant");
@@ -6182,7 +6207,7 @@ mod tests {
         };
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         let outcome = rendered.last().expect("a failure row is appended");
         assert_eq!(outcome.role, "system");
         assert_eq!(
@@ -6343,9 +6368,15 @@ mod tests {
         .unwrap();
         let witness = CursorPromptHistory::load(&dir.path().join("store.db"));
 
-        let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), Some(&witness))
-                .unwrap();
+        let rendered = cursor_render_records(
+            &snapshot,
+            &selected,
+            0,
+            Some(&evidence),
+            Some(&witness),
+            None,
+        )
+        .unwrap();
 
         let text: Vec<&str> = rendered
             .iter()
@@ -6473,10 +6504,53 @@ mod tests {
             ..Default::default()
         };
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         assert!(rendered
             .iter()
             .all(|record| record.interaction_kind.is_none()));
+    }
+
+    /// The hook stream says a turn failed; only the projection says why. When
+    /// that string is available the row uses the provider's own words.
+    #[test]
+    fn cursor_failure_row_uses_the_provider_error_when_one_is_known() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let final_text = "4444444444444444444444444444444444444444444444444444444444444444";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                final_text,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"done"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            failures: vec![crate::cursor_visibility::CursorTurnFailure {
+                generation_id: "continuation".to_string(),
+                status: "error".to_string(),
+                observed_at: None,
+            }],
+            latest_terminal: Some(("continuation".to_string(), true)),
+            ..Default::default()
+        };
+
+        let rendered = cursor_render_records(
+            &snapshot,
+            &selected,
+            0,
+            Some(&evidence),
+            None,
+            Some("WritableIterable is closed"),
+        )
+        .unwrap();
+
+        let outcome = rendered.last().expect("a failure row is appended");
+        assert_eq!(
+            outcome.content_text.as_deref(),
+            Some("Cursor reported this turn failed: WritableIterable is closed")
+        );
     }
 
     #[test]
@@ -6504,7 +6578,7 @@ mod tests {
             ..Default::default()
         };
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         assert!(rendered
             .iter()
             .all(|record| record.interaction_kind.is_none()));
@@ -6541,7 +6615,7 @@ mod tests {
         };
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].role, "user");
     }
@@ -6573,7 +6647,7 @@ mod tests {
         };
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].role, "user");
     }
@@ -6609,7 +6683,7 @@ mod tests {
         };
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         assert_eq!(rendered.len(), 3);
         assert_eq!(rendered[0].role, "user");
         assert_eq!(rendered[1].tool_call_id.as_deref(), Some("call-1"));
@@ -6638,7 +6712,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence::default();
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].role, "user");
         assert_eq!(selected.len(), 2, "unverified text remains in raw storage");
@@ -6678,7 +6752,7 @@ mod tests {
         };
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
 
         assert_eq!(rendered.len(), 3);
         assert_eq!(rendered[0].role, "user");
@@ -6723,7 +6797,7 @@ mod tests {
         };
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
 
         assert_eq!(rendered.len(), 2);
         assert_eq!(rendered[0].role, "user");
@@ -6756,7 +6830,7 @@ mod tests {
         .unwrap();
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
 
         assert_eq!(rendered.len(), 2);
         assert_eq!(rendered[0].role, "user");
@@ -6800,7 +6874,7 @@ mod tests {
         };
 
         let rendered =
-            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None, None).unwrap();
         assert_eq!(rendered.len(), 2);
         assert!(rendered.iter().all(|record| record.role == "user"));
     }

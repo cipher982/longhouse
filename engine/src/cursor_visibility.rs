@@ -218,6 +218,77 @@ pub(crate) fn configured_cursor_store(conversation_id: &str) -> Option<PathBuf> 
     Some(store.clone())
 }
 
+/// The provider's own words for why a turn failed.
+///
+/// Cursor's hook stream reports *that* a turn ended in error but never why; the
+/// message only ever reaches the agent-transcripts projection, as a trailing
+/// `{"type":"turn_ended","status":"error","error":"..."}` lifecycle line. That
+/// file is not a transcript source — it is rejected as one — but a typed
+/// lifecycle record in it is still evidence, and it is the only place the
+/// string exists. Read the tail only, and answer `None` unless the newest
+/// lifecycle line is itself the failure, so a later successful turn cannot
+/// lend its predecessor an error message.
+pub(crate) fn cursor_projection_turn_error(conversation_id: &str) -> Option<String> {
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
+    let cursor_home = std::env::var_os("CURSOR_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cursor"));
+    cursor_projection_turn_error_in(&cursor_home, conversation_id)
+}
+
+fn cursor_projection_turn_error_in(cursor_home: &Path, conversation_id: &str) -> Option<String> {
+    const TAIL_BYTES: u64 = 64 * 1024;
+    let path = cursor_projection_candidates(cursor_home, conversation_id)
+        .into_iter()
+        .next()?;
+    let mut file = fs::File::open(&path).ok()?;
+    let length = file.metadata().ok()?.len();
+    if length > TAIL_BYTES {
+        use std::io::Seek;
+        file.seek(std::io::SeekFrom::Start(length - TAIL_BYTES))
+            .ok()?;
+    }
+    let mut contents = String::new();
+    {
+        use std::io::Read as _;
+        file.read_to_string(&mut contents).ok()?;
+    }
+    let last_lifecycle = contents
+        .lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|row| row.get("type").and_then(Value::as_str) == Some("turn_ended"))?;
+    let status = last_lifecycle.get("status").and_then(Value::as_str)?;
+    if !matches!(status, "error" | "aborted") {
+        return None;
+    }
+    let message = last_lifecycle.get("error").and_then(Value::as_str)?.trim();
+    // Cursor writes provider text here; keep it short enough to read as a
+    // status line rather than a transcript.
+    (!message.is_empty() && message.chars().count() <= 200).then(|| message.to_string())
+}
+
+fn cursor_projection_candidates(cursor_home: &Path, conversation_id: &str) -> Vec<PathBuf> {
+    let Ok(projects) = fs::read_dir(cursor_home.join("projects")) else {
+        return Vec::new();
+    };
+    projects
+        .flatten()
+        .flat_map(|project| {
+            let transcripts = project.path().join("agent-transcripts");
+            // Cursor has used both a flat file and a per-conversation
+            // directory; accept either rather than guessing a version.
+            [
+                transcripts.join(format!("{conversation_id}.jsonl")),
+                transcripts
+                    .join(conversation_id)
+                    .join(format!("{conversation_id}.jsonl")),
+            ]
+        })
+        .filter(|path| path.is_file())
+        .collect()
+}
+
 fn cursor_store_candidates(conversation_id: &str) -> Vec<PathBuf> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     let cursor_home = std::env::var_os("CURSOR_HOME")
@@ -866,5 +937,116 @@ mod tests {
         )
         .unwrap();
         assert!(session_lifecycle_ended(root.path(), "session"));
+    }
+}
+
+#[cfg(test)]
+mod projection_error_tests {
+    use super::*;
+
+    fn write_projection(cursor_home: &Path, conversation_id: &str, lines: &[&str]) {
+        let dir = cursor_home
+            .join("projects/Users-davidrose-git-zeta/agent-transcripts")
+            .join(conversation_id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(format!("{conversation_id}.jsonl")),
+            lines.join("\n"),
+        )
+        .unwrap();
+    }
+
+    /// Cursor's hook stream says a turn failed; the error string exists only in
+    /// the projection, as a trailing lifecycle line.
+    #[test]
+    fn the_newest_lifecycle_failure_supplies_its_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = "f4fe32b7-4986-478d-b715-c1688f659046";
+        write_projection(
+            dir.path(),
+            conversation,
+            &[
+                r#"{"role":"assistant","message":{"content":"done"}}"#,
+                r#"{"type":"turn_ended","status":"error","error":"WritableIterable is closed"}"#,
+            ],
+        );
+
+        assert_eq!(
+            cursor_projection_turn_error_in(dir.path(), conversation).as_deref(),
+            Some("WritableIterable is closed")
+        );
+    }
+
+    /// A turn that succeeded after the failure must not lend its predecessor an
+    /// error message.
+    #[test]
+    fn a_later_success_withholds_the_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = "aaaaaaaa-0000-0000-0000-000000000001";
+        write_projection(
+            dir.path(),
+            conversation,
+            &[
+                r#"{"type":"turn_ended","status":"error","error":"WritableIterable is closed"}"#,
+                r#"{"type":"turn_ended","status":"success"}"#,
+            ],
+        );
+
+        assert_eq!(
+            cursor_projection_turn_error_in(dir.path(), conversation),
+            None
+        );
+    }
+
+    #[test]
+    fn an_absent_projection_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            cursor_projection_turn_error_in(dir.path(), "aaaaaaaa-0000-0000-0000-000000000002"),
+            None
+        );
+    }
+
+    /// Cursor has used both a flat file and a per-conversation directory.
+    #[test]
+    fn a_flat_projection_file_is_found_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = "aaaaaaaa-0000-0000-0000-000000000003";
+        let transcripts = dir
+            .path()
+            .join("projects/Users-davidrose-git-zeta/agent-transcripts");
+        fs::create_dir_all(&transcripts).unwrap();
+        fs::write(
+            transcripts.join(format!("{conversation}.jsonl")),
+            r#"{"type":"turn_ended","status":"aborted","error":"interrupted"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            cursor_projection_turn_error_in(dir.path(), conversation).as_deref(),
+            Some("interrupted")
+        );
+    }
+
+    /// Provider text, not a transcript: an essay in the error field is not a
+    /// status line.
+    #[test]
+    fn an_oversized_message_is_declined() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = "aaaaaaaa-0000-0000-0000-000000000004";
+        let long = "x".repeat(500);
+        write_projection(
+            dir.path(),
+            conversation,
+            &[&format!(
+                r#"{{"type":"turn_ended","status":"error","error":"{long}"}}"#
+            )],
+        );
+
+        assert_eq!(
+            cursor_projection_turn_error_in(dir.path(), conversation),
+            None
+        );
     }
 }
