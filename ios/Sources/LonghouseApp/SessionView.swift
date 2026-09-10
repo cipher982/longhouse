@@ -84,12 +84,19 @@ struct SessionView: View {
                     subtitle: viewModel.detail?.identitySubtitle ?? fallbackSubtitle
                 )
             }
-            // Keep one trailing toolbar item mounted for the entire push
-            // transition. Inserting/removing a toolbar item as detail and the
-            // transcript arrive makes UIKit animate a blurred placeholder
-            // over the destination title.
+            // Keep one trailing toolbar slot mounted for the entire push. The
+            // loading glyph is the bounded placeholder; replacing its content
+            // does not insert a second control over the destination title.
             ToolbarItem(placement: .topBarTrailing) {
-                overflowMenu
+                if isSessionInteractionReady {
+                    overflowMenu
+                } else if viewModel.isInitialLoading || viewModel.detail != nil {
+                    Image(systemName: "ellipsis")
+                        .frame(width: 32, height: 32)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Session actions unavailable until transcript is ready")
+                        .accessibilityIdentifier("session-navigation-loading")
+                }
             }
         }
         .task(id: sessionId) {
@@ -306,10 +313,10 @@ struct SessionView: View {
     }
 
     private var isSessionInteractionReady: Bool {
-        // The compact detail lane owns native session chrome. It can paint the
-        // runtime dock, composer, and menu while the transcript tail/WebKit
-        // render continues independently.
-        viewModel.detail != nil
+        // Primary detail can arrive before the transcript tail. Keep the
+        // header responsive, but leave the composer and actions in their
+        // bounded loading shell until the initial transcript lane settles.
+        viewModel.detail != nil && !viewModel.isInitialLoading
     }
 
     private var transcriptState: TranscriptDisplayState {
