@@ -235,7 +235,9 @@ export function buildSessionLedgerState(
   const headline = pending
     ? "Needs your response"
     : tone === "unknown"
-      ? "Activity uncertain"
+      ? !streamConnected && !inInitialConnectionGrace
+        ? "Updates interrupted"
+        : "Activity uncertain"
       : interaction.isManagedLocalSession
         ? withObservationAge(
             display.headline,
@@ -264,11 +266,13 @@ export function buildSessionLedgerState(
     (pending
       ? "A response is required before another message."
       : tone === "unknown"
-        ? hostConcern
-          ? `Host is ${facts.host.state}; the agent may still be running.`
-          : transcriptConcern
-            ? "Transcript is lagging the observed session state."
-            : "Provider activity is unconfirmed."
+        ? !streamConnected && !inInitialConnectionGrace
+          ? "Connection lost. The agent may still be working."
+          : hostConcern
+            ? `Host is ${facts.host.state}; the agent may still be running.`
+            : transcriptConcern
+              ? "Transcript is lagging the observed session state."
+              : "Provider activity is unconfirmed."
         : display.detail);
   const connection: SessionLedgerState["connection"] = !openSession
     ? "recorded"
@@ -290,7 +294,9 @@ export function buildSessionLedgerState(
               ? "Transcript is lagging"
               : tone === "working"
                 ? "Provider evidence is still valid"
-                : "Provider activity is unconfirmed"
+                : tone === "unknown"
+                  ? "Provider activity is unconfirmed"
+                  : "No active work reported"
         : tone === "unknown"
           ? "Updates disconnected · the agent may still be running"
           : "Updates disconnected";

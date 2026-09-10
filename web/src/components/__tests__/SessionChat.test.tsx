@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { SessionChat, type SessionChatTarget } from "../SessionChat";
@@ -213,11 +219,55 @@ describe("SessionChat", () => {
     URL.createObjectURL = vi.fn(() => "blob:test-preview");
     URL.revokeObjectURL = vi.fn();
   });
+  it("expires turn-specific actions without another update while retaining the draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-10T12:00:00Z"));
+    const view = renderSessionChat({
+      chatMode: "managed_local",
+      canSteerActiveTurn: true,
+      canQueueNextInput: true,
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          activity: "executing",
+          access: "live_control",
+          interruptAvailable: true,
+          activityValidUntil: "2026-09-10T12:00:01.500Z",
+        }),
+      }),
+    });
+    try {
+      const draft = screen.getByRole("textbox");
+      fireEvent.change(draft, { target: { value: "Keep this instruction" } });
+      draft.focus();
+      expect(
+        screen.getByRole("button", { name: /send update/i }),
+      ).toBeEnabled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(
+        screen.queryByRole("button", { name: /send update/i }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+      expect(screen.getByRole("textbox")).toBe(draft);
+      expect(draft).toHaveValue("Keep this instruction");
+      expect(draft).toHaveFocus();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
   it("retains an editable draft when control is revoked without allowing a send", async () => {
     const user = userEvent.setup();
     const view = renderSessionChat({
       chatMode: "managed_local",
-      isSessionExecuting: true,
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          activity: "executing",
+          access: "live_control",
+          interruptAvailable: true,
+        }),
+      }),
       canSteerActiveTurn: true,
       canQueueNextInput: true,
     });
@@ -263,7 +313,13 @@ describe("SessionChat", () => {
     renderSessionChat({
       chatMode: "managed_local",
       canQueueNextInput: true,
-      isStalled: true,
+      session: makeSession({
+        session_state: makeSessionStateFacts({
+          activity: "stalled",
+          access: "live_control",
+          interruptAvailable: true,
+        }),
+      }),
     });
 
     const recovery = await screen.findByTestId("session-chat-stall-recovery");
@@ -328,10 +384,10 @@ describe("SessionChat", () => {
 
     renderSessionChat({
       chatMode: "managed_local",
-      isSessionExecuting: true,
       session: makeSession({
         provider: "cursor",
         session_state: makeSessionStateFacts({
+          activity: "executing",
           access: "live_control",
           mode: "console",
           startTurnAvailable: true,
@@ -986,7 +1042,13 @@ describe("SessionChat", () => {
         chatMode: "managed_local",
         canQueueNextInput: true,
         canSteerActiveTurn: true,
-        isSessionExecuting: true,
+        session: makeSession({
+          session_state: makeSessionStateFacts({
+            activity: "executing",
+            access: "live_control",
+            interruptAvailable: true,
+          }),
+        }),
       },
       { queryClient },
     );
@@ -1036,7 +1098,13 @@ describe("SessionChat", () => {
         chatMode: "managed_local",
         canQueueNextInput: true,
         canSteerActiveTurn: true,
-        isSessionExecuting: true,
+        session: makeSession({
+          session_state: makeSessionStateFacts({
+            activity: "executing",
+            access: "live_control",
+            interruptAvailable: true,
+          }),
+        }),
         timelineItems: [],
       },
       { queryClient },

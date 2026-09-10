@@ -253,6 +253,11 @@ const server = createServer(async (request, response) => {
         case "working":
           restoreWork();
           break;
+        case "expiring":
+          restoreWork();
+          session.session_state.activity.valid_until = iso(3_000);
+          publish();
+          break;
         case "receipt":
           publish();
           break;

@@ -69,6 +69,7 @@ struct SessionSignalField<Content: View>: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @State private var fieldNow = Date()
     @State private var receiptTask: Task<Void, Never>?
     @State private var receiptActive = false
@@ -152,6 +153,7 @@ struct SessionSignalField<Content: View>: View {
                         )
                         .opacity(receiptOpacity)
                 }
+                .id(reduceMotion)
                 .clipped()
             }
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -185,6 +187,9 @@ struct SessionSignalField<Content: View>: View {
                 startReceiptAccent()
             }
             .onChange(of: realtimeConnection) { _, _ in fieldNow = Date() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { fieldNow = Date() }
+            }
             .onChange(of: materialKind) { _, kind in
                 fieldNow = Date()
                 guard kind != .working, receiptActive else { return }
@@ -325,6 +330,7 @@ struct SessionRuntimeDock: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     // A streaming provider refreshes the primary label's observed_at with
     // every provisional delta. Anchor the counter on the earliest observation
     // for the current label + tool so it counts up instead of resetting.
@@ -349,6 +355,8 @@ struct SessionRuntimeDock: View {
                 launchSetupLine
             } else {
                 statusLines(asOf: evidenceNow)
+                    .id(reduceMotion)
+                    .transition(.identity)
             }
         }
         .padding(.horizontal, 4)
@@ -369,9 +377,16 @@ struct SessionRuntimeDock: View {
             observeStatus()
         }
         .onChange(of: realtimeConnection) { _, connection in
+            evidenceNow = Date()
             if connection == .connected {
                 hasObservedConnection = true
             }
+            observeStatus()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            evidenceNow = Date()
+            noticeNow = Date()
             observeStatus()
         }
         .onChange(of: elapsedAnchorKey) { _, _ in reanchorElapsed() }
@@ -380,6 +395,7 @@ struct SessionRuntimeDock: View {
         }
         // server's valid_until passes, labels and motion change immediately.
         .task(id: evidenceDeadlineKey) {
+            evidenceNow = Date()
             guard let deadline = detail.stateFacts.activityValidUntil.flatMap(LonghouseDateParser.parse) else {
                 return
             }

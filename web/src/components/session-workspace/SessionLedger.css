@@ -403,6 +403,13 @@
   color: rgb(24, 60, 41);
 }
 
+.session-balanced-field:has(.session-ledger[data-work-state="unknown"])
+  .session-chat-composer-row
+  > .ui-button--primary:not(:disabled) {
+  background: rgb(220, 206, 182);
+  color: rgb(62, 50, 33);
+}
+
 .session-control-dock--bar:has(.session-balanced-field) {
   border: 0;
   border-radius: 0;

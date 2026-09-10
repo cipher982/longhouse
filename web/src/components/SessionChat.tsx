@@ -37,6 +37,11 @@ import { AttachmentTray } from "./AttachmentTray";
 import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
 import { ProviderGlyph } from "./ProviderGlyph";
 import { getProviderLabel } from "../lib/providers";
+import { useWallClock } from "../hooks/useWallClock";
+import {
+  isActivityExecuting,
+  isActivityStalled,
+} from "../lib/activityEvidence";
 import "../styles/session-chat.css";
 
 interface PendingManagedLocalInput {
@@ -77,10 +82,6 @@ interface SessionChatProps {
    * error with a "Queue instead" affordance.
    */
   canSteerActiveTurn?: boolean;
-  /** True when backend detected stale managed execution with no active tool. */
-  isStalled?: boolean;
-  /** True when runtime truth says the provider is currently executing. */
-  isSessionExecuting?: boolean;
   /**
    * Durable timeline rows visible in the parent workspace. When present,
    * managed-local optimistic inputs stay visible until the backend-authored
@@ -139,10 +140,16 @@ export function SessionChat({
   managedLaunchSuggestion = null,
   canQueueNextInput = false,
   canSteerActiveTurn = false,
-  isStalled = false,
-  isSessionExecuting = false,
   timelineItems,
 }: SessionChatProps) {
+  const activity = session.session_state.activity;
+  const renderNowMs = Date.now();
+  const activityNowMs = Math.max(
+    renderNowMs,
+    useWallClock(renderNowMs <= Date.parse(activity.valid_until ?? ""), 1_000),
+  );
+  const isSessionExecuting = isActivityExecuting(activity, activityNowMs);
+  const isStalled = isActivityStalled(activity, activityNowMs);
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
   const isComposerDisabled = Boolean(composerDisabledReason);

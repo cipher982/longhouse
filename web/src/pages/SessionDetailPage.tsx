@@ -37,10 +37,6 @@ import {
   resolveSessionRuntimeState,
 } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
-import {
-  isActivityExecuting,
-  isActivityStalled,
-} from "../lib/activityEvidence";
 import { useWallClock } from "../hooks/useWallClock";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useAuth } from "../lib/auth";
@@ -627,14 +623,6 @@ function SessionDetailWorkspaceRoute({
                       displaySession.capabilities?.can_steer_active_turn,
                     )}
                     timelineItems={items}
-                    isStalled={isActivityStalled(
-                      displaySession.session_state.activity,
-                      nowMs,
-                    )}
-                    isSessionExecuting={isActivityExecuting(
-                      displaySession.session_state.activity,
-                      nowMs,
-                    )}
                   />
                 </div>
               </div>

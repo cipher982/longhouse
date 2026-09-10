@@ -233,55 +233,75 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                     && !attachmentIsProcessing
                     && !isLoadingPickerItems
                     && !(attachmentIsEmpty == false && SessionComposerControlState.primaryIntent(for: detail) != "auto")
-                HStack(alignment: .bottom, spacing: 8) {
-                    actionMenu
-
-                    TextField(detail.composerPlaceholder, text: $text, axis: .vertical)
-                        .lineLimit(1...(typeSize.isAccessibilitySize ? 3 : 6))
-                        .focused($focused)
-                        .autocorrectionDisabled(true)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .accessibilityIdentifier("session-chat-composer")
-
-                    Button {
-                        Task { await onSend(nil) }
-                    } label: {
-                        if isSending {
-                            ProgressView()
-                                .frame(width: 30, height: 30)
-                        } else {
-                            Image(systemName: SessionComposerControlState.sendIcon(for: detail))
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(sendIsEnabled ? Color(.systemBackground) : Color(.systemGray))
-                                .frame(width: 30, height: 30)
-                                .background(
-                                    Circle().fill(sendIsEnabled
-                                        ? AnyShapeStyle(Color.primary)
-                                        : AnyShapeStyle(Color(.tertiarySystemFill)))
-                                )
+                if typeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 6) {
+                        draftEditor
+                        HStack {
+                            actionMenu
+                            Spacer()
+                            sendButton(enabled: sendIsEnabled)
                         }
                     }
-                    .disabled(!sendIsEnabled)
-                    .accessibilityLabel(detail.activePauseRequest == nil
-                        ? SessionComposerControlState.sendAccessibilityLabel(for: detail)
-                        : "Answer the pending request before sending")
-                    .accessibilityIdentifier("session-chat-send")
-                    .contextMenu {
-                        if detail.activePauseRequest == nil && SessionComposerControlState.showsSecondaryQueueAction(for: detail) && attachmentIsEmpty {
-                            Button {
-                                Task { await onSend("steer") }
-                            } label: {
-                                Label("Send update now", systemImage: "arrow.up.circle")
-                            }
-                            Button {
-                                Task { await onSend("queue") }
-                            } label: {
-                                Label("Queue for next turn", systemImage: "clock.arrow.circlepath")
-                            }
-                        }
+                } else {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        actionMenu
+                        draftEditor
+                        sendButton(enabled: sendIsEnabled)
                     }
+                }
+            }
+        }
+    }
+
+    private var draftEditor: some View {
+        TextField(detail.composerPlaceholder, text: $text, axis: .vertical)
+            .lineLimit(1...(typeSize.isAccessibilitySize ? 3 : 6))
+            .focused($focused)
+            .autocorrectionDisabled(true)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .accessibilityIdentifier("session-chat-composer")
+    }
+
+    private func sendButton(enabled: Bool) -> some View {
+        Button {
+            Task { await onSend(nil) }
+        } label: {
+            if isSending {
+                ProgressView()
+                    .frame(width: 30, height: 30)
+            } else {
+                Image(systemName: SessionComposerControlState.sendIcon(for: detail))
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(enabled ? Color(.systemBackground) : Color(.systemGray))
+                    .frame(width: 30, height: 30)
+                    .background(
+                        Circle().fill(enabled
+                            ? AnyShapeStyle(Color.primary)
+                            : AnyShapeStyle(Color(.tertiarySystemFill)))
+                    )
+            }
+        }
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Rectangle())
+        .disabled(!enabled)
+        .accessibilityLabel(detail.activePauseRequest == nil
+            ? SessionComposerControlState.sendAccessibilityLabel(for: detail)
+            : "Answer the pending request before sending")
+        .accessibilityIdentifier("session-chat-send")
+        .contextMenu {
+            if detail.activePauseRequest == nil && SessionComposerControlState.showsSecondaryQueueAction(for: detail) && attachmentIsEmpty {
+                Button {
+                    Task { await onSend("steer") }
+                } label: {
+                    Label("Send update now", systemImage: "arrow.up.circle")
+                }
+                Button {
+                    Task { await onSend("queue") }
+                } label: {
+                    Label("Queue for next turn", systemImage: "clock.arrow.circlepath")
                 }
             }
         }
