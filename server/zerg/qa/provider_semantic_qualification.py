@@ -215,15 +215,22 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
                 if source_events and isinstance(source.get("event_type"), str)
                 else None
             )
-            if selected_event is not None and isinstance(previous_event_digest, str):
-                rewrites[previous_event_digest] = _native_event_digest(selected_event)
+            event_digest = _native_event_digest(selected_event) if selected_event is not None else None
+            if isinstance(event_digest, str) and isinstance(previous_event_digest, str) and previous_event_digest.startswith("sha256:"):
+                event_digest = f"sha256:{event_digest}"
+            if selected_event is not None and isinstance(previous_event_digest, str) and event_digest is not None:
+                rewrites[previous_event_digest] = event_digest
+            source_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            previous_source_digest = source.get("sha256")
+            if isinstance(previous_source_digest, str) and previous_source_digest.startswith("sha256:"):
+                source_digest = f"sha256:{source_digest}"
             source = {
                 **source,
                 "path": path.relative_to(root).as_posix(),
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "sha256": source_digest,
             }
-            if selected_event is not None:
-                source["event_sha256"] = _native_event_digest(selected_event)
+            if event_digest is not None:
+                source["event_sha256"] = event_digest
         except (OSError, ValueError) as exc:
             raise identity.RequestError("native source artifact could not be finalized") from exc
         updated_sources.append(source)
@@ -238,8 +245,10 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
             for event in _native_jsonl_events((root / source["path"]).resolve())
         ]
         model_source_event = _select_model_source_event(source_events, source_canary=source_canary)
-        if model_source_event is not None:
-            rewrites[model_source_digest] = _native_event_digest(model_source_event)
+        model_source_event_digest = _native_event_digest(model_source_event)
+        if model_source_digest.startswith("sha256:"):
+            model_source_event_digest = f"sha256:{model_source_event_digest}"
+        rewrites[model_source_digest] = model_source_event_digest
     return _rewrite_native_event_digests(refreshed, rewrites)
 
 

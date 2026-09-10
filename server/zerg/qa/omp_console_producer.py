@@ -148,9 +148,11 @@ def omp_native_model_evidence(
 ) -> dict[str, Any] | None:
     """Bind OMP's provider-reported model call to one retained JSONL source."""
 
-    retention = _read_json(root / "provider-source-retention.json") or {}
+    evidence_root = root.resolve()
+    retention = _read_json(evidence_root / "provider-source-retention.json") or {}
     sources = retention.get("sources") if isinstance(retention.get("sources"), list) else []
     selected_source: Path | None = None
+    selected_source_relative: str | None = None
     selected_event: Mapping[str, Any] | None = None
     selected_events: list[Mapping[str, Any]] = []
     for item in sources:
@@ -159,16 +161,22 @@ def omp_native_model_evidence(
         raw_path = item.get("path")
         if not isinstance(raw_path, str) or not raw_path:
             continue
-        path = Path(raw_path)
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = evidence_root / candidate
+        if candidate.is_symlink():
+            continue
+        try:
+            path = candidate.resolve(strict=True)
+            relative_path = path.relative_to(evidence_root).as_posix()
+            source_bytes = path.read_bytes()
+        except (OSError, ValueError):
+            continue
         try:
             events = [
-                value
-                for line in path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-                for value in [json.loads(line)]
-                if isinstance(value, Mapping)
+                value for line in source_bytes.splitlines() if line.strip() for value in [json.loads(line)] if isinstance(value, Mapping)
             ]
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, json.JSONDecodeError):
             continue
         assistant_messages = [
             event
@@ -177,10 +185,11 @@ def omp_native_model_evidence(
         ]
         assistants = [event for event in assistant_messages if _successful_assistant_event(event)]
         if assistants:
-            selected_source = path.resolve()
+            selected_source = path
+            selected_source_relative = relative_path
             selected_event = assistants[-1]
             selected_events = assistant_messages
-    if selected_source is None or selected_event is None:
+    if selected_source is None or selected_source_relative is None or selected_event is None:
         return None
 
     raw_message = selected_event.get("message")
@@ -208,7 +217,8 @@ def omp_native_model_evidence(
     if requested_model is not None and native_model != requested_model:
         return None
     model = native_model
-    event_digest = raw_event_digest(selected_event)
+    event_digest = f"sha256:{raw_event_digest(selected_event)}"
+    source_digest = f"sha256:{hashlib.sha256(selected_source.read_bytes()).hexdigest()}"
     return {
         "source_canary": source_canary,
         "operation_evidence": {"model_call": {"status": "pass", "level": "live_token"}},
@@ -229,8 +239,8 @@ def omp_native_model_evidence(
         },
         "source_artifacts": [
             {
-                "path": str(selected_source),
-                "sha256": hashlib.sha256(selected_source.read_bytes()).hexdigest(),
+                "path": selected_source_relative,
+                "sha256": source_digest,
                 "kind": "provider_jsonl_stream",
                 "event_type": "message",
                 "event_sha256": event_digest,

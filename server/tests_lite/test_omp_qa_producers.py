@@ -114,9 +114,9 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
     assert evidence["result_event"]["usage"]["output"] == 9
     assert evidence["result_event"]["total_cost_usd"] == 0.0004
     artifact = evidence["source_artifacts"][0]
-    assert artifact["path"] == str(source)
-    assert len(artifact["sha256"]) == 64
-    assert len(artifact["native_event_sha256"]) == 64
+    assert artifact["path"] == source.relative_to(tmp_path).as_posix()
+    assert artifact["sha256"].startswith("sha256:") and len(artifact["sha256"]) == 71
+    assert artifact["native_event_sha256"].startswith("sha256:") and len(artifact["native_event_sha256"]) == 71
 
 
 
